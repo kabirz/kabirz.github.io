@@ -1,7 +1,10 @@
 ---
 title: 轻松入门学习rust
 date: 2021-03-24 16:56:14
+categories: 学习
 tags:
+  - rust
+  - 编程
 ---
 
 2021年2月1日: [Youtube视频](https://www.youtube.com/playlist?list=PLfllocyHVgsRwLkTAhG0E-2QxCf-ozBkk)
