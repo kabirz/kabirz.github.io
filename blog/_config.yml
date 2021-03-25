@@ -105,3 +105,10 @@ deploy:
   type: 'git'
   repo: 'https://github.com/kabirz/kabirz.github.io'
   branch: master
+
+githubEmojis:
+  enable: true
+  className: github-emoji
+  inject: true
+  styles:
+  customEmojis:
