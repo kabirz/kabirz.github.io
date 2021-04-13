@@ -4,7 +4,7 @@
 
 <head>
     <meta charset="utf-8">
-    <meta name="keywords" content="contact, c rust c++">
+    <meta name="keywords" content="zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED, c rust c++">
     <meta name="description" content="个人笔记">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
@@ -16,7 +16,7 @@
     <!-- Global site tag (gtag.js) - Google Analytics -->
 
 
-    <title>contact | 我的个人博客</title>
+    <title>zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED | 我的个人博客</title>
     <link rel="icon" type="image/png" href="/favicon.png">
 
     <link rel="stylesheet" type="text/css" href="/libs/awesome/css/all.css">
@@ -312,12 +312,12 @@
 
 
 
-<div class="bg-cover pd-header post-cover" style="background-image: url('/medias/featureimages/16.jpg')">
+<div class="bg-cover pd-header post-cover" style="background-image: url('/medias/featureimages/4.jpg')">
     <div class="container" style="right: 0px;left: 0px;">
         <div class="row">
             <div class="col s12 m12 l12">
                 <div class="brand">
-                    <h1 class="description center-align post-title">contact</h1>
+                    <h1 class="description center-align post-title">zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED</h1>
                 </div>
             </div>
         </div>
@@ -431,12 +431,33 @@
             <div class="row tag-cate">
                 <div class="col s7">
                     
-                          <div class="article-tag">
-                            <span class="chip bg-color">无标签</span>
-                          </div>
+                    <div class="article-tag">
+                        
+                            <a href="/tags/zephyr-util/">
+                                <span class="chip bg-color">zephyr_util</span>
+                            </a>
+                        
+                            <a href="/tags/condtion/">
+                                <span class="chip bg-color">condtion</span>
+                            </a>
+                        
+                    </div>
                     
                 </div>
                 <div class="col s5 right-align">
+                    
+                    <div class="post-cate">
+                        <i class="fas fa-bookmark fa-fw icon-category"></i>
+                        
+                            <a href="/categories/zephyr/" class="post-category">
+                                zephyr
+                            </a>
+                        
+                            <a href="/categories/zephyr/rtos/" class="post-category">
+                                rtos
+                            </a>
+                        
+                    </div>
                     
                 </div>
             </div>
@@ -445,7 +466,7 @@
                 
                 <div class="post-date info-break-policy">
                     <i class="far fa-calendar-minus fa-fw"></i>发布日期:&nbsp;&nbsp;
-                    2021-03-25
+                    2021-04-13
                 </div>
                 
 
@@ -454,7 +475,7 @@
                 
                 <div class="info-break-policy">
                     <i class="far fa-file-word fa-fw"></i>文章字数:&nbsp;&nbsp;
-                    0
+                    304
                 </div>
                 
 
@@ -484,7 +505,55 @@
 
         <div class="card-content article-card-content">
             <div id="articleContent">
-                
+                <h3 id="COND-CODE-1-和-COND-CODE-0"><a href="#COND-CODE-1-和-COND-CODE-0" class="headerlink" title="COND_CODE_1 和 COND_CODE_0"></a>COND_CODE_1 和 COND_CODE_0</h3><pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token comment">/* ####################################################################### */</span> 
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">IF_ENABLED</span><span class="token expression"><span class="token punctuation">(</span>_flag<span class="token punctuation">,</span> _code<span class="token punctuation">)</span> </span><span class="token punctuation">\</span>
+        <span class="token expression"><span class="token function">COND_CODE_1</span><span class="token punctuation">(</span>_flag<span class="token punctuation">,</span> _code<span class="token punctuation">,</span> <span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">)</span></span></span>
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name">_XXXX1</span> <span class="token expression">_YYYY<span class="token punctuation">,</span></span></span>
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">Z_COND_CODE_1</span><span class="token expression"><span class="token punctuation">(</span>_flag<span class="token punctuation">,</span> _if_1_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span> </span><span class="token punctuation">\</span>
+	<span class="token expression"><span class="token function">__COND_CODE</span><span class="token punctuation">(</span>_XXXX</span><span class="token punctuation">##</span><span class="token expression">_flag<span class="token punctuation">,</span> _if_1_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span></span></span>
+<span class="token comment">// Z_COND_CODE_1(1, (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// _COND_CODE(_YYYY,, (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// __GET_ARG2_DEBRACKET(_YYYY, (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// __DEBRACKET ((int a = 10;)) =&gt; int a = 10;</span>
+
+<span class="token comment">// Z_COND_CODE_1(0, (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// _COND_CODE(_XXXX0, (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// __GET_ARG2_DEBRACKET(_XXXX0 (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// __DEBRACKET ((int a = 100;)) =&gt; int a = 100;</span>
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">Z_COND_CODE_0</span><span class="token expression"><span class="token punctuation">(</span>_flag<span class="token punctuation">,</span> _if_0_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span> </span><span class="token punctuation">\</span>
+  <span class="token expression"><span class="token function">__COND_CODE</span><span class="token punctuation">(</span>_ZZZZ</span><span class="token punctuation">##</span><span class="token expression">_flag<span class="token punctuation">,</span> _if_0_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span></span></span>
+<span class="token comment">// Z_COND_CODE_0(1, (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// _COND_CODE(_ZZZZ1, (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// __GET_ARG2_DEBRACKET(_ZZZZ1 (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// __DEBRACKET ((int a = 100;)) =&gt; int a = 100;</span>
+
+<span class="token comment">// Z_COND_CODE_0(0, (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// _COND_CODE(_YYYY,, (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// __GET_ARG2_DEBRACKET(_YYYY, (int a = 10;), (int a = 100;))</span>
+<span class="token comment">// __DEBRACKET ((int a = 10;)) =&gt; int a = 10;</span>
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name">_ZZZZ0</span> <span class="token expression">_YYYY<span class="token punctuation">,</span></span></span>
+ 
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">__COND_CODE</span><span class="token expression"><span class="token punctuation">(</span>one_or_two_args<span class="token punctuation">,</span> _if_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span> </span><span class="token punctuation">\</span>
+  <span class="token expression"><span class="token function">__GET_ARG2_DEBRACKET</span><span class="token punctuation">(</span>one_or_two_args _if_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span></span></span>
+
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">__GET_ARG2_DEBRACKET</span><span class="token expression"><span class="token punctuation">(</span>ignore_this<span class="token punctuation">,</span> val<span class="token punctuation">,</span> <span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">)</span> __DEBRACKET val</span></span>
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">__DEBRACKET</span><span class="token expression"><span class="token punctuation">(</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">)</span> __VA_ARGS__</span></span>
+
+<span class="token comment">/* ####################################################################### */</span><span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></span></code></pre>
+<p>使用IS_ENABLED操作的代码较短时， code看上去会感觉比较臃肿，COND_CODE_1/COND_CODE_0 可以更好的解决这个问题，如(特别要注意2，3行的括号不能忘记)：</p>
+<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token class-name">uint32_t</span> limit <span class="token operator">=</span> <span class="token function">COND_CODE_1</span><span class="token punctuation">(</span>CONFIG_LOG_IMMEDIATE<span class="token punctuation">,</span>
+                    <span class="token punctuation">(</span>LOG_IMMEDIATE_TEST_MESSAGES_LIMIT<span class="token punctuation">)</span><span class="token punctuation">,</span>
+                    <span class="token punctuation">(</span>CONFIG_LOG_BUFFER_SIZE <span class="token operator">/</span> <span class="token keyword">sizeof</span><span class="token punctuation">(</span><span class="token keyword">struct</span> <span class="token class-name">log_msg</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
+<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span></span></code></pre>
+<p>当 CONFIG_LOG_IMMEDIATE = 1 时，上述代码同：</p>
+<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token class-name">uint32_t</span> limit <span class="token operator">=</span> LOG_IMMEDIATE_TEST_MESSAGES_LIMIT<span class="token punctuation">;</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre>
+<p>否则:</p>
+<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token class-name">uint32_t</span> limit <span class="token operator">=</span> CONFIG_LOG_BUFFER_SIZE <span class="token operator">/</span> <span class="token keyword">sizeof</span><span class="token punctuation">(</span><span class="token keyword">struct</span> <span class="token class-name">log_msg</span><span class="token punctuation">)</span><span class="token punctuation">;</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre>
+
+<p>当我们只有CONFIG_LOG_IMMEDIATE = 1的操作时，则可以使用更简洁的代码</p>
+<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token class-name">uint32_t</span> limit <span class="token operator">=</span> <span class="token function">IF_ENABLED</span><span class="token punctuation">(</span>CONFIG_LOG_IMMEDIATE<span class="token punctuation">,</span> <span class="token punctuation">(</span>LOG_IMMEDIATE_TEST_MESSAGES_LIMIT<span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre>
+<p>同样COND_CODE_0的用法和COND_CODE_1相反，不多在举例了。</p>
+
                 
             </div>
             <hr/>
@@ -510,7 +579,7 @@
                     </i>
                 </span>
                 <span class="reprint-info">
-                    <a href="https://kabirz.github.io/contact/index-1.html">https://kabirz.github.io/contact/index-1.html</a>
+                    <a href="https://kabirz.github.io/2021/04/13/zephyr-cond-code/">https://kabirz.github.io/2021/04/13/zephyr-cond-code/</a>
                 </span>
             </div>
             <div class="reprint__notice">
@@ -547,7 +616,15 @@
                 <div class="post-meta__tag-list" style="display: inline-block;">
                     
                         <div class="article-tag">
-                            <span class="chip bg-color">无标签</span>
+                            
+                                <a href="/tags/zephyr-util/">
+                                    <span class="chip bg-color">zephyr_util</span>
+                                </a>
+                            
+                                <a href="/tags/condtion/">
+                                    <span class="chip bg-color">condtion</span>
+                                </a>
+                            
                         </div>
                     
                 </div>
@@ -596,13 +673,13 @@
                 <i class="far fa-dot-circle"></i>&nbsp;本篇
             </div>
             <div class="card">
-                <a href="/contact/index-1.html">
+                <a href="/2021/04/13/zephyr-cond-code/">
                     <div class="card-image">
                         
                         
-                        <img src="/medias/featureimages/16.jpg" class="responsive-img" alt="contact">
+                        <img src="/medias/featureimages/4.jpg" class="responsive-img" alt="zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED">
                         
-                        <span class="card-title">contact</span>
+                        <span class="card-title">zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED</span>
                     </div>
                 </a>
                 <div class="card-content article-content">
@@ -613,17 +690,37 @@
                     </div>
                     <div class="publish-info">
                             <span class="publish-date">
-                                <i class="far fa-clock fa-fw icon-date"></i>2021-03-25
+                                <i class="far fa-clock fa-fw icon-date"></i>2021-04-13
                             </span>
                         <span class="publish-author">
                             
-                            <i class="fas fa-user fa-fw"></i>
-                            Kabirz
+                            <i class="fas fa-bookmark fa-fw icon-category"></i>
+                            
+                            <a href="/categories/zephyr/" class="post-category">
+                                    zephyr
+                                </a>
+                            
+                            <a href="/categories/zephyr/rtos/" class="post-category">
+                                    rtos
+                                </a>
+                            
                             
                         </span>
                     </div>
                 </div>
 
+                
+                <div class="card-action article-tags">
+                    
+                    <a href="/tags/zephyr-util/">
+                        <span class="chip bg-color">zephyr_util</span>
+                    </a>
+                    
+                    <a href="/tags/condtion/">
+                        <span class="chip bg-color">condtion</span>
+                    </a>
+                    
+                </div>
                 
             </div>
         </div>
@@ -631,16 +728,16 @@
         
         <div class="article col s12 m6" data-aos="fade-up">
             <div class="article-badge right-badge text-color">
-                本篇&nbsp;<i class="far fa-dot-circle"></i>
+                下一篇&nbsp;<i class="fas fa-chevron-right"></i>
             </div>
             <div class="card">
-                <a href="/contact/index-1.html">
+                <a href="/2021/04/13/zephyr-is-enabled/">
                     <div class="card-image">
                         
                         
-                        <img src="/medias/featureimages/16.jpg" class="responsive-img" alt="contact">
+                        <img src="/medias/featureimages/16.jpg" class="responsive-img" alt="zephyr 源码分析之IS_ENABLED">
                         
-                        <span class="card-title">contact</span>
+                        <span class="card-title">zephyr 源码分析之IS_ENABLED</span>
                     </div>
                 </a>
                 <div class="card-content article-content">
@@ -651,17 +748,36 @@
                     </div>
                     <div class="publish-info">
                             <span class="publish-date">
-                                <i class="far fa-clock fa-fw icon-date"></i>2021-03-25
+                                <i class="far fa-clock fa-fw icon-date"></i>2021-04-13
                             </span>
                         <span class="publish-author">
                             
-                            <i class="fas fa-user fa-fw"></i>
-                            Kabirz
+                            <i class="fas fa-bookmark fa-fw icon-category"></i>
+                            
+                            <a href="/categories/zephyr/" class="post-category">
+                                    zephyr
+                                </a>
+                            
+                            <a href="/categories/zephyr/rtos/" class="post-category">
+                                    rtos
+                                </a>
+                            
                             
                         </span>
                     </div>
                 </div>
-
+                
+                <div class="card-action article-tags">
+                    
+                    <a href="/tags/zephyr-util/">
+                        <span class="chip bg-color">zephyr_util</span>
+                    </a>
+                    
+                    <a href="/tags/is-enabled/">
+                        <span class="chip bg-color">is_enabled</span>
+                    </a>
+                    
+                </div>
                 
             </div>
         </div>
