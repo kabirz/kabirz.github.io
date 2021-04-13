@@ -4,7 +4,7 @@
 
 <head>
     <meta charset="utf-8">
-    <meta name="keywords" content="contact, c rust c++">
+    <meta name="keywords" content="zephyr 源码分析之IS_ENABLED, c rust c++">
     <meta name="description" content="个人笔记">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
@@ -16,7 +16,7 @@
     <!-- Global site tag (gtag.js) - Google Analytics -->
 
 
-    <title>contact | 我的个人博客</title>
+    <title>zephyr 源码分析之IS_ENABLED | 我的个人博客</title>
     <link rel="icon" type="image/png" href="/favicon.png">
 
     <link rel="stylesheet" type="text/css" href="/libs/awesome/css/all.css">
@@ -317,7 +317,7 @@
         <div class="row">
             <div class="col s12 m12 l12">
                 <div class="brand">
-                    <h1 class="description center-align post-title">contact</h1>
+                    <h1 class="description center-align post-title">zephyr 源码分析之IS_ENABLED</h1>
                 </div>
             </div>
         </div>
@@ -431,12 +431,33 @@
             <div class="row tag-cate">
                 <div class="col s7">
                     
-                          <div class="article-tag">
-                            <span class="chip bg-color">无标签</span>
-                          </div>
+                    <div class="article-tag">
+                        
+                            <a href="/tags/zephyr-util/">
+                                <span class="chip bg-color">zephyr_util</span>
+                            </a>
+                        
+                            <a href="/tags/is-enabled/">
+                                <span class="chip bg-color">is_enabled</span>
+                            </a>
+                        
+                    </div>
                     
                 </div>
                 <div class="col s5 right-align">
+                    
+                    <div class="post-cate">
+                        <i class="fas fa-bookmark fa-fw icon-category"></i>
+                        
+                            <a href="/categories/zephyr/" class="post-category">
+                                zephyr
+                            </a>
+                        
+                            <a href="/categories/zephyr/rtos/" class="post-category">
+                                rtos
+                            </a>
+                        
+                    </div>
                     
                 </div>
             </div>
@@ -445,7 +466,7 @@
                 
                 <div class="post-date info-break-policy">
                     <i class="far fa-calendar-minus fa-fw"></i>发布日期:&nbsp;&nbsp;
-                    2021-03-25
+                    2021-04-13
                 </div>
                 
 
@@ -454,7 +475,7 @@
                 
                 <div class="info-break-policy">
                     <i class="far fa-file-word fa-fw"></i>文章字数:&nbsp;&nbsp;
-                    0
+                    218
                 </div>
                 
 
@@ -484,7 +505,23 @@
 
         <div class="card-content article-card-content">
             <div id="articleContent">
-                
+                <h3 id="如何在zephyr代码中动态判断kconfig中的config是否enable呢？"><a href="#如何在zephyr代码中动态判断kconfig中的config是否enable呢？" class="headerlink" title="如何在zephyr代码中动态判断kconfig中的config是否enable呢？"></a>如何在zephyr代码中动态判断kconfig中的config是否enable呢？</h3><p>zephyr 源码提供了宏IS_ENABLED来判断 某个宏是否定义, 具体实现在<a target="_blank" rel="noopener" href="https://github.com/zephyrproject-rtos/zephyr/blob/master/include/sys/util_macro.h">util_macro.h</a>和<a target="_blank" rel="noopener" href="https://github.com/zephyrproject-rtos/zephyr/blob/master/include/sys/util_internal.h">util_internal.h</a></p>
+<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token comment">/* ####################################################################### */</span>
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">IS_ENABLED</span><span class="token expression"><span class="token punctuation">(</span>config_macro<span class="token punctuation">)</span> <span class="token function">Z_IS_ENABLED1</span><span class="token punctuation">(</span>config_macro<span class="token punctuation">)</span></span></span>
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">Z_IS_ENABLED1</span><span class="token expression"><span class="token punctuation">(</span>config_macro<span class="token punctuation">)</span> <span class="token function">Z_IS_ENABLED2</span><span class="token punctuation">(</span>_XXXX</span><span class="token punctuation">##</span><span class="token expression">config_macro<span class="token punctuation">)</span></span></span>
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name">_XXXX1</span> <span class="token expression">_YYYY<span class="token punctuation">,</span></span></span>
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">Z_IS_ENABLED2</span><span class="token expression"><span class="token punctuation">(</span>one_or_two_args<span class="token punctuation">)</span> <span class="token function">Z_IS_ENABLED3</span><span class="token punctuation">(</span>one_or_two_args <span class="token number">1</span><span class="token punctuation">,</span> <span class="token number">0</span><span class="token punctuation">)</span></span></span>
+<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">Z_IS_ENABLED3</span><span class="token expression"><span class="token punctuation">(</span>ignore_this<span class="token punctuation">,</span> val<span class="token punctuation">,</span> <span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">)</span> val</span></span>
+<span class="token comment">/* ####################################################################### */</span><span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></span></code></pre>
+<p>举个例子：<br>当LOG_IMMEDIATE 被enable时，即CONFIG_LOG_IMMEDIATE=y, 执行cmake config之后会生成文件<br><code>&lt;build_dir&gt;/zephyr/include/generated/autoconf.h</code>,其中有</p>
+<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name">CONFIG_LOG_IMMEDIATE</span> <span class="token expression"><span class="token number">1</span></span></span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre>
+<p>IS_ENABLED(CONFIG_LOG_IMMEDIATE) =&gt; IS_ENABLED(1) =&gt; Z_IS_ENABLED3(_YYYY, 1, 0) =&gt; 1<br>当当LOG_IMMEDIATE 没有被enable时，CONFIG_LOG_IMMEDIATE为空白，则<br>IS_ENABLED(CONFIG_LOG_IMMEDIATE) =&gt; IS_ENABLED() =&gt; Z_IS_ENABLED3(_YYYY 1, 0) =&gt; 0<br>如果我们需要动态的判断宏enable之后的操作，只需如果操作:</p>
+<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token keyword">if</span> <span class="token punctuation">(</span><span class="token function">IS_ENABLED</span><span class="token punctuation">(</span>CONFIG_LOG_IMMEDIATE<span class="token punctuation">)</span><span class="token punctuation">)</span> <span class="token punctuation">{</span>
+    <span class="token comment">// 当ONFIG_LOG_IMMEDIATE enable时的具体代码</span>
+<span class="token punctuation">}</span><span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span></span></code></pre>
+
+<p>当然这种判断只有在config是bool类型的时候才能用， 如果这个config是一个字符串或者其他数时，IS_EANBLED将不能使用。</p>
+
                 
             </div>
             <hr/>
@@ -510,7 +547,7 @@
                     </i>
                 </span>
                 <span class="reprint-info">
-                    <a href="https://kabirz.github.io/contact/index-1.html">https://kabirz.github.io/contact/index-1.html</a>
+                    <a href="https://kabirz.github.io/2021/04/13/zephyr-is-enabled/">https://kabirz.github.io/2021/04/13/zephyr-is-enabled/</a>
                 </span>
             </div>
             <div class="reprint__notice">
@@ -547,7 +584,15 @@
                 <div class="post-meta__tag-list" style="display: inline-block;">
                     
                         <div class="article-tag">
-                            <span class="chip bg-color">无标签</span>
+                            
+                                <a href="/tags/zephyr-util/">
+                                    <span class="chip bg-color">zephyr_util</span>
+                                </a>
+                            
+                                <a href="/tags/is-enabled/">
+                                    <span class="chip bg-color">is_enabled</span>
+                                </a>
+                            
                         </div>
                     
                 </div>
@@ -591,18 +636,17 @@
 <article id="prenext-posts" class="prev-next articles">
     <div class="row article-row">
         
-        <div class="article col s12 m6" data-aos="fade-up" data-aos="fade-up">
+        <div class="article col s12 m6" data-aos="fade-up">
             <div class="article-badge left-badge text-color">
-                <i class="far fa-dot-circle"></i>&nbsp;本篇
-            </div>
+                <i class="fas fa-chevron-left"></i>&nbsp;上一篇</div>
             <div class="card">
-                <a href="/contact/index-1.html">
+                <a href="/2021/04/13/zephyr-cond-code/">
                     <div class="card-image">
                         
                         
-                        <img src="/medias/featureimages/16.jpg" class="responsive-img" alt="contact">
+                        <img src="/medias/featureimages/4.jpg" class="responsive-img" alt="zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED">
                         
-                        <span class="card-title">contact</span>
+                        <span class="card-title">zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED</span>
                     </div>
                 </a>
                 <div class="card-content article-content">
@@ -612,18 +656,37 @@
                         
                     </div>
                     <div class="publish-info">
-                            <span class="publish-date">
-                                <i class="far fa-clock fa-fw icon-date"></i>2021-03-25
-                            </span>
+                        <span class="publish-date">
+                            <i class="far fa-clock fa-fw icon-date"></i>2021-04-13
+                        </span>
                         <span class="publish-author">
                             
-                            <i class="fas fa-user fa-fw"></i>
-                            Kabirz
+                            <i class="fas fa-bookmark fa-fw icon-category"></i>
+                            
+                            <a href="/categories/zephyr/" class="post-category">
+                                    zephyr
+                                </a>
+                            
+                            <a href="/categories/zephyr/rtos/" class="post-category">
+                                    rtos
+                                </a>
+                            
                             
                         </span>
                     </div>
                 </div>
-
+                
+                <div class="card-action article-tags">
+                    
+                    <a href="/tags/zephyr-util/">
+                        <span class="chip bg-color">zephyr_util</span>
+                    </a>
+                    
+                    <a href="/tags/condtion/">
+                        <span class="chip bg-color">condtion</span>
+                    </a>
+                    
+                </div>
                 
             </div>
         </div>
@@ -631,16 +694,16 @@
         
         <div class="article col s12 m6" data-aos="fade-up">
             <div class="article-badge right-badge text-color">
-                本篇&nbsp;<i class="far fa-dot-circle"></i>
+                下一篇&nbsp;<i class="fas fa-chevron-right"></i>
             </div>
             <div class="card">
-                <a href="/contact/index-1.html">
+                <a href="/2021/03/31/resource/">
                     <div class="card-image">
                         
                         
-                        <img src="/medias/featureimages/16.jpg" class="responsive-img" alt="contact">
+                        <img src="/medias/featureimages/14.jpg" class="responsive-img" alt="资源统计">
                         
-                        <span class="card-title">contact</span>
+                        <span class="card-title">资源统计</span>
                     </div>
                 </a>
                 <div class="card-content article-content">
@@ -651,7 +714,7 @@
                     </div>
                     <div class="publish-info">
                             <span class="publish-date">
-                                <i class="far fa-clock fa-fw icon-date"></i>2021-03-25
+                                <i class="far fa-clock fa-fw icon-date"></i>2021-03-31
                             </span>
                         <span class="publish-author">
                             
@@ -661,7 +724,22 @@
                         </span>
                     </div>
                 </div>
-
+                
+                <div class="card-action article-tags">
+                    
+                    <a href="/tags/hexo/">
+                        <span class="chip bg-color">hexo</span>
+                    </a>
+                    
+                    <a href="/tags/python/">
+                        <span class="chip bg-color">python</span>
+                    </a>
+                    
+                    <a href="/tags/git/">
+                        <span class="chip bg-color">git</span>
+                    </a>
+                    
+                </div>
                 
             </div>
         </div>
