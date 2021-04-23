@@ -4,7 +4,7 @@
 
 <head>
     <meta charset="utf-8">
-    <meta name="keywords" content="zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED, c rust c++">
+    <meta name="keywords" content="wsl2 安装ArchLinux方法, c rust c++">
     <meta name="description" content="个人笔记">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
@@ -16,7 +16,7 @@
     <!-- Global site tag (gtag.js) - Google Analytics -->
 
 
-    <title>zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED | 我的个人博客</title>
+    <title>wsl2 安装ArchLinux方法 | 我的个人博客</title>
     <link rel="icon" type="image/png" href="/favicon.png">
 
     <link rel="stylesheet" type="text/css" href="/libs/awesome/css/all.css">
@@ -312,12 +312,12 @@
 
 
 
-<div class="bg-cover pd-header post-cover" style="background-image: url('/medias/featureimages/4.jpg')">
+<div class="bg-cover pd-header post-cover" style="background-image: url('/medias/featureimages/8.jpg')">
     <div class="container" style="right: 0px;left: 0px;">
         <div class="row">
             <div class="col s12 m12 l12">
                 <div class="brand">
-                    <h1 class="description center-align post-title">zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED</h1>
+                    <h1 class="description center-align post-title">wsl2 安装ArchLinux方法</h1>
                 </div>
             </div>
         </div>
@@ -433,31 +433,22 @@
                     
                     <div class="article-tag">
                         
-                            <a href="/tags/condtion/">
-                                <span class="chip bg-color">condtion</span>
+                            <a href="/tags/Linux/">
+                                <span class="chip bg-color">Linux</span>
                             </a>
                         
-                            <a href="/tags/zephyr-util/">
-                                <span class="chip bg-color">zephyr_util</span>
+                            <a href="/tags/ArchLinux/">
+                                <span class="chip bg-color">ArchLinux</span>
+                            </a>
+                        
+                            <a href="/tags/nvim/">
+                                <span class="chip bg-color">nvim</span>
                             </a>
                         
                     </div>
                     
                 </div>
                 <div class="col s5 right-align">
-                    
-                    <div class="post-cate">
-                        <i class="fas fa-bookmark fa-fw icon-category"></i>
-                        
-                            <a href="/categories/zephyr/" class="post-category">
-                                zephyr
-                            </a>
-                        
-                            <a href="/categories/zephyr/rtos/" class="post-category">
-                                rtos
-                            </a>
-                        
-                    </div>
                     
                 </div>
             </div>
@@ -466,7 +457,7 @@
                 
                 <div class="post-date info-break-policy">
                     <i class="far fa-calendar-minus fa-fw"></i>发布日期:&nbsp;&nbsp;
-                    2021-04-13
+                    2021-04-23
                 </div>
                 
 
@@ -475,14 +466,14 @@
                 
                 <div class="info-break-policy">
                     <i class="far fa-file-word fa-fw"></i>文章字数:&nbsp;&nbsp;
-                    304
+                    532
                 </div>
                 
 
                 
                 <div class="info-break-policy">
                     <i class="far fa-clock fa-fw"></i>阅读时长:&nbsp;&nbsp;
-                    1 分
+                    2 分
                 </div>
                 
 
@@ -505,54 +496,68 @@
 
         <div class="card-content article-card-content">
             <div id="articleContent">
-                <h3 id="COND-CODE-1-和-COND-CODE-0"><a href="#COND-CODE-1-和-COND-CODE-0" class="headerlink" title="COND_CODE_1 和 COND_CODE_0"></a>COND_CODE_1 和 COND_CODE_0</h3><pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token comment">/* ####################################################################### */</span> 
-<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">IF_ENABLED</span><span class="token expression"><span class="token punctuation">(</span>_flag<span class="token punctuation">,</span> _code<span class="token punctuation">)</span> </span><span class="token punctuation">\</span>
-        <span class="token expression"><span class="token function">COND_CODE_1</span><span class="token punctuation">(</span>_flag<span class="token punctuation">,</span> _code<span class="token punctuation">,</span> <span class="token punctuation">(</span><span class="token punctuation">)</span><span class="token punctuation">)</span></span></span>
-<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name">_XXXX1</span> <span class="token expression">_YYYY<span class="token punctuation">,</span></span></span>
-<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">Z_COND_CODE_1</span><span class="token expression"><span class="token punctuation">(</span>_flag<span class="token punctuation">,</span> _if_1_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span> </span><span class="token punctuation">\</span>
-	<span class="token expression"><span class="token function">__COND_CODE</span><span class="token punctuation">(</span>_XXXX</span><span class="token punctuation">##</span><span class="token expression">_flag<span class="token punctuation">,</span> _if_1_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span></span></span>
-<span class="token comment">// Z_COND_CODE_1(1, (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// _COND_CODE(_YYYY,, (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// __GET_ARG2_DEBRACKET(_YYYY, (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// __DEBRACKET ((int a = 10;)) =&gt; int a = 10;</span>
+                <h2 id="wsl2-安装ArchLinux方法"><a href="#wsl2-安装ArchLinux方法" class="headerlink" title="wsl2 安装ArchLinux方法"></a>wsl2 安装ArchLinux方法</h2><p>如果大家使用过wsl2的话，我们通常只能在Microsoft Store 上下载安装Ubuntu等Linux操作系统， 但是找不到Arch Linux。那么我们需要如何在wsl2上安装Arch Linux呢？</p>
+<h3 id="通过LxRunOffline-安装"><a href="#通过LxRunOffline-安装" class="headerlink" title="通过LxRunOffline 安装"></a>通过LxRunOffline 安装</h3><ol>
+<li> 安装LxRunOffline, 这里以3.5.0版本为例，实际上大家可以去安装最新版本</li>
+</ol>
+   <pre class="line-numbers language-powershell" data-language="powershell"><code class="language-powershell">cd <span class="token operator">%</span>USERPROFILE<span class="token operator">%</span>\Downloads
+curl <span class="token operator">-</span>LO https:<span class="token operator">/</span><span class="token operator">/</span>github<span class="token punctuation">.</span>com<span class="token operator">/</span>DDoSolitary<span class="token operator">/</span>LxRunOffline<span class="token operator">/</span>releases<span class="token operator">/</span>download<span class="token operator">/</span>v3<span class="token punctuation">.</span>5<span class="token punctuation">.</span>0<span class="token operator">/</span>LxRunOffline<span class="token operator">-</span>v3<span class="token punctuation">.</span>5<span class="token punctuation">.</span>0<span class="token operator">-</span>msvc<span class="token punctuation">.</span>zip
+powershell <span class="token operator">-</span>c <span class="token function">Expand-Archive</span> LxRunOffline<span class="token operator">-</span>v3<span class="token punctuation">.</span>5<span class="token punctuation">.</span>0<span class="token operator">-</span>msvc<span class="token punctuation">.</span>zip
+cd LxRunOffline<span class="token operator">-</span>v3<span class="token punctuation">.</span>5<span class="token punctuation">.</span>0<span class="token operator">-</span>msvc
+<span class="token function">copy</span> LxRunOffline<span class="token punctuation">.</span>exe C:\Windows <span class="token comment"># 这步可以根据自己的需要， 不需要也许，但使用时要注意该命令的位置</span><span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span><span></span><span></span></span></code></pre>
 
-<span class="token comment">// Z_COND_CODE_1(0, (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// _COND_CODE(_XXXX0, (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// __GET_ARG2_DEBRACKET(_XXXX0 (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// __DEBRACKET ((int a = 100;)) =&gt; int a = 100;</span>
-<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">Z_COND_CODE_0</span><span class="token expression"><span class="token punctuation">(</span>_flag<span class="token punctuation">,</span> _if_0_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span> </span><span class="token punctuation">\</span>
-  <span class="token expression"><span class="token function">__COND_CODE</span><span class="token punctuation">(</span>_ZZZZ</span><span class="token punctuation">##</span><span class="token expression">_flag<span class="token punctuation">,</span> _if_0_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span></span></span>
-<span class="token comment">// Z_COND_CODE_0(1, (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// _COND_CODE(_ZZZZ1, (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// __GET_ARG2_DEBRACKET(_ZZZZ1 (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// __DEBRACKET ((int a = 100;)) =&gt; int a = 100;</span>
+<ol start="2">
+<li>下载最新版本</li>
+</ol>
+<pre class="line-numbers language-po" data-language="po"><code class="language-po">cd %USERPROFILE%\Downloads
+curl -LO http://mirrors.163.com/archlinux/iso/2021.04.01/archlinux-bootstrap-2021.04.01-x86_64.tar.gz<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span></span></code></pre>
 
-<span class="token comment">// Z_COND_CODE_0(0, (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// _COND_CODE(_YYYY,, (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// __GET_ARG2_DEBRACKET(_YYYY, (int a = 10;), (int a = 100;))</span>
-<span class="token comment">// __DEBRACKET ((int a = 10;)) =&gt; int a = 10;</span>
-<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name">_ZZZZ0</span> <span class="token expression">_YYYY<span class="token punctuation">,</span></span></span>
- 
-<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">__COND_CODE</span><span class="token expression"><span class="token punctuation">(</span>one_or_two_args<span class="token punctuation">,</span> _if_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span> </span><span class="token punctuation">\</span>
-  <span class="token expression"><span class="token function">__GET_ARG2_DEBRACKET</span><span class="token punctuation">(</span>one_or_two_args _if_code<span class="token punctuation">,</span> _else_code<span class="token punctuation">)</span></span></span>
+<ol start="3">
+<li>安装到wsl2, 时间稍微较长需要等待一会儿</li>
+</ol>
+<pre class="line-numbers language-po" data-language="po"><code class="language-po">mkdir D:\WSL\Arch
+LxRunOffline i -n &lt;ArchName&gt; -d D:\WSL\Arch\ -f %USERPROFILE%\Downloads\archlinux-bootstrap-2021.04.01-x86_64.tar.gz -r root.x86_64<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span></span></code></pre>
 
-<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">__GET_ARG2_DEBRACKET</span><span class="token expression"><span class="token punctuation">(</span>ignore_this<span class="token punctuation">,</span> val<span class="token punctuation">,</span> <span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">)</span> __DEBRACKET val</span></span>
-<span class="token macro property"><span class="token directive-hash">#</span><span class="token directive keyword">define</span> <span class="token macro-name function">__DEBRACKET</span><span class="token expression"><span class="token punctuation">(</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">.</span><span class="token punctuation">)</span> __VA_ARGS__</span></span>
+<pre><code>4.    上一步默认使用的时wsl1，我们需要切换到wsl2，时间稍微较长需要等待一会儿
+</code></pre>
+<pre class="line-numbers language-po" data-language="po"><code class="language-po">wsl --set-version &lt;ArchName&gt; 2<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre>
 
-<span class="token comment">/* ####################################################################### */</span><span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></span></code></pre>
-<p>使用IS_ENABLED操作的代码较短时， code看上去会感觉比较臃肿，COND_CODE_1/COND_CODE_0 可以更好的解决这个问题，如(特别要注意2，3行的括号不能忘记)：</p>
-<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token class-name">uint32_t</span> limit <span class="token operator">=</span> <span class="token function">COND_CODE_1</span><span class="token punctuation">(</span>CONFIG_LOG_IMMEDIATE<span class="token punctuation">,</span>
-                    <span class="token punctuation">(</span>LOG_IMMEDIATE_TEST_MESSAGES_LIMIT<span class="token punctuation">)</span><span class="token punctuation">,</span>
-                    <span class="token punctuation">(</span>CONFIG_LOG_BUFFER_SIZE <span class="token operator">/</span> <span class="token keyword">sizeof</span><span class="token punctuation">(</span><span class="token keyword">struct</span> <span class="token class-name">log_msg</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span>
-<span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span></span></code></pre>
-<p>当 CONFIG_LOG_IMMEDIATE = 1 时，上述代码同：</p>
-<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token class-name">uint32_t</span> limit <span class="token operator">=</span> LOG_IMMEDIATE_TEST_MESSAGES_LIMIT<span class="token punctuation">;</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre>
-<p>否则:</p>
-<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token class-name">uint32_t</span> limit <span class="token operator">=</span> CONFIG_LOG_BUFFER_SIZE <span class="token operator">/</span> <span class="token keyword">sizeof</span><span class="token punctuation">(</span><span class="token keyword">struct</span> <span class="token class-name">log_msg</span><span class="token punctuation">)</span><span class="token punctuation">;</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre>
+<pre><code>5. 到此已经安装完成，接下来去初始化ArchLinux即可
+</code></pre>
+<pre class="line-numbers language-powershell" data-language="powershell"><code class="language-powershell">wsl ~ <span class="token operator">-</span>d &lt;ArchName&gt;
+notepad<span class="token punctuation">.</span>exe <span class="token operator">/</span>etc<span class="token operator">/</span>pacman<span class="token punctuation">.</span>d<span class="token operator">/</span>mirrorlist <span class="token comment"># 更改为国内镜像</span>
+pacman<span class="token operator">-</span>key <span class="token operator">--</span>init
+pacman<span class="token operator">-</span>key <span class="token operator">--</span>populate archlinux
+pacman <span class="token operator">-</span>Syu base base<span class="token operator">-</span>devel vim sudo <span class="token comment"># 初始化key和安装基本软件</span>
+passwd root <span class="token comment"># 设置root密码</span>
+useradd <span class="token operator">-</span>m <span class="token operator">-</span>G wheel username <span class="token comment"># 添加普遍用户</span>
+passwd username <span class="token comment"># 设置普通用户密码</span>
+visudo <span class="token comment"># 找到 %wheel ALL=(ALL), 取消前面的注释</span><span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></span></code></pre>
 
-<p>当我们只有CONFIG_LOG_IMMEDIATE = 1的操作时，则可以使用更简洁的代码</p>
-<pre class="line-numbers language-c" data-language="c"><code class="language-c"><span class="token class-name">uint32_t</span> limit <span class="token operator">=</span> <span class="token function">IF_ENABLED</span><span class="token punctuation">(</span>CONFIG_LOG_IMMEDIATE<span class="token punctuation">,</span> <span class="token punctuation">(</span>LOG_IMMEDIATE_TEST_MESSAGES_LIMIT<span class="token punctuation">)</span><span class="token punctuation">)</span><span class="token punctuation">;</span><span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre>
-<p>同样COND_CODE_0的用法和COND_CODE_1相反，不多在举例了。</p>
+<ol start="6">
+<li>设置为普通用户启动</li>
+</ol>
+<pre class="line-numbers language-powershell" data-language="powershell"><code class="language-powershell">LxRunOffline su <span class="token operator">-</span>n Arch <span class="token operator">-</span>v 1000<span aria-hidden="true" class="line-numbers-rows"><span></span></span></code></pre>
+
+<h2 id="以下是个人环境的安装"><a href="#以下是个人环境的安装" class="headerlink" title="以下是个人环境的安装"></a>以下是个人环境的安装</h2><ol>
+<li> 安装zsh框架zim， ohmyzsh太过庞大，这个小巧强悍</li>
+</ol>
+<pre class="line-numbers language-bash" data-language="bash"><code class="language-bash"><span class="token function">sudo</span> pacman -S <span class="token function">git</span> <span class="token function">zsh</span> fzf pkgfile
+chsh -s <span class="token variable"><span class="token variable">$(</span><span class="token function">which</span> <span class="token function">zsh</span><span class="token variable">)</span></span>
+<span class="token function">sudo</span> pkgfile -u
+<span class="token function">git</span> clone https://github.com/kabirz/zimfw ~/.zimfw
+<span class="token builtin class-name">cd</span> ~/.zimfw
+<span class="token function">bash</span> ./install.sh <span class="token comment"># 等待安装完成，然后重启终端</span><span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span><span></span><span></span><span></span></span></code></pre>
+
+<ol start="2">
+<li>安装neovim及其插件</li>
+</ol>
+<pre class="line-numbers language-bash" data-language="bash"><code class="language-bash"><span class="token function">sudo</span> pacman -S neovim python python-neovim the_silver_searcher ranger cmake nodejs <span class="token function">yarn</span> <span class="token function">npm</span> rust-analyzer ccls clang-format global ripgrep xonsh ipython3
+<span class="token function">git</span> clone https://github.com/kabirz/nvim ~/.config/nvim/
+<span class="token function">sudo</span> <span class="token function">ln</span> -s /usr/bin/nvim /usr/bin/vi
+<span class="token function">sudo</span> <span class="token function">ln</span> -s /usr/bin/nvim /usr/bin/vim
+<span class="token function">vi</span>  <span class="token comment">#等待较长一段时间，这是在安装相关环境及插件</span><span aria-hidden="true" class="line-numbers-rows"><span></span><span></span><span></span><span></span><span></span></span></code></pre>
+
 
                 
             </div>
@@ -579,7 +584,7 @@
                     </i>
                 </span>
                 <span class="reprint-info">
-                    <a href="https://kabirz.github.io/2021/04/13/zephyr-cond-code/">https://kabirz.github.io/2021/04/13/zephyr-cond-code/</a>
+                    <a href="https://kabirz.github.io/2021/04/23/Archlinux-install/">https://kabirz.github.io/2021/04/23/Archlinux-install/</a>
                 </span>
             </div>
             <div class="reprint__notice">
@@ -617,12 +622,16 @@
                     
                         <div class="article-tag">
                             
-                                <a href="/tags/condtion/">
-                                    <span class="chip bg-color">condtion</span>
+                                <a href="/tags/Linux/">
+                                    <span class="chip bg-color">Linux</span>
                                 </a>
                             
-                                <a href="/tags/zephyr-util/">
-                                    <span class="chip bg-color">zephyr_util</span>
+                                <a href="/tags/ArchLinux/">
+                                    <span class="chip bg-color">ArchLinux</span>
+                                </a>
+                            
+                                <a href="/tags/nvim/">
+                                    <span class="chip bg-color">nvim</span>
                                 </a>
                             
                         </div>
@@ -668,9 +677,10 @@
 <article id="prenext-posts" class="prev-next articles">
     <div class="row article-row">
         
-        <div class="article col s12 m6" data-aos="fade-up">
+        <div class="article col s12 m6" data-aos="fade-up" data-aos="fade-up">
             <div class="article-badge left-badge text-color">
-                <i class="fas fa-chevron-left"></i>&nbsp;上一篇</div>
+                <i class="far fa-dot-circle"></i>&nbsp;本篇
+            </div>
             <div class="card">
                 <a href="/2021/04/23/Archlinux-install/">
                     <div class="card-image">
@@ -688,9 +698,9 @@
                         
                     </div>
                     <div class="publish-info">
-                        <span class="publish-date">
-                            <i class="far fa-clock fa-fw icon-date"></i>2021-04-23
-                        </span>
+                            <span class="publish-date">
+                                <i class="far fa-clock fa-fw icon-date"></i>2021-04-23
+                            </span>
                         <span class="publish-author">
                             
                             <i class="fas fa-user fa-fw"></i>
@@ -699,6 +709,7 @@
                         </span>
                     </div>
                 </div>
+
                 
                 <div class="card-action article-tags">
                     
@@ -725,13 +736,13 @@
                 下一篇&nbsp;<i class="fas fa-chevron-right"></i>
             </div>
             <div class="card">
-                <a href="/2021/04/13/zephyr-is-enabled/">
+                <a href="/2021/04/13/zephyr-cond-code/">
                     <div class="card-image">
                         
                         
-                        <img src="/medias/featureimages/16.jpg" class="responsive-img" alt="zephyr 源码分析之IS_ENABLED">
+                        <img src="/medias/featureimages/4.jpg" class="responsive-img" alt="zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED">
                         
-                        <span class="card-title">zephyr 源码分析之IS_ENABLED</span>
+                        <span class="card-title">zephyr 源码分析之COND_CODE_1, COND_CODE_0 和 IF_ENABLED</span>
                     </div>
                 </a>
                 <div class="card-content article-content">
@@ -763,12 +774,12 @@
                 
                 <div class="card-action article-tags">
                     
-                    <a href="/tags/zephyr-util/">
-                        <span class="chip bg-color">zephyr_util</span>
+                    <a href="/tags/condtion/">
+                        <span class="chip bg-color">condtion</span>
                     </a>
                     
-                    <a href="/tags/is-enabled/">
-                        <span class="chip bg-color">is_enabled</span>
+                    <a href="/tags/zephyr-util/">
+                        <span class="chip bg-color">zephyr_util</span>
                     </a>
                     
                 </div>
