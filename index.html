@@ -3,274 +3,331 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>文档导航</title>
+<title>Linux 内核深度解析 · 文档导航</title>
 <style>
-  :root {
-    --bg: #f0f2f5;
-    --card: #ffffff;
-    --border: #d0d7de;
-    --accent: #0969da;
-    --accent2: #1a7f37;
-    --accent3: #8250df;
-    --accent4: #bc4c00;
-    --text: #1f2328;
-    --text-dim: #656d76;
-    --code-bg: #f6f8fa;
-    --highlight: #ddf4ff;
-  }
+  :root { --bg: #f0f2f5; --card: #ffffff; --border: #d0d7de; --accent: #0969da; --accent2: #1a7f37; --accent3: #8250df; --accent4: #bc4c00; --text: #1f2328; --text-dim: #656d76; --code-bg: #f6f8fa; --highlight: #ddf4ff; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    line-height: 1.7;
-  }
-  .header {
-    background: linear-gradient(135deg, #f6f8fa 0%, #e8ecf0 50%, #f6f8fa 100%);
-    border-bottom: 1px solid var(--border);
-    padding: 50px 20px 40px;
-    text-align: center;
-    position: relative;
-    overflow: hidden;
-  }
-  .header::before {
-    content: '';
-    position: absolute;
-    top: -50%;
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    background: radial-gradient(circle at 30% 50%, rgba(9,105,218,0.06) 0%, transparent 50%),
-                radial-gradient(circle at 70% 50%, rgba(130,80,223,0.04) 0%, transparent 50%);
-  }
-  .header h1 {
-    font-size: 2.2em;
-    font-weight: 700;
-    background: linear-gradient(135deg, #0969da, #8250df);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    position: relative;
-    margin-bottom: 8px;
-  }
-  .header p {
-    color: var(--text-dim);
-    font-size: 1.05em;
-    position: relative;
-  }
-  .container {
-    max-width: 900px;
-    margin: 0 auto;
-    padding: 40px 24px;
-  }
-  .section-title {
-    font-size: 1.1em;
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 16px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--border);
-  }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-    gap: 18px;
-    margin-bottom: 50px;
-  }
-  @media (max-width: 480px) {
-    .grid { grid-template-columns: 1fr; }
-    .header h1 { font-size: 1.6em; }
-  }
-  .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 24px;
-    text-decoration: none;
-    color: inherit;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    transition: box-shadow 0.2s, border-color 0.2s;
-  }
-  .card:hover {
-    border-color: var(--accent);
-    box-shadow: 0 4px 16px rgba(9,105,218,0.1);
-  }
-  .card-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .card-icon {
-    width: 44px;
-    height: 44px;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.3em;
-    flex-shrink: 0;
-  }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+
+  /* Header */
+  .header { background: linear-gradient(135deg, #f6f8fa 0%, #e8ecf0 50%, #f6f8fa 100%); border-bottom: 1px solid var(--border); padding: 48px 20px 36px; text-align: center; position: relative; overflow: hidden; }
+  .header::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle at 30% 50%, rgba(9,105,218,0.06) 0%, transparent 50%), radial-gradient(circle at 70% 50%, rgba(26,127,55,0.04) 0%, transparent 50%); }
+  .header h1 { font-size: 2.2em; font-weight: 700; background: linear-gradient(135deg, #0969da, #8250df); -webkit-background-clip: text; -webkit-text-fill-color: transparent; position: relative; margin-bottom: 8px; }
+  .header .subtitle { color: var(--text-dim); font-size: 1em; position: relative; }
+  .header .stats { display: flex; justify-content: center; gap: 24px; margin-top: 18px; position: relative; }
+  .header .stat { display: flex; flex-direction: column; align-items: center; }
+  .header .stat-num { font-size: 1.5em; font-weight: 700; color: var(--accent); }
+  .header .stat-label { font-size: 0.78em; color: var(--text-dim); }
+
+  /* Search */
+  .search-bar { max-width: 600px; margin: 0 auto; padding: 20px 20px 0; position: relative; }
+  .search-bar input { width: 100%; padding: 12px 16px 12px 44px; border: 1px solid var(--border); border-radius: 10px; font-size: 0.95em; background: var(--card); color: var(--text); outline: none; transition: border-color 0.2s; }
+  .search-bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(9,105,218,0.1); }
+  .search-bar input::placeholder { color: var(--text-dim); }
+  .search-bar .search-icon { position: absolute; left: 34px; top: 32px; color: var(--text-dim); pointer-events: none; }
+  .search-bar .clear-btn { position: absolute; right: 32px; top: 32px; background: none; border: none; color: var(--text-dim); cursor: pointer; display: none; font-size: 1.2em; line-height: 1; }
+  .search-bar .clear-btn.visible { display: block; }
+
+  /* Container */
+  .container { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+
+  /* Category */
+  .category { margin-bottom: 40px; }
+  .category-header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+  .category-icon { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .category-icon.core { background: rgba(207,34,46,0.1); }
+  .category-icon.fs { background: rgba(26,127,55,0.1); }
+  .category-icon.driver { background: rgba(9,105,218,0.1); }
+  .category-icon.net { background: rgba(188,76,0,0.1); }
+  .category-title { font-size: 1.05em; font-weight: 600; color: var(--text); }
+  .category-count { font-size: 0.78em; color: var(--text-dim); background: var(--code-bg); padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); }
+
+  /* Grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+  @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } .header h1 { font-size: 1.6em; } .header .stats { gap: 16px; } }
+  @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
+
+  /* Card */
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; text-decoration: none; color: inherit; display: flex; flex-direction: column; gap: 8px; transition: box-shadow 0.2s, border-color 0.2s; }
+  .card:hover { border-color: var(--accent); box-shadow: 0 4px 16px rgba(9,105,218,0.1); transform: translateY(-1px); }
+  .card-top { display: flex; align-items: center; gap: 12px; }
+  .card-icon { width: 38px; height: 38px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
   .card-icon.blue { background: rgba(9,105,218,0.1); }
   .card-icon.green { background: rgba(26,127,55,0.1); }
   .card-icon.purple { background: rgba(130,80,223,0.1); }
   .card-icon.orange { background: rgba(188,76,0,0.1); }
-  .card-title {
-    font-size: 1.12em;
-    font-weight: 600;
-    color: var(--text);
-  }
-  .card-desc {
-    color: var(--text-dim);
-    font-size: 0.92em;
-    flex: 1;
-  }
-  .card-meta {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 4px;
-  }
-  .tag {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 0.75em;
-    font-weight: 500;
-  }
+  .card-icon.red { background: rgba(207,34,46,0.1); }
+  .card-title { font-size: 1em; font-weight: 600; color: var(--text); flex: 1; }
+  .card-desc { color: var(--text-dim); font-size: 0.85em; line-height: 1.5; }
+  .card-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 0.7em; font-weight: 500; }
   .tag-blue { background: rgba(9,105,218,0.08); color: #0969da; border: 1px solid rgba(9,105,218,0.2); }
   .tag-green { background: rgba(26,127,55,0.08); color: #1a7f37; border: 1px solid rgba(26,127,55,0.2); }
   .tag-purple { background: rgba(130,80,223,0.08); color: #8250df; border: 1px solid rgba(130,80,223,0.2); }
   .tag-orange { background: rgba(188,76,0,0.08); color: #bc4c00; border: 1px solid rgba(188,76,0,0.2); }
-  .empty {
-    text-align: center;
-    padding: 60px 20px;
-    color: var(--text-dim);
-    font-size: 0.95em;
-  }
-  .empty svg {
-    display: block;
-    margin: 0 auto 14px;
-    opacity: 0.4;
-  }
-  footer {
-    text-align: center;
-    padding: 30px 20px;
-    border-top: 1px solid var(--border);
-    color: var(--text-dim);
-    font-size: 0.82em;
-  }
+  .tag-red { background: rgba(207,34,46,0.08); color: #cf222e; border: 1px solid rgba(207,34,46,0.2); }
+
+  /* Hidden */
+  .card.hidden { display: none; }
+  .category.hidden { display: none; }
+  .no-results { display: none; text-align: center; padding: 60px 20px; color: var(--text-dim); }
+  .no-results.visible { display: block; }
+
+  /* Footer */
+  footer { text-align: center; padding: 24px 20px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 0.8em; }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>Docs Navigation</h1>
-  <p>技术文档索引 · ~/docs</p>
+  <h1>Linux 内核深度解析</h1>
+  <p class="subtitle">从源码到架构 · 基于 Linux 7.0.12</p>
+  <div class="stats">
+    <div class="stat"><span class="stat-num" id="total-count">10</span><span class="stat-label">篇文档</span></div>
+    <div class="stat"><span class="stat-num" id="total-chapters">70+</span><span class="stat-label">个章节</span></div>
+    <div class="stat"><span class="stat-num" id="total-lines">~4000</span><span class="stat-label">行代码</span></div>
+  </div>
 </div>
 
-<div class="container">
+<div class="search-bar">
+  <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+  <input type="text" id="search" placeholder="搜索文档... (标题、描述、标签)" autocomplete="off">
+  <button class="clear-btn" id="clear-btn" onclick="clearSearch()">×</button>
+</div>
 
-  <div class="section-title">内核与系统</div>
-  <div class="grid">
-    <a href="linux-mmu.html" class="card">
-      <div class="card-header">
-        <div class="card-icon blue">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0969da" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        </div>
-        <div class="card-title">Linux 内核 MMU 实现详解</div>
-      </div>
-      <div class="card-desc">从硬件页表到缺页处理的完整剖析 — 五级页表、缺页流程、TLB 管理、内存保护机制、源码索引</div>
-      <div class="card-meta">
-        <span class="tag tag-blue">内存管理</span>
-        <span class="tag tag-green">x86-64</span>
-        <span class="tag tag-purple">Linux 7.0.12</span>
-      </div>
-    </a>
+<div class="container" id="container"></div>
 
-    <a href="linux-procfs.html" class="card">
-      <div class="card-header">
-        <div class="card-icon green">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-        </div>
-        <div class="card-title">Linux 内核 procfs 深度解析</div>
-      </div>
-      <div class="card-desc">伪文件系统的完整剖析 — 架构设计、seq_file 接口、/proc/[pid]、/proc/sys、自定义条目创建、源码索引</div>
-      <div class="card-meta">
-        <span class="tag tag-green">文件系统</span>
-        <span class="tag tag-blue">伪文件系统</span>
-        <span class="tag tag-purple">Linux 7.0.12</span>
-      </div>
-    </a>
-
-    <a href="linux-cgroup.html" class="card">
-      <div class="card-header">
-        <div class="card-icon purple">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8250df" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-        </div>
-        <div class="card-title">Linux 内核 cgroup 深度解析</div>
-      </div>
-      <div class="card-desc">控制组的完整剖析 — v1/v2 架构、层级结构、核心数据结构、控制器接口、BPF 集成、命名空间、源码索引</div>
-      <div class="card-meta">
-        <span class="tag tag-purple">资源控制</span>
-        <span class="tag tag-blue">容器基础</span>
-        <span class="tag tag-green">Linux 7.0.12</span>
-      </div>
-    </a>
-
-    <a href="linux-pinctrl.html" class="card">
-      <div class="card-header">
-        <div class="card-icon orange">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#bc4c00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="8" cy="8" r="1"/><circle cx="16" cy="8" r="1"/><circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/><line x1="8" y1="11" x2="8" y2="13"/><line x1="16" y1="11" x2="16" y2="13"/><line x1="11" y1="8" x2="13" y2="8"/><line x1="11" y1="16" x2="13" y2="16"/></svg>
-        </div>
-        <div class="card-title">Linux 内核 pinctrl 子系统深度解析</div>
-      </div>
-      <div class="card-desc">引脚控制的完整剖析 — 架构设计、核心数据结构、引脚复用与配置、设备树集成、消费者 API、GPIO 集成、源码索引</div>
-      <div class="card-meta">
-        <span class="tag tag-orange">硬件抽象</span>
-        <span class="tag tag-blue">引脚复用</span>
-        <span class="tag tag-green">Linux 7.0.12</span>
-      </div>
-    </a>
-
-    <a href="linux-scheduler.html" class="card">
-      <div class="card-header">
-        <div class="card-icon red">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#cf222e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        </div>
-        <div class="card-title">Linux 内核调度器深度解析</div>
-      </div>
-      <div class="card-desc">进程调度的完整剖析 — 调度策略、CFS/RT/Deadline/sched_ext、核心数据结构、负载均衡、抢占模型、源码索引</div>
-      <div class="card-meta">
-        <span class="tag tag-red">核心子系统</span>
-        <span class="tag tag-blue">CPU 调度</span>
-        <span class="tag tag-green">Linux 7.0.12</span>
-      </div>
-    </a>
-
-    <a href="linux-mm.html" class="card">
-      <div class="card-header">
-        <div class="card-icon green">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2"/><line x1="2" y1="7" x2="22" y2="7"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="17" x2="22" y2="17"/></svg>
-        </div>
-        <div class="card-title">Linux 内核内存管理深度解析</div>
-      </div>
-      <div class="card-desc">内存管理的完整剖析 — 页面与 Folio、伙伴系统、SLUB、VMA、页面回收、Swap、OOM、内存 cgroup、源码索引</div>
-      <div class="card-meta">
-        <span class="tag tag-green">核心子系统</span>
-        <span class="tag tag-blue">内存管理</span>
-        <span class="tag tag-purple">Linux 7.0.12</span>
-      </div>
-    </a>
-  </div>
-
+<div class="no-results" id="no-results">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;margin-bottom:12px"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+  <div>没有找到匹配的文档</div>
 </div>
 
 <footer>
-  ~/docs · 文档导航页
+  Linux 内核深度解析 · <a href="https://github.com">GitHub</a> · 基于 Linux 7.0.12 源码
 </footer>
+
+<script>
+// ============================================================
+// 文档数据 — 新增文档只需在此添加一项
+// ============================================================
+const DOCS = [
+  // ── 内核核心 ──
+  {
+    title: "MMU 实现详解",
+    file: "linux-mmu.html",
+    desc: "从硬件页表到缺页处理 — 五级页表、缺页流程、TLB 管理、内存保护",
+    icon: "blue",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0969da" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+    tags: ["内存管理", "x86-64", "MMU"],
+    category: "core",
+    categoryLabel: "内核核心",
+    categoryIcon: "core"
+  },
+  {
+    title: "调度器深度解析",
+    file: "linux-scheduler.html",
+    desc: "CFS/RT/Deadline/sched_ext、核心数据结构、负载均衡、抢占模型",
+    icon: "red",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#cf222e" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
+    tags: ["CPU调度", "CFS", "实时"],
+    category: "core",
+    categoryLabel: "内核核心",
+    categoryIcon: "core"
+  },
+  {
+    title: "内存管理深度解析",
+    file: "linux-mm.html",
+    desc: "页面与 Folio、伙伴系统、SLUB、VMA、页面回收、Swap、OOM",
+    icon: "green",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2"/><line x1="2" y1="7" x2="22" y2="7"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="17" x2="22" y2="17"/></svg>',
+    tags: ["内存管理", "伙伴系统", "SLUB"],
+    category: "core",
+    categoryLabel: "内核核心",
+    categoryIcon: "core"
+  },
+  {
+    title: "cgroup 深度解析",
+    file: "linux-cgroup.html",
+    desc: "v1/v2 架构、层级结构、核心数据结构、控制器接口、BPF 集成",
+    icon: "purple",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8250df" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
+    tags: ["资源控制", "容器", "cgroup"],
+    category: "core",
+    categoryLabel: "内核核心",
+    categoryIcon: "core"
+  },
+
+  // ── 文件系统 ──
+  {
+    title: "procfs 深度解析",
+    file: "linux-procfs.html",
+    desc: "伪文件系统 — 架构设计、seq_file、/proc/[pid]、/proc/sys、自定义条目",
+    icon: "green",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+    tags: ["文件系统", "proc", "伪文件系统"],
+    category: "fs",
+    categoryLabel: "文件系统",
+    categoryIcon: "fs"
+  },
+
+  // ── 设备与驱动 ──
+  {
+    title: "设备模型深度解析",
+    file: "linux-devmodel.html",
+    desc: "kobject、总线/设备/驱动三要素、Probe 流程、设备类、sysfs、PM",
+    icon: "blue",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0969da" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="15" x2="23" y2="15"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="15" x2="4" y2="15"/></svg>',
+    tags: ["设备模型", "驱动", "sysfs"],
+    category: "driver",
+    categoryLabel: "设备与驱动",
+    categoryIcon: "driver"
+  },
+  {
+    title: "pinctrl 子系统深度解析",
+    file: "linux-pinctrl.html",
+    desc: "引脚复用与配置 — 架构、核心数据结构、设备树集成、GPIO 集成",
+    icon: "orange",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#bc4c00" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="8" cy="8" r="1"/><circle cx="16" cy="8" r="1"/><circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/></svg>',
+    tags: ["引脚复用", "硬件", "pinctrl"],
+    category: "driver",
+    categoryLabel: "设备与驱动",
+    categoryIcon: "driver"
+  },
+  {
+    title: "GPIO 驱动深度解析",
+    file: "linux-gpio.html",
+    desc: "通用输入输出 — gpio_chip、gpiolib、消费者 API、GPIO 中断、设备树、sysfs/chardev",
+    icon: "green",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/><line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg>',
+    tags: ["GPIO", "gpiolib", "驱动"],
+    category: "driver",
+    categoryLabel: "设备与驱动",
+    categoryIcon: "driver"
+  },
+
+  // ── 网络 ──
+  {
+    title: "网络子系统深度解析",
+    file: "linux-network.html",
+    desc: "协议栈架构、sk_buff、net_device、网络驱动、TCP/IP、XDP/BPF、NAPI",
+    icon: "orange",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#bc4c00" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
+    tags: ["网络", "TCP/IP", "XDP"],
+    category: "net",
+    categoryLabel: "网络",
+    categoryIcon: "net"
+  },
+
+  // ── 文件系统 ──
+  {
+    title: "VFS 子系统深度解析",
+    file: "linux-vfs.html",
+    desc: "虚拟文件系统 — 四大对象、DCache、路径查找、读写流程、挂载、sysfs/procfs",
+    icon: "purple",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8250df" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+    tags: ["VFS", "文件系统", "dcache"],
+    category: "fs",
+    categoryLabel: "文件系统",
+    categoryIcon: "fs"
+  }
+];
+
+// ============================================================
+// 渲染
+// ============================================================
+function render() {
+  const container = document.getElementById('container');
+  const categories = {};
+
+  DOCS.forEach(doc => {
+    if (!categories[doc.category]) {
+      categories[doc.category] = { label: doc.categoryLabel, icon: doc.categoryIcon, items: [] };
+    }
+    categories[doc.category].items.push(doc);
+  });
+
+  let html = '';
+  for (const [key, cat] of Object.entries(categories)) {
+    html += `<div class="category" data-category="${key}">
+      <div class="category-header">
+        <div class="category-icon ${cat.icon}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        </div>
+        <span class="category-title">${cat.label}</span>
+        <span class="category-count">${cat.items.length}</span>
+      </div>
+      <div class="grid">`;
+
+    cat.items.forEach(doc => {
+      const tagsHtml = doc.tags.map(t => `<span class="tag tag-${doc.icon}">${t}</span>`).join('');
+      html += `<a href="${doc.file}" class="card" data-search="${(doc.title + ' ' + doc.desc + ' ' + doc.tags.join(' ')).toLowerCase()}">
+        <div class="card-top">
+          <div class="card-icon ${doc.icon}">${doc.iconSvg}</div>
+          <div class="card-title">Linux 内核 ${doc.title}</div>
+        </div>
+        <div class="card-desc">${doc.desc}</div>
+        <div class="card-meta">${tagsHtml}<span class="tag tag-purple">Linux 7.0.12</span></div>
+      </a>`;
+    });
+
+    html += `</div></div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+// ============================================================
+// 搜索
+// ============================================================
+const searchInput = document.getElementById('search');
+const clearBtn = document.getElementById('clear-btn');
+const noResults = document.getElementById('no-results');
+
+searchInput.addEventListener('input', function() {
+  const q = this.value.toLowerCase().trim();
+  clearBtn.classList.toggle('visible', q.length > 0);
+
+  const cards = document.querySelectorAll('.card');
+  const categories = document.querySelectorAll('.category');
+  let totalVisible = 0;
+
+  cards.forEach(card => {
+    const match = !q || card.dataset.search.includes(q);
+    card.classList.toggle('hidden', !match);
+    if (match) totalVisible++;
+  });
+
+  categories.forEach(cat => {
+    const visibleCards = cat.querySelectorAll('.card:not(.hidden)');
+    cat.classList.toggle('hidden', visibleCards.length === 0);
+  });
+
+  noResults.classList.toggle('visible', totalVisible === 0);
+});
+
+function clearSearch() {
+  searchInput.value = '';
+  searchInput.dispatchEvent(new Event('input'));
+  searchInput.focus();
+}
+
+// 快捷键：按 / 聚焦搜索
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && document.activeElement !== searchInput) {
+    e.preventDefault();
+    searchInput.focus();
+  }
+  if (e.key === 'Escape' && document.activeElement === searchInput) {
+    clearSearch();
+    searchInput.blur();
+  }
+});
+
+// 初始化
+render();
+</script>
 
 </body>
 </html>
