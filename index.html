@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文档导航</title>
+<style>
+  :root {
+    --bg: #f0f2f5;
+    --card: #ffffff;
+    --border: #d0d7de;
+    --accent: #0969da;
+    --accent2: #1a7f37;
+    --accent3: #8250df;
+    --accent4: #bc4c00;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --code-bg: #f6f8fa;
+    --highlight: #ddf4ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+  }
+  .header {
+    background: linear-gradient(135deg, #f6f8fa 0%, #e8ecf0 50%, #f6f8fa 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 50px 20px 40px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle at 30% 50%, rgba(9,105,218,0.06) 0%, transparent 50%),
+                radial-gradient(circle at 70% 50%, rgba(130,80,223,0.04) 0%, transparent 50%);
+  }
+  .header h1 {
+    font-size: 2.2em;
+    font-weight: 700;
+    background: linear-gradient(135deg, #0969da, #8250df);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    position: relative;
+    margin-bottom: 8px;
+  }
+  .header p {
+    color: var(--text-dim);
+    font-size: 1.05em;
+    position: relative;
+  }
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 24px;
+  }
+  .section-title {
+    font-size: 1.1em;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 18px;
+    margin-bottom: 50px;
+  }
+  @media (max-width: 480px) {
+    .grid { grid-template-columns: 1fr; }
+    .header h1 { font-size: 1.6em; }
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: box-shadow 0.2s, border-color 0.2s;
+  }
+  .card:hover {
+    border-color: var(--accent);
+    box-shadow: 0 4px 16px rgba(9,105,218,0.1);
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .card-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3em;
+    flex-shrink: 0;
+  }
+  .card-icon.blue { background: rgba(9,105,218,0.1); }
+  .card-icon.green { background: rgba(26,127,55,0.1); }
+  .card-icon.purple { background: rgba(130,80,223,0.1); }
+  .card-icon.orange { background: rgba(188,76,0,0.1); }
+  .card-title {
+    font-size: 1.12em;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .card-desc {
+    color: var(--text-dim);
+    font-size: 0.92em;
+    flex: 1;
+  }
+  .card-meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+  .tag {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.75em;
+    font-weight: 500;
+  }
+  .tag-blue { background: rgba(9,105,218,0.08); color: #0969da; border: 1px solid rgba(9,105,218,0.2); }
+  .tag-green { background: rgba(26,127,55,0.08); color: #1a7f37; border: 1px solid rgba(26,127,55,0.2); }
+  .tag-purple { background: rgba(130,80,223,0.08); color: #8250df; border: 1px solid rgba(130,80,223,0.2); }
+  .tag-orange { background: rgba(188,76,0,0.08); color: #bc4c00; border: 1px solid rgba(188,76,0,0.2); }
+  .empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-dim);
+    font-size: 0.95em;
+  }
+  .empty svg {
+    display: block;
+    margin: 0 auto 14px;
+    opacity: 0.4;
+  }
+  footer {
+    text-align: center;
+    padding: 30px 20px;
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 0.82em;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Docs Navigation</h1>
+  <p>技术文档索引 · ~/docs</p>
+</div>
+
+<div class="container">
+
+  <div class="section-title">内核与系统</div>
+  <div class="grid">
+    <a href="linux-mmu.html" class="card">
+      <div class="card-header">
+        <div class="card-icon blue">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0969da" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
+        <div class="card-title">Linux 内核 MMU 实现详解</div>
+      </div>
+      <div class="card-desc">从硬件页表到缺页处理的完整剖析 — 五级页表、缺页流程、TLB 管理、内存保护机制、源码索引</div>
+      <div class="card-meta">
+        <span class="tag tag-blue">内存管理</span>
+        <span class="tag tag-green">x86-64</span>
+        <span class="tag tag-purple">Linux 7.0.12</span>
+      </div>
+    </a>
+
+    <a href="linux-procfs.html" class="card">
+      <div class="card-header">
+        <div class="card-icon green">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        </div>
+        <div class="card-title">Linux 内核 procfs 深度解析</div>
+      </div>
+      <div class="card-desc">伪文件系统的完整剖析 — 架构设计、seq_file 接口、/proc/[pid]、/proc/sys、自定义条目创建、源码索引</div>
+      <div class="card-meta">
+        <span class="tag tag-green">文件系统</span>
+        <span class="tag tag-blue">伪文件系统</span>
+        <span class="tag tag-purple">Linux 7.0.12</span>
+      </div>
+    </a>
+
+    <a href="linux-cgroup.html" class="card">
+      <div class="card-header">
+        <div class="card-icon purple">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#8250df" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        </div>
+        <div class="card-title">Linux 内核 cgroup 深度解析</div>
+      </div>
+      <div class="card-desc">控制组的完整剖析 — v1/v2 架构、层级结构、核心数据结构、控制器接口、BPF 集成、命名空间、源码索引</div>
+      <div class="card-meta">
+        <span class="tag tag-purple">资源控制</span>
+        <span class="tag tag-blue">容器基础</span>
+        <span class="tag tag-green">Linux 7.0.12</span>
+      </div>
+    </a>
+
+    <a href="linux-pinctrl.html" class="card">
+      <div class="card-header">
+        <div class="card-icon orange">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#bc4c00" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="8" cy="8" r="1"/><circle cx="16" cy="8" r="1"/><circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/><line x1="8" y1="11" x2="8" y2="13"/><line x1="16" y1="11" x2="16" y2="13"/><line x1="11" y1="8" x2="13" y2="8"/><line x1="11" y1="16" x2="13" y2="16"/></svg>
+        </div>
+        <div class="card-title">Linux 内核 pinctrl 子系统深度解析</div>
+      </div>
+      <div class="card-desc">引脚控制的完整剖析 — 架构设计、核心数据结构、引脚复用与配置、设备树集成、消费者 API、GPIO 集成、源码索引</div>
+      <div class="card-meta">
+        <span class="tag tag-orange">硬件抽象</span>
+        <span class="tag tag-blue">引脚复用</span>
+        <span class="tag tag-green">Linux 7.0.12</span>
+      </div>
+    </a>
+
+    <a href="linux-scheduler.html" class="card">
+      <div class="card-header">
+        <div class="card-icon red">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#cf222e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <div class="card-title">Linux 内核调度器深度解析</div>
+      </div>
+      <div class="card-desc">进程调度的完整剖析 — 调度策略、CFS/RT/Deadline/sched_ext、核心数据结构、负载均衡、抢占模型、源码索引</div>
+      <div class="card-meta">
+        <span class="tag tag-red">核心子系统</span>
+        <span class="tag tag-blue">CPU 调度</span>
+        <span class="tag tag-green">Linux 7.0.12</span>
+      </div>
+    </a>
+
+    <a href="linux-mm.html" class="card">
+      <div class="card-header">
+        <div class="card-icon green">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2"/><line x1="2" y1="7" x2="22" y2="7"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="17" x2="22" y2="17"/></svg>
+        </div>
+        <div class="card-title">Linux 内核内存管理深度解析</div>
+      </div>
+      <div class="card-desc">内存管理的完整剖析 — 页面与 Folio、伙伴系统、SLUB、VMA、页面回收、Swap、OOM、内存 cgroup、源码索引</div>
+      <div class="card-meta">
+        <span class="tag tag-green">核心子系统</span>
+        <span class="tag tag-blue">内存管理</span>
+        <span class="tag tag-purple">Linux 7.0.12</span>
+      </div>
+    </a>
+  </div>
+
+</div>
+
+<footer>
+  ~/docs · 文档导航页
+</footer>
+
+</body>
+</html>

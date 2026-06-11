@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核调度器深度解析</title>
+<style>
+  :root { --bg: #f0f2f5; --card: #ffffff; --border: #d0d7de; --accent: #0969da; --accent2: #1a7f37; --accent3: #8250df; --accent4: #bc4c00; --text: #1f2328; --text-dim: #656d76; --code-bg: #f6f8fa; --highlight: #ddf4ff; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+  .hero { background: linear-gradient(135deg, #f6f8fa 0%, #e8ecf0 50%, #f6f8fa 100%); border-bottom: 1px solid var(--border); padding: 60px 20px 50px; text-align: center; position: relative; overflow: hidden; }
+  .hero::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle at 30% 50%, rgba(9,105,218,0.06) 0%, transparent 50%), radial-gradient(circle at 70% 50%, rgba(207,34,46,0.04) 0%, transparent 50%); animation: drift 20s ease-in-out infinite; }
+  @keyframes drift { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(-2%, 1%); } }
+  .hero h1 { font-size: 2.6em; font-weight: 700; background: linear-gradient(135deg, #cf222e, #0969da); -webkit-background-clip: text; -webkit-text-fill-color: transparent; position: relative; margin-bottom: 12px; }
+  .hero .subtitle { font-size: 1.15em; color: var(--text-dim); position: relative; }
+  .hero .version { display: inline-block; margin-top: 16px; padding: 4px 14px; background: rgba(207,34,46,0.08); border: 1px solid rgba(207,34,46,0.25); border-radius: 20px; font-size: 0.85em; color: #cf222e; position: relative; }
+  nav.toc { position: sticky; top: 0; z-index: 100; background: rgba(240,242,245,0.92); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); padding: 0 20px; overflow-x: auto; }
+  nav.toc ul { display: flex; list-style: none; max-width: 1200px; margin: 0 auto; gap: 0; }
+  nav.toc a { display: block; padding: 12px 16px; color: var(--text-dim); text-decoration: none; font-size: 0.88em; white-space: nowrap; border-bottom: 2px solid transparent; transition: all 0.2s; }
+  nav.toc a:hover, nav.toc a.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .container { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
+  section { margin-bottom: 60px; }
+  h2 { font-size: 1.8em; font-weight: 700; color: var(--text); margin-bottom: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+  h2 .num { color: var(--accent); font-size: 0.7em; font-weight: 400; opacity: 0.7; }
+  h3 { font-size: 1.25em; color: var(--accent3); margin: 28px 0 12px; }
+  h4 { font-size: 1.05em; color: var(--accent2); margin: 20px 0 8px; }
+  p { margin-bottom: 14px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin: 18px 0; }
+  .card-title { font-weight: 600; color: var(--accent); margin-bottom: 10px; font-size: 1.05em; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } .hero h1 { font-size: 1.8em; } }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px; overflow-x: auto; font-size: 0.88em; line-height: 1.6; margin: 12px 0; }
+  code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+  :not(pre) > code { background: var(--code-bg); padding: 2px 7px; border-radius: 4px; font-size: 0.88em; color: #bc4c00; border: 1px solid var(--border); }
+  .kw { color: #cf222e; } .ty { color: #0550ae; } .fn { color: #8250df; } .cm { color: #656d76; } .st { color: #0a3069; } .num { color: #0550ae; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 0.92em; }
+  th, td { padding: 10px 14px; border: 1px solid var(--border); text-align: left; }
+  th { background: var(--highlight); color: var(--accent); font-weight: 600; }
+  tr:nth-child(even) { background: rgba(255,255,255,0.015); }
+  .diagram { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 30px; margin: 20px 0; text-align: center; overflow-x: auto; }
+  .flow-box { display: inline-block; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 18px; margin: 4px; font-size: 0.88em; font-family: monospace; color: var(--accent); white-space: nowrap; }
+  .flow-box.active { border-color: var(--accent2); color: var(--accent2); background: rgba(26,127,55,0.06); }
+  .flow-box.warn { border-color: var(--accent4); color: var(--accent4); background: rgba(188,76,0,0.06); }
+  .flow-box.danger { border-color: #cf222e; color: #cf222e; background: rgba(207,34,46,0.06); }
+  .flow-box.purple { border-color: var(--accent3); color: var(--accent3); background: rgba(130,80,223,0.06); }
+  .flow-arrow { display: inline-block; color: var(--text-dim); font-size: 1.2em; vertical-align: middle; margin: 0 2px; }
+  .flow-down { display: block; text-align: center; color: var(--text-dim); font-size: 1.1em; margin: 8px 0; }
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.78em; font-weight: 500; margin: 2px 3px; }
+  .tag-blue { background: rgba(9,105,218,0.08); color: #0969da; border: 1px solid rgba(9,105,218,0.2); }
+  .tag-green { background: rgba(26,127,55,0.08); color: #1a7f37; border: 1px solid rgba(26,127,55,0.2); }
+  .tag-purple { background: rgba(130,80,223,0.08); color: #8250df; border: 1px solid rgba(130,80,223,0.2); }
+  .tag-orange { background: rgba(188,76,0,0.08); color: #bc4c00; border: 1px solid rgba(188,76,0,0.2); }
+  .tag-red { background: rgba(207,34,46,0.08); color: #cf222e; border: 1px solid rgba(207,34,46,0.2); }
+  .callout { border-left: 3px solid var(--accent); background: rgba(9,105,218,0.04); padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 0.93em; }
+  .callout.warn { border-left-color: var(--accent4); background: rgba(188,76,0,0.04); }
+  .callout.tip { border-left-color: var(--accent2); background: rgba(26,127,55,0.04); }
+  .callout.danger { border-left-color: #cf222e; background: rgba(207,34,46,0.04); }
+  .file-tree { font-family: monospace; font-size: 0.9em; line-height: 1.8; color: var(--text-dim); padding: 18px; background: var(--code-bg); border-radius: 8px; border: 1px solid var(--border); }
+  .file-tree .dir { color: #0969da; } .file-tree .file { color: #1a7f37; } .file-tree .cmt { color: #656d76; font-style: italic; }
+  .ref { color: var(--text-dim); font-size: 0.85em; font-style: italic; }
+  hr.divider { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+  ul, ol { margin: 8px 0 14px 24px; }
+  li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>Linux 内核调度器深度解析</h1>
+  <p class="subtitle">进程调度 — CPU 时间分配的核心决策引擎</p>
+  <span class="version">Linux 7.0.12 · kernel/sched/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#policies">调度策略</a></li>
+    <li><a href="#arch">架构设计</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#cfs">CFS 调度器</a></li>
+    <li><a href="#rt">RT 调度器</a></li>
+    <li><a href="#dl">Deadline 调度器</a></li>
+    <li><a href="#ext">sched_ext</a></li>
+    <li><a href="#balance">负载均衡</a></li>
+    <li><a href="#preempt">抢占模型</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- 1. Overview -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>调度器是 Linux 内核最核心的子系统之一，负责决定<strong>哪个进程在哪个 CPU 上运行多长时间</strong>。Linux 采用模块化的调度类（sched_class）架构，支持多种调度策略共存。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">调度器的核心职责</div>
+      <ul>
+        <li><strong>选择进程</strong>：从就绪队列中选择最优任务执行</li>
+        <li><strong>时间分配</strong>：公平或按优先级分配 CPU 时间</li>
+        <li><strong>负载均衡</strong>：在多核间平衡工作负载</li>
+        <li><strong>实时性保证</strong>：确保实时任务的延迟约束</li>
+        <li><strong>能效管理</strong>：在性能和功耗间平衡</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">设计目标</div>
+      <ul>
+        <li><strong>交互响应</strong>：桌面/移动设备的快速响应</li>
+        <li><strong>吞吐量</strong>：服务器的高吞吐处理</li>
+        <li><strong>公平性</strong>：多用户/容器环境的资源公平</li>
+        <li><strong>实时性</strong>：工业/音频的确定性延迟</li>
+        <li><strong>可扩展性</strong>：从单核到数千核的线性扩展</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 2. Policies -->
+<section id="policies" class="toc-link">
+  <h2><span class="num">02</span> 调度策略</h2>
+
+  <p class="ref">include/uapi/linux/sched.h:114-121</p>
+  <table>
+    <tr><th>策略</th><th>宏</th><th>调度类</th><th>说明</th></tr>
+    <tr><td>普通</td><td><code>SCHED_NORMAL</code> (0)</td><td>fair</td><td>CFS 公平调度，适合大多数交互式/批处理任务</td></tr>
+    <tr><td>FIFO</td><td><code>SCHED_FIFO</code> (1)</td><td>rt</td><td>实时先进先出，同优先级不会被抢占</td></tr>
+    <tr><td>RR</td><td><code>SCHED_RR</code> (2)</td><td>rt</td><td>实时轮转，同优先级时间片轮转</td></tr>
+    <tr><td>批处理</td><td><code>SCHED_BATCH</code> (3)</td><td>fair</td><td>CFS 批处理，优化吞吐量</td></tr>
+    <tr><td>空闲</td><td><code>SCHED_IDLE</code> (5)</td><td>fair</td><td>CFS 最低优先级，仅在系统空闲时运行</td></tr>
+    <tr><td>Deadline</td><td><code>SCHED_DEADLINE</code> (6)</td><td>dl</td><td>EDF 最早截止时间优先，最高调度优先级</td></tr>
+    <tr><td>Ext</td><td><code>SCHED_EXT</code> (7)</td><td>ext</td><td>BPF 可编程调度器（sched_ext）</td></tr>
+  </table>
+
+  <h3>优先级层次</h3>
+  <div class="diagram">
+    <div style="display:flex; flex-direction:column; align-items:center; gap:6px;">
+      <div class="flow-box danger" style="min-width:300px">SCHED_DEADLINE <span class="cm">（最高优先级）</span></div>
+      <div class="flow-box warn" style="min-width:300px">SCHED_FIFO / SCHED_RR <span class="cm">（RT: prio 0-99）</span></div>
+      <div class="flow-box active" style="min-width:300px">SCHED_NORMAL / BATCH / IDLE <span class="cm">（CFS: prio 100-139, nice -20 ~ +19）</span></div>
+    </div>
+    <br>
+    <div style="color:var(--text-dim);font-size:0.85em">prio 值越小优先级越高 · RT 总是优先于 CFS</div>
+  </div>
+
+  <h3>优先级计算</h3>
+  <div class="card">
+    <p class="ref">include/linux/sched/prio.h</p>
+    <pre><code><span class="kw">#define</span> MAX_RT_PRIO    <span class="num">100</span>    <span class="cm">// RT 优先级范围: 0-99</span>
+<span class="kw">#define</span> NICE_WIDTH     <span class="num">40</span>     <span class="cm">// nice 范围: -20 ~ +19</span>
+<span class="kw">#define</span> MAX_PRIO       <span class="num">140</span>    <span class="cm">// MAX_RT_PRIO + NICE_WIDTH</span>
+<span class="kw">#define</span> DEFAULT_PRIO   <span class="num">120</span>    <span class="cm">// 默认优先级 (nice=0)</span>
+
+<span class="cm">// nice → prio 转换</span>
+<span class="kw">#define</span> NICE_TO_PRIO(nice)  ((nice) + DEFAULT_PRIO)  <span class="cm">// nice -20 → prio 100</span>
+<span class="cm">// nice  0  → prio 120</span>
+<span class="cm">// nice +19 → prio 139</span></code></pre>
+  </div>
+</section>
+
+<!-- 3. Architecture -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">03</span> 架构设计</h2>
+
+  <h3>调度类架构</h3>
+  <div class="diagram">
+    <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap; margin-bottom:16px;">
+      <div class="flow-box danger" style="min-width:100px">stop_sched_class<br><small>最高：停机任务</small></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box warn" style="min-width:100px">dl_sched_class<br><small>Deadline</small></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box purple" style="min-width:100px">rt_sched_class<br><small>RT FIFO/RR</small></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box active" style="min-width:100px">fair_sched_class<br><small>CFS 公平</small></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box" style="min-width:100px">idle_sched_class<br><small>空闲任务</small></div>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-box" style="min-width:100px">ext_sched_class<br><small>BPF 可编程</small></div>
+    <br><br>
+    <div style="color:var(--text-dim);font-size:0.85em">pick_next_task() 按此顺序遍历，找到第一个有可运行任务的类</div>
+  </div>
+
+  <h3>核心调度流程</h3>
+  <div class="diagram">
+    <div class="flow-box danger">__schedule(sched_mode)</div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box">prev = rq->curr</div>
+    <div class="flow-down">↓</div>
+    <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
+      <div class="flow-box">try_to_block_task()<br><span class="cm">// 非抢占时尝试阻塞</span></div>
+      <div class="flow-box">update_rq_clock()<br><span class="cm">// 更新时钟</span></div>
+    </div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box active">pick_next_task(rq, donor)<br><span class="cm">// 选择下一个任务</span></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box">context_switch(prev, next)<br><span class="cm">// 切换上下文</span></div>
+  </div>
+
+  <h3>struct sched_class</h3>
+  <div class="card">
+    <p class="ref">kernel/sched/sched.h:2500-2620</p>
+    <pre><code><span class="kw">struct</span> <span class="ty">sched_class</span> {
+    <span class="ty">void</span> (*enqueue_task)(<span class="kw">struct</span> <span class="ty">rq</span> *rq, <span class="kw">struct</span> <span class="ty">task_struct</span> *p, <span class="ty">int</span> flags);
+    <span class="ty">bool</span> (*dequeue_task)(<span class="kw">struct</span> <span class="ty">rq</span> *rq, <span class="kw">struct</span> <span class="ty">task_struct</span> *p, <span class="ty">int</span> flags);
+    <span class="ty">void</span> (*yield_task)(<span class="kw">struct</span> <span class="ty">rq</span> *rq);
+    <span class="ty">void</span> (*wakeup_preempt)(<span class="kw">struct</span> <span class="ty">rq</span> *rq, <span class="kw">struct</span> <span class="ty">task_struct</span> *p, <span class="ty">int</span> flags);
+    <span class="ty">int</span>  (*balance)(<span class="kw">struct</span> <span class="ty">rq</span> *rq, <span class="kw">struct</span> <span class="ty">task_struct</span> *prev, <span class="kw">struct</span> <span class="ty">rq_flags</span> *rf);
+    <span class="kw">struct</span> <span class="ty">task_struct</span> *(*pick_task)(<span class="kw">struct</span> <span class="ty">rq</span> *rq, <span class="kw">struct</span> <span class="ty">rq_flags</span> *rf);
+    <span class="ty">int</span>  (*select_task_rq)(<span class="kw">struct</span> <span class="ty">task_struct</span> *p, <span class="ty">int</span> task_cpu, <span class="ty">int</span> flags);
+    <span class="ty">void</span> (*task_tick)(<span class="kw">struct</span> <span class="ty">rq</span> *rq, <span class="kw">struct</span> <span class="ty">task_struct</span> *p, <span class="ty">int</span> queued);
+    <span class="ty">void</span> (*task_fork)(<span class="kw">struct</span> <span class="ty">task_struct</span> *p);
+    <span class="ty">void</span> (*task_dead)(<span class="kw">struct</span> <span class="ty">task_struct</span> *p);
+    <span class="cm">// ... 更多回调</span>
+};</code></pre>
+  </div>
+</section>
+
+<!-- 4. Data Structures -->
+<section id="data" class="toc-link">
+  <h2><span class="num">04</span> 核心数据结构</h2>
+
+  <h3>struct rq（运行队列）</h3>
+  <div class="card">
+    <p class="ref">kernel/sched/sched.h:1124-1250</p>
+    <pre><code><span class="kw">struct</span> <span class="ty">rq</span> {
+    <span class="ty">unsigned int</span> nr_running;       <span class="cm">// 可运行任务总数</span>
+    <span class="kw">struct</span> <span class="ty">task_struct</span> __rcu *curr; <span class="cm">// 当前运行任务</span>
+    <span class="kw">struct</span> <span class="ty">task_struct</span> __rcu *donor; <span class="cm">// 调度上下文（proxy exec）</span>
+    <span class="kw">struct</span> <span class="ty">task_struct</span> *idle;     <span class="cm">// 空闲任务</span>
+    <span class="ty">u64</span> nr_switches;               <span class="cm">// 上下文切换次数</span>
+    <span class="ty">raw_spinlock_t</span> __lock;         <span class="cm">// 运行队列锁</span>
+
+    <span class="kw">struct</span> <span class="ty">cfs_rq</span> cfs;             <span class="cm">// CFS 运行队列</span>
+    <span class="kw">struct</span> <span class="ty">rt_rq</span> rt;               <span class="cm">// RT 运行队列</span>
+    <span class="kw">struct</span> <span class="ty">dl_rq</span> dl;               <span class="cm">// Deadline 运行队列</span>
+<span class="pp">#ifdef CONFIG_SCHED_CLASS_EXT</span>
+    <span class="kw">struct</span> <span class="ty">scx_rq</span> scx;            <span class="cm">// sched_ext 运行队列</span>
+<span class="pp">#endif</span>
+
+    <span class="ty">u64</span> clock;                     <span class="cm">// rq 时钟</span>
+    <span class="kw">struct</span> <span class="ty">sched_domain</span> __rcu *sd; <span class="cm">// 调度域</span>
+    <span class="kw">struct</span> <span class="ty">root_domain</span> *rd;        <span class="cm">// 根调度域</span>
+    <span class="cm">// ... 时钟数据、负载均衡字段等</span>
+};</code></pre>
+  </div>
+
+  <h3>struct cfs_rq（CFS 运行队列）</h3>
+  <div class="card">
+    <p class="ref">kernel/sched/sched.h:678-772</p>
+    <pre><code><span class="kw">struct</span> <span class="ty">cfs_rq</span> {
+    <span class="kw">struct</span> <span class="ty">load_weight</span> load;       <span class="cm">// 总权重</span>
+    <span class="ty">unsigned int</span> nr_queued;        <span class="cm">// 队列中的实体数</span>
+    <span class="ty">unsigned int</span> h_nr_queued;     <span class="cm">// 层级任务数（含组）</span>
+    <span class="ty">u64</span> sum_w_vruntime;            <span class="cm">// 加权 vruntime 总和</span>
+
+    <span class="kw">struct</span> <span class="ty">rb_root_cached</span> tasks_timeline;  <span class="cm">// 红黑树（按 vruntime 排序）</span>
+    <span class="kw">struct</span> <span class="ty">sched_entity</span> *curr;     <span class="cm">// 当前运行的实体</span>
+    <span class="kw">struct</span> <span class="ty">sched_entity</span> *next;     <span class="cm">// 下一个运行的实体</span>
+
+    <span class="kw">struct</span> <span class="ty">sched_avg</span> avg;          <span class="cm">// 负载跟踪</span>
+<span class="pp">#ifdef CONFIG_FAIR_GROUP_SCHED</span>
+    <span class="kw">struct</span> <span class="ty">rq</span> *rq;                <span class="cm">// 所属 CPU 运行队列</span>
+    <span class="kw">struct</span> <span class="ty">task_group</span> *tg;        <span class="cm">// 所属任务组</span>
+<span class="pp">#endif</span>
+<span class="pp">#ifdef CONFIG_CFS_BANDWIDTH</span>
+    <span class="ty">s64</span> runtime_remaining;         <span class="cm">// 带宽控制剩余时间</span>
+    <span class="ty">bool</span> throttled;               <span class="cm">// 是否被节流</span>
+<span class="pp">#endif</span>
+};</code></pre>
+  </div>
+
+  <h3>关系图</h3>
+  <div class="diagram">
+    <pre style="background:none;border:none;padding:0;margin:0;font-size:0.9em;line-height:2;">
+<span class="ty">CPU</span> ──→ <span class="fn">rq</span> ──┬──→ <span class="fn">cfs_rq</span> ──→ <span class="fn">sched_entity</span>（红黑树）──→ <span class="ty">task_struct</span>
+             ├──→ <span class="fn">rt_rq</span>   ──→ <span class="fn">sched_rt_entity</span>（优先级数组）──→ <span class="ty">task_struct</span>
+             ├──→ <span class="fn">dl_rq</span>   ──→ <span class="fn">sched_dl_entity</span>（红黑树）──→ <span class="ty">task_struct</span>
+             └──→ <span class="fn">scx_rq</span>  ──→ <span class="fn">BPF 调度器</span> ──→ <span class="ty">task_struct</span>
+</pre>
+  </div>
+</section>
+
+<!-- 5. CFS -->
+<section id="cfs" class="toc-link">
+  <h2><span class="num">05</span> CFS 调度器</h2>
+
+  <p>CFS（Completely Fair Scheduler）是 Linux 的<strong>默认调度器</strong>，用于 <code>SCHED_NORMAL</code>、<code>SCHED_BATCH</code>、<code>SCHED_IDLE</code> 策略。它基于<strong>虚拟运行时间</strong>（vruntime）实现 O(log n) 的公平调度。</p>
+
+  <h3>核心原理</h3>
+  <div class="card">
+    <ul>
+      <li><strong>虚拟运行时间</strong>：每个任务维护 vruntime，代表它已获得的"公平"CPU 时间</li>
+      <li><strong>权重机制</strong>：nice 值通过权重映射影响 vruntime 增长速度</li>
+      <li><strong>红黑树</strong>：按 vruntime 排序，最左节点（vruntime 最小）最先被调度</li>
+      <li><strong>时间片</strong>：基于 cfs_bandwidth 或 nr_running 动态计算</li>
+    </ul>
+  </div>
+
+  <h3>vruntime 计算</h3>
+  <pre><code><span class="cm">// 虚拟运行时间更新</span>
+delta_exec = now - prev->se.exec_start;     <span class="cm">// 实际执行时间</span>
+vruntime += delta_exec * (NICE_0_LOAD / weight);  <span class="cm">// 加权计算</span>
+
+<span class="cm">// nice 值越小（优先级越高），权重越大，vruntime 增长越慢</span>
+<span class="cm">// 因此高优先级任务获得更多 CPU 时间</span>
+
+<span class="cm">// 权重表（sched_pelt.c）</span>
+<span class="cm">// nice -20: weight = 88761    (最重)</span>
+<span class="cm">// nice   0: weight = 1024     (基准)</span>
+<span class="cm">// nice +19: weight = 15       (最轻)</span></code></pre>
+
+  <h3>CFS 带宽控制</h3>
+  <div class="callout tip">
+    <strong>cfs_bandwidth</strong>：通过 <code>cpu.cfs_quota_us</code> 和 <code>cpu.cfs_period_us</code> 限制 cgroup 的 CPU 使用量。当配额用尽时，cfs_rq 被 throttled，直到下一个周期开始。
+  </div>
+
+  <h3>调度实体</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 每个任务在 CFS 中对应一个 sched_entity</span>
+<span class="kw">struct</span> <span class="ty">sched_entity</span> {
+    <span class="kw">struct</span> <span class="ty">load_weight</span> load;      <span class="cm">// 权重（由 nice 值决定）</span>
+    <span class="kw">struct</span> <span class="ty">rb_node</span> run_node;      <span class="cm">// 红黑树节点</span>
+    <span class="ty">u64</span> vruntime;                <span class="cm">// 虚拟运行时间</span>
+    <span class="ty">u64</span> exec_start;              <span class="cm">// 开始执行时间</span>
+    <span class="ty">u64</span> sum_exec_runtime;        <span class="cm">// 累计执行时间</span>
+    <span class="ty">u64</span> prev_sum_exec_runtime;
+    <span class="ty">u64</span> nr_migrations;
+    <span class="cm">// ...</span>
+};</code></pre>
+  </div>
+</section>
+
+<!-- 6. RT -->
+<section id="rt" class="toc-link">
+  <h2><span class="num">06</span> RT 调度器</h2>
+
+  <p>RT（Real-Time）调度器用于 <code>SCHED_FIFO</code> 和 <code>SCHED_RR</code> 策略，提供<strong>固定优先级</strong>的实时调度。</p>
+
+  <h3>核心特性</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">SCHED_FIFO</div>
+      <ul>
+        <li>先进先出，不会被同优先级任务抢占</li>
+        <li>高优先级任务总是抢占低优先级</li>
+        <li>无时间片限制，一直运行直到阻塞或让出</li>
+        <li>优先级 1-99（数值越大优先级越高）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">SCHED_RR</div>
+      <ul>
+        <li>轮转调度，同优先级任务共享时间片</li>
+        <li>时间片用完后放到同优先级队列尾部</li>
+        <li>默认时间片 = 100ms（可配置）</li>
+        <li>高优先级任务仍然抢占低优先级</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>优先级数组</h3>
+  <div class="card">
+    <pre><code><span class="cm">// RT 使用位图 + 链表实现 O(1) 调度</span>
+<span class="kw">struct</span> <span class="ty">rt_rq</span> {
+    <span class="kw">struct</span> <span class="ty">rt_prio_array</span> active;  <span class="cm">// 100 个优先级的位图 + 链表</span>
+    <span class="ty">unsigned int</span> rt_nr_running;
+    <span class="ty">unsigned int</span> rr_nr_running;
+    <span class="cm">// ...</span>
+};
+
+<span class="kw">struct</span> <span class="ty">rt_prio_array</span> {
+    <span class="ty">DECLARE_BITMAP</span>(bitmap, MAX_RT_PRIO+1);  <span class="cm">// 100 位位图</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span> queue[MAX_RT_PRIO];    <span class="cm">// 100 个链表</span>
+};</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>带宽控制</strong>：<code>sysctl_sched_rt_runtime</code>（默认 950000us）和 <code>sysctl_sched_rt_period</code>（默认 1000000us）限制 RT 任务最多使用 95% 的 CPU 时间，防止饥饿 CFS 任务。
+  </div>
+</section>
+
+<!-- 7. Deadline -->
+<section id="dl" class="toc-link">
+  <h2><span class="num">07</span> Deadline 调度器</h2>
+
+  <p>Deadline 调度器实现 <strong>EDF（Earliest Deadline First）</strong>算法，提供<strong>严格的时间保证</strong>。每个任务有三个参数：运行时间（runtime）、周期（period）、截止时间（deadline）。</p>
+
+  <h3>参数说明</h3>
+  <div class="card">
+    <pre><code><span class="cm">// sched_setattr() 设置</span>
+<span class="kw">struct</span> <span class="ty">sched_attr</span> {
+    <span class="ty">u32</span> size;
+    <span class="ty">u32</span> sched_policy;
+    <span class="ty">u64</span> sched_flags;
+    <span class="ty">s32</span> sched_nice;
+    <span class="ty">u32</span> sched_priority;
+    <span class="cm">// Deadline 特定参数:</span>
+    <span class="ty">u64</span> sched_runtime;    <span class="cm">// 每次执行的最大时间</span>
+    <span class="ty">u64</span> sched_deadline;   <span class="cm">// 相对于周期的截止时间</span>
+    <span class="ty">u64</span> sched_period;     <span class="cm">// 重复周期</span>
+};</code></pre>
+  </div>
+
+  <h3>调度逻辑</h3>
+  <div class="diagram">
+    <div class="flow-box danger">EDF: 选择截止时间最早的任务</div>
+    <div class="flow-down">↓</div>
+    <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
+      <div class="flow-box">runtime ≤ deadline ≤ period</div>
+      <div class="flow-box">保证 CPU 利用率 ≤ 100%</div>
+    </div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box active">任务按 (deadline - runtime) 排序</div>
+  </div>
+
+  <div class="callout">
+    <strong>可调度性检查</strong>：使用 <code>chrt -d</code> 验证。Deadline 任务的总 CPU 利用率不能超过 100%，否则会拒绝设置。
+  </div>
+</section>
+
+<!-- 8. sched_ext -->
+<section id="ext" class="toc-link">
+  <h2><span class="num">08</span> sched_ext</h2>
+
+  <p>sched_ext（<code>SCHED_EXT</code>，调度类 <code>ext_sched_class</code>）是 Linux 7.x 引入的 <strong>BPF 可编程调度器</strong>框架，允许通过 BPF 程序自定义调度策略，而无需修改内核。</p>
+
+  <h3>核心特性</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">设计目标</div>
+      <ul>
+        <li><strong>可编程</strong>：BPF 程序实现调度逻辑</li>
+        <li><strong>安全</strong>：BPF 验证器确保安全</li>
+        <li><strong>可热替换</strong>：运行时加载/卸载调度器</li>
+        <li><strong>兼容性</strong>：回退到 CFS</li>
+        <li><strong>可观测</strong>：内置跟踪和统计</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">典型用例</div>
+      <ul>
+        <li>游戏/VR 的低延迟调度</li>
+        <li>容器的自定义资源分配</li>
+        <li>研究新型调度算法</li>
+        <li>特定工作负载的优化</li>
+        <li>桌面响应性增强</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>架构</h3>
+  <div class="diagram">
+    <div class="flow-box danger">用户空间 BPF 调度器程序</div>
+    <div class="flow-down">↓ scx_ops 注册</div>
+    <div class="flow-box active">ext_sched_class<br><small>内核 ext.c (7556 行)</small></div>
+    <div class="flow-down">↓</div>
+    <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
+      <div class="flow-box">scx_ops_bypass()<br><span class="cm">回退到 CFS</span></div>
+      <div class="flow-box">scx_watchdog<br><span class="cm">超时检测</span></div>
+      <div class="flow-box">scx_exit_task()<br><span class="cm">任务退出处理</span></div>
+    </div>
+  </div>
+
+  <h3>关键机制</h3>
+  <div class="card">
+    <p class="ref">kernel/sched/ext.c</p>
+    <pre><code><span class="cm">// BPF 调度器通过 scx_ops 结构体注册回调</span>
+<span class="cm">// 关键回调：</span>
+<span class="cm">//   .select_cpu  — 选择 CPU</span>
+<span class="cm">//   .enqueue     — 任务入队</span>
+<span class="cm">//   .dequeue     — 任务出队</span>
+<span class="cm">//   .dispatch    — 分派任务到本地队列</span>
+<span class="cm">//   .running     — 任务开始运行</span>
+<span class="cm">//   .stopping    — 任务停止运行</span>
+
+<span class="cm">// 看门狗机制</span>
+<span class="cm">// 任务可运行时间超过 scx_watchdog_timeout 触发 scx_error()</span>
+<span class="cm">// 此时自动禁用 BPF 调度器，回退到 CFS</span></code></pre>
+  </div>
+</section>
+
+<!-- 9. Load Balancing -->
+<section id="balance" class="toc-link">
+  <h2><span class="num">09</span> 负载均衡</h2>
+
+  <p>负载均衡器在多核系统间迁移任务，确保各 CPU 的工作负载均衡。</p>
+
+  <h3>调度域层级</h3>
+  <div class="diagram">
+    <div style="text-align:left; font-size:0.9em; line-height:2;">
+<pre style="background:none;border:none;padding:0;margin:0;">
+<span class="fn">root_domain</span>
+  └── <span class="fn">sched_domain</span> (SMT)        <span class="cm">← 同一物理核的超线程</span>
+        └── <span class="fn">sched_domain</span> (MC)    <span class="cm">← 同一物理核的多个核心</span>
+              └── <span class="fn">sched_domain</span> (DIE)  <span class="cm">← 同一 die 的核心</span>
+                    └── <span class="fn">sched_domain</span> (NUMA) <span class="cm">← 跨 NUMA 节点</span>
+</pre>
+    </div>
+  </div>
+
+  <h3>均衡策略</h3>
+  <table>
+    <tr><th>触发</th><th>函数</th><th>说明</th></tr>
+    <tr><td>定时器</td><td><code>load_balance()</code></td><td>定期检查并迁移任务</td></tr>
+    <tr><td>唤醒</td><td><code>select_task_rq_fair()</code></td><td>唤醒时选择最空闲的 CPU</td></tr>
+    <tr><td>fork</td><td><code>select_task_rq_fair()</code></td><td>新进程放置到最优 CPU</td></tr>
+    <tr><td>exec</td><td><code>sched_exec()</code></td><td>exec 时迁移到最空闲 CPU</td></tr>
+    <tr><td>主动均衡</td><td><code>active_balance()</code></td><td>强制迁移特定任务</td></tr>
+  </table>
+
+  <h3>NOHZ（无滴答）</h3>
+  <div class="callout tip">
+    <strong>NO_HZ_FULL</strong>：当 CPU 上只有一个可运行任务时，停止定时器滴答（tickless），减少中断开销。这对计算密集型和延迟敏感型工作负载非常有益。
+  </div>
+</section>
+
+<!-- 10. Preemption -->
+<section id="preempt" class="toc-link">
+  <h2><span class="num">10</span> 抢占模型</h2>
+
+  <p>Linux 支持多种抢占模型，通过 <code>CONFIG_PREEMPT</code> 选项控制。</p>
+
+  <table>
+    <tr><th>模型</th><th>CONFIG</th><th>说明</th></tr>
+    <tr><td>无抢占</td><td><code>PREEMPT_NONE</code></td><td>仅在返回用户态时检查，适合服务器</td></tr>
+    <tr><td>自愿抢占</td><td><code>PREEMPT_VOLUNTARY</code></td><td>在显式检查点（cond_resched）时可抢占</td></tr>
+    <tr><td>完全抢占</td><td><code>PREEMPT</code></td><td>内核几乎任何地方都可抢占</td></tr>
+    <tr><td>RT 抢占</td><td><code>PREEMPT_RT</code></td><td>实时补丁，大多数自旋锁变为可睡眠锁</td></tr>
+  </table>
+
+  <h3>抢占点</h3>
+  <pre><code><span class="cm">// 抢占发生的时机：</span>
+1. 从中断返回内核态时
+2. 从系统调用返回用户态时
+3. 内核中显式调用 <span class="fn">cond_resched()</span> 时
+4. 内核中调用 <span class="fn">schedule()</span> 时（主动让出）
+5. 被唤醒的高优先级任务抢占当前任务
+
+<span class="cm">// preempt_disable/preempt_enable 对</span>
+<span class="fn">preempt_disable</span>();   <span class="cm">// 禁止抢占（引用计数）</span>
+<span class="cm">// ... 临界区 ...</span>
+<span class="fn">preempt_enable</span>();   <span class="cm">// 恢复抢占（可能触发调度）</span></code></pre>
+</section>
+
+<!-- 11. Source Files -->
+<section id="files" class="toc-link">
+  <h2><span class="num">11</span> 源码索引</h2>
+
+  <div class="file-tree">
+<span class="dir">kernel/sched/</span>
+├── <span class="file">core.c</span>            <span class="cmt">调度核心：schedule/pick_next_task/fork/exit (10938 行)</span>
+├── <span class="file">sched.h</span>           <span class="cmt">内部数据结构：rq/cfs_rq/rt_rq/sched_class (4112 行)</span>
+├── <span class="file">fair.c</span>            <span class="cmt">CFS 调度器：vruntime/负载均衡/组调度</span>
+├── <span class="file">rt.c</span>              <span class="cmt">RT 调度器：FIFO/RR 实现</span>
+├── <span class="file">deadline.c</span>        <span class="cmt">Deadline 调度器：EDF 算法</span>
+├── <span class="file">ext.c</span>             <span class="cmt">sched_ext：BPF 可编程调度器 (7556 行)</span>
+├── <span class="file">ext_idle.c</span>        <span class="cmt">sched_ext 空闲处理</span>
+├── <span class="file">topology.c</span>        <span class="cmt">调度域拓扑构建</span>
+├── <span class="file">pelt.c</span>            <span class="cmt">PELT 负载跟踪</span>
+├── <span class="file">loadavg.c</span>         <span class="cmt">系统负载平均值</span>
+├── <span class="file">clock.c</span>           <span class="cmt">rq 时钟管理</span>
+├── <span class="file">cputime.c</span>         <span class="cmt">CPU 时间统计</span>
+├── <span class="file">cpuacct.c</span>         <span class="cmt">cgroup CPU 统计</span>
+├── <span class="file">cpufreq.c</span>         <span class="cmt">CPU 频率集成</span>
+├── <span class="file">cpufreq_schedutil.c</span> <span class="cmt">util-aware 调频</span>
+├── <span class="file">cpupri.c</span>          <span class="cmt">CPU 优先级管理</span>
+├── <span class="file">cpudeadline.c</span>     <span class="cmt">CPU deadline 管理</span>
+├── <span class="file">core_sched.c</span>      <span class="cmt">核心调度（core scheduling）</span>
+├── <span class="file">stop_task.c</span>       <span class="cmt">stop 调度类（最高优先级）</span>
+├── <span class="file">idle.c</span>            <span class="cmt">idle 调度类</span>
+├── <span class="file">psi.c</span>             <span class="cmt">压力停滞信息 (PSI)</span>
+├── <span class="file">debug.c</span>           <span class="cmt">debugfs 调试接口</span>
+├── <span class="file">stats.c</span>           <span class="cmt">调度统计</span>
+├── <span class="file">syscalls.c</span>        <span class="cmt">sched_setattr/getattr 系统调用</span>
+├── <span class="file">autogroup.c</span>       <span class="cmt">自动组（桌面响应性）</span>
+├── <span class="file">isolation.c</span>       <span class="cmt">CPU 隔离（nohz_full 等）</span>
+├── <span class="file">membarrier.c</span>      <span class="cmt">内存屏障系统调用</span>
+├── <span class="file">wait.c</span>            <span class="cmt">等待队列</span>
+├── <span class="file">wait_bit.c</span>        <span class="cmt">位等待队列</span>
+├── <span class="file">swait.c</span>           <span class="cmt">简单等待队列</span>
+├── <span class="file">completion.c</span>      <span class="cmt">完成量</span>
+└── <span class="file">rq-offsets.c</span>      <span class="cmt">rq 字段偏移量（BPF 用）</span>
+
+<span class="dir">include/linux/sched/</span>
+├── <span class="file">prio.h</span>            <span class="cmt">优先级定义 (46 行)</span>
+├── <span class="file">topology.h</span>        <span class="cmt">调度域拓扑</span>
+├── <span class="file">deadline.h</span>        <span class="cmt">Deadline 属性</span>
+├── <span class="file">rt.h</span>              <span class="cmt">RT 属性</span>
+├── <span class="file">ext.h</span>             <span class="cmt">sched_ext 接口</span>
+├── <span class="file">nohz.h</span>            <span class="cmt">NOHZ 接口</span>
+├── <span class="file">cpufreq.h</span>         <span class="cmt">CPU 频率集成</span>
+├── <span class="file">isolation.h</span>       <span class="cmt">CPU 隔离</span>
+└── <span class="file">numa_balancing.h</span>  <span class="cmt">NUMA 均衡</span>
+  </div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议</strong>：<code>kernel/sched/core.c</code>（10900+ 行）是核心，从 <code>__schedule()</code> 开始。<code>sched.h</code> 定义所有内部结构。<code>fair.c</code> 是 CFS 实现。<code>ext.c</code> 展示了如何通过 BPF 扩展调度器。优先级体系见 <code>prio.h</code>。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center; padding:30px 20px; border-top:1px solid var(--border); color:var(--text-dim); font-size:0.85em; background: var(--bg);">
+  基于 Linux 7.0.12 源码分析 · kernel/sched/ · 生成于 2026-06-11
+</footer>
+
+<script>
+const sections = document.querySelectorAll('section[id]');
+const navLinks = document.querySelectorAll('nav.toc a');
+const observer = new IntersectionObserver(entries => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      navLinks.forEach(l => l.classList.remove('active'));
+      const link = document.querySelector(`nav.toc a[href="#${entry.target.id}"]`);
+      if (link) link.classList.add('active');
+    }
+  });
+}, { rootMargin: '-80px 0px -70% 0px' });
+sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>
