@@ -86,7 +86,7 @@
   <h1>Linux 内核深度解析</h1>
   <p class="subtitle">从源码到架构 · 基于 Linux 7.0.12</p>
   <div class="stats">
-    <div class="stat"><span class="stat-num" id="total-count">10</span><span class="stat-label">篇文档</span></div>
+    <div class="stat"><span class="stat-num" id="total-count">17</span><span class="stat-label">篇文档</span></div>
     <div class="stat"><span class="stat-num" id="total-chapters">70+</span><span class="stat-label">个章节</span></div>
     <div class="stat"><span class="stat-num" id="total-lines">~4000</span><span class="stat-label">行代码</span></div>
   </div>
@@ -207,6 +207,72 @@ const DOCS = [
     categoryLabel: "设备与驱动",
     categoryIcon: "driver"
   },
+  {
+    title: "I2C 驱动深度解析",
+    file: "linux-i2c.html",
+    desc: "I2C 总线 — 适配器/从设备/驱动、i2c_algorithm、SMBus、设备树、编写驱动",
+    icon: "orange",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#bc4c00" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>',
+    tags: ["I2C", "SMBus", "驱动"],
+    category: "driver",
+    categoryLabel: "设备与驱动",
+    categoryIcon: "driver"
+  },
+  {
+    title: "SPI 驱动深度解析",
+    file: "linux-spi.html",
+    desc: "SPI 总线 — spi_device/transfer/message、SPI 模式、SPI-MEM、设备树、编写驱动",
+    icon: "purple",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8250df" stroke-width="2"><path d="M12 2v20M2 12h20M6 6l12 12M18 6L6 18"/></svg>',
+    tags: ["SPI", "spi-mem", "驱动"],
+    category: "driver",
+    categoryLabel: "设备与驱动",
+    categoryIcon: "driver"
+  },
+  {
+    title: "串口驱动深度解析",
+    file: "linux-serial.html",
+    desc: "UART/TTY — uart_ops、控制台、earlycon、设备树、编写驱动",
+    icon: "red",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#cf222e" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 7h4v10H7z"/><line x1="14" y1="7" x2="14" y2="17"/><line x1="17" y1="7" x2="17" y2="17"/><line x1="14" y1="12" x2="17" y2="12"/></svg>',
+    tags: ["串口", "UART", "TTY"],
+    category: "driver",
+    categoryLabel: "设备与驱动",
+    categoryIcon: "driver"
+  },
+  {
+    title: "MMC 驱动深度解析",
+    file: "linux-mmc.html",
+    desc: "SD/eMMC/SDIO — mmc_host、host_ops、卡片初始化、UHS-II、设备树、编写驱动",
+    icon: "green",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 6V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/><line x1="6" y1="12" x2="18" y2="12"/></svg>',
+    tags: ["MMC", "SD", "eMMC"],
+    category: "driver",
+    categoryLabel: "设备与驱动",
+    categoryIcon: "driver"
+  },
+  {
+    title: "LED 驱动深度解析",
+    file: "linux-led.html",
+    desc: "LED 子系统 — led_classdev、触发器框架、sysfs、设备树、编写驱动",
+    icon: "orange",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#bc4c00" stroke-width="2"><circle cx="12" cy="8" r="5"/><path d="M12 13v8"/><path d="M9 21h6"/><line x1="8" y1="17" x2="8" y2="21"/><line x1="16" y1="17" x2="16" y2="21"/></svg>',
+    tags: ["LED", "触发器", "sysfs"],
+    category: "driver",
+    categoryLabel: "设备与驱动",
+    categoryIcon: "driver"
+  },
+  {
+    title: "PWM 驱动深度解析",
+    file: "linux-pwm.html",
+    desc: "脉宽调制 — pwm_chip/pwm_device、pwm_ops、消费者 API、设备树、编写驱动",
+    icon: "purple",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8250df" stroke-width="2"><polyline points="2 12 5 12 8 6 11 18 14 6 17 18 20 12 22 12"/></svg>',
+    tags: ["PWM", "占空比", "驱动"],
+    category: "driver",
+    categoryLabel: "设备与驱动",
+    categoryIcon: "driver"
+  },
 
   // ── 网络 ──
   {
@@ -232,6 +298,19 @@ const DOCS = [
     category: "fs",
     categoryLabel: "文件系统",
     categoryIcon: "fs"
+  },
+
+  // ── 硬件描述 ──
+  {
+    title: "设备树深度解析",
+    file: "linux-devtree.html",
+    desc: "Device Tree — DTB 格式、语法基础、内核 API、平台设备、绑定规范、DT Overlay",
+    icon: "green",
+    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2"><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="14"/><circle cx="6" cy="19" r="3"/><circle cx="18" cy="19" r="3"/><line x1="12" y1="14" x2="6" y2="16"/><line x1="12" y1="14" x2="18" y2="16"/></svg>',
+    tags: ["设备树", "DTB", "ARM"],
+    category: "other",
+    categoryLabel: "硬件描述与系统",
+    categoryIcon: "driver"
   }
 ];
 
