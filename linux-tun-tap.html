@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux tun/tap 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux tun/tap 深度解析</h1>
+  <p class="subtitle">虚拟网络设备 — VPN 与虚拟化的基石</p>
+  <span class="version">Linux 7.0.12 · drivers/net/tun.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#principle">工作原理</a></li>
+    <li><a href="#tun-vs-tap">tun vs tap</a></li>
+    <li><a href="#example">实验演示</a></li>
+    <li><a href="#vpn">VPN 应用</a></li>
+    <li><a href="#vs">与其他虚拟设备对比</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>tun/tap 是 Linux 内核中最经典的<strong>虚拟网络设备</strong>。与 veth 不同，tun/tap 的另一端是<strong>用户空间程序</strong>，允许用户态应用直接读写网络数据包。它是 VPN（如 OpenVPN、WireGuard）和虚拟化（如 KVM、QEMU）的核心基础。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>用户态接口</strong>：通过 fd 读写数据包</li>
+        <li><strong>tun 模式</strong>：IP 层数据包</li>
+        <li><strong>tap 模式</strong>：以太网帧数据包</li>
+        <li><strong>可配置路由</strong>：控制哪些流量走 tun/tap</li>
+        <li><strong>VPN 基础</strong>：隧道、IPSec 等应用</li>
+        <li><strong>虚拟化基础</strong>：KVM/QEMU 网络后端</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">典型应用</div>
+      <table>
+        <tr><th>应用</th><th>说明</th></tr>
+        <tr><td>OpenVPN</td><td>VPN 隧道</td></tr>
+        <tr><td>KVM/QEMU</td><td>虚拟机网络后端</td></tr>
+        <tr><td>VTun</td><td>虚拟隧道</td></tr>
+        <tr><td>WireGuard</td><td>现代 VPN</td></tr>
+        <tr><td>网络调试</td><td>抓包、流量分析</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="data" class="toc-link">
+  <h2><span class="num">02</span> 核心数据结构</h2>
+  <div class="card">
+    <pre><code><span class="cm">// drivers/net/tun.c</span>
+<span class="kw">struct</span> <span class="ty">tun_struct</span> {
+    <span class="kw">struct</span> <span class="ty">net_device</span>        *dev;          <span class="cm">// 关联的网络设备</span>
+    <span class="kw">struct</span> <span class="ty">file</span>              *file;         <span class="cm">// 用户态 fd</span>
+    <span class="kw">struct</span> <span class="ty">tun_file</span>          *tfile;        <span class="cm">// TUN 文件</span>
+    <span class="kw">struct</span> <span class="ty">sock_fprog</span>        fprog;          <span class="cm">// BPF 过滤器</span>
+    <span class="kw">struct</span> <span class="ty">tun_flow_table</span>   *flow_table;    <span class="cm">// 流表（XDP）</span>
+    <span class="ty">bool</span>                     enabled;
+    <span class="ty">u32</span>                      flags;         <span class="cm">// IFF_TUN / IFF_TAP 等</span>
+    <span class="ty">u32</span>                      numqueues;     <span class="cm">// 多队列数</span>
+    <span class="ty">struct</span> <span class="ty">socket</span>          *sock;          <span class="cm">// 关联的 socket</span>
+    <span class="ty">unsigned int</span>             hdr_len;
+    <span class="ty">unsigned char</span>            addr[<span class="num">ETH_ALEN</span>]; <span class="cm">// tap 设备 MAC 地址</span>
+    <span class="ty">u16</span>                      queue_index;
+};</code></pre>
+  </div>
+  <h3>对象关系</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│  ┌────────────────────┐      ┌────────────────────┐              │
+│  │ User Application A │      │ User Application B │←────+        │
+│  └────────┬───────────┘      └────────┬───────────┘     |        │
+│           │  1                        │ 5               |        │
+│           ↓                           ↓                 |        │
+│      +----------+               +----------+            |        │
+│      | socket A |               | socket B |            |        │
+│      +----------+               +----------+            |        │
+│              │ 2                     │ 6                |        │
+│              ↓                       ↓                  |        │
+│      ┌────────────────────────────────────┐             |        │
+│      │        Network Protocol Stack      │             |        │
+│      └────────────────────────────────────┘             |        │
+│              │ 7                     │ 3                |        │
+│              ↓                       ↓                  |        │
+│      ┌──────────────┐       ┌──────────────┐            |        │
+│      │     eth0     │       │     tun0     │────────────+        │
+│      │  10.32.0.11  │       │ 192.168.3.11 │                     │
+│      └──────┬───────┘       └──────────────┘                     │
+│             │ 8                                                  │
+│  Physical   │                                                    │
+│  Network    ↓                                                    │
+└──────────────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="principle" class="toc-link">
+  <h2><span class="num">03</span> 工作原理</h2>
+  <h3>数据包流程（VPN 场景）</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">1. 应用程序 A 通过 socket A 发送数据包（目的 IP: 192.168.3.1）</span>
+        │
+        ▼
+<span style="color:#8250df">2. 协议栈匹配路由表 → 走 tun0</span>
+        │
+        ▼
+<span style="color:#1a7f37">3. tun0 将数据包传递给应用程序 B</span>
+        │
+        ▼
+<span style="color:#bc4c00">4. 应用程序 B 封装原始数据包（隧道）</span>
+        │
+        ▼
+<span style="color:#cf222e">5. 通过 socket B 发送给协议栈</span>
+        │
+        ▼
+<span style="color:#8250df">6. 协议栈路由 → 走 eth0 → 物理网络</span>
+        │
+        ▼
+<span style="color:#1a7f37">7. 远端 10.33.0.1 解封装 → 转发给 192.168.3.1</span>
+</pre></div>
+
+  <div class="card">
+    <p><strong>关键点</strong>：</p>
+    <ul>
+      <li>tun0 的一端是协议栈，另一端是<strong>用户态程序 B</strong></li>
+      <li>协议栈发给 tun0 的数据包，应用程序 B 可以通过 <code>read()</code> 读取</li>
+      <li>应用程序 B 写入 tun0 的数据包，协议栈会通过 <code>write()</code> 接收</li>
+      <li>数据包走哪个网络设备由<strong>路由表</strong>控制</li>
+    </ul>
+  </div>
+
+  <h3>tun 设备打开流程</h3>
+  <pre><code><span class="cm">// 用户态程序打开 /dev/net/tun</span>
+<span class="ty">int</span> fd = <span class="fn">open</span>(<span class="st">"/dev/net/tun"</span>, O_RDWR);
+
+<span class="cm">// 通过 ioctl 配置 tun 设备</span>
+<span class="kw">struct</span> <span class="ty">ifreq</span> ifr;
+ifr.ifr_flags = IFF_TUN | IFF_NO_PI;  <span class="cm">// TUN 模式，无包信息</span>
+<span class="fn">ioctl</span>(fd, TUNSETIFF, &ifr);
+
+<span class="cm">// 内核创建 tun 设备，绑定到 fd</span>
+<span class="cm">// 用户态通过 read/write 与协议栈交换数据包</span>
+nread = <span class="fn">read</span>(fd, buffer, sizeof(buffer)); <span class="cm">// 读取数据包</span>
+<span class="fn">write</span>(fd, buffer, nread);  <span class="cm">// 发送数据包</span></code></pre>
+</section>
+
+<section id="tun-vs-tap" class="toc-link">
+  <h2><span class="num">04</span> tun vs tap</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#0969da">tun</span>（IP 层）
+┌──────────────────────────────────────┐
+│  用户程序                            │
+│  read()/write() 操作 IP 数据包       │
+└──────────────────┬───────────────────┘
+                   │ IP 包
+              ┌────┴────┐
+              │  tun0   │
+              └────┬────┘
+                   │ IP 包
+              ┌────┴────┐
+              │  协议栈 │
+              └─────────┘
+
+<span style="color:#1a7f37">tap</span>（以太网层）
+┌──────────────────────────────────────┐
+│  用户程序                            │
+│  read()/write() 操作以太网帧         │
+└──────────────────┬───────────────────┘
+                   │ 以太网帧（含 MAC）
+              ┌────┴────┐
+              │  tap0   │
+              └────┬────┘
+                   │ 以太网帧
+              ┌────┴─────┐
+              │  协议栈  │
+              └──────────┘
+</pre></div>
+
+  <h3>对比表</h3>
+  <table>
+    <tr><th>特性</th><th>tun</th><th>tap</th></tr>
+    <tr><td>工作层级</td><td>IP 层</td><td>以太网层</td></tr>
+    <tr><td>数据格式</td><td>IP 数据包</td><td>以太网帧（含 MAC 头）</td></tr>
+    <tr><td>类似</td><td>普通 socket</td><td>raw socket</td></tr>
+    <tr><td>典型场景</td><td>VPN（不需要 MAC）</td><td>虚拟机（需要 MAC）</td></tr>
+    <tr><td>Bridge 兼容</td><td>不常用</td><td>完美兼容</td></tr>
+    <tr><td>IFF 标志</td><td>IFF_TUN</td><td>IFF_TAP</td></tr>
+  </table>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">05</span> 实验演示</h2>
+
+  <h3>示例程序</h3>
+  <div class="card">
+    <pre><code><span class="cm">// tun_test.c — 简单的 tun 设备测试程序</span>
+<span class="kw">#include</span> <span class="st">&lt;net/if.h&gt;</span>
+<span class="kw">#include</span> <span class="st">&lt;sys/ioctl.h&gt;</span>
+<span class="kw">#include</span> <span class="st">&lt;fcntl.h&gt;</span>
+<span class="kw">#include</span> <span class="st">&lt;linux/if_tun.h&gt;</span>
+<span class="kw">#include</span> <span class="st">&lt;stdio.h&gt;</span>
+<span class="kw">#include</span> <span class="st">&lt;stdlib.h&gt;</span>
+<span class="kw">#include</span> <span class="st">&lt;string.h&gt;</span>
+
+<span class="ty">int</span> <span class="fn">tun_alloc</span>(<span class="ty">int</span> flags)
+{
+    <span class="kw">struct</span> <span class="ty">ifreq</span> ifr;
+    <span class="ty">int</span> fd;
+
+    fd = <span class="fn">open</span>(<span class="st">"/dev/net/tun"</span>, O_RDWR);
+    <span class="kw">if</span> (fd &lt; <span class="num">0</span>) <span class="kw">return</span> fd;
+
+    <span class="fn">memset</span>(&ifr, <span class="num">0</span>, <span class="kw">sizeof</span>(ifr));
+    ifr.ifr_flags = flags;
+    <span class="fn">ioctl</span>(fd, TUNSETIFF, &amp;ifr);
+
+    <span class="fn">printf</span>(<span class="st">"Opened tun/tap device: %s\n"</span>, ifr.ifr_name);
+    <span class="kw">return</span> fd;
+}
+
+<span class="ty">int</span> <span class="fn">main</span>()
+{
+    <span class="ty">int</span> tun_fd, nread;
+    <span class="ty">char</span> buffer[<span class="num">1500</span>];
+
+    tun_fd = <span class="fn">tun_alloc</span>(IFF_TUN | IFF_NO_PI);
+    <span class="kw">if</span> (tun_fd &lt; <span class="num">0</span>) { <span class="fn">perror</span>(<span class="st">"tun"</span>); <span class="kw">return</span> <span class="num">1</span>; }
+
+    <span class="kw">while</span> (<span class="num">1</span>) {
+        nread = <span class="fn">read</span>(tun_fd, buffer, <span class="kw">sizeof</span>(buffer));
+        <span class="fn">printf</span>(<span class="st">"Read %d bytes from tun/tap device\n"</span>, nread);
+    }
+}</code></pre>
+  </div>
+
+  <h3>运行演示</h3>
+  <pre><code><span class="cm"># 窗口 1：启动 tun 程序</span>
+$ gcc tun.c -o tun && sudo ./tun
+Open tun/tap device tun1 for reading...
+Read 84 bytes from tun/tap device    <span class="cm"># 收到 ICMP echo request</span>
+
+<span class="cm"># 窗口 2：配置 tun 设备</span>
+$ sudo ip addr add 192.168.3.11/24 dev tun1
+$ sudo ip link set tun1 up
+
+<span class="cm"># 窗口 3：ping 测试</span>
+$ ping -c 4 192.168.3.12
+PING 192.168.3.12 ... 4 packets transmitted, 0 received  <span class="cm"># 无应答（程序没处理）</span></code></pre>
+
+  <div class="callout tip">
+    <strong>观察</strong>：ping 的数据包确实到达了应用程序（显示 84 字节），但因为程序只是打印数据包长度不做处理，所以没有返回 ICMP echo reply，ping 失败。
+  </div>
+</section>
+
+<section id="vpn" class="toc-link">
+  <h2><span class="num">06</span> VPN 应用</h2>
+
+  <h3>VPN 工作原理</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">本地 VPN 客户端</span>
+┌────────────────────────────────────────────┐
+│                                            │
+│  ┌──────────┐    ┌──────────┐              │
+│  │ 应用程序 │───→│ tun0     │              │
+│  └──────────┘    └────┬─────┘              │
+│                       │ IP 包              │
+│                  ┌────┴────┐               │
+│                  │  VPN    │  ← 加密/封装  │
+│                  │  程序   │               │
+│                  └────┬────┘               │
+│                       │ 加密后的数据包     │
+│                  ┌────┴────┐               │
+│                  │  eth0   │               │
+│                  └────┬────┘               │
+└───────────────────────│────────────────────┘
+                        ↓
+              ┌─────────────────┐
+              │  Internet       │
+              └────────┬────────┘
+                       ↓
+              ┌─────────────────┐
+              │ 远端 VPN 服务器 │
+              └────────┬────────┘
+                       ↓ 解密
+              ┌─────────────────┐
+              │     目标网络    │
+              └─────────────────┘
+</pre></div>
+
+  <div class="callout tip">
+    <strong>OpenVPN 原理</strong>：OpenVPN 使用 tun 设备创建虚拟网卡，所有发往 tun0 的数据包被 OpenVPN 进程加密后通过 eth0 发送到远端 VPN 服务器，远端解密后转发给目标。返回路径反之。
+  </div>
+</section>
+
+<section id="vs" class="toc-link">
+  <h2><span class="num">07</span> 与其他虚拟设备对比</h2>
+  <table>
+    <tr><th>特性</th><th>tun/tap</th><th>veth</th><th>dummy</th></tr>
+    <tr><td>另一端</td><td>用户态程序</td><td>配对设备</td><td>无（丢弃）</td></tr>
+    <tr><td>成对</td><td>否</td><td>是</td><td>否</td></tr>
+    <tr><td>数据传递</td><td>read/write fd</td><td>内核直接传递</td><td>丢弃</td></tr>
+    <tr><td>协议栈</td><td>tun 连 IP 层，tap 连以太网层</td><td>一端连协议栈</td><td>一端连协议栈</td></tr>
+    <tr><td>典型用途</td><td>VPN、虚拟机</td><td>容器、网络命名空间</td><td>路由测试</td></tr>
+    <tr><td>性能</td><td>中（用户态处理）</td><td>高（内核直接）</td><td>高（丢弃）</td></tr>
+  </table>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/net/</span>
+└── <span class="file">tun.c</span>             <span class="cmt">tun/tap 驱动实现</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">if_tun.h</span>         <span class="cmt">TUN/TAP 接口定义</span>
+└── <span class="file">netdevice.h</span>       <span class="cmt">net_device 定义</span>
+
+<span class="dir">drivers/net/</span>
+├── <span class="file">veth.c</span>           <span class="cmt">veth（下一篇参考）</span>
+└── <span class="file">dummy.c</span>          <span class="cmt">dummy 设备</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>drivers/net/tun.c</span> 是 tun/tap 驱动的核心实现。<br>
+    <code>drivers/net/veth.c</code> 是 veth 驱动（下一篇的参考）。<br>
+    <code>include/linux/if_tun.h</code> 定义 TUN/TAP 的 ioctl 接口。<br>
+    <code>net/core/dev.c</code> 是网络设备核心框架。
+  </div>
+  <div class="callout tip">
+    <strong>参考链接</strong><br>
+    <a href="https://segmentfault.com/a/1190000009249039" target="_blank">Linux 虚拟网络设备之 tun/tap</a> — 本文基于该文章内容与内核源码深度整合。<br>
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · drivers/net/tun.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -141,6 +141,10 @@ tr:nth-child(even) { background: rgba(127,127,127,0.05); }
 .flow-box.purple { border-color: var(--accent3); color: var(--accent3); background: rgba(130,80,223,0.06); }
 .flow-arrow { display: inline-block; color: var(--text-dim); font-size: 1.2em; vertical-align: middle; margin: 0 2px; }
 .flow-down { display: block; text-align: center; color: var(--text-dim); font-size: 1.1em; margin: 8px 0; }
+
+/* ---- ASCII Diagram (跨文档复用) ---- */
+.ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+.ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; }
 [data-theme="dark"] .flow-box.active { background: rgba(80,250,123,0.1); }
 [data-theme="dark"] .flow-box.warn { background: rgba(255,184,108,0.1); }
 [data-theme="dark"] .flow-box.danger { background: rgba(255,85,85,0.1); }

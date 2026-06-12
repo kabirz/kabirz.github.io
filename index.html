@@ -137,6 +137,7 @@ const DOCS = [
   { t:"Linux Completion", f:"linux-completion.html", d:"完成量 — 任务间同步等待与通知", i:"blue", tags:["completion","同步","等待"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
   { t:"Linux 等待队列", f:"linux-waitqueue.html", d:"Wait Queue — 条件等待与事件通知", i:"blue", tags:["wait_queue","条件等待","通知"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
   { t:"Linux 工作队列", f:"linux-workqueue.html", d:"Workqueue — 延迟执行与异步处理框架", i:"purple", tags:["workqueue","cmwq","worker"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux WQ_BH", f:"linux-wq-bh.html", d:"Bottom Half Workqueue — softirq 上下文的工作队列", i:"purple", tags:["WQ_BH","tasklet","softirq"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
   { t:"Linux cgroup", f:"linux-cgroup.html", d:"v1/v2 架构、控制器接口、BPF 集成", i:"purple", tags:["cgroup","容器","资源控制"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
   { t:"Linux procfs", f:"linux-procfs.html", d:"伪文件系统 — seq_file、/proc/[pid]", i:"green", tags:["procfs","文件系统"], top:"linux", topLabel:"Linux 内核", cat:"fs", catLabel:"文件系统" },
   { t:"Linux VFS", f:"linux-vfs.html", d:"四大对象、DCache、路径查找、读写", i:"purple", tags:["VFS","文件系统","dcache"], top:"linux", topLabel:"Linux 内核", cat:"fs", catLabel:"文件系统" },
@@ -154,6 +155,11 @@ const DOCS = [
   { t:"Linux 时钟", f:"linux-clk.html", d:"clk_ops、PLL、门控、分频", i:"green", tags:["时钟","CCF","PLL"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
   { t:"Linux DMA", f:"linux-dma.html", d:"一致性/流式 DMA、SWIOTLB、IOMMU", i:"blue", tags:["DMA","IOMMU"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
   { t:"Linux 网络", f:"linux-network.html", d:"sk_buff、TCP/IP、XDP、NAPI", i:"orange", tags:["网络","TCP/IP","XDP"], top:"linux", topLabel:"Linux 内核", cat:"net", catLabel:"网络" },
+  { t:"Linux Bridge", f:"linux-bridge.html", d:"虚拟网桥 — 软件交换机、VM/Docker 网络", i:"orange", tags:["bridge","虚拟交换机","网络"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
+  { t:"Linux veth", f:"linux-veth.html", d:"虚拟网卡 — 容器网络的基石", i:"orange", tags:["veth","虚拟网卡","容器"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
+  { t:"Linux tun/tap", f:"linux-tun-tap.html", d:"虚拟网络设备 — VPN 与虚拟化的基石", i:"orange", tags:["tun","tap","VPN","虚拟化"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
+  { t:"数据包接收流程", f:"linux-rx-packet.html", d:"网卡 → 内存 → 协议栈 → 应用层（UDP 示例）", i:"orange", tags:["NAPI","softirq","IP","UDP","收包"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
+  { t:"数据包发送流程", f:"linux-tx-packet.html", d:"应用层 → 协议栈 → 网卡 → 网线（UDP 示例）", i:"orange", tags:["sendto","qdisc","ARP","发包"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
 ];
 
 const ICON_MAP = {

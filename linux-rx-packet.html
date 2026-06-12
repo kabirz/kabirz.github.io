@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 数据包接收过程深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 数据包接收过程深度解析</h1>
+  <p class="subtitle">从网卡到应用层 — 一个数据包的完整旅程</p>
+  <span class="version">Linux 7.0.12 · net/ · drivers/net/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#nic">网卡到内存</a></li>
+    <li><a href="#softirq">内核网络模块</a></li>
+    <li><a href="#ip">IP 层处理</a></li>
+    <li><a href="#udp">UDP 层处理</a></li>
+    <li><a href="#socket">应用层接收</a></li>
+    <li><a href="#summary">全流程总结</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>本文以 UDP 数据包为例，完整介绍数据包如何从物理网卡一步一步传递到用户进程。整个过程分为四个阶段：网卡到内存、内核网络模块、IP/UDP 协议栈、应用层 socket。</p>
+  <div class="callout tip">
+    <strong>说明</strong>：本文只讨论以太网物理网卡，不涉及虚拟设备。函数调用关系基于内核 7.0.12，与旧版有细微差别但原理相同。
+  </div>
+</section>
+
+<section id="nic" class="toc-link">
+  <h2><span class="num">02</span> 网卡到内存</h2>
+  <p>数据包进入主机后，经历以下 6 个步骤：</p>
+
+  <div class="ascii-diagram"><pre>
+                            Memory
+                        +--------+--------+--------+--------+
+                        | Packet | Packet | Packet |  ...   |
+                        +---+----+---+----+---+----+---+----+
+                            |           |          |
+          +--------+        |           |          |
+          | Packet |   1    |           |          |
++-------->|  NIC   |--------+    DMA    |    DMA   |
+|  网线   |        |----+    (步骤 2)   |          |
++---------+--------+  |                 |          |
+                      | 3. Raise IRQ    |          |
+                      |                 |          |
+                      ↓                 |          |
+                 +--------+             |          |
+                 |  CPU   | 4. IRQ      |          |
+                 |        | Handler     |          |
+                 +--------+             |          |
+                      |                 |          |
+                      ↓ 5. Disable IRQ  |          |
+                 +----------+           |          |
+                 |   NIC    |←----------+          |
+                 |  Driver  |   9. Read Packet     |
+                 +-----+----+                      |
+                       |                           |
+                       ↓ 6. Raise softIRQ          |
+                 +------------+                    |
+                 | ksoftirqd  | 7. Poll            |
+                 +------+-----+                    |
+                        |                          |
+                        ↓ 8. net_rx_action         |
+                        +--------------------------+
+</pre></div>
+
+  <table>
+    <tr><th>步骤</th><th>操作</th><th>说明</th></tr>
+    <tr><td>1</td><td>数据包到达网卡</td><td>如果目的 MAC 不是当前网卡且未开启混杂模式，包被丢弃</td></tr>
+    <tr><td>2</td><td>DMA 写入内存</td><td>网卡通过 DMA 将数据包写入驱动分配的内存缓冲区</td></tr>
+    <tr><td>3</td><td>硬件中断（IRQ）</td><td>网卡通过 IRQ 通知 CPU 有数据到达</td></tr>
+    <tr><td>4</td><td>CPU 执行 IRQ Handler</td><td>CPU 根据中断向量表调用注册的中断处理函数（→ NIC Driver）</td></tr>
+    <tr><td>5</td><td>禁用网卡中断</td><td>驱动禁用 IRQ，后续数据包直接 DMA 到内存，不再中断 CPU</td></tr>
+    <tr><td>6</td><td>触发软中断</td><td>硬件中断处理结束，耗时操作移到软中断上下文处理</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>为什么需要软中断？</strong><br>
+    硬件中断处理程序执行过程中<strong>不能被中断</strong>。如果它执行时间过长，会导致 CPU 无法响应其他硬件中断。内核引入软中断（softirq），将耗时的数据包处理操作移到软中断上下文中执行。
+  </div>
+</section>
+
+<section id="softirq" class="toc-link">
+  <h2><span class="num">03</span> 内核网络模块</h2>
+
+  <h3>NAPI 处理流程</h3>
+  <div class="ascii-diagram"><pre>
+                                   +-------+
+                  17. Enable IRQ   |  NIC  |
+              +--------------------|       |
+              |                    +-------+
+              |
+              |     Poll (8)
+              |                    Memory
+              |              +--------+--------+--------+--------+
+              |              | Packet | Packet | Packet |  ...   |
+   +---------------+  Read   +---+----+---+----+---+----+---+----+
+   | net_rx_action |<--------|   |          |         |          |
+   +-------+-------+   9     |   |          |         |          |
+           |                  | 10. skb     |         |          |
+     Call  | 7                |   ↓         |         |          |
+           |                  |   |         |         |          |
+   +-----------+              |   ↓         |         |          |
+   |ksoftirqd  |              |   ↓         |         |          |
+   +-----------+              |   ↓         |         |          |
+                              |   ↓         |         |          |
+                    napi_gro_receive  enqueue_to_backlog         |
+                           |                    |                |
+                           ↓ (14)               ↓ (12)           |
+              +--------------------------+  +------------------+ |
+              | __netif_receive_skb_core |<-| input_pkt_queue  | |
+              +-----------+--------------+  +------------------+ |
+                          |                                      |
+                          | 15                                   |
+                          ↓                                      |
+                +---------------------+                          |
+                | AF_PACKET (tcpdump) |                          |
+                +---------------------+                          |
+                          |                                      |
+                          | 16                                   |
+                          ↓                                      |
+                 +------------------+                            |
+                 | Protocol Layers  |----------------------------+
+                 +------------------+
+</pre></div>
+
+  <table>
+    <tr><th>步骤</th><th>函数</th><th>说明</th></tr>
+    <tr><td>7</td><td>ksoftirqd</td><td>内核软中断进程，调用 net_rx_action 处理网络数据</td></tr>
+    <tr><td>8</td><td>net_rx_action</td><td>调用网卡驱动的 poll 函数逐个处理数据包</td></tr>
+    <tr><td>9</td><td>poll 函数</td><td>驱动读取内存中的原始数据包</td></tr>
+    <tr><td>10</td><td>skb 分配</td><td>驱动将原始数据转换为内核 sk_buff 格式</td></tr>
+    <tr><td>11</td><td>napi_gro_receive</td><td>处理 GRO（合并小包），判断是否开启 RPS</td></tr>
+    <tr><td>12</td><td>enqueue_to_backlog</td><td>RPS 开启时，将 skb 放入 CPU 的 input_pkt_queue</td></tr>
+    <tr><td>13</td><td>input_pkt_queue</td><td>CPU 在软中断上下文中处理队列中的数据包</td></tr>
+    <tr><td>14</td><td>__netif_receive_skb_core</td><td>RPS 关闭时直接调用；开启时从队列取出调用</td></tr>
+    <tr><td>15</td><td>AF_PACKET</td><td>检查是否有原始套接字（tcpdump 抓包点）</td></tr>
+    <tr><td>16</td><td>协议栈分发</td><td>根据 ethertype 交给 IP / ARP / IPv6 等协议层处理</td></tr>
+    <tr><td>17</td><td>Enable IRQ</td><td>所有数据包处理完成后，重新启用网卡硬中断</td></tr>
+  </table>
+
+  <h3>关键概念</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">NAPI</div>
+      <p>New API。传统模式下每个包都触发一次中断，高流量时 CPU 忙于中断处理。NAPI 在第一个包到达时触发中断，然后驱动禁用中断，改用轮询（poll）模式批量处理多个包，处理完后再启用中断。</p>
+    </div>
+    <div class="card">
+      <div class="card-title">GRO / RPS</div>
+      <p><strong>GRO</strong>（Generic Receive Offload）：合并可聚合的小数据包，减少协议栈处理次数。<br><strong>RPS</strong>（Receive Packet Steering）：将数据包分发到其他 CPU 的队列中处理，实现软件层面的接收多队列。</p>
+    </div>
+  </div>
+</section>
+
+<section id="ip" class="toc-link">
+  <h2><span class="num">04</span> IP 层处理</h2>
+
+  <div class="ascii-diagram"><pre>
+       |
+       ↓
+  +--------+     promiscuous mode        +------------------+
+  | ip_rcv |-----PACKET_OTHERHOST------->| drop this packet |
+  +--------+                             +------------------+
+       |
+       ↓
++---------------------+
+| NF_INET_PRE_ROUTING |   ← Netfilter 钩子（iptables PREROUTING）
++---------------------+
+       |
+       ↓
+  +---------+        IP 转发?
+  | routing |---yes---→ +------------+   +-----------------+
+  |         |           | ip_forward |--→| NF_INET_FORWARD |
+  +---------+           +------------+   +-----------------+
+       |                                     |
+       | 目的 IP 是本地                       ↓
+       ↓                              +---------------+
++------------------+                  | dst_output_sk | → 转发出去
+| ip_local_deliver |                  +---------------+
++------------------+
+       |
+       ↓
++------------------+
+| NF_INET_LOCAL_IN |   ← Netfilter 钩子（iptables INPUT）
++------------------+
+       |
+       ↓
+  +-----------+
+  | UDP Layer |
+  +-----------+
+</pre></div>
+
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>ip_rcv</code></td><td>IP 模块入口。丢弃垃圾数据包（混杂模式下收到的非本机包），然后调用 NF_INET_PRE_ROUTING</td></tr>
+    <tr><td>NF_INET_PRE_ROUTING</td><td>Netfilter 钩子，iptables PREROUTING 链的处理点。可修改或丢弃数据包</td></tr>
+    <tr><td>routing</td><td>路由查找。目的 IP 非本地且未开 ip_forward → 丢弃；开了 → ip_forward 转发</td></tr>
+    <tr><td><code>ip_forward</code></td><td>调用 NF_INET_FORWARD 钩子，未丢弃则调用 dst_output_sk 发送出去</td></tr>
+    <tr><td><code>ip_local_deliver</code></td><td>目的 IP 是本地。调用 NF_INET_LOCAL_IN 钩子，通过后交给 UDP 层</td></tr>
+    <tr><td>NF_INET_LOCAL_IN</td><td>Netfilter 钩子，iptables INPUT 链的处理点</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>Netfilter 四个钩子位置</strong><br>
+    PREROUTING → routing → FORWARD（转发）/ LOCAL_IN（本机）→ POSTROUTING<br>
+    在本例（UDP 包接收）中经过的钩子：PRE_ROUTING → LOCAL_IN
+  </div>
+</section>
+
+<section id="udp" class="toc-link">
+  <h2><span class="num">05</span> UDP 层处理</h2>
+
+  <div class="ascii-diagram"><pre>
+       |
+       ↓
+  +---------+            +-----------------------+
+  | udp_rcv |-----------→| __udp4_lib_lookup_skb |
+  +---------+            |   (查找匹配的 socket)  |
+       |                 +-----------------------+
+       ↓
++--------------------+      +-----------+
+| sock_queue_rcv_skb |-----→| sk_filter |
++--------------------+      | (BPF过滤) |
+       |                    +-----------+
+       ↓
++------------------+
+| __skb_queue_tail |   ← 数据包放入 socket 接收队列末尾
++------------------+
+       |
+       ↓
++---------------+
+| sk_data_ready |   ← 通知进程有数据到达
++---------------+
+</pre></div>
+
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>udp_rcv</code></td><td>UDP 模块入口。做必要检查</td></tr>
+    <tr><td><code>__udp4_lib_lookup_skb</code></td><td>根据目的 IP + 端口查找匹配的 socket。找不到 → 丢弃</td></tr>
+    <tr><td><code>sock_queue_rcv_skb</code></td><td>检查接收缓冲区是否满（满则丢弃），调用 sk_filter 检查 BPF 过滤器</td></tr>
+    <tr><td><code>sk_filter</code></td><td>每个 socket 可设置类似 tcpdump 的过滤规则，不满足条件 → 丢弃</td></tr>
+    <tr><td><code>__skb_queue_tail</code></td><td>将 skb 放入 socket 的 receive_skb 队列末尾</td></tr>
+    <tr><td><code>sk_data_ready</code></td><td>唤醒等待的进程（recvfrom 阻塞返回）或通知 epoll/select</td></tr>
+  </table>
+</section>
+
+<section id="socket" class="toc-link">
+  <h2><span class="num">06</span> 应用层接收</h2>
+  <div class="card">
+    <p>应用层有两种接收数据的方式：</p>
+    <pre><code><span class="cm">// 方式 1：阻塞式 recvfrom</span>
+nread = <span class="fn">recvfrom</span>(sockfd, buffer, MAXLINE, <span class="num">0</span>, NULL, NULL);
+<span class="cm">// 进程阻塞 → sk_data_ready 唤醒 → 从 receive_skb 队列读取数据</span>
+
+<span class="cm">// 方式 2：epoll/select 监听</span>
+<span class="ty">int</span> nready = <span class="fn">epoll_wait</span>(epfd, events, MAX_EVENTS, -<span class="num">1</span>);
+<span class="cm">// socket 可读事件触发 → 调用 recvfrom 读取队列数据</span></code></pre>
+  </div>
+</section>
+
+<section id="summary" class="toc-link">
+  <h2><span class="num">07</span> 全流程总结</h2>
+
+  <div class="ascii-diagram"><pre>
+┌─────────────────────────────────────────────────────────────────────┐
+│                        完整数据包接收路径                           │
+│                                                                     │
+│  网线                                                               │
+│   ↓                                                                 │
+│  NIC 网卡                                                           │
+│   ↓  DMA                                                            │
+│  内存（驱动缓冲区）                                                 │
+│   ↓  IRQ（硬中断）                                                  │
+│  CPU → NIC Driver → 禁用 IRQ → 触发 softIRQ                         │
+│   ↓  软中断                                                         │
+│  ksoftirqd → net_rx_action → poll() → skb 转换 → napi_gro_receive   │
+│   ↓  RPS?                                                           │
+│  enqueue_to_backlog → input_pkt_queue → __netif_receive_skb_core    │
+│   ↓                                                                 │
+│  AF_PACKET 检查（tcpdump）                                          │
+│   ↓                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐       │
+│  │                    IP 层                                 │       │
+│  │  ip_rcv → PRE_ROUTING → routing                          │       │
+│  │     ├── 转发 → ip_forward → FORWARD → dst_output_sk      │       │
+│  │     └── 本机 → ip_local_deliver → LOCAL_IN               │       │
+│  └──────────────────────────┬───────────────────────────────┘       │
+│                             ↓                                       │
+│  ┌───────────────────────────────────────────────────────────┐      │
+│  │                    UDP 层                                 │      │
+│  │  udp_rcv → lookup socket → filter → queue_tail → ready    │      │
+│  └──────────────────────────┬────────────────────────────────┘      │
+│                             ↓                                       │
+│                    ┌─────────────────┐                              │
+│                    │  recvfrom()     │                              │
+│                    │  epoll/select   │                              │
+│                    └─────────────────┘                              │
+└─────────────────────────────────────────────────────────────────────┘
+</pre></div>
+
+  <div class="callout tip">
+    <strong>丢包点总结</strong><br>
+    整个接收路径中有多个可能丢包的位置：<br>
+    • <strong>网卡</strong>：混杂模式检查、MAC 过滤<br>
+    • <strong>驱动</strong>：内存不足时 DMA 缓冲区满<br>
+    • <strong>enqueue_to_backlog</strong>：input_pkt_queue 满（可通过 net.core.netdev_max_backlog 调整）<br>
+    • <strong>AF_PACKET</strong>：tcpdump 过滤<br>
+    • <strong>ip_rcv</strong>：混杂模式 + PACKET_OTHERHOST<br>
+    • <strong>routing</strong>：无路由且未开 ip_forward<br>
+    • <strong>udp_rcv</strong>：找不到匹配的 socket<br>
+    • <strong>sock_queue_rcv_skb</strong>：socket 接收缓冲区满（net.core.rmem_max）<br>
+    • <strong>sk_filter</strong>：BPF 过滤器不匹配
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

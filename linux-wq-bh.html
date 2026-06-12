@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 WQ_BH 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核 WQ_BH 深度解析</h1>
+  <p class="subtitle">Bottom Half Workqueue — softirq 上下文的工作队列</p>
+  <span class="version">Linux 7.0.12 · kernel/workqueue.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#structure">数据结构</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#bh_worker">BH Worker</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#vs">对比其他机制</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>WQ_BH（Bottom Half Workqueue）是 Linux 7.x 引入的<strong>在 softirq 上下文中执行工作</strong>的机制。它解决了 tasklet 的已知问题（不可睡眠、并发限制），同时保留了 softirq 的低延迟特性。WQ_BH 是 tasklet 的现代替代方案。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>softirq 上下文</strong>：在软中断中执行</li>
+        <li><strong>cmwq 框架</strong>：复用工作队列基础设施</li>
+        <li><strong>per-CPU</strong>：每个 CPU 独立的 worker pool</li>
+        <li><strong>替代 tasklet</strong>：解决 tasklet 的已知缺陷</li>
+        <li><strong>系统预定义</strong>：system_bh_wq / system_bh_highpri_wq</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">适用场景</div>
+      <table>
+        <tr><th>场景</th><th>说明</th></tr>
+        <tr><td>网络栈</td><td>高性能网络处理</td></tr>
+        <tr><td>驱动底半部</td><td>中断后的快速处理</td></tr>
+        <tr><td>替代 tasklet</td><td>所有 tasklet 用例</td></tr>
+        <tr><td>延迟处理</td><td>需要 softirq 但不能用 tasklet</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="structure" class="toc-link">
+  <h2><span class="num">02</span> 数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/workqueue.h:370-413</span>
+<span class="kw">enum</span> <span class="ty">wq_flags</span> {
+    WQ_BH          = <span class="num">1</span> << <span class="num">0</span>,  <span class="cm">// 在 softirq 上下文执行</span>
+    WQ_UNBOUND     = <span class="num">1</span> << <span class="num">1</span>,  <span class="cm">// 不绑定 CPU</span>
+    WQ_FREEZABLE   = <span class="num">1</span> << <span class="num">2</span>,  <span class="cm">// 挂起时冻结</span>
+    WQ_MEM_RECLAIM = <span class="num">1</span> << <span class="num">3</span>,  <span class="cm">// 内存回收时保证推进</span>
+    WQ_HIGHPRI     = <span class="num">1</span> << <span class="num">4</span>,  <span class="cm">// 高优先级</span>
+    <span class="cm">// BH wq 只允许以下标志组合</span>
+    __WQ_BH_ALLOWS = WQ_BH | WQ_HIGHPRI | WQ_PERCPU,
+};</code></pre>
+  </div>
+
+  <h3>BH Worker Pool</h3>
+  <div class="card">
+    <pre><code><span class="cm">// kernel/workqueue.c:488-489</span>
+<span class="cm">// 每个 CPU 有两个 BH worker pool：普通和高优先级</span>
+<span class="kw">static DEFINE_PER_CPU_SHARED_ALIGNED</span>(
+    <span class="kw">struct</span> <span class="ty">worker_pool</span> [<span class="num">NR_STD_WORKER_POOLS</span>],
+    bh_worker_pools
+);
+
+<span class="cm">// 系统预定义 BH 工作队列</span>
+<span class="kw">struct</span> <span class="ty">workqueue_struct</span> *system_bh_wq;         <span class="cm">// 普通 BH</span>
+<span class="kw">struct</span> <span class="ty">workqueue_struct</span> *system_bh_highpri_wq; <span class="cm">// 高优先级 BH</span></code></pre>
+  </div>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 核心 API</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// 提交 BH 工作</span>
+<span class="fn">queue_work</span>(system_bh_wq, &my_work);
+
+<span class="cm">// 提交高优先级 BH 工作</span>
+<span class="fn">queue_work</span>(system_bh_highpri_wq, &my_work);
+
+<span class="cm">// 自定义 BH 工作队列</span>
+<span class="kw">struct</span> <span class="ty">workqueue_struct</span> *my_bh_wq;
+my_bh_wq = <span class="fn">alloc_workqueue</span>(<span class="st">"my_bh"</span>, WQ_BH | WQ_HIGHPRI, <span class="num">0</span>);
+<span class="fn">queue_work</span>(my_bh_wq, &my_work);</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>限制</strong>：BH 工作队列只允许 <code>WQ_BH | WQ_HIGHPRI | WQ_PERCPU</code> 标志组合。不能使用 WQ_UNBOUND、WQ_FREEZABLE 等。BH 工作<strong>不能睡眠</strong>（在 softirq 上下文中执行）。
+  </div>
+</section>
+
+<section id="bh_worker" class="toc-link">
+  <h2><span class="num">04</span> BH Worker</h2>
+
+  <p>BH worker 是在 softirq 上下文中执行工作的特殊 worker，通过 <code>workqueue_softirq_action()</code> 触发。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// kernel/workqueue.c:3649-3685</span>
+<span class="kw">static void</span> <span class="fn">bh_worker</span>(<span class="kw">struct</span> <span class="ty">worker</span> *worker)
+{
+    <span class="kw">struct</span> <span class="ty">worker_pool</span> *pool = worker->pool;
+    <span class="ty">int</span> nr_restarts = <span class="ty">BH_WORKER_RESTARTS</span>;  <span class="cm">// 最多处理 10 个工作</span>
+    <span class="ty">unsigned long</span> end = jiffies + <span class="ty">BH_WORKER_JIFFIES</span>; <span class="cm">// 2ms 超时</span>
+
+    <span class="cm">// 从 worker pool 中取出工作执行</span>
+    <span class="kw">do</span> {
+        <span class="kw">struct</span> <span class="ty">work_struct</span> *work =
+            list_first_entry(&pool->worklist, <span class="kw">struct</span> <span class="ty">work_struct</span>, entry);
+        <span class="fn">process_scheduled_works</span>(worker);
+    } <span class="kw">while</span> (keep_working(pool) &&
+             --nr_restarts && <span class="fn">time_before</span>(jiffies, end));
+}
+
+<span class="cm">// 由 softirq 触发</span>
+<span class="kw">void</span> <span class="fn">workqueue_softirq_action</span>(<span class="ty">bool</span> highpri)
+{
+    <span class="kw">struct</span> <span class="ty">worker_pool</span> *pool =
+        &per_cpu(bh_worker_pools, smp_processor_id())[highpri];
+    <span class="kw">if</span> (<span class="fn">need_more_worker</span>(pool))
+        <span class="fn">bh_worker</span>(list_first_entry(&pool->workers, <span class="kw">struct</span> <span class="ty">worker</span>, node));
+}</code></pre>
+  </div>
+</section>
+
+<section id="patterns" class="toc-link">
+  <h2><span class="num">05</span> 使用模式</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式一：替代 tasklet</span>
+<span class="cm">// 旧代码（tasklet，已废弃）：</span>
+<span class="fn">tasklet_schedule</span>(&my_tasklet);
+
+<span class="cm">// 新代码（WQ_BH）：</span>
+<span class="fn">queue_work</span>(system_bh_wq, &my_work);
+
+<span class="cm">// 模式二：网络栈底半部</span>
+<span class="kw">static void</span> <span class="fn">net_rx_action</span>(<span class="kw">struct</span> <span class="ty">softirq_action</span> *h)
+{
+    <span class="cm">// 由 softirq 触发，执行 BH worker</span>
+    <span class="fn">workqueue_softirq_action</span>(<span class="num">false</span>);
+}
+
+<span class="cm">// 模式三：高优先级 BH</span>
+<span class="fn">queue_work</span>(system_bh_highpri_wq, &urgent_work);</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>tasklet 替代</strong>：所有使用 <code>tasklet_schedule()</code> 的代码都应该迁移到 <code>queue_work(system_bh_wq, ...)</code>。BH 工作队列提供了更好的并发管理和更清晰的语义。
+  </div>
+</section>
+
+<section id="vs" class="toc-link">
+  <h2><span class="num">06</span> 对比其他机制</h2>
+
+  <table>
+    <tr><th>特性</th><th>WQ_BH</th><th>tasklet</th><th>普通 workqueue</th><th>softirq</th></tr>
+    <tr><td>上下文</td><td>softirq</td><td>softirq</td><td>进程</td><td>softirq</td></tr>
+    <tr><td>可睡眠</td><td>否</td><td>否</td><td>是</td><td>否</td></tr>
+    <tr><td>并发控制</td><td>per-CPU</td><td>per-tasklet</td><td>max_active</td><td>无</td></tr>
+    <tr><td>框架</td><td>cmwq</td><td>独立</td><td>cmwq</td><td>独立</td></tr>
+    <tr><td>状态</td><td>推荐</td><td>已废弃</td><td>推荐</td><td>已废弃</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <strong>tasklet 已废弃</strong>：tasklet 有已知的延迟问题（softirq 恢复时重新触发）。WQ_BH 是其现代替代方案，在保持 softirq 低延迟的同时，提供了更好的并发管理和 cmwq 框架支持。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/workqueue.c</span>          <span class="cmt">workqueue 核心 (~8000 行)</span>
+├── <span class="fn">bh_worker()</span>              <span class="cmt">BH worker 执行函数</span>
+├── <span class="fn">workqueue_softirq_action()</span> <span class="cmt">softirq 触发入口</span>
+├── <span class="fn">system_bh_wq</span>            <span class="cmt">系统 BH 工作队列</span>
+└── <span class="fn">bh_worker_pools</span>         <span class="cmt">per-CPU BH worker pool</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">workqueue.h</span>        <span class="cmt">WQ_BH 定义 (905 行)</span>
+└── <span class="file">workqueue_types.h</span>  <span class="cmt">类型定义</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>include/linux/workqueue.h</code>（905 行）定义 WQ_BH 标志和 system_bh_wq。<br>
+    <code>kernel/workqueue.c</code>（~8000 行）实现 bh_worker() 和 workqueue_softirq_action()。<br>
+    <code>Documentation/core-api/workqueue.rst</code> 是官方文档。<br>
+    <code>kernel/softirq.c</code> 展示 softirq 如何触发 BH workqueue。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/workqueue.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

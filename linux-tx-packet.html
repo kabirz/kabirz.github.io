@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 数据包发送过程深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 数据包发送过程深度解析</h1>
+  <p class="subtitle">从应用层到网卡 — 一个 UDP 数据包的完整发送旅程</p>
+  <span class="version">Linux 7.0.12 · net/ · drivers/net/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#socket">Socket 层</a></li>
+    <li><a href="#udp">UDP 层</a></li>
+    <li><a href="#ip">IP 层</a></li>
+    <li><a href="#netdevice">Netdevice 子系统</a></li>
+    <li><a href="#driver">Device Driver</a></li>
+    <li><a href="#other">关键参数</a></li>
+    <li><a href="#rx-vs-tx">收包 vs 发包对比</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>本文以 UDP 数据包为例，介绍数据包如何从应用程序一步步传递到网卡并最终发送出去。整个过程分为五个阶段：Socket 层 → UDP 层 → IP 层 → Netdevice 子系统 → Device Driver。</p>
+  <div class="callout tip">
+    <strong>与收包流程的对应关系</strong><br>
+    收包路径：NIC → 驱动 → NAPI → IP → UDP → Socket → 应用<br>
+    发包路径：应用 → Socket → UDP → IP → Netdevice → 驱动 → NIC<br>
+    发包路径是收包路径的<strong>逆过程</strong>，但不完全对称。
+  </div>
+</section>
+
+<section id="socket" class="toc-link">
+  <h2><span class="num">02</span> Socket 层</h2>
+
+  <div class="ascii-diagram"><pre>
+        +-------------------+
+        |    Application    |   应用程序
+        +--------+----------+
+                 |
+                 |  socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+                 ↓
+        +-------------------+
+        |  socket 结构体    |   内核创建，填充 UDP 相关操作函数
+        +--------+----------+
+                 |
+                 |  sendto(sock, buf, len, ...)
+                 ↓
+        +-------------------+
+        |  inet_sendmsg     |   检查源端口是否绑定
+        +--------+----------+
+                 |
+                 |  未绑定？→ inet_autobind
+                 ↓
+        +-------------------+
+        |  inet_autobind    |   调用 get_port 分配可用端口
+        +--------+----------+
+                 |
+                 ↓
+           +-----------+
+           | UDP Layer |
+           +-----------+
+</pre></div>
+
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)</code></td><td>创建 socket 结构体，初始化 UDP 相关的操作函数</td></tr>
+    <tr><td><code>sendto(sock, ...)</code></td><td>应用层调用该函数开始发送数据包</td></tr>
+    <tr><td><code>inet_sendmsg</code></td><td>检查 socket 是否绑定了源端口，未绑定则调用 inet_autobind</td></tr>
+    <tr><td><code>inet_autobind</code></td><td>调用 socket 的 get_port 获取一个可用端口（UDP 模式）</td></tr>
+  </table>
+</section>
+
+<section id="udp" class="toc-link">
+  <h2><span class="num">03</span> UDP 层</h2>
+
+  <div class="ascii-diagram"><pre>
+            |
+            ↓
+     +--------------+
+     | udp_sendmsg  |   UDP 发送入口
+     +------+-------+
+            |
+            |  1. 路由查找
+            ↓
+     +------------------------+
+     | ip_route_output_flow   |   根据目的 IP 查找路由（源 IP + 出接口）
+     +------+-----------------+
+            |
+            |  2. 构造 skb
+            ↓
+     +------------------+
+     |   ip_make_skb    |   分配 skb + IP 包头 + 分片（如果需要）
+     +------+-----------+
+            |
+            |  3. 填充 UDP 头
+            ↓
+     +------------------------+
+     | udp_send_skb(skb, fl4) |   填充 UDP 包头 + checksum
+     +------+-----------------+
+            |
+            ↓
+       +----------+
+       | IP Layer |
+       +----------+
+</pre></div>
+
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>udp_sendmsg</code></td><td>UDP 模块发送入口，控制整个发送流程</td></tr>
+    <tr><td><code>ip_route_output_flow</code></td><td>根据路由表和目的 IP 查找发送设备和源 IP。如果 socket 已绑定源 IP 但路由不可达，数据包被丢弃，sendto 返回错误</td></tr>
+    <tr><td><code>ip_make_skb</code></td><td>构造 skb，分配 IP 包头并设置源 IP。调用 __ip_append_data 进行分片。检查 send buffer 是否用光（满了返回 ENOBUFS）</td></tr>
+    <tr><td><code>udp_send_skb</code></td><td>填充 UDP 包头 + checksum，然后调用 IP 层发送函数</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>路由查找的关键作用</strong><br>
+    <code>ip_route_output_flow</code> 同时完成了两件重要的事：<br>
+    1. 找到数据包应该从哪个网卡发出去<br>
+    2. 如果 socket 没有绑定源 IP，自动选择一个最合适的源 IP<br>
+    如果 socket 已绑定源 IP 但从该 IP 对应的网卡无法到达目的地址，数据包会被丢弃。
+  </div>
+</section>
+
+<section id="ip" class="toc-link">
+  <h2><span class="num">04</span> IP 层</h2>
+
+  <div class="ascii-diagram"><pre>
+            |
+            ↓
+     +---------------+
+     |  ip_send_skb  |   IP 发送入口
+     +-------+-------+
+             |
+             ↓
+  +---------------------+     +---------------------+     +---------------+
+  | __ip_local_out_sk   |----→| NF_INET_LOCAL_OUT   |----→| dst_output_sk |
+  +---------------------+     | iptables OUTPUT 链  |     +-------+-------+
+                              +---------------------+             |
+                                                                  ↓
+                                                         +-----------+
+                                                         | ip_output |
+                                                         +-----+-----+
+                                                               |
+                                                               ↓
+                                                    +----------------------+
+                                                    | NF_INET_POST_ROUTING | ← SNAT 可能改变路由
+                                                    +----------+-----------+
+                                                               |
+                                                               ↓
+                                                    +-------------------+
+                                                    | ip_finish_output  |
+                                                    +--------+----------+
+                                                             |
+                                                     路由变了？
+                                                    /        \
+                                                  Yes         No
+                                                  ↓            ↓
+                                          dst_output_sk   ip_finish_output2
+                                          (重新路由)         |
+                                                             ↓
+                                                   +--------------------+
+                                                   | dst_neigh_output   | ← 查 ARP 表
+                                                   +--------+-----------+
+                                                            |
+                                                   找到 neigh?
+                                                  /          \
+                                                No            Yes
+                                                ↓              ↓
+                                    neigh_resolve_output   neigh_hh_output
+                                    (发 ARP 请求)         (填 MAC 地址)
+                                                \           /
+                                                 \         /
+                                                  ↓       ↓
+                                            +----------------+
+                                            | dev_queue_xmit |
+                                            +----------------+
+</pre></div>
+
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>ip_send_skb</code></td><td>IP 发送入口</td></tr>
+    <tr><td><code>__ip_local_out_sk</code></td><td>设置 IP 报文长度和 checksum，调用 NF_INET_LOCAL_OUT 钩子</td></tr>
+    <tr><td>NF_INET_LOCAL_OUT</td><td>Netfilter OUTPUT 链，iptables 可在此处理数据包</td></tr>
+    <tr><td><code>ip_output</code></td><td>将网卡信息写入 skb，调用 NF_INET_POST_ROUTING</td></tr>
+    <tr><td>NF_INET_POST_ROUTING</td><td>SNAT 在此生效，可能导致路由信息变化</td></tr>
+    <tr><td><code>ip_finish_output</code></td><td>检查路由是否变化，变了则重新调用 dst_output_sk</td></tr>
+    <tr><td><code>ip_finish_output2</code></td><td>查找下一跳的 ARP 表项（neigh），未找到则创建空结构体</td></tr>
+    <tr><td><code>neigh_resolve_output</code></td><td>发送 ARP 请求获取 MAC 地址</td></tr>
+    <tr><td><code>neigh_hh_output</code></td><td>从 neigh 缓存获取 MAC 地址填入 skb</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>Netfilter 在发送路径中的位置</strong><br>
+    LOCAL_OUT → POST_ROUTING<br>
+    iptables 的 OUTPUT 链对应 LOCAL_OUT；POST_ROUTING 对应 SNAT/MASQUERADE。
+  </div>
+</section>
+
+<section id="netdevice" class="toc-link">
+  <h2><span class="num">05</span> Netdevice 子系统</h2>
+
+  <div class="ascii-diagram"><pre>
+            |
+            ↓
+     +------------------+
+     | dev_queue_xmit   |   netdevice 入口
+     +--------+---------+
+              |
+         有 qdisc?
+        /          \
+      No            Yes
+      |               ↓
+      |     +------------------+
+      |     | Traffic Control  |   排队/过滤/调度
+      |     | (qdisc)          |
+      |     +--------+---------+
+      |              |
+      |     队列满了？→ 丢包
+      |              |
+      ↓              ↓
+     +------------------------+
+     | dev_hard_start_xmit    |
+     +--------+---------------+
+              |
+     拷贝一份给 AF_PACKET（tcpdump 抓包点）
+              |
+              ↓
+     +------------------+
+     | ndo_start_xmit   |   → 网卡驱动发送函数
+     +------------------+
+</pre></div>
+
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>dev_queue_xmit</code></td><td>netdevice 入口。检查是否有 qdisc（loopback/IP tunnel 没有）</td></tr>
+    <tr><td>Traffic Control (qdisc)</td><td>排队/过滤/优先级处理。队列满则丢包。默认 pfifo_fast 使用 txqueuelen 配置</td></tr>
+    <tr><td><code>dev_hard_start_xmit</code></td><td>拷贝 skb 给 AF_PACKET（tcpdump），然后调用 ndo_start_xmit</td></tr>
+    <tr><td>失败重试</td><td>返回 NETDEV_TX_BUSY 时，skb 放入重试队列，触发 NET_TX_SOFTIRQ 软中断</td></tr>
+    <tr><td><code>ndo_start_xmit</code></td><td>函数指针，指向具体网卡驱动的发送函数</td></tr>
+  </table>
+</section>
+
+<section id="driver" class="toc-link">
+  <h2><span class="num">06</span> Device Driver</h2>
+  <div class="card">
+    <p>ndo_start_xmit 绑定到具体网卡驱动。不同网卡驱动处理方式不同，但大致流程：</p>
+    <ul>
+      <li>1. 将 skb 放入网卡自己的<strong>发送队列</strong>（TX ring queue）</li>
+      <li>2. 通知网卡<strong>发送数据包</strong></li>
+      <li>3. 网卡发送完成后发送<strong>中断</strong>给 CPU</li>
+      <li>4. 收到中断后进行 <strong>skb 清理</strong>（释放内存）</li>
+    </ul>
+    <div class="callout tip">
+      <strong>流控反馈</strong>：当网卡发送队列满时，驱动返回 NETDEV_TX_BUSY 给上层。队列有空闲时，驱动通过 NET_TX_SOFTIRQ 通知上层重试发送。
+    </div>
+  </div>
+</section>
+
+<section id="other" class="toc-link">
+  <h2><span class="num">07</span> 关键参数</h2>
+  <table>
+    <tr><th>参数</th><th>说明</th></tr>
+    <tr><td><code>SO_SNDBUF</code></td><td>UDP 的发送缓冲区上限。skb 占用内存超过此值 → 返回 ENOBUFS。调大无意义，因为没有真正的 send buffer</td></tr>
+    <tr><td><code>txqueuelen</code></td><td>qdisc 队列长度。仅部分 qdisc 类型使用（如默认的 pfifo_fast）</td></tr>
+    <tr><td>HW TX ring</td><td>网卡硬件发送队列，大小通过 ethtool 配置。满时驱动返回 NETDEV_TX_BUSY</td></tr>
+    <tr><td><code>net.core.wmem_max</code></td><td>系统级发送缓冲区上限</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <strong>ENOBUFS 错误</strong><br>
+    对于 UDP，SO_SNDBUF 不是一个真正的发送缓冲区，只是 skb 内存占用的上限。只要不出现 ENOBUFS 错误，调大 SO_SNDBUF 没有意义。
+  </div>
+</section>
+
+<section id="rx-vs-tx" class="toc-link">
+  <h2><span class="num">08</span> 收包 vs 发包对比</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">收包（RX）</span>                                    <span style="color:#1a7f37">发包（TX）</span>
+
+   NIC 网卡                                      Application
+     ↓  DMA                                      ↓
+   内存（驱动缓冲区）                              socket()
+     ↓  IRQ                                      ↓
+   CPU → NIC Driver                              inet_sendmsg
+     ↓  softIRQ                                  ↓
+   ksoftirqd → net_rx_action                     udp_sendmsg
+     ↓                                           ↓
+   napi_gro_receive                              ip_route + ip_make_skb
+     ↓                                           ↓
+   __netif_receive_skb_core                      udp_send_skb
+     ↓                                           ↓
+   AF_PACKET（tcpdump）                           ip_send_skb
+     ↓                                           ↓
+   ip_rcv → PRE_ROUTING                          LOCAL_OUT → POST_ROUTING
+     ↓                                           ↓
+   ip_local_deliver                              ip_finish_output
+     ↓                                           ↓
+   udp_rcv                                       dst_neigh_output（ARP）
+     ↓                                           ↓
+   socket recv_queue                             dev_queue_xmit
+     ↓                                           ↓
+   Application recvfrom()                        ndo_start_xmit → NIC
+</pre></div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title" style="color:#cf222e">收包关键点</div>
+      <ul>
+        <li>NAPI 轮询模式批量处理</li>
+        <li>GRO 合并小包减少协议栈处理</li>
+        <li>RPS 将负载分散到多个 CPU</li>
+        <li>多级 Netfilter 钩子（4 个）</li>
+        <li>AF_PACKET 在协议栈之前</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#1a7f37">发包关键点</div>
+      <ul>
+        <li>路由查找决定出接口和源 IP</li>
+        <li>ARP 表查找获取目标 MAC</li>
+        <li>Traffic Control (qdisc) 排队调度</li>
+        <li>NET_TX_SOFTIRQ 重试机制</li>
+        <li>AF_PACKET 在 dev_hard_start_xmit</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <strong>tcpdump 抓包位置差异</strong><br>
+    收包：在 <code>__netif_receive_skb_core</code> 中（协议栈之前）<br>
+    发包：在 <code>dev_hard_start_xmit</code> 中（TC 之后、驱动之前）<br>
+    这意味着 tcpdump 看到的发包是经过路由和 qdisc 处理后的包。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

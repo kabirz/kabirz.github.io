@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Bridge 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Bridge 深度解析</h1>
+  <p class="subtitle">虚拟网桥 — 软件交换机、虚拟机与容器网络的核心</p>
+  <span class="version">Linux 7.0.12 · net/bridge/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#work">工作原理</a></li>
+    <li><a href="#mac">MAC 学习</a></li>
+    <li><a href="#setup">实战搭建</a></li>
+    <li><a href="#arp">ARP 问题</a></li>
+    <li><a href="#vm">虚拟机网络</a></li>
+    <li><a href="#docker">Docker 网络</a></li>
+    <li><a href="#cli">配置命令</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux Bridge 是一个<strong>虚拟交换机</strong>，将多个网络设备（物理网卡、虚拟网卡、veth、tun/tap）连接在一起，工作原理与物理交换机类似——根据 MAC 地址转发数据帧。它是虚拟机和容器网络的核心基础设施。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>多端口</strong>：连接任意数量的网络设备</li>
+        <li><strong>MAC 学习</strong>：自动学习源 MAC 地址</li>
+        <li><strong>帧转发</strong>：根据 MAC 表单播或泛洪</li>
+        <li><strong>STP</strong>：生成树协议防环路</li>
+        <li><strong>VLAN</strong>：支持 802.1Q VLAN</li>
+        <li><strong>组播</strong>：IGMP snooping</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Bridge vs 物理网卡</div>
+      <table>
+        <tr><th>特性</th><th>物理网卡</th><th>Bridge</th></tr>
+        <tr><td>端口数</td><td>两端</td><td>任意多个</td></tr>
+        <tr><td>转发</td><td>协议栈处理</td><td>MAC 地址转发</td></tr>
+        <tr><td>数据路径</td><td>协议栈 ↔ 外部</td><td>端口 ↔ 端口</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="data" class="toc-link">
+  <h2><span class="num">02</span> 核心数据结构</h2>
+  <div class="card">
+    <pre><code><span class="cm">// net_bridge — Bridge 核心结构</span>
+<span class="kw">struct</span> <span class="ty">net_bridge</span> {
+    <span class="kw">struct</span> <span class="ty">net_device</span>     *dev;          <span class="cm">// bridge 虚拟网卡（可配 IP）</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span>     port_list;     <span class="cm">// 所有端口链表</span>
+    <span class="kw">struct</span> <span class="ty">rhashtable</span>     fdb;           <span class="cm">// MAC 转发表（RHASH）</span>
+    <span class="ty">unsigned long</span>      flags;         <span class="cm">// BR_LEARNING / BR_FLOOD 等</span>
+    <span class="ty">u32</span>                ageing_time;   <span class="cm">// MAC 老化时间</span>
+    <span class="ty">u8</span>                 stp_state;     <span class="cm">// STP 状态</span>
+};
+
+<span class="cm">// net_bridge_port — Bridge 端口</span>
+<span class="kw">struct</span> <span class="ty">net_bridge_port</span> {
+    <span class="kw">struct</span> <span class="ty">net_device</span>  *dev;       <span class="cm">// 端口网络设备</span>
+    <span class="kw">struct</span> <span class="ty">net_bridge</span>  *br;        <span class="cm">// 所属 bridge</span>
+    <span class="ty">u32</span>              flags;       <span class="cm">// BR_FLOOD / BR_LEARNING 等</span>
+    <span class="ty">u16</span>              port_no;     <span class="cm">// 端口号</span>
+};
+
+<span class="cm">// net_bridge_fdb_entry — MAC 转发表条目</span>
+<span class="kw">struct</span> <span class="ty">net_bridge_fdb_entry</span> {
+    <span class="kw">struct</span> <span class="ty">net_bridge_port</span> *dst;   <span class="cm">// 目标端口</span>
+    <span class="ty">u8</span>            addr[<span class="num">ETH_ALEN</span>];  <span class="cm">// MAC 地址</span>
+    <span class="ty">unsigned long</span> updated;     <span class="cm">// 老化时间戳</span>
+    <span class="ty">bool</span>          is_local;    <span class="cm">// 本端口学到的</span>
+};</code></pre>
+  </div>
+</section>
+
+<section id="work" class="toc-link">
+  <h2><span class="num">03</span> 工作原理</h2>
+  <h3>数据帧转发流程</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">数据帧到达端口 P</span>（eth0 / veth0 / tap0）
+        │
+        ▼
+  提取源 MAC 地址 S ──→ <span style="color:#1a7f37">学习 FDB</span>：(S, P)
+        │
+        ▼
+  提取目的 MAC 地址 D ──→ <span style="color:#8250df">查 FDB</span>
+        │
+        ├── D 已知 ──────────→ <span style="color:#1a7f37">单播转发</span>到目标端口
+        │
+        ├── D 未知 ──────────→ <span style="color:#bc4c00">泛洪</span>到所有其他端口
+        │
+        └── 广播/组播 ────────→ <span style="color:#bc4c00">泛洪</span>到所有端口
+</pre></div>
+
+  <h3>端口行为详解</h3>
+  <div class="card">
+    <p>当一个网络设备（如 eth0）加入 bridge 后，关键变化：</p>
+    <ul>
+      <li><strong>数据拦截</strong>：从外面网络收到的数据包会无条件转发给 bridge，不再直接到协议栈</li>
+      <li><strong>双向通道</strong>：bridge 和端口之间建立双向通道</li>
+      <li><strong>协议栈隔离</strong>：端口的协议栈连接被"劫持"，数据不再直接到协议栈</li>
+      <li><strong>无差别对待</strong>：bridge 不区分物理设备和虚拟设备</li>
+    </ul>
+  </div>
+
+  <h3>Bridge + veth + eth0 完整拓扑</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────────┐
+│                                                                      │
+│                 ┌──────────────────────────────────────────┐         │
+│                 │         Network Protocol Stack           │         │
+│                 └──────────────────────────────────────────┘         │
+│                          ↑                          ↑                │
+│ .........................|..........................|............... │
+│                          ↓                          ↓                │
+│                   +-----------+              +-----------+           │
+│                   │  .3.101   │              │  .3.102   │           │
+│        +------+   +-----------+              +-----------+           │
+│        | eth0 |←→ |    br0    | ←──────────→ |  veth0    |           │
+│        +------+   +-----------+              +-----------+           │
+│            ↑            ↑                      ↑       ↑             │
+│            │            │                      │       │             │
+│            │            │                      +───────+             │
+│            │            │                    veth0 ← veth1           │
+│            |            |                                            │
+│        Physical      Bridge                                          │
+│        Network       (192.168.3.101)                                 │
+└──────────────────────────────────────────────────────────────────────┘
+         ↓
+  Physical Network (192.168.3.0/24)
+</pre></div>
+</section>
+
+<section id="mac" class="toc-link">
+  <h2><span class="num">04</span> MAC 学习</h2>
+  <div class="card">
+    <pre><code><span class="cm">// MAC 地址学习算法</span>
+<span class="cm">// 1. 数据帧从端口 P 进入 bridge</span>
+<span class="cm">// 2. 提取源 MAC 地址 S</span>
+<span class="cm">// 3. 在 FDB 中查找 S：</span>
+<span class="cm">//    - 不存在 → 创建 (S, P, aging_time)</span>
+<span class="cm">//    - 存在但端口不同 → 更新为 P</span>
+<span class="cm">//    - 存在且端口相同 → 刷新 aging</span>
+<span class="cm">// 4. 根据目的 MAC D 转发：</span>
+<span class="cm">//    - 已知 → 单播到目标端口</span>
+<span class="cm">//    - 未知 → 泛洪到所有端口</span></code></pre>
+  </div>
+  <table>
+    <tr><th>操作</th><th>函数</th><th>说明</th></tr>
+    <tr><td>查找</td><td><code>br_fdb_find()</code></td><td>按 MAC 查找 FDB 条目</td></tr>
+    <tr><td>更新</td><td><code>br_fdb_update()</code></td><td>更新/创建 FDB 条目</td></tr>
+    <tr><td>删除</td><td><code>br_fdb_delete()</code></td><td>删除 FDB 条目</td></tr>
+    <tr><td>老化</td><td><code>br_fdb_flush()</code></td><td>清除过期条目</td></tr>
+  </table>
+</section>
+
+<section id="setup" class="toc-link">
+  <h2><span class="num">05</span> 实战搭建</h2>
+  <h3>步骤一：创建 Bridge</h3>
+  <pre><code>$ sudo ip link add name br0 type bridge
+$ sudo ip link set br0 up
+$ bridge link    <span class="cm"># 查看当前状态（空）</span></code></pre>
+
+  <h3>步骤二：创建 veth 并连接</h3>
+  <pre><code>$ sudo ip link add veth0 type veth peer name veth1
+$ sudo ip addr add 192.168.3.101/24 dev veth0
+$ sudo ip addr add 192.168.3.102/24 dev veth1
+$ sudo ip link set veth0 up
+$ sudo ip link set veth1 up
+
+$ sudo ip link set dev veth0 master br0
+$ bridge link
+6: veth0 state UP master br0 state forwarding</code></pre>
+
+  <h3>步骤三：配置 IP</h3>
+  <pre><code>$ sudo ip addr del 192.168.3.101/24 dev veth0
+$ sudo ip addr add 192.168.3.101/24 dev br0
+
+$ ping -c 1 -I br0 192.168.3.102
+64 bytes from 192.168.3.102: icmp_seq=1 ttl=64 time=0.121 ms  <span class="cm"># 成功</span></code></pre>
+
+  <h3>步骤四：连接物理网卡</h3>
+  <pre><code>$ sudo ip link set dev eth0 master br0
+$ sudo ip addr del 192.168.3.21/24 dev eth0
+$ sudo ip route add default via 192.168.3.1
+
+$ ping -c 1 -I br0 192.168.3.1
+64 bytes from 192.168.3.1: icmp_seq=1 ttl=64 time=3.91 ms  <span class="cm"># 成功</span></code></pre>
+
+  <h3>最终拓扑</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│         ┌──────────────────────────────────────┐                 │
+│         │       Network Protocol Stack         │                 │
+│         └──────────────────────────────────────┘                 │
+│                                  ↑                               │
+│ .................................|.............................. │
+│                                  ↓                               │
+│        +------+     +--------+  +-------+    +-------+           │
+│        |      |     | .3.101 |  |       |    | .3.102|           │
+│        +------+     +--------+  +-------+    +-------+           │
+│        | eth0 |←──→ |  br0   |←→| veth0 |    | veth1 |           │
+│        +------+     +--------+  +-------+    +-------+           │
+│           ↑            ↑            ↑            ↑               │
+│           |            |            |            |               │
+│           |            |            +------------+               │
+│           |            |             veth0 ← veth1               │
+│           |            |                                         │
+│       Physical      Bridge                                       │
+│       Network     (192.168.3.101)                                │
+└──────────────────────────────────────────────────────────────────┘
+          ↓
+  Physical Network (192.168.3.0/24)
+</pre></div>
+</section>
+
+<section id="arp" class="toc-link">
+  <h2><span class="num">06</span> ARP 问题</h2>
+  <h3>双 ARP 应答</h3>
+  <div class="card">
+    <p>当 br0 和 veth1 都配置了同一网段 IP，外面的 ARP 请求会得到<strong>两个 ARP 应答</strong>，导致外部设备的 ARP 表不稳定。</p>
+    <pre><code><span class="cm"># 抓包可见两个应答：</span>
+<span class="cm"># Reply 192.168.3.102 is-at xx:xx:xx:xx:xx:xx (br0)</span>
+<span class="cm"># Reply 192.168.3.102 is-at yy:yy:yy:yy:yy:yy (veth1)</span></code></pre>
+  </div>
+
+  <h3>解决方案</h3>
+  <table>
+    <tr><th>问题</th><th>原因</th><th>解决</th></tr>
+    <tr><td>veth0 ping veth1 失败</td><td>veth0 应答被 bridge 拦截</td><td>给 br0 配 IP，不给 veth0</td></tr>
+    <tr><td>br0 ping 网关失败</td><td>br0 没有默认路由</td><td>删除 eth0 IP，添加默认网关</td></tr>
+    <tr><td>双 ARP 应答</td><td>br0 和 veth1 都有 IP</td><td>只给 br0 配 IP</td></tr>
+    <tr><td>无线网络不通</td><td>MAC 地址转换失败</td><td>统一所有端口 MAC</td></tr>
+  </table>
+</section>
+
+<section id="vm" class="toc-link">
+  <h2><span class="num">07</span> 虚拟机网络</h2>
+  <div class="ascii-diagram"><pre>
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              Host                                       │
+│             ┌───────────────────────────────────────────┐               │
+│             │          Network Protocol Stack           │               │
+│             └───────────────────────────────────────────┘               │
+│                          ↑                          ↑                   │
+│ .........................|..........................|...................│
+│                          ↓                          ↓                   │
+│                   +-----------+              +-----------+              │
+│                   │  .3.101   │              │  .3.102   │              │
+│        +------+   +-----------+              +-----------+              │
+│        | eth0 |←→ |    br0    | ←──────────→ |  tun/tap  |              │
+│        +------+   +-----------+              +-----------+              │
+│            ↑            ↑                          ↑                    │
+│            |            |                +------------------+           │
+│            |            |                | Virtual Machine  |           │
+│            |            |                |   ┌─────────┐    │           │
+│            |            |                |   │  eth0   │    │           │
+│            |            |                |   │ .3.103  │    │           │
+│            |            |                |   └─────────┘    │           │
+│            |            |                +-------------------+          │
+│  Physical  │       Host IP                                              │
+│  Network   │     (192.168.3.101)                                        │
+└────────────│────────────────────────────────────────────────────────────┘
+             ↓
+       Physical Network
+</pre></div>
+
+  <h3>VM vs Docker 对比</h3>
+  <table>
+    <tr><th>特性</th><th>虚拟机</th><th>Docker</th></tr>
+    <tr><td>连接方式</td><td>tun/tap → br0</td><td>veth → br0</td></tr>
+    <tr><td>数据路径</td><td>VM → tun/tap → br0（不经 Host）</td><td>Container → veth → br0 → Host → NAT</td></tr>
+    <tr><td>性能</td><td>高（零拷贝）</td><td>中（经过协议栈+NAT）</td></tr>
+    <tr><td>MAC 处理</td><td>VM 独立 MAC</td><td>统一通过 Host 出去</td></tr>
+    <tr><td>无线兼容</td><td>需要 MAC 转换</td><td>兼容性好</td></tr>
+  </table>
+</section>
+
+<section id="docker" class="toc-link">
+  <h2><span class="num">08</span> Docker 网络</h2>
+  <div class="ascii-diagram"><pre>
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              Host                                       │
+│    ┌───────────────────────────────────────────┐                        │
+│    │         Network Protocol Stack            │                        │
+│    └───────────────────────────────────────────┘                        │
+│                  ↑          ↑                                           │
+│  .....  ...  ....|..........|...........................................│
+│                  ↓          ↓                                           │
+│    +------+  +--------+  +-------+                                      │
+│    | eth0 |←→|  br0   |←→| veth  |                                      │
+│    +------+  +--------+  +-------+                                      │
+│         ↑       ↑            ↑                                          │
+│    Physical  Host IP     Container                                      │
+│    Network   .9.1      ┌──────────┐                                     │
+│                        │  eth0    │                                     │
+│                        │  .9.2    │                                     │
+│                        └──────────┘                                     │
+└─────────────────────────────────────────────────────────────────────────┘
+</pre></div>
+
+  <h3>核心区别</h3>
+  <div class="card">
+    <p><strong>虚拟机</strong>：VM → tun/tap → br0 → eth0，数据包<strong>不经过 Host 协议栈</strong>，零拷贝效率高。</p>
+    <p><strong>Docker</strong>：Container → veth → br0 → Host 协议栈 → NAT → eth0，经过协议栈 + NAT，但 MAC 地址问题少。</p>
+  </div>
+</section>
+
+<section id="cli" class="toc-link">
+  <h2><span class="num">09</span> 配置命令</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 创建/删除 bridge</span>
+$ sudo ip link add name br0 type bridge
+$ sudo ip link set br0 up
+$ sudo ip link del br0
+
+<span class="cm"># 添加/删除端口</span>
+$ sudo ip link set dev eth0 master br0
+$ sudo ip link set dev eth0 nomaster
+
+<span class="cm"># 配置属性</span>
+$ sudo ip link set dev br0 type bridge stp_state <span class="num">1</span>
+
+<span class="cm"># 查看信息</span>
+$ bridge link
+$ brctl show
+$ bridge fdb show</code></pre>
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">10</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/bridge/</span>
+├── <span class="file">br.c</span>              <span class="cmt">bridge 核心初始化</span>
+├── <span class="file">br_device.c</span>       <span class="cmt">bridge 网络设备操作</span>
+├── <span class="file">br_fdb.c</span>          <span class="cmt">MAC 地址转发表（FDB）</span>
+├── <span class="file">br_input.c</span>        <span class="cmt">输入帧处理与分发</span>
+├── <span class="file">br_forward.c</span>      <span class="cmt">帧转发逻辑</span>
+├── <span class="file">br_stp.c</span>          <span class="cmt">生成树协议 (STP)</span>
+├── <span class="file">br_mcast.c</span>        <span class="cmt">组播/IGMP snooping</span>
+├── <span class="file">br_sysfs_br.c</span>     <span class="cmt">bridge sysfs</span>
+├── <span class="file">br_netlink.c</span>      <span class="cmt">Netlink 接口</span>
+├── <span class="file">br_vlan.c</span>         <span class="cmt">VLAN 支持</span>
+├── <span class="file">br_tunnel.c</span>       <span class="cmt">隧道（VXLAN/GRE）</span>
+└── <span class="file">br_switchdev.c</span>    <span class="cmt">Switchdev 硬件卸载</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">if_bridge.h</span>       <span class="cmt">bridge 结构和标志</span>
+├── <span class="file">netdevice.h</span>       <span class="cmt">net_device 定义</span>
+└── <span class="file">net.h</span>             <span class="cmt">网络核心</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/bridge/br_input.c</code> 是数据帧输入处理的入口。<br>
+    <code>net/bridge/br_fdb.c</code> 实现 MAC 地址学习和转发表。<br>
+    <code>net/bridge/br_forward.c</code> 实现帧转发逻辑。<br>
+    <code>net/bridge/br.c</code> 是 bridge 核心初始化。<br>
+    <code>net/bridge/br_stp.c</code> 实现生成树协议。<br>
+    <code>net/bridge/br_netlink.c</code> 实现 Netlink 接口（ip 命令）。
+  </div>
+  <div class="callout tip">
+    <strong>参考链接</strong><br>
+    <a href="https://segmentfault.com/a/1190000009491002" target="_blank">Linux 虚拟网络设备之 bridge（桥）</a> — 本文基于该文章内容与内核源码深度整合。<br>
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/bridge/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
