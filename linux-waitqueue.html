@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核等待队列深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核等待队列深度解析</h1>
+  <p class="subtitle">Wait Queue — 条件等待与事件通知机制</p>
+  <span class="version">Linux 7.0.12 · include/linux/wait.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#structure">数据结构</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#wait_event">wait_event 宏</a></li>
+    <li><a href="#internals">内部实现</a></li>
+    <li><a href="#vs">对比其他原语</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>等待队列（Wait Queue）是 Linux 内核中<strong>最灵活的等待/通知机制</strong>。与 completion 的"一次性通知"不同，wait_queue 是基于<strong>条件</strong>的等待——等待某个条件变为真。它被广泛用于 I/O 完成、网络数据到达、信号量实现等场景。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>条件等待</strong>：等待任意布尔条件</li>
+        <li><strong>可睡眠</strong>：等待时不消耗 CPU</li>
+        <li><strong>多种状态</strong>：INTERRUPTIBLE / KILLABLE / UNINTERRUPTIBLE</li>
+        <li><strong>超时支持</strong>：可设置最大等待时间</li>
+        <li><strong>Exclusive</strong>：排他唤醒，避免惊群效应</li>
+        <li><strong>自定义回调</strong>：可替换默认唤醒函数</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">vs Completion</div>
+      <table>
+        <tr><th>特性</th><th>wait_queue</th><th>completion</th></tr>
+        <tr><td>等待方式</td><td>条件循环检查</td><td>一次性通知</td></tr>
+        <tr><td>重复使用</td><td>天然支持</td><td>需 reinit</td></tr>
+        <tr><td>多条件</td><td>支持</td><td>不支持</td></tr>
+        <tr><td>唤醒方式</td><td>wake_up 系列</td><td>complete</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="structure" class="toc-link">
+  <h2><span class="num">02</span> 数据结构</h2>
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/wait.h:28-38</span>
+<span class="kw">struct</span> <span class="ty">wait_queue_entry</span> {
+    <span class="ty">unsigned int</span> flags;        <span class="cm">// WQ_FLAG_EXCLUSIVE 等</span>
+    <span class="ty">void</span> *private;             <span class="cm">// 私有数据（通常为 task_struct）</span>
+    <span class="ty">wait_queue_func_t</span> func;    <span class="cm">// 唤醒回调函数</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span> entry;     <span class="cm">// 链表节点</span>
+};
+
+<span class="kw">struct</span> <span class="ty">wait_queue_head</span> {
+    <span class="ty">spinlock_t</span> lock;           <span class="cm">// 保护链表的自旋锁</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span> head;     <span class="cm">// 等待者链表</span>
+};
+<span class="kw">typedef struct</span> <span class="ty">wait_queue_head</span> <span class="ty">wait_queue_head_t</span>;</code></pre>
+  </div>
+
+  <h3>初始化</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 静态初始化</span>
+<span class="kw">DECLARE_WAIT_QUEUE_HEAD</span>(my_wq);
+
+<span class="cm">// 动态初始化</span>
+<span class="kw">struct</span> <span class="ty">wait_queue_head</span> wq;
+<span class="fn">init_waitqueue_head</span>(&wq);
+
+<span class="cm">// 栈上初始化</span>
+<span class="kw">DECLARE_WAIT_QUEUE_HEAD_ONSTACK</span>(wq);</code></pre>
+  </div>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 核心 API</h2>
+
+  <h3>底层 API</h3>
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>add_wait_queue()</code></td><td>添加等待者到队列尾部</td></tr>
+    <tr><td><code>add_wait_queue_exclusive()</code></td><td>添加排他等待者</td></tr>
+    <tr><td><code>remove_wait_queue()</code></td><td>移除等待者</td></tr>
+    <tr><td><code>wake_up()</code></td><td>唤醒所有等待者</td></tr>
+    <tr><td><code>wake_up_interruptible()</code></td><td>唤醒 INTERRUPTIBLE 等待者</td></tr>
+    <tr><td><code>wake_up_interruptible_all()</code></td><td>唤醒所有 INTERRUPTIBLE 等待者</td></tr>
+    <tr><td><code>waitqueue_active()</code></td><td>检查是否有等待者（无锁）</td></tr>
+    <tr><td><code>wake_up_all()</code></td><td>唤醒所有等待者</td></tr>
+  </table>
+
+  <h3>等待函数</h3>
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>prepare_to_wait()</code></td><td>将任务加入等待队列并设置状态</td></tr>
+    <tr><td><code>prepare_to_wait_exclusive()</code></td><td>排他等待</td></tr>
+    <tr><td><code>finish_wait()</code></td><td>从等待队列移除并恢复状态</td></tr>
+    <tr><td><code>remove_wait_queue()</code></td><td>直接移除等待者</td></tr>
+  </table>
+</section>
+
+<section id="wait_event" class="toc-link">
+  <h2><span class="num">04</span> wait_event 宏</h2>
+
+  <p><code>wait_event</code> 是最常用的等待队列接口，封装了完整的等待逻辑。</p>
+
+  <h3>wait_event 系列</h3>
+  <table>
+    <tr><th>宏</th><th>阻塞</th><th>可中断</th><th>超时</th></tr>
+    <tr><td><code>wait_event(wq, cond)</code></td><td>是</td><td>否</td><td>否</td></tr>
+    <tr><td><code>wait_event_timeout(wq, cond, timeout)</code></td><td>是</td><td>否</td><td>是</td></tr>
+    <tr><td><code>wait_event_interruptible(wq, cond)</code></td><td>是</td><td>是</td><td>否</td></tr>
+    <tr><td><code>wait_event_interruptible_timeout()</code></td><td>是</td><td>是</td><td>是</td></tr>
+    <tr><td><code>wait_event_killable(wq, cond)</code></td><td>是</td><td>致命信号</td><td>否</td></tr>
+    <tr><td><code>wait_event_killable_timeout()</code></td><td>是</td><td>致命信号</td><td>是</td></tr>
+    <tr><td><code>wait_event_cmd(wq, cond, cmd1, cmd2)</code></td><td>是</td><td>否</td><td>否</td></tr>
+  </table>
+
+  <h3>wait_event 实现逻辑</h3>
+  <div class="card">
+    <pre><code><span class="cm">// wait_event(wq_head, condition) 的等价展开：</span>
+<span class="kw">for</span> (;;) {
+    <span class="fn">prepare_to_wait</span>(&wq_head, &wait, TASK_UNINTERRUPTIBLE);
+    <span class="kw">if</span> (condition)  <span class="cm">// 检查条件</span>
+        <span class="kw">break</span>;
+    <span class="fn">schedule</span>();    <span class="cm">// 让出 CPU，等待唤醒</span>
+}
+<span class="fn">finish_wait</span>(&wq_head, &wait);
+
+<span class="cm">// interruptible 版本使用 TASK_INTERRUPTIBLE 状态</span>
+<span class="cm">// timeout 版本增加 jiffies 超时检查</span></code></pre>
+  </div>
+
+  <h3>返回值</h3>
+  <table>
+    <tr><th>宏</th><th>返回值</th></tr>
+    <tr><td><code>wait_event</code></td><td>无（void）</td></tr>
+    <tr><td><code>wait_event_timeout</code></td><td>剩余 jiffies（0=超时）</td></tr>
+    <tr><td><code>wait_event_interruptible</code></td><td>0=成功，-ERESTARTSYS=信号</td></tr>
+    <tr><td><code>wait_event_interruptible_timeout</code></td><td>剩余 jiffies（0=超时）</td></tr>
+    <tr><td><code>wait_event_killable</code></td><td>0=成功，-ERESTARTSYS=致命信号</td></tr>
+  </table>
+</section>
+
+<section id="internals" class="toc-link">
+  <h2><span class="num">05</span> 内部实现</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// 唤醒函数</span>
+<span class="kw">void</span> <span class="fn">__wake_up</span>(<span class="kw">struct</span> <span class="ty">wait_queue_head</span> *wq_head, <span class="ty">unsigned int</span> mode,
+               <span class="ty">int</span> nr_exclusive, <span class="ty">void</span> *key)
+{
+    <span class="ty">unsigned long</span> flags;
+    <span class="fn">spin_lock_irqsave</span>(&wq_head->lock, flags);
+    <span class="fn">__wake_up_common_lock</span>(wq_head, mode, nr_exclusive, <span class="num">0</span>, key);
+    <span class="fn">spin_unlock_irqrestore</span>(&wq_head->lock, flags);
+}
+
+<span class="cm">// WQ_FLAG_EXCLUSIVE 的作用：</span>
+<span class="cm">// 当设置 nr_exclusive 时，只唤醒队列尾部的 N 个排他等待者</span>
+<span class="cm">// 避免惊群效应（thundering herd）</span></code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>Exclusive 等待者</strong>：当多个线程等待同一事件时，<code>wake_up()</code> 默认唤醒所有等待者（惊群）。使用 <code>add_wait_queue_exclusive()</code> 可以让等待者成为排他等待者，配合 <code>__wake_up(wq, mode, 1, key)</code> 只唤醒一个。这在网络等高负载场景中很重要。
+  </div>
+</section>
+
+<section id="vs" class="toc-link">
+  <h2><span class="num">06</span> 对比其他原语</h2>
+
+  <table>
+    <tr><th>特性</th><th>wait_queue</th><th>completion</th><th>semaphore</th><th>mutex</th></tr>
+    <tr><td>等待方式</td><td>条件循环</td><td>一次性通知</td><td>计数器</td><td>排他</td></tr>
+    <tr><td>默认行为</td><td>阻塞</td><td>阻塞</td><td>非阻塞</td><td>阻塞</td></tr>
+    <tr><td>重复使用</td><td>天然支持</td><td>需 reinit</td><td>天然支持</td><td>天然支持</td></tr>
+    <tr><td>多条件</td><td>支持</td><td>不支持</td><td>不适用</td><td>不适用</td></tr>
+    <tr><td>惊群控制</td><td>Exclusive</td><td>无</td><td>无</td><td>无</td></tr>
+    <tr><td>典型场景</td><td>I/O 完成</td><td>异步操作完成</td><td>资源池</td><td>临界区</td></tr>
+  </table>
+</section>
+
+<section id="patterns" class="toc-link">
+  <h2><span class="num">07</span> 使用模式</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式一：等待事件条件</span>
+<span class="kw">DECLARE_WAIT_QUEUE_HEAD</span>(wq);
+<span class="kw">int</span> data_ready = <span class="num">0</span>;
+
+<span class="cm">// 生产者</span>
+data = <span class="fn">receive_data</span>();
+data_ready = <span class="num">1</span>;
+<span class="fn">wake_up</span>(&wq);
+
+<span class="cm">// 消费者</span>
+<span class="fn">wait_event</span>(wq, data_ready);
+process(data);</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式二：I/O 完成等待</span>
+<span class="kw">struct</span> <span class="ty">my_request</span> {
+    <span class="kw">struct</span> <span class="ty">wait_queue_head</span> wq;
+    <span class="ty">int</span> completed;
+    <span class="ty">int</span> result;
+};
+
+<span class="cm">// 启动 I/O</span>
+req.completed = <span class="num">0</span>;
+<span class="fn">submit_io</span>(req);
+
+<span class="cm">// 等待完成</span>
+<span class="fn">wait_event</span>(req.wq, req.completed);
+
+<span class="cm">// I/O 完成回调</span>
+req.result = <span class="num">0</span>;
+req.completed = <span class="num">1</span>;
+<span class="fn">wake_up</span>(&req.wq);</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式三：网络数据到达</span>
+<span class="kw">static DECLARE_WAIT_QUEUE_HEAD</span>(rx_wq);
+
+<span class="cm">// 中断处理：数据到达</span>
+<span class="fn">__wake_up_rx</span>(&rx_wq);  <span class="cm">// 唤醒接收线程</span>
+
+<span class="cm">// 接收线程</span>
+<span class="kw">while</span> (!kthread_should_stop()) {
+    <span class="fn">wait_event</span>(rx_wq, has_data(&rx_queue));
+    <span class="fn">process_packets</span>(&rx_queue);
+}</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式四：超时等待</span>
+<span class="ty">int</span> ret;
+ret = <span class="fn">wait_event_timeout</span>(wq, condition, <span class="fn">msecs_to_jiffies</span>(<span class="num">5000</span>));
+<span class="kw">if</span> (ret == <span class="num">0</span>) {
+    <span class="cm">// 超时</span>
+    <span class="fn">pr_err</span>(<span class="st">"timeout waiting for condition\n"</span>);
+} <span class="kw">else</span> {
+    <span class="cm">// 条件满足</span>
+}</code></pre>
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">include/linux/</span>
+├── <span class="file">wait.h</span>             <span class="cmt">wait_queue API (1255 行)</span>
+├── <span class="file">swait.h</span>            <span class="cmt">simple wait queue</span>
+├── <span class="file">wait_bit.h</span>         <span class="cmt">位等待队列</span>
+└── <span class="file">completion.h</span>       <span class="cmt">completion（基于 swait）</span>
+
+<span class="dir">kernel/sched/</span>
+├── <span class="file">wait.c</span>            <span class="cmt">wait_event / wait_queue 核心实现</span>
+├── <span class="file">swait.c</span>           <span class="cmt">simple wait queue 实现</span>
+├── <span class="file">completion.c</span>      <span class="cmt">completion 实现</span>
+└── <span class="file">wait_bit.c</span>        <span class="cmt">位等待实现</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>include/linux/wait.h</code>（1255 行）定义所有 API 和 wait_event 宏。<br>
+    <code>kernel/sched/wait.c</code> 实现 add_wait_queue / wake_up 等核心函数。<br>
+    <code>kernel/sched/completion.c</code> 展示基于 swait 的 completion 实现。<br>
+    <code>include/linux/swait.h</code> 是 simple wait queue 的底层实现。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · include/linux/wait.h · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

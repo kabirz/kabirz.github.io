@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核工作队列深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核工作队列深度解析</h1>
+  <p class="subtitle">Workqueue — 延迟执行与异步处理框架</p>
+  <span class="version">Linux 7.0.12 · kernel/workqueue.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#structure">数据结构</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#types">工作队列类型</a></li>
+    <li><a href="#worker">worker 线程</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#vs">对比其他机制</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>工作队列（Workqueue）是 Linux 内核的<strong>延迟执行框架</strong>，允许在进程上下文中异步执行工作函数。它将工作推迟到专门的 worker 线程中执行，避免在中断上下文中执行可能睡眠的操作。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>进程上下文</strong>：worker 线程中执行，可睡眠</li>
+        <li><strong>延迟执行</strong>：中断 → 调度 → worker 执行</li>
+        <li><strong>CPU 绑定</strong>：可绑定到特定 CPU</li>
+        <li><strong>并发控制</strong>：可配置最大并发 worker</li>
+        <li><strong>系统化</strong>：cmwq 框架自动管理 worker</li>
+        <li><strong>flush 支持</strong>：等待所有工作完成</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">适用场景</div>
+      <table>
+        <tr><th>场景</th><th>说明</th></tr>
+        <tr><td>中断下半部</td><td>替代 softirq/tasklet</td></tr>
+        <tr><td>设备事件</td><td>热插拔、配置变更</td></tr>
+        <tr><td>延迟初始化</td><td>模块加载后执行</td></tr>
+        <tr><td>定时任务</td><td>周期性检查/清理</td></tr>
+        <tr><td>USB 异步操作</td><td>USB 核心大量使用</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="structure" class="toc-link">
+  <h2><span class="num">02</span> 数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/workqueue.h:114-130</span>
+<span class="kw">struct</span> <span class="ty">work_struct</span> {
+    <span class="kw">atomic_long_t</span> data;       <span class="cm">// 状态位 + pool 指针</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span> entry;   <span class="cm">// 链表节点</span>
+    <span class="ty">work_func_t</span> func;         <span class="cm">// 工作函数</span>
+};
+
+<span class="kw">struct</span> <span class="ty">delayed_work</span> {
+    <span class="kw">struct</span> <span class="ty">work_struct</span> work;
+    <span class="kw">struct</span> <span class="ty">timer_list</span> timer;   <span class="cm">// 延迟定时器</span>
+};
+
+<span class="kw">struct</span> <span class="ty">workqueue_struct</span> {
+    <span class="ty">unsigned int</span> flags;           <span class="cm">// WQ_UNBOUND / WQ_MEM_RECLAIM 等</span>
+    <span class="ty">u32</span> max_active;               <span class="cm">// 最大并发 worker 数</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span> pwqs;        <span class="cm">// pool_workqueue 链表</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span> list;        <span class="cm">// 全局工作队列链表</span>
+    <span class="kw">struct</span> <span class="ty">mutex</span> mutex;
+    <span class="kw">char</span> name[WQ_NAME_LEN];   <span class="cm">// 名称</span>
+};</code></pre>
+  </div>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 核心 API</h2>
+
+  <h3>声明与初始化</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 静态声明</span>
+<span class="kw">DECLARE_WORK</span>(my_work, my_func);              <span class="cm">// 立即工作</span>
+<span class="kw">DECLARE_DELAYED_WORK</span>(my_dwork, my_func);     <span class="cm">// 延迟工作</span>
+
+<span class="cm">// 动态初始化</span>
+<span class="kw">struct</span> <span class="ty">work_struct</span> work;
+<span class="fn">INIT_WORK</span>(&work, my_func);
+
+<span class="kw">struct</span> <span class="ty">delayed_work</span> dwork;
+<span class="fn">INIT_DELAYED_WORK</span>(&dwork, my_func);</code></pre>
+  </div>
+
+  <h3>提交与执行</h3>
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>queue_work(wq, work)</code></td><td>提交到指定工作队列</td></tr>
+    <tr><td><code>schedule_work(work)</code></td><td>提交到 system_wq</td></tr>
+    <tr><td><code>queue_delayed_work()</code></td><td>延迟提交（jiffies 后）</td></tr>
+    <tr><td><code>schedule_delayed_work()</code></td><td>延迟提交到 system_wq</td></tr>
+    <tr><td><code>queue_work_on(cpu, wq, work)</code></td><td>指定 CPU 执行</td></tr>
+    <tr><td><code>mod_delayed_work()</code></td><td>修改延迟工作的时间</td></tr>
+    <tr><td><code>cancel_work_sync(work)</code></td><td>取消工作并等待</td></tr>
+    <tr><td><code>cancel_delayed_work_sync()</code></td><td>取消延迟工作并等待</td></tr>
+  </table>
+
+  <h3>等待与刷新</h3>
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>flush_work(work)</code></td><td>等待指定工作完成</td></tr>
+    <tr><td><code>flush_delayed_work(dwork)</code></td><td>等待延迟工作完成</td></tr>
+    <tr><td><code>flush_workqueue(wq)</code></td><td>刷新整个工作队列</td></tr>
+    <tr><td><code>drain_workqueue(wq)</code></td><td>排空工作队列（等所有 worker 完成）</td></tr>
+    <tr><td><code>system_wq</code></td><td>系统默认工作队列</td></tr>
+    <tr><td><code>system_highpri_wq</code></td><td>高优先级工作队列</td></tr>
+    <tr><td><code>system_long_wq</code></td><td>长时间工作队列</td></tr>
+    <tr><td><code>system_unbound_wq</code></td><td>不绑定 CPU 的工作队列</td></tr>
+  </table>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">04</span> 工作队列类型</h2>
+
+  <h3>预定义工作队列</h3>
+  <table>
+    <tr><th>工作队列</th><th>说明</th><th>适用场景</th></tr>
+    <tr><td><code>system_wq</code></td><td>系统默认</td><td>通用延迟工作</td></tr>
+    <tr><td><code>system_highpri_wq</code></td><td>高优先级</td><td>时间敏感任务</td></tr>
+    <tr><td><code>system_long_wq</code></td><td>长时间</td><td>耗时操作</td></tr>
+    <tr><td><code>system_unbound_wq</code></td><td>非绑定</td><td>不需要特定 CPU</td></tr>
+    <tr><td><code>system_freezable_wq</code></td><td>可冻结</td><td>系统挂起时停止</td></tr>
+    <tr><td><code>system_power_efficient_wq</code></td><td>省电</td><td>功耗敏感场景</td></tr>
+  </table>
+
+  <h3>自定义工作队列</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 创建自定义工作队列</span>
+<span class="kw">struct</span> <span class="ty">workqueue_struct</span> *my_wq;
+my_wq = <span class="fn">alloc_workqueue</span>(<span class="st">"my_wq"</span>, WQ_UNBOUND | WQ_MEM_RECLAIM, <span class="num">4</span>);
+
+<span class="cm">// 标志说明</span>
+<span class="cm">// WQ_UNBOUND    — 不绑定 CPU</span>
+<span class="cm">// WQ_HIGHPRI    — 高优先级</span>
+<span class="cm">// WQ_FREEZABLE  — 系统挂起时冻结</span>
+<span class="cm">// WQ_MEM_RECLAIM — 内存回收时保证推进</span>
+<span class="cm">// WQ_CPU_INTENSIVE — CPU 密集型工作</span></code></pre>
+  </div>
+</section>
+
+<section id="worker" class="toc-link">
+  <h2><span class="num">05</span> worker 线程</h2>
+
+  <p>cmwq（Concurrency Managed Workqueue）框架自动管理 worker 线程，根据负载动态创建/销毁。</p>
+
+  <h3>cmwq 机制</h3>
+  <div class="diagram">
+    <div class="flow-box danger">schedule_work(my_work)</div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box">加入 pool_workqueue<br><small>关联到 worker_pool</small></div>
+    <div class="flow-down">↓</div>
+    <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
+      <div class="flow-box active">worker_thread1<br><small>执行 work_func()</small></div>
+      <div class="flow-box">worker_thread2<br><small>空闲或执行其他</small></div>
+    </div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box warn">work_func() 执行完毕<br><small>work 标记为完成</small></div>
+  </div>
+
+  <h3>Worker 类型</h3>
+  <table>
+    <tr><th>类型</th><th>说明</th></tr>
+    <tr><td>普通 worker</td><td>按需创建，空闲时销毁</td></tr>
+    <tr><td>bound worker</td><td>绑定到特定 CPU</td></tr>
+    <tr><td>unbound worker</td><td>不绑定 CPU，可调度到任意 CPU</td></tr>
+  </table>
+</section>
+
+<section id="patterns" class="toc-link">
+  <h2><span class="num">06</span> 使用模式</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式一：一次性工作</span>
+<span class="kw">static void</span> <span class="fn">my_work_func</span>(<span class="kw">struct</span> <span class="ty">work_struct</span> *work)
+{
+    <span class="cm">// 在进程上下文中执行，可睡眠</span>
+    <span class="fn">msleep</span>(<span class="num">100</span>);
+    <span class="fn">pr_info</span>(<span class="st">"work completed\n"</span>);
+}
+
+<span class="kw">struct</span> <span class="ty">work_struct</span> my_work;
+<span class="fn">INIT_WORK</span>(&my_work, my_work_func);
+<span class="fn">schedule_work</span>(&my_work);</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式二：延迟工作（定时器）</span>
+<span class="kw">static void</span> <span class="fn">my_delayed_func</span>(<span class="kw">struct</span> <span class="ty">delayed_work</span> *dwork)
+{
+    <span class="fn">pr_info</span>(<span class="st">"delayed work done\n"</span>);
+}
+
+<span class="kw">struct</span> <span class="ty">delayed_work</span> my_dwork;
+<span class="fn">INIT_DELAYED_WORK</span>(&my_dwork, my_delayed_func);
+
+<span class="cm">// 5 秒后执行</span>
+<span class="fn">schedule_delayed_work</span>(&my_dwork, <span class="fn">msecs_to_jiffies</span>(<span class="num">5000</span>));
+
+<span class="cm">// 修改延迟</span>
+<span class="fn">mod_delayed_work</span>(system_wq, &my_dwork, <span class="fn">msecs_to_jiffies</span>(<span class="num">10000</span>));
+
+<span class="cm">// 取消</span>
+<span class="fn">cancel_delayed_work_sync</span>(&my_dwork);</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式三：中断下半部</span>
+<span class="kw">static</span> <span class="ty">irqreturn_t</span> <span class="fn">my_irq_handler</span>(<span class="ty">int</span> irq, <span class="ty">void</span> *dev_id)
+{
+    <span class="kw">struct</span> <span class="ty">my_device</span> *dev = dev_id;
+    <span class="fn">disable_irq_nosync</span>(irq);
+    <span class="fn">schedule_work</span>(&dev->bottom_half);  <span class="cm">// 推迟到 worker 执行</span>
+    <span class="kw">return</span> IRQ_HANDLED;
+}
+
+<span class="cm">// worker 中处理（可睡眠）</span>
+<span class="kw">static void</span> <span class="fn">my_bottom_half</span>(<span class="kw">struct</span> <span class="ty">work_struct</span> *work)
+{
+    <span class="kw">struct</span> <span class="ty">my_device</span> *dev = <span class="fn">container_of</span>(work, ...);
+    <span class="cm">// 处理数据（可睡眠）</span>
+    <span class="fn">enable_irq</span>(dev->irq);
+}</code></pre>
+  </div>
+</section>
+
+<section id="vs" class="toc-link">
+  <h2><span class="num">07</span> 对比其他机制</h2>
+
+  <table>
+    <tr><th>特性</th><th>workqueue</th><th>tasklet</th><th>softirq</th><th>kthread</th></tr>
+    <tr><td>执行上下文</td><td>进程</td><td>软中断</td><td>软中断</td><td>进程</td></tr>
+    <tr><td>可睡眠</td><td>是</td><td>否</td><td>否</td><td>是</td></tr>
+    <tr><td>CPU 绑定</td><td>可选</td><td>否</td><td>否</td><td>可选</td></tr>
+    <tr><td>并发控制</td><td>max_active</td><td>无</td><td>无</td><td>自己管理</td></tr>
+    <tr><td>推荐</td><td>首选</td><td>已废弃</td><td>已废弃</td><td>长期运行</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <strong>tasklet 已废弃</strong>：tasklet 和 softirq 在新代码中已不推荐使用。tasklet 有已知的延迟问题，softirq 不能睡眠。workqueue 是它们的现代替代方案。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/workqueue.c</span>          <span class="cmt">workqueue 核心实现 (~8000 行)</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">workqueue.h</span>        <span class="cmt">workqueue API (905 行)</span>
+└── <span class="file">workqueue_types.h</span>  <span class="cmt">类型定义</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">kthread.h</span>          <span class="cmt">kthread（长期 worker 替代）</span>
+├── <span class="file">timer.h</span>            <span class="cmt">定时器（与 delayed_work 对比）</span>
+└── <span class="file">softirq.h</span>          <span class="cmt">softirq（已废弃机制）</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>include/linux/workqueue.h</code>（905 行）定义所有 API 和数据结构。<br>
+    <code>kernel/workqueue.c</code>（~8000 行）是核心实现，包含 cmwq 框架。<br>
+    <code>Documentation/core-api/workqueue.rst</code> 是官方文档。<br>
+    <code>Documentation/core-api/delayed-work.rst</code> 是延迟工作文档。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/workqueue.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

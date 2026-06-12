@@ -2,7 +2,7 @@
 
 ## 文档集合
 
-当前共 **27 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件，基于 Linux 7.0.12 内核源码。
+当前共 **28 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件，基于 Linux 7.0.12 内核源码。
 
 ### 文件结构
 
@@ -29,7 +29,8 @@
 | 8 | linux-semaphore.html | 信号量（Semaphore / Rwsem） | 内核核心 |
 | 9 | linux-rwlock.html | 读写锁（Rwlock / Rwsem） | 内核核心 |
 | 10 | linux-rcu.html | RCU（Tree RCU、SRCU、宽限期） | 内核核心 |
-| 11 | linux-cgroup.html | cgroup（v1/v2、控制器、BPF） | 内核核心 |
+| 11 | linux-completion.html | Completion（完成量、同步等待） | 内核核心 |
+| 12 | linux-cgroup.html | cgroup（v1/v2、控制器、BPF） | 内核核心 |
 | 12 | linux-procfs.html | procfs（seq_file、/proc/[pid]） | 文件系统 |
 | 13 | linux-vfs.html | VFS（四大对象、DCache、路径查找） | 文件系统 |
 | 14 | linux-devmodel.html | 设备模型（bus/device/driver） | 设备与驱动 |

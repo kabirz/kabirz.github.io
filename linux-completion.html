@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 Completion 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核 Completion 深度解析</h1>
+  <p class="subtitle">完成量 — 任务间同步等待与通知机制</p>
+  <span class="version">Linux 7.0.12 · include/linux/completion.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#structure">数据结构</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#internals">内部实现</a></li>
+    <li><a href="#vs">对比其他原语</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Completion（完成量）是 Linux 内核中的<strong>一对一等待/通知原语</strong>。一个线程等待某个事件完成，另一个线程完成事件后通知等待者。与 semaphore 不同，completion 默认阻塞等待（而非非阻塞），并且设计用于<strong>同步点而非排他点</strong>。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>FIFO 顺序</strong>：按等待顺序唤醒</li>
+        <li><strong>可重复使用</strong>：complete_all 后需 reinit</li>
+        <li><strong>多种等待</strong>：可中断、可杀死、超时</li>
+        <li><strong>完整内存屏障</strong>：complete() 包含 full barrier</li>
+        <li><strong>非排他性</strong>：用于同步点，不用于互斥</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">适用场景</div>
+      <table>
+        <tr><th>场景</th><th>说明</th></tr>
+        <tr><td>模块加载</td><td>等待初始化完成</td></tr>
+        <tr><td>异步 I/O</td><td>等待 I/O 完成</td></tr>
+        <tr><td>设备初始化</td><td>等待固件加载</td></tr>
+        <tr><td>线程同步</td><td>等待子线程完成</td></tr>
+        <tr><td>RCU 同步</td><td>等待 grace period</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="structure" class="toc-link">
+  <h2><span class="num">02</span> 数据结构</h2>
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/completion.h:26-29</span>
+<span class="kw">struct</span> <span class="ty">completion</span> {
+    <span class="ty">unsigned int</span> done;            <span class="cm">// 完成计数器</span>
+    <span class="kw">struct</span> <span class="ty">swait_queue_head</span> wait; <span class="cm">// 等待队列头</span>
+};</code></pre>
+  </div>
+
+  <h3>状态语义</h3>
+  <table>
+    <tr><th>done 值</th><th>含义</th></tr>
+    <tr><td>0</td><td>未完成，等待者阻塞</td></tr>
+    <tr><td>> 0</td><td>已完成，等待者立即返回</td></tr>
+    <tr><td>UINT_MAX</td><td>complete_all() 设置，永久完成</td></tr>
+  </table>
+
+  <h3>初始化方式</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 静态初始化</span>
+<span class="kw">DECLARE_COMPLETION</span>(my_comp);         <span class="cm">// done=0</span>
+
+<span class="cm">// 栈上初始化</span>
+<span class="kw">DECLARE_COMPLETION_ONSTACK</span>(my_comp); <span class="cm">// 用于局部变量</span>
+
+<span class="cm">// 动态初始化</span>
+<span class="kw">struct</span> <span class="ty">completion</span> comp;
+<span class="fn">init_completion</span>(&comp);               <span class="cm">// done=0</span>
+
+<span class="cm">// 重置（complete_all 后必须调用）</span>
+<span class="fn">reinit_completion</span>(&comp);              <span class="cm">// done=0</span></code></pre>
+  </div>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 核心 API</h2>
+
+  <h3>等待 API</h3>
+  <table>
+    <tr><th>函数</th><th>阻塞</th><th>超时</th><th>可中断</th></tr>
+    <tr><td><code>wait_for_completion()</code></td><td>是</td><td>否</td><td>否</td></tr>
+    <tr><td><code>wait_for_completion_timeout()</code></td><td>是</td><td>是</td><td>否</td></tr>
+    <tr><td><code>wait_for_completion_interruptible()</code></td><td>是</td><td>否</td><td>是</td></tr>
+    <tr><td><code>wait_for_completion_interruptible_timeout()</code></td><td>是</td><td>是</td><td>是</td></tr>
+    <tr><td><code>wait_for_completion_killable()</code></td><td>是</td><td>否</td><td>致命信号</td></tr>
+    <tr><td><code>wait_for_completion_killable_timeout()</code></td><td>是</td><td>是</td><td>致命信号</td></tr>
+    <tr><td><code>try_wait_for_completion()</code></td><td>否</td><td>-</td><td>-</td></tr>
+    <tr><td><code>completion_done()</code></td><td>否</td><td>-</td><td>-</td></tr>
+  </table>
+
+  <h3>通知 API</h3>
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>complete(x)</code></td><td>唤醒一个等待者</td></tr>
+    <tr><td><code>complete_all(x)</code></td><td>唤醒所有等待者（设 done=UINT_MAX）</td></tr>
+    <tr><td><code>complete_on_current_cpu(x)</code></td><td>在当前 CPU 上唤醒（WF_CURRENT_CPU）</td></tr>
+  </table>
+
+  <h3>完整 API 示例</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 完整的等待 API</span>
+<span class="cm">// 返回值：</span>
+<span class="cm">//   0 = 完成</span>
+<span class="cm">//   -ERESTARTSYS = 被信号中断（interruptible）</span>
+<span class="cm">//   -ERESTARTSYS = 被致命信号杀死（killable）</span>
+<span class="cm">//   超时值 = 剩余时间（timeout 版本）</span>
+<span class="cm">//   false = 未完成（try_wait）</span>
+
+<span class="cm">// 同步等待</span>
+<span class="fn">wait_for_completion</span>(&comp);
+
+<span class="cm">// 带超时等待</span>
+<span class="ty">unsigned long</span> ret = <span class="fn">wait_for_completion_timeout</span>(&comp, <span class="num">100</span>);
+<span class="kw">if</span> (ret == <span class="num">0</span>) { <span class="cm">/* 超时 */</span> }
+
+<span class="cm">// 可中断等待</span>
+<span class="ty">int</span> ret = <span class="fn">wait_for_completion_interruptible</span>(&comp);
+<span class="kw">if</span> (ret == -<span class="fn">ERESTARTSYS</span>) { <span class="cm">/* 被信号中断 */</span> }
+
+<span class="cm">// 非阻塞检查</span>
+<span class="kw">if</span> (<span class="fn">try_wait_for_completion</span>(&comp)) {
+    <span class="cm">/* 已完成 */</span>
+}</code></pre>
+  </div>
+</section>
+
+<section id="internals" class="toc-link">
+  <h2><span class="num">04</span> 内部实现</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// kernel/sched/completion.c</span>
+<span class="cm">// complete() 的核心实现</span>
+
+<span class="kw">static void</span> <span class="fn">complete_with_flags</span>(<span class="kw">struct</span> <span class="ty">completion</span> *x, <span class="ty">int</span> wake_flags)
+{
+    <span class="ty">unsigned long</span> flags;
+    <span class="fn">raw_spin_lock_irqsave</span>(&x->wait.lock, flags);
+
+    <span class="kw">if</span> (x->done != <span class="ty">UINT_MAX</span>)
+        x->done++;           <span class="cm">// done 计数 +1</span>
+    <span class="fn">swake_up_locked</span>(&x->wait, wake_flags); <span class="cm">// 唤醒一个等待者</span>
+
+    <span class="fn">raw_spin_unlock_irqrestore</span>(&x->wait.lock, flags);
+}
+
+<span class="kw">void</span> <span class="fn">complete</span>(<span class="kw">struct</span> <span class="ty">completion</span> *x)
+{
+    <span class="fn">complete_with_flags</span>(x, <span class="num">0</span>);  <span class="cm">// 无特殊唤醒标志</span>
+}
+
+<span class="kw">void</span> <span class="fn">complete_all</span>(<span class="kw">struct</span> <span class="ty">completion</span> *x)
+{
+    <span class="fn">raw_spin_lock_irqsave</span>(&x->wait.lock, flags);
+    x->done = <span class="ty">UINT_MAX</span>;           <span class="cm">// 设为永久完成</span>
+    <span class="fn">swake_up_all_locked</span>(&x->wait); <span class="cm">// 唤醒所有等待者</span>
+    <span class="fn">raw_spin_unlock_irqrestore</span>(&x->wait.lock, flags);
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>FIFO 语义</strong>：completion 使用 FIFO 队列管理等待者。complete() 唤醒最早等待的线程。complete_all() 唤醒所有等待者。这确保了公平性——先等待的线程先被唤醒。
+  </div>
+</section>
+
+<section id="vs" class="toc-link">
+  <h2><span class="num">05</span> 对比其他原语</h2>
+
+  <table>
+    <tr><th>特性</th><th>completion</th><th>semaphore</th><th>mutex</th><th>wait_event</th></tr>
+    <tr><td>默认行为</td><td>阻塞</td><td>非阻塞（down_trylock）</td><td>阻塞</td><td>阻塞</td></tr>
+    <tr><td>通知方式</td><td>complete/complete_all</td><td>up</td><td>unlock</td><td>wake_up</td></tr>
+    <tr><td>计数</td><td>单次/全部</td><td>可计数</td><td>仅排他</td><td>条件</td></tr>
+    <tr><td>语义</td><td>同步点</td><td>资源访问</td><td>互斥</td><td>条件等待</td></tr>
+    <tr><td>典型场景</td><td>等待异步操作完成</td><td>资源池</td><td>临界区保护</td><td>事件等待</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <strong>completion vs wait_event</strong>：completion 是一次性通知（done++），wait_event 是条件循环检查（while (!condition)）。completion 适合"等待某个操作完成"，wait_event 适合"等待某个条件变为真"。如果操作可以重复触发，使用 completion + reinit_completion()。
+  </div>
+</section>
+
+<section id="patterns" class="toc-link">
+  <h2><span class="num">06</span> 使用模式</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式一：单次同步（最常见）</span>
+<span class="kw">struct</span> <span class="ty">completion</span> comp;
+<span class="fn">init_completion</span>(&comp);
+
+<span class="cm">// 线程 A：发起异步操作</span>
+<span class="fn">do_async_work</span>(&comp);
+
+<span class="cm">// 线程 B：等待完成</span>
+<span class="fn">wait_for_completion</span>(&comp);</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式二：可中断等待</span>
+<span class="ty">int</span> ret = <span class="fn">wait_for_completion_interruptible</span>(&comp);
+<span class="kw">if</span> (ret == -<span class="fn">ERESTARTSYS</span>) {
+    <span class="cm">// 用户进程收到信号，优雅退出</span>
+    <span class="kw">return</span> -<span class="fn">EINTR</span>;
+}</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式三：带超时</span>
+<span class="ty">unsigned long</span> ret;
+ret = <span class="fn">wait_for_completion_timeout</span>(&comp, <span class="fn">msecs_to_jiffies</span>(<span class="num">1000</span>));
+<span class="kw">if</span> (ret == <span class="num">0</span>) {
+    <span class="fn">dev_err</span>(&dev->dev, <span class="st">"timeout\n"</span>);
+    <span class="kw">return</span> -<span class="fn">ETIMEDOUT</span>;
+}</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 模式四：重复使用（complete_all + reinit）</span>
+<span class="kw">struct</span> <span class="ty">completion</span> comp;
+<span class="fn">init_completion</span>(&comp);
+
+<span class="cm">// 第一轮</span>
+<span class="fn">do_work1</span>(&comp);
+<span class="fn">wait_for_completion</span>(&comp);
+<span class="fn">reinit_completion</span>(&comp);  <span class="cm">// 必须重置！</span>
+
+<span class="cm">// 第二轮</span>
+<span class="fn">do_work2</span>(&comp);
+<span class="fn">wait_for_completion</span>(&comp);</code></pre>
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">include/linux/</span>
+├── <span class="file">completion.h</span>       <span class="cmt">completion API 定义 (122 行)</span>
+└── <span class="file">swait.h</span>            <span class="cmt">simple wait queue（底层实现）</span>
+
+<span class="dir">kernel/sched/</span>
+├── <span class="file">completion.c</span>      <span class="cmt">completion 核心实现 (358 行)</span>
+├── <span class="file">wait.c</span>            <span class="cmt">wait_event 等待队列</span>
+├── <span class="file">wait_bit.c</span>        <span class="cmt">位等待</span>
+├── <span class="file">swait.c</span>           <span class="cmt">simple wait queue 实现</span>
+└── <span class="file">core.c</span>            <span class="cmt">调度器核心</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>include/linux/completion.h</code>（122 行）定义所有 API。<br>
+    <code>kernel/sched/completion.c</code>（358 行）实现 complete/complete_all/try_wait。<br>
+    <code>include/linux/swait.h</code> 是底层 simple wait queue。<br>
+    <code>kernel/sched/swait.c</b> 实现 swait 基础设施。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · include/linux/completion.h · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
