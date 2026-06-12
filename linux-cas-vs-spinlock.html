@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核原子 CAS 与自旋锁区别深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>原子 CAS 与自旋锁的区别</h1>
+  <p class="subtitle">compare-and-exchange vs spinlock — 如何选择同步原语</p>
+  <span class="version">Linux 7.0.12</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#cas">CAS 原理</a></li>
+    <li><a href="#spinlock">自旋锁原理</a></li>
+    <li><a href="#compare">对比分析</a></li>
+    <li><a href="#performance">性能对比</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#decision">选择决策树</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- 1. Overview -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>CAS（Compare-And-Swap/Exchange）和自旋锁（Spinlock）是内核中两种最基础的同步机制。CAS 是<strong>无锁原语</strong>，通过原子比较和交换实现；自旋锁是<strong>有锁原语</strong>，通过忙等待实现互斥。理解它们的区别对于编写高效的并发代码至关重要。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">CAS（原子比较并交换）</div>
+      <ul>
+        <li><strong>无锁</strong>：不持有任何锁</li>
+        <li><strong>乐观</strong>：先尝试，失败则重试</li>
+        <li><strong>适用</strong>：简单计数器、单变量更新</li>
+        <li><strong>局限</strong>：无法保护多步操作</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">自旋锁</div>
+      <ul>
+        <li><strong>有锁</strong>：持有锁才能访问临界区</li>
+        <li><strong>悲观</strong>：等待直到获取锁</li>
+        <li><strong>适用</strong>：多步操作、复杂临界区</li>
+        <li><strong>局限</strong>：持有时间必须短</li>
+      </ul>
+    </div>
+  </pre>
+  </div>
+</section>
+
+<!-- 2. CAS -->
+<section id="cas" class="toc-link">
+  <h2><span class="num">02</span> CAS 原理</h2>
+
+  <p>CAS（Compare-And-Swap）是一条<strong>原子硬件指令</strong>，它原子地比较内存地址的值与预期值，如果相等则交换为新值。</p>
+
+  <h3>硬件实现</h3>
+  <div class="diagram">
+    <div class="flow-box" style="min-width:350px">
+<pre style="background:none;border:none;padding:0;margin:0;text-align:left;font-size:0.9em;line-height:1.8;">
+<span class="cm">x86: lock cmpxchg [mem], new</span>
+<span class="cm">ARM: ldrex / strex (独占访问)</span>
+<span class="cm">RISC-V: lr.w / sc.w (链接-条件存储)</span>
+</pre>
+    </div>
+  </div>
+
+  <h3>Linux CAS API</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 基本 CAS — 返回旧值</span>
+<span class="ty">int</span> old = <span class="fn">atomic_cmpxchg</span>(&counter, expected, new);
+
+<span class="cm">// 安全 CAS — 推荐使用</span>
+<span class="ty">int</span> old = expected;
+<span class="kw">if</span> (<span class="fn">atomic_try_cmpxchg</span>(&counter, &old, new)) {
+    <span class="cm">// 成功：old 仍为预期值，counter 已变为 new</span>
+} <span class="kw">else</span> {
+    <span class="cm">// 失败：old 已更新为当前值</span>
+}
+
+<span class="cm">// 带内存序的变体</span>
+<span class="fn">atomic_cmpxchg_relaxed</span>(&counter, old, new);   <span class="cm">// 无序</span>
+<span class="fn">atomic_cmpxchg_acquire</span>(&counter, old, new);   <span class="cm">// 获取语义</span>
+<span class="fn">atomic_cmpxchg_release</span>(&counter, old, new);   <span class="cm">// 释放语义</span>
+
+<span class="cm">// xchg — 无条件交换（无比较）</span>
+<span class="ty">int</span> old = <span class="fn">xchg</span>(&counter, new);  <span class="cm">// 原子交换</span>
+<span class="fn">xchg_relaxed</span>(&counter, new);    <span class="cm">// 无序版本</span></code></pre>
+  </div>
+
+  <h3>CAS 的语义</h3>
+  <div class="diagram">
+    <div class="flow-box" style="min-width:380px">
+<pre style="background:none;border:none;padding:0;margin:0;text-align:left;font-size:0.9em;line-height:1.8;">
+<span class="cm">if (*addr == expected)</span>
+<span class="cm">    *addr = new;     // 原子操作</span>
+<span class="cm">    return true;     // 成功</span>
+<span class="cm">else</span>
+<span class="cm">    expected = *addr; // 返回当前值</span>
+<span class="cm">    return false;     // 失败（需重试）</span>
+</pre>
+    </div>
+  </pre>
+  </div>
+</section>
+
+<!-- 3. Spinlock -->
+<section id="spinlock" class="toc-link">
+  <h2><span class="num">03</span> 自旋锁原理</h2>
+
+  <p>自旋锁通过原子操作获取锁，失败时忙等待直到锁被释放。它保证互斥访问临界区。</p>
+
+  <h3>锁获取流程</h3>
+  <div class="diagram">
+    <div class="flow-box danger">spin_lock(&lock)</div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box">尝试获取锁<br><small>原子操作（test-and-set）</small></div>
+    <div class="flow-down">↓</div>
+    <div style="display:flex; justify-content:center; gap:16px;">
+      <div class="flow-box active">成功<br><small>进入临界区</small></div>
+      <div class="flow-box warn">失败<br><small>忙等待（自旋）</small></div>
+    </div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box">spin_unlock(&lock)<br><small>释放锁，唤醒等待者</small></div>
+  </div>
+
+  <h3>自旋锁的代价</h3>
+  <table>
+    <tr><th>方面</th><th>代价</th></tr>
+    <tr><td>获取</td><td>原子指令 + 内存屏障</td></tr>
+    <tr><td>等待</td><td>忙等待，消耗 CPU 周期</td></tr>
+    <tr><td>释放</td><td>原子指令</td></tr>
+    <tr><td>上下文</td><td>禁用抢占（可能禁用中断）</td></tr>
+    <tr><td>公平性</td><td>无保证（可能饥饿）</td></tr>
+  </table>
+</section>
+
+<!-- 4. Compare -->
+<section id="compare" class="toc-link">
+  <h2><span class="num">04</span> 对比分析</h2>
+
+  <h3>核心区别</h3>
+  <table>
+    <tr><th>维度</th><th>CAS</th><th>Spinlock</th></tr>
+    <tr><td>机制</td><td>单条原子指令</td><td>锁获取/释放循环</td></tr>
+    <tr><td>锁状态</td><td>无锁</td><td>有锁（自旋等待）</td></tr>
+    <tr><td>保护范围</td><td>单次原子操作</td><td>任意长度的临界区</td></tr>
+    <tr><td>多步操作</td><td>需要循环实现</td><td>天然支持</td></tr>
+    <tr><td>失败重试</td><td>乐观重试（无开销）</td><td>阻塞等待</td></tr>
+    <tr><td>中断安全</td><td>天然安全</td><td>需要 irqsave 变体</td></tr>
+    <tr><td>公平性</td><td>无保证</td><td>无保证（但可扩展）</td></tr>
+    <tr><td>嵌套</td><td>不适用</td><td>可通过 lockdep 检测</td></tr>
+  </table>
+
+  <h3>适用场景对比</h3>
+  <table>
+    <tr><th>场景</th><th>推荐</th><th>原因</th></tr>
+    <tr><td>简单计数器</td><td><code>atomic_t</code>（基于 CAS）</td><td>最轻量</td></tr>
+    <tr><td>单变量更新</td><td><code>atomic_cmpxchg()</code></td><td>无锁，无等待开销</td></tr>
+    <tr><td>短临界区</td><td><code>spinlock_t</code></td><td>获取/释放快</td></tr>
+    <tr><td>长临界区</td><td><code>mutex</code>（非自旋锁）</td><td>不浪费 CPU</td></tr>
+    <tr><td>多步原子操作</td><td><code>spinlock_t</code></td><td>CAS 无法保护多步</td></tr>
+    <tr><td>读多写少</td><td><code>rwlock_t</code> / RCU</td><td>并发读</td></tr>
+  </table>
+</section>
+
+<!-- 5. Performance -->
+<section id="performance" class="toc-link">
+  <h2><span class="num">05</span> 性能对比</h2>
+
+  <h3>低竞争场景（单 CPU）</h3>
+  <div class="card">
+    <pre><code><span class="cm">// CAS：几乎无开销</span>
+<span class="fn">atomic_add</span>(<span class="num">1</span>, &counter);  <span class="cm">// 一条指令</span>
+
+<span class="cm">// Spinlock：有开销</span>
+<span class="fn">spin_lock</span>(&lock);       <span class="cm">// 禁用抢占 + 原子操作</span>
+counter++;               <span class="cm">// 修改</span>
+<span class="fn">spin_unlock</span>(&lock);     <span class="cm">// 启用抢占</span>
+
+<span class="cm">// 结论：CAS 快 2-5 倍</span></code></pre>
+  </div>
+
+  <h3>高竞争场景（多 CPU）</h3>
+  <div class="card">
+    <pre><code><span class="cm">// CAS：自旋循环</span>
+<span class="kw">do</span> {
+    old = <span class="fn">atomic_read</span>(&counter);
+} <span class="kw">while</span> (!<span class="fn">atomic_try_cmpxchg</span>(&counter, &old, old + <span class="num">1</span>));
+<span class="cm">// 所有 CPU 争抢同一变量 → 频繁失败 → 热点</span>
+
+<span class="cm">// Spinlock：有序获取</span>
+<span class="fn">spin_lock</span>(&lock);
+counter++;
+<span class="fn">spin_unlock</span>(&lock);
+<span class="cm">// 只有一个 CPU 在临界区，其他等待 → 有序</span>
+
+<span class="cm">// 结论：高竞争时 spinlock 更可预测</span></code></pre>
+  </div>
+
+  <h3>性能总结</h3>
+  <table>
+    <tr><th>竞争级别</th><th>CAS</th><th>Spinlock</th><th>推荐</th></tr>
+    <tr><td>无竞争</td><td>~10ns</td><td>~20ns</td><td>CAS</td></tr>
+    <tr><td>低竞争</td><td>~15ns</td><td>~25ns</td><td>CAS</td></tr>
+    <tr><td>中竞争</td><td>~50ns（重试）</td><td>~30ns（等待）</td><td>视情况</td></tr>
+    <tr><td>高竞争</td><td>退化严重</td><td>有序等待</td><td>Spinlock</td></tr>
+    <tr><td>多步操作</td><td>无法保护</td><td>天然保护</td><td>Spinlock</td></tr>
+  </table>
+</section>
+
+<!-- 6. Patterns -->
+<section id="patterns" class="toc-link">
+  <h2><span class="num">06</span> 使用模式</h2>
+
+  <h3>CAS：无锁计数器</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 无锁引用计数</span>
+<span class="ty">int</span> old;
+<span class="kw">do</span> {
+    old = <span class="fn">atomic_read</span>(&refcount);
+    <span class="kw">if</span> (old == <span class="num">0</span>) <span class="kw">return</span> -<span class="num">1</span>;  <span class="cm">// 已释放</span>
+} <span class="kw">while</span> (!<span class="fn">atomic_try_cmpxchg</span>(&refcount, &old, old + <span class="num">1</span>));
+
+<span class="cm">// 释放</span>
+<span class="kw">if</span> (<span class="fn">atomic_dec_and_test</span>(&refcount)) {
+    <span class="fn">kfree</span>(obj);
+}</code></pre>
+  </div>
+
+  <h3>CAS：无锁链表插入</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 无锁 LIFO 栈</span>
+<span class="kw">void</span> <span class="fn">push</span>(<span class="kw">struct</span> <span class="ty">node</span> *n, <span class="kw">struct</span> <span class="ty">node</span> **top) {
+    <span class="kw">struct</span> <span class="ty">node</span> *old;
+    <span class="kw">do</span> {
+        old = <span class="fn">READ_ONCE</span>(*top);
+        n->next = old;
+    } <span class="kw">while</span> (!<span class="fn">cmpxchg</span>(&(*top), old, n));
+}</code></pre>
+  </div>
+
+  <h3>Spinlock：保护复杂状态</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 保护多步操作</span>
+<span class="fn">spin_lock</span>(&dev->lock);
+<span class="cm">// 1. 读取状态</span>
+status = dev->status;
+<span class="cm">// 2. 检查条件</span>
+<span class="kw">if</span> (status != READY) {
+    <span class="fn">spin_unlock</span>(&dev->lock);
+    <span class="kw">return</span> -EBUSY;
+}
+<span class="cm">// 3. 更新多个字段</span>
+dev->status = BUSY;
+dev->timeout = jiffies + <span class="num">100</span>;
+dev->error = <span class="num">0</span>;
+<span class="fn">spin_unlock</span>(&dev->lock);
+
+<span class="cm">// CAS 无法原子地保护这三步</span></code></pre>
+  </div>
+
+  <h3>混合使用：CAS + Spinlock</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 快速路径用 CAS，慢速路径用 spinlock</span>
+<span class="ty">int</span> old;
+<span class="kw">if</span> (<span class="fn">atomic_try_cmpxchg</span>(&counter, &old, old + <span class="num">1</span>)) {
+    <span class="kw">return</span>;  <span class="cm">// 快速路径成功</span>
+}
+<span class="cm">// CAS 失败，竞争激烈，使用 spinlock</span>
+<span class="fn">spin_lock</span>(&slow_lock);
+counter++;
+<span class="fn">spin_unlock</span>(&slow_lock);</code></pre>
+  </pre>
+  </div>
+</section>
+
+<!-- 7. Decision Tree -->
+<section id="decision" class="toc-link">
+  <h2><span class="num">07</span> 选择决策树</h2>
+
+  <div class="diagram" style="text-align:left;font-size:0.88em;">
+<pre style="background:none;border:none;padding:0;margin:0;line-height:2;">
+<span class="cm">需要同步共享数据？</span>
+  │
+  ├─ 是 → <span class="cm">是单变量更新吗？</span>
+  │       ├─ 是 → <span class="cm">CAS / atomic_t</span> <span class="fn">（最优选择）</span>
+  │       └─ 否 → <span class="cm">需要多步原子操作？</span>
+  │               ├─ 是 → <span class="cm">spinlock_t</span> <span class="fn">（保护临界区）</span>
+  │               └─ 否 → <span class="cm">临界区可睡眠？</span>
+  │                       ├─ 是 → <span class="cm">mutex</span> <span class="fn">（可睡眠等待）</span>
+  │                       └─ 否 → <span class="cm">spinlock_t</span> <span class="fn">（不可睡眠上下文）</span>
+  └─ 否 → 无需同步
+</pre>
+  </div>
+
+  <h3>快速决策表</h3>
+  <table>
+    <tr><th>问题</th><th>答案</th><th>选择</th></tr>
+    <tr><td>只更新一个变量？</td><td>是</td><td><code>atomic_cmpxchg()</code></td></tr>
+    <tr><td>只做简单加减？</td><td>是</td><td><code>atomic_add()</code></td></tr>
+    <tr><td>需要保护多步操作？</td><td>是</td><td><code>spinlock_t</code></td></tr>
+    <tr><td>在中断上下文中？</td><td>是</td><td><code>spinlock_t</code> + irqsave</td></tr>
+    <tr><td>临界区可睡眠？</td><td>是</td><td><code>mutex</code></td></tr>
+    <tr><td>读多写少？</td><td>是</td><td><code>rwlock_t</code> / RCU</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>黄金法则</strong>：能用 CAS 解决的就用 CAS（最轻量）；需要保护临界区就用自旋锁；临界区长或可睡眠就用 mutex。不要过度设计——先用最简单的方案，性能不够再优化。
+  </pre>
+  </div>
+</section>
+
+<!-- 8. Source Files -->
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">include/linux/</span>
+├── <span class="file">atomic.h</span>            <span class="cmt">原子操作：CAS/atomic_t (84 行)</span>
+├── <span class="file">refcount.h</span>          <span class="cmt">引用计数 (486 行)</span>
+├── <span class="file">spinlock.h</span>          <span class="cmt">自旋锁 API (678 行)</span>
+├── <span class="file">rwlock.h</span>            <span class="cmt">读写锁 API</span>
+├── <span class="file">mutex.h</span>             <span class="cmt">互斥锁（可睡眠替代）</span>
+├── <span class="file">cmpxchg.h</span>          <span class="cmt">CAS 底层实现</span>
+└── <span class="file">barrier.h</span>          <span class="cmt">内存屏障</span>
+
+<span class="dir">arch/x86/include/asm/</span>
+├── <span class="file">atomic.h</span>            <span class="cmt">x86 原子操作</span>
+├── <span class="file">atomic64_64.h</span>       <span class="cmt">x86-64 原子操作</span>
+├── <span class="file">cmpxchg.h</span>          <span class="cmt">x86 CAS 指令封装</span>
+├── <span class="file">qspinlock.h</span>        <span class="cmt">queued spinlock（x86 默认）</span>
+└── <span class="file">spinlock.h</span>         <span class="cmt">x86 自旋锁</span>
+
+<span class="dir">kernel/locking/</span>
+├── <span class="file">lockdep.c</span>          <span class="cmt">Lockdep 死锁检测</span>
+├── <span class="file">mutex.c</span>            <span class="cmt">互斥锁实现</span>
+└── <span class="file">spinlock_rt.c</span>      <span class="cmt">RT 内核自旋锁</span>
+</pre>  </div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议：</strong><br><code>include/linux/atomic.h</code> 理解 CAS 和原子操作.<br><code>include/linux/spinlock.h</code> 理解自旋锁。两者的核心区别在于：CAS 是<strong>指令级</strong>原语（单次操作），自旋锁是<strong>机制级</strong>原语（保护临界区）。在 Linux <code>atomic/</code> 目录下可以找到各架构的 CAS 实现。
+  </pre>
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center; padding:30px 20px; border-top:1px solid var(--border); color:var(--text-dim); font-size:0.85em; background:var(--bg);">
+  基于 Linux 7.0.12 源码分析 · 生成于 2026-06-12
+</footer>
+
+<script src="common.js"></script>
+
+</body>
+</html>

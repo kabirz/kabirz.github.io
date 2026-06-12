@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 RCU 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+
+<div class="hero">
+  <h1>Linux 内核 RCU 深度解析</h1>
+  <p class="subtitle">Read-Copy-Update — 高性能无锁同步机制</p>
+  <span class="version">Linux 7.0.12 · kernel/rcu/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">RCU 类型</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#tree">Tree RCU</a></li>
+    <li><a href="#callbacks">回调机制</a></li>
+    <li><a href="#srcu">SRCU</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- 1. Overview -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>RCU（Read-Copy-Update）是 Linux 内核中<strong>最重要的并发原语之一</strong>，用于实现无锁读取。读取者在 RCU 读临界区内不获取任何锁，写入者在修改数据后等待宽限期（grace period）再释放旧数据。RCU 是网络协议栈、路由表、VFS dcache 等核心子系统的基石。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">RCU 核心原理</div>
+      <ul>
+        <li><strong>读者零开销</strong>：rcu_read_lock() 仅禁止抢占（非 PREEMPT_RCU）</li>
+        <li><strong>宽限期</strong>：写入者等待所有读者退出临界区</li>
+        <li><strong>无锁</strong>：读者不需要获取任何锁</li>
+        <li><strong>写时复制</strong>：修改数据前先复制一份</li>
+        <li><strong>延迟释放</strong>：旧数据在宽限期后释放</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">适用场景</div>
+      <table>
+        <tr><th>场景</th><th>原因</th></tr>
+        <tr><td>路由表查找</td><td>读多写极少</td></tr>
+        <tr><td>DCache 查找</td><td>路径查找是热路径</td></tr>
+        <tr><td>模块列表</td><td>模块加载/卸载很少</td></tr>
+        <tr><td>通知链</td><td>读取者众多</td></tr>
+        <tr><td>网络包分类</td><td>高性能需求</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 2. RCU Types -->
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> RCU 类型</h2>
+
+  <table>
+    <tr><th>类型</th><th>抢占</th><th>场景</th></tr>
+    <tr><td><code>RCU</code>（Tree）</td><td>CONFIG_PREEMPT_RCU</td><td>默认，通用场景</td></tr>
+    <tr><td><code>RCU</code>（Tiny）</td><td>CONFIG_TINY_RCU</td><td>单处理器</td></tr>
+    <tr><td><code>SRCU</code></td><td>可选</td><td>可睡眠的读临界区</td></tr>
+    <tr><td><code>Tasks RCU</code></td><td>-</td><td>非抢占上下文切换</td></tr>
+  </table>
+
+  <h3>PREEMPT_RCU vs 非抢占 RCU</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">非抢占 RCU（默认）</div>
+      <ul>
+        <li><code>rcu_read_lock()</code> = <code>preempt_disable()</code></li>
+        <li>读临界区不可被抢占</li>
+        <li>宽限期 = 所有 CPU 经过一次上下文切换</li>
+        <li>开销极低</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">PREEMPT_RCU</div>
+      <ul>
+        <li><code>rcu_read_lock()</code> 仅递增计数器</li>
+        <li>读临界区可被抢占</li>
+        <li>宽限期需要跟踪抢占的读者</li>
+        <li>开销略高，但允许更低延迟</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 3. Core API -->
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 核心 API</h2>
+
+  <h3>读取侧 API</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 进入 RCU 读临界区</span>
+<span class="fn">rcu_read_lock</span>();
+<span class="cm">// ... 访问 RCU 保护的数据 ...</span>
+p = <span class="fn">rcu_dereference</span>(global_ptr);  <span class="cm">// 安全读取指针</span>
+<span class="cm">// ... 使用 p 访问数据 ...</span>
+<span class="fn">rcu_read_unlock</span>();</code></pre>
+  </div>
+
+  <h3>更新侧 API</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 1. 分配新版本数据</span>
+new = <span class="fn">kmalloc</span>(sizeof(*new), GFP_KERNEL);
+*new = *old;  <span class="cm">// 复制旧数据</span>
+new->field = new_value;  <span class="cm">// 修改</span>
+
+<span class="cm">// 2. 替换指针（发布新版本）</span>
+<span class="fn">rcu_assign_pointer</span>(global_ptr, new);
+
+<span class="cm">// 3. 同步方式释放旧数据</span>
+<span class="fn">synchronize_rcu</span>();     <span class="cm">// 等待宽限期（可睡眠）</span>
+<span class="fn">kfree</span>(old);
+
+<span class="cm">// 或 异步方式释放</span>
+<span class="fn">call_rcu</span>(&old->rcu_head, my_free_callback); <span class="cm">// 回调释放</span></code></pre>
+  </div>
+
+  <h3>API 总结</h3>
+  <table>
+    <tr><th>函数</th><th>类型</th><th>说明</th></tr>
+    <tr><td><code>rcu_read_lock()</code></td><td>读</td><td>进入读临界区</td></tr>
+    <tr><td><code>rcu_read_unlock()</code></td><td>读</td><td>退出读临界区</td></tr>
+    <tr><td><code>rcu_dereference(p)</code></td><td>读</td><td>安全读取 RCU 保护的指针</td></tr>
+    <tr><td><code>rcu_dereference_protected(p, c)</code></td><td>读</td><td>持锁时读取</td></tr>
+    <tr><td><code>rcu_assign_pointer(p, v)</code></td><td>写</td><td>发布新指针</td></tr>
+    <tr><td><code>synchronize_rcu()</code></td><td>写</td><td>等待宽限期（可睡眠）</td></tr>
+    <tr><td><code>call_rcu(head, func)</code></td><td>写</td><td>宽限期后异步回调</td></tr>
+    <tr><td><code>rcu_barrier()</code></td><td>写</td><td>等待所有 call_rcu 回调完成</td></tr>
+    <tr><td><code>rcu_read_lock_sched()</code></td><td>读</td><td>调度器 RCU 读临界区</td></tr>
+    <tr><td><code>rcu_read_lock_bh()</code></td><td>读</td><td>软中断 RCU 读临界区</td></tr>
+  </table>
+</section>
+
+<!-- 4. Patterns -->
+<section id="patterns" class="toc-link">
+  <h2><span class="num">04</span> 使用模式</h2>
+
+  <h3>模式一：RCU 指针替换</h3>
+  <div class="card">
+    <pre><code><span class="kw">struct</span> <span class="ty">my_config</span> __rcu *global_config;
+
+<span class="cm">// 更新（写者）</span>
+<span class="kw">struct</span> <span class="ty">my_config</span> *new = <span class="fn">kmalloc</span>(sizeof(*new), GFP_KERNEL);
+*new = *global_config;
+new->timeout = <span class="num">300</span>;
+<span class="fn">rcu_assign_pointer</span>(global_config, new);
+<span class="fn">synchronize_rcu</span>();
+<span class="fn">kfree</span>(old);
+
+<span class="cm">// 读取（读者）</span>
+<span class="fn">rcu_read_lock</span>();
+<span class="kw">struct</span> <span class="ty">my_config</span> *cfg = <span class="fn">rcu_dereference</span>(global_config);
+timeout = cfg->timeout;  <span class="cm">// 安全访问</span>
+<span class="fn">rcu_read_unlock</span>();</code></pre>
+  </div>
+
+  <h3>模式二：RCU 遍历链表</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 遍历 RCU 保护的链表</span>
+<span class="fn">rcu_read_lock</span>();
+<span class="fn">list_for_each_entry_rcu</span>(item, &my_list, list) {
+    <span class="cm">// item 在 RCU 保护下安全访问</span>
+    process(item);
+}
+<span class="fn">rcu_read_unlock</span>();
+
+<span class="cm">// 安全删除（需要持有写锁）</span>
+<span class="fn">spin_lock</span>(&my_lock);
+<span class="fn">list_del_rcu</span>(&item->list);  <span class="cm">// 从链表移除</span>
+<span class="fn">spin_unlock</span>(&my_lock);
+<span class="fn">call_rcu</span>(&item->rcu_head, my_free);  <span class="cm">// 宽限期后释放</span></code></pre>
+  </div>
+
+  <h3>模式三：SLAB_TYPESAFE_BY_RCU</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 允许 slab 对象在 RCU 读者访问期间被释放并重用</span>
+<span class="cm">// 读者必须在访问后检查对象是否仍然有效</span>
+<span class="fn">rcu_read_lock</span>();
+<span class="kw">struct</span> <span class="ty">my_obj</span> *obj = <span class="fn">rcu_dereference</span>(ptr);
+<span class="cm">// 二次验证：确认 obj 仍属于预期的 slub</span>
+<span class="kw">if</span> (unlikely(obj->gen != expected_gen)) {
+    <span class="fn">rcu_read_unlock</span>();
+    <span class="kw">return</span> -<span class="num">1</span>;
+}
+process(obj);
+<span class="fn">rcu_read_unlock</span>();</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>RCU 使用规则</strong>：<br>
+    • 读临界区内<strong>不可睡眠</strong>（除非使用 SRCU）<br>
+    • 读临界区内<strong>不可抢占</strong>（非 PREEMPT_RCU）<br>
+    • <code>rcu_dereference()</code> 必须在 <code>rcu_read_lock()</code> 内使用<br>
+    • <code>rcu_assign_pointer()</code> 必须在修改完新数据后调用<br>
+    • 释放旧数据必须等待宽限期
+  </div>
+</section>
+
+<!-- 5. Tree RCU -->
+<section id="tree" class="toc-link">
+  <h2><span class="num">05</span> Tree RCU</h2>
+
+  <p>Tree RCU 是多处理器系统的默认 RCU 实现，使用<strong>层级结构</strong>跟踪 CPU 状态，实现高效的宽限期检测。</p>
+
+  <h3>工作原理</h3>
+  <div class="diagram">
+    <div class="flow-box danger">rcu_read_lock()</div>
+    <div class="flow-down">↓ 仅递增 current->rcu_read_lock_nesting</div>
+    <div class="flow-box">... 临界区 ...</div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box warn">rcu_read_unlock()</div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box">检查是否需要通知 RCU 核心</div>
+  </div>
+
+  <h3>宽限期（Grace Period）</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 宽限期 = 所有 CPU 至少经历一次上下文切换</span>
+<span class="cm">// 在非 PREEMPT_RCU 下，这等价于：所有 CPU 都调用了 rcu_read_unlock()</span>
+
+<span class="cm">// Tree RCU 的层级结构：</span>
+<span class="cm">// CPU 0 ─┐</span>
+<span class="cm">// CPU 1 ─┤── rcu_node (叶节点)</span>
+<span class="cm">// CPU 2 ─┘         │</span>
+<span class="cm">// CPU 3 ─┐         │</span>
+<span class="cm">// CPU 4 ─┤── rcu_node (叶节点)</span>
+<span class="cm">// CPU 5 ─┘         │</span>
+<span class="cm">//              rcu_node (内部节点)</span>
+<span class="cm">//                   │</span>
+<span class="cm">//              rcu_state (根)</span>
+
+<span class="cm">// 宽限期检测：</span>
+<span class="cm">// 1. 根节点标记新宽限期开始</span>
+<span class="cm">// 2. 各 CPU 检查自己的 quiescent state</span>
+<span class="cm">// 3. 叶节点收集所有 CPU 的状态</span>
+<span class="cm">// 4. 逐级上报到根节点</span>
+<span class="cm">// 5. 根节点确认宽限期完成</span></code></pre>
+  </div>
+
+  <h3>Quiescent State（静默状态）</h3>
+  <table>
+    <tr><th>事件</th><th>说明</th></tr>
+    <tr><td>上下文切换</td><td>任务离开内核态</td></tr>
+    <tr><td>返回用户态</td><td>从内核态返回</td></tr>
+    <tr><td>空闲</td><td>CPU 进入 idle</td></tr>
+    <tr><td>离线</td><td>CPU 热插拔离线</td></tr>
+    <tr><td>上下文跟踪</td><td>经过 context_tracking</td></tr>
+  </table>
+</section>
+
+<!-- 6. Callbacks -->
+<section id="callbacks" class="toc-link">
+  <h2><span class="num">06</span> 回调机制</h2>
+
+  <h3>call_rcu 回调</h3>
+  <div class="card">
+    <pre><code><span class="kw">struct</span> <span class="ty">my_obj</span> {
+    <span class="kw">struct</span> <span class="ty">rcu_head</span> rcu;
+    <span class="ty">int</span> data;
+};
+
+<span class="kw">static void</span> <span class="fn">my_free_cb</span>(<span class="kw">struct</span> <span class="ty">rcu_head</span> *head)
+{
+    <span class="kw">struct</span> <span class="ty">my_obj</span> *obj = <span class="fn">container_of</span>(head, <span class="kw">struct</span> <span class="ty">my_obj</span>, rcu);
+    <span class="fn">kfree</span>(obj);
+}
+
+<span class="cm">// 使用</span>
+<span class="fn">call_rcu</span>(&old_obj->rcu, my_free_cb);</code></pre>
+  </div>
+
+  <h3>synchronize_rcu vs call_rcu</h3>
+  <table>
+    <tr><th>方式</th><th>特点</th><th>场景</th></tr>
+    <tr><td><code>synchronize_rcu()</code></td><td>阻塞等待宽限期</td><td>可睡眠上下文</td></tr>
+    <tr><td><code>call_rcu()</code></td><td>异步回调</td><td>不可睡眠上下文</td></tr>
+    <tr><td><code>kvfree_rcu()</code></td><td>异步 kfree</td><td>简单释放（无需自定义回调）</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>性能提示</strong>：<code>call_rcu()</code> 将回调放入 per-CPU 链表，批量处理以减少开销。对于大量释放操作，优先使用 <code>call_rcu()</code> 而非 <code>synchronize_rcu()</code> + <code>kfree()</code>。
+  </div>
+</section>
+
+<!-- 7. SRCU -->
+<section id="srcu" class="toc-link">
+  <h2><span class="num">07</span> SRCU</h2>
+
+  <p>SRCU（Sleepable RCU）是 RCU 的扩展，允许<strong>读临界区内睡眠</strong>。适用于需要长时间持有读锁且可能调用可睡眠函数的场景。</p>
+
+  <h3>SRCU vs RCU</h3>
+  <table>
+    <tr><th>特性</th><th>RCU</th><th>SRCU</th></tr>
+    <tr><td>读临界区可睡眠</td><td>否</td><td>是</td></tr>
+    <tr><td>宽限期检测</td><td>基于 quiescent state</td><td>基于 CPU 上下文切换</td></tr>
+    <tr><td>开销</td><td>极低</td><td>中等</td></tr>
+    <tr><td>适用场景</td><td>通用无锁读</td><td>可睡眠读临界区</td></tr>
+    <tr><td>嵌套</td><td>支持</td><td>需要独立 SRCU 域</td></tr>
+  </table>
+
+  <h3>SRCU API</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 定义 SRCU 域</span>
+<span class="fn">DEFINE_STATIC_SRCU</span>(my_srcu);
+
+<span class="cm">// 读临界区（可睡眠）</span>
+<span class="ty">int</span> idx = <span class="fn">srcu_read_lock</span>(&my_srcu);
+<span class="cm">// ... 可以睡眠的操作 ...</span>
+p = <span class="fn">rcu_dereference</span>(data);
+process(p);
+<span class="fn">srcu_read_unlock</span>(&my_srcu, idx);
+
+<span class="cm">// 宽限期等待</span>
+<span class="fn">synchronize_srcu</span>(&my_srcu);
+
+<span class="cm">// 异步释放</span>
+<span class="fn">call_srcu</span>(&my_srcu, &obj->rcu_head, my_free_cb);</code></pre>
+  </div>
+</section>
+
+<!-- 8. Source Files -->
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/rcu/</span>
+├── <span class="file">tree.c</span>           <span class="cmt">Tree RCU 核心实现 (4931 行)</span>
+├── <span class="file">tiny.c</span>           <span class="cmt">单处理器 RCU</span>
+├── <span class="file">srcutree.c</span>       <span class="cmt">SRCU Tree 实现</span>
+├── <span class="file">srcutiny.c</span>       <span class="cmt">SRCU Tiny 实现</span>
+├── <span class="file">update.c</span>         <span class="cmt">RCU 更新核心</span>
+├── <span class="file">sync.c</span>           <span class="cmt">RCU 同步原语</span>
+├── <span class="file">rcu_segcblist.c</span>  <span class="cmt">回调段链表</span>
+├── <span class="file">rcutorture.c</span>     <span class="cmt">RCU 压力测试</span>
+├── <span class="file">rcuscale.c</span>       <span class="cmt">RCU 性能基准</span>
+└── <span class="file">refscale.c</span>       <span class="cmt">引用计数基准</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">rcupdate.h</span>       <span class="cmt">RCU 核心 API (1196 行)</span>
+├── <srcu.h>          <span class="cmt">SRCU API</span>
+├── <span class="file">rcupdate_wait.h</span>  <span class="cmt">等待宽限期</span>
+├── <span class="file">rcupdate_trace.h</span> <span class="cmt">RCU 跟踪事件</span>
+└── <span class="file">srcu.h</span>           <span class="cmt">SRCU 定义</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议：</strong><br><code>kernel/rcu/tree.c</code>（4931 行）是核心，实现了 Tree RCU 的宽限期检测.<br><code>include/linux/rcupdate.h</code>（1196 行）定义所有核心 API.<br><code>kernel/rcu/srcutree.c</code> 展示 SRCU 实现.<br><code>kernel/rcu/sync.c</code> 展示 RCU 同步原语.<br><code>Documentation/RCU/</code> 目录下有详细文档。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center; padding:30px 20px; border-top:1px solid var(--border); color:var(--text-dim); font-size:0.85em; background: var(--bg);">
+  基于 Linux 7.0.12 源码分析 · kernel/rcu/ · 生成于 2026-06-12
+</footer>
+
+<script src="common.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核原子操作深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+
+<div class="hero">
+  <h1>Linux 内核原子操作深度解析</h1>
+  <p class="subtitle">Atomic / Refcount / Spinlock / Memory Barrier</p>
+  <span class="version">Linux 7.0.12 · include/linux/atomic.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">层次结构</a></li>
+    <li><a href="#atomic">原子操作</a></li>
+    <li><a href="#refcount">引用计数</a></li>
+    <li><a href="#spinlock">自旋锁</a></li>
+    <li><a href="#barrier">内存屏障</a></li>
+    <li><a href="#atomic_long">原子长整型</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- 1. Overview -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>原子操作是内核中<strong>无锁并发</strong>的基础，用于在多处理器环境下安全地操作共享数据。Linux 提供了从底层硬件原子指令到上层引用计数的完整层次化并发原语。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心并发原语</div>
+      <ul>
+        <li><strong>atomic_t / atomic64_t</strong>：原子计数器</li>
+        <li><strong>refcount_t</strong>：引用计数（饱和语义）</li>
+        <li><strong>spinlock_t</strong>：自旋锁</li>
+        <li><strong>rwlock_t</strong>：读写锁</li>
+        <li><strong>mutex</strong>：互斥锁（可睡眠）</li>
+        <li><strong>completion</strong>：完成量</li>
+        <li><strong>RCU</strong>：读-拷贝-更新</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">内存序（Memory Ordering）</div>
+      <table>
+        <tr><th>类型</th><th>说明</th></tr>
+        <tr><td>Relaxed</td><td>无序（最快）</td></tr>
+        <tr><td>Acquire</td><td>读屏障（阻止后续操作重排到此之前）</td></tr>
+        <tr><td>Release</td><td>写屏障（阻止之前操作重排到此之后）</td></tr>
+        <tr><td>Fully ordered</td><td>完全有序（最慢，最安全）</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 2. Architecture -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 层次结构</h2>
+
+  <div class="diagram">
+    <div class="flow-box danger" style="min-width:180px">设备驱动 / 子系统<br><small>使用层</small></div>
+    <div class="flow-down">↓</div>
+    <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
+      <div class="flow-box active" style="min-width:100px">refcount_t<br><small>引用计数</small></div>
+      <div class="flow-box warn" style="min-width:100px">spinlock_t<br><small>自旋锁</small></div>
+      <div class="flow-box purple" style="min-width:100px">mutex<br><small>互斥锁</small></div>
+      <div class="flow-box" style="min-width:100px">RCU<br><small>读写分离</small></div>
+    </div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box" style="min-width:200px">atomic_t / atomic64_t<br><small>原子计数器层</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box active" style="min-width:200px">架构特定实现<br><small>x86: lock xadd / lock cmpxchg</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box warn" style="min-width:200px">CPU 硬件指令<br><small>原子读写、缓存锁、总线锁</small></div>
+  </div>
+
+  <h3>选择指南</h3>
+  <table>
+    <tr><th>场景</th><th>推荐</th><th>原因</th></tr>
+    <tr><td>简单计数器</td><td><code>atomic_t</code></td><td>最轻量</td></tr>
+    <tr><td>对象引用计数</td><td><code>refcount_t</code></td><td>饱和语义防 use-after-free</td></tr>
+    <tr><td>短临界区</td><td><code>spinlock_t</code></td><td>不可睡眠的快速操作</td></tr>
+    <tr><td>长临界区 / 可睡眠</td><td><code>mutex</code></td><td>不占 CPU 等待</td></tr>
+    <tr><td>读多写少</td><td><code>rwlock_t</code> / RCU</td><td>并发读</td></tr>
+    <tr><td>跨 CPU 同步</td><td>内存屏障 + 原子操作</td><td>精确控制排序</td></tr>
+  </table>
+</section>
+
+<!-- 3. Atomic Operations -->
+<section id="atomic" class="toc-link">
+  <h2><span class="num">03</span> 原子操作</h2>
+
+  <h3>atomic_t API</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 初始化</span>
+<span class="ty">atomic_t</span> counter = <span class="fn">ATOMIC_INIT</span>(<span class="num">0</span>);
+
+<span class="cm">// 基本操作</span>
+<span class="fn">atomic_set</span>(&counter, <span class="num">100</span>);        <span class="cm">// 设置值</span>
+<span class="fn">atomic_read</span>(&counter);            <span class="cm">// 读取值</span>
+<span class="fn">atomic_add</span>(<span class="num">1</span>, &counter);          <span class="cm">// 加（无返回值）</span>
+<span class="fn">atomic_sub</span>(<span class="num">1</span>, &counter);          <span class="cm">// 减</span>
+<span class="fn">atomic_inc</span>(&counter);            <span class="cm">// 加 1</span>
+<span class="fn">atomic_dec</span>(&counter);            <span class="cm">// 减 1</span>
+
+<span class="cm">// 返回值版本（完全有序）</span>
+<span class="fn">atomic_add_return</span>(<span class="num">1</span>, &counter);  <span class="cm">// 返回新值</span>
+<span class="fn">atomic_sub_return</span>(<span class="num">1</span>, &counter);
+<span class="fn">atomic_inc_return</span>(&counter);
+<span class="fn">atomic_dec_return</span>(&counter);
+
+<span class="cm">// fetch 版本（返回旧值）</span>
+<span class="fn">atomic_fetch_add</span>(<span class="num">1</span>, &counter);  <span class="cm">// 返回旧值</span>
+<span class="fn">atomic_fetch_sub</span>(<span class="num">1</span>, &counter);
+
+<span class="cm">// 比较并交换</span>
+<span class="fn">atomic_cmpxchg</span>(&counter, old, new);  <span class="cm">// CAS 操作</span>
+<span class="fn">atomic_try_cmpxchg</span>(&counter, &old, new); <span class="cm">// 安全 CAS</span></code></pre>
+  </div>
+
+  <h3>内存序变体</h3>
+  <div class="card">
+    <p class="ref">include/linux/atomic.h:10-78</p>
+    <pre><code><span class="cm">// 四种变体：</span>
+
+<span class="cm">// 1. Relaxed（无序）— 最快，无排序保证</span>
+<span class="fn">atomic_add_unless_relaxed</span>(v, <span class="num">1</span>, <span class="num">0</span>);
+<span class="fn">atomic_fetch_add_relaxed</span>(<span class="num">1</span>, v);
+
+<span class="cm">// 2. Acquire（读屏障）</span>
+<span class="fn">atomic_add_unless_acquire</span>(v, <span class="num">1</span>, <span class="num">0</span>);
+<span class="fn">atomic_fetch_add_acquire</span>(<span class="num">1</span>, v);
+<span class="cm">// 等价于：__atomic_acquire_fence(); fetch_relaxed();</span>
+
+<span class="cm">// 3. Release（写屏障）</span>
+<span class="fn">atomic_add_unless_release</span>(v, <span class="num">1</span>, <span class="num">0</span>);
+<span class="cm">// 等价于：__atomic_release_fence(); add_relaxed();</span>
+
+<span class="cm">// 4. Fully ordered（默认，完全有序）</span>
+<span class="fn">atomic_add</span>(<span class="num">1</span>, v);
+<span class="fn">atomic_fetch_add</span>(<span class="num">1</span>, v);
+<span class="cm">// 等价于：pre_fence(); add_relaxed(); post_fence();</span></code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>选择原则</strong>：默认使用完全有序版本。只有在性能关键路径且经过仔细分析后才使用 relaxed/acquire/release 变体。错误的内存序是极难调试的并发 bug 来源。
+  </div>
+</section>
+
+<!-- 4. Refcount -->
+<section id="refcount" class="toc-link">
+  <h2><span class="num">04</span> 引用计数</h2>
+
+  <p><code>refcount_t</code> 是专为引用计数设计的类型，相比 <code>atomic_t</code> 具有<strong>饱和语义</strong>（溢出时不回绕）。</p>
+
+  <h3>与 atomic_t 的区别</h3>
+  <table>
+    <tr><th>特性</th><th>atomic_t</th><th>refcount_t</th></tr>
+    <tr><td>溢出行为</td><td>回绕到负数</td><td>饱和到 REFCOUNT_SATURATED</td></tr>
+    <tr><td>下溢行为</td><td>回绕到大正数</td><td>饱和 + WARN</td></tr>
+    <tr><td>检查函数</td><td>无</td><td><code>refcount_inc_not_zero()</code></td></tr>
+    <tr><td>用途</td><td>通用计数器</td><td>专用引用计数</td></tr>
+    <tr><td>安全</td><td>需手动保护</td><td>内置防溢出保护</td></tr>
+  </table>
+
+  <h3>refcount_t API</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 初始化</span>
+<span class="fn">refcount_set</span>(&ref, <span class="num">1</span>);           <span class="cm">// 设置初始引用</span>
+
+<span class="cm">// 增加引用（无检查）</span>
+<span class="fn">refcount_inc</span>(&ref);             <span class="cm">// 增加（必须 > 0）</span>
+
+<span class="cm">// 增加引用（检查是否为零）</span>
+<span class="ty">bool</span> ok = <span class="fn">refcount_inc_not_zero</span>(&ref); <span class="cm">// 如果为 0 则失败</span>
+
+<span class="cm">// 减少引用</span>
+<span class="fn">refcount_dec</span>(&ref);             <span class="cm">// 减少（必须 > 0）</span>
+
+<span class="cm">// 减少并检查是否归零</span>
+<span class="ty">bool</span> last = <span class="fn">refcount_dec_and_test</span>(&ref); <span class="cm">// 最后一个引用</span>
+
+<span class="cm">// 查询</span>
+<span class="ty">bool</span> alive = <span class="fn">refcount_read</span>(&ref) != <span class="num">0</span>;
+<span class="ty">bool</span> saturated = <span class="fn">refcount_is_saturated</span>(&ref);</code></pre>
+  </div>
+
+  <div class="callout danger">
+    <strong>饱和语义</strong>：当引用计数溢出或下溢时，<code>refcount_t</code> 不会回绕，而是饱和到 <code>REFCOUNT_SATURATED (0xC0000000)</code>。这避免了经典的 use-after-free 和 double-free 安全漏洞。检测到异常时会打印 WARN 并进入内核 oops。
+  </div>
+</section>
+
+<!-- 5. Spinlock -->
+<section id="spinlock" class="toc-link">
+  <h2><span class="num">05</span> 自旋锁</h2>
+
+  <h3>自旋锁类型</h3>
+  <table>
+    <tr><th>类型</th><th>说明</th><th>使用场景</th></tr>
+    <tr><td><code>spinlock_t</code></td><td>普通自旋锁</td><td>短临界区</td></tr>
+    <tr><td><code>rwlock_t</code></td><td>读写锁</td><td>读多写少</td></tr>
+    <tr><td><code>seqlock_t</code></td><td>顺序锁</td><td>写者优先、读者不阻塞</td></tr>
+    <tr><td><code>raw_spinlock_t</span></td><td>原始自旋锁（RT 内核也自旋）</td><td>硬中断上下文</td></tr>
+  </table>
+
+  <h3>使用示例</h3>
+  <div class="card">
+    <pre><code><span class="cm">// spinlock_t — 保护短临界区</span>
+<span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(my_lock);
+
+<span class="fn">spin_lock</span>(&my_lock);
+<span class="cm">// ... 临界区（不可睡眠） ...</span>
+<span class="fn">spin_unlock</span>(&my_lock);
+
+<span class="cm">// rwlock_t — 读多写少</span>
+<span class="kw">static</span> <span class="ty">DEFINE_RWLOCK</span>(my_rwlock);
+
+<span class="fn">read_lock</span>(&my_rwlock);     <span class="cm">// 多个读者可以同时持有</span>
+<span class="cm">// ... 只读操作 ...</span>
+<span class="fn">read_unlock</span>(&my_rwlock);
+
+<span class="fn">write_lock</span>(&my_rwlock);    <span class="cm">// 写者独占</span>
+<span class="cm">// ... 写操作 ...</span>
+<span class="fn">write_unlock</span>(&my_rwlock);</code></pre>
+  </div>
+
+  <h3>自旋锁 vs mutex</h3>
+  <table>
+    <tr><th>特性</th><th>spinlock</th><th>mutex</th></tr>
+    <tr><td>等待方式</td><td>忙等待（自旋）</td><td>睡眠等待</td></tr>
+    <tr><td>上下文</td><td>不可睡眠</td><td>可睡眠</td></tr>
+    <tr><td>持有时间</td><td>微秒级</td><td>毫秒级</td></tr>
+    <tr><td>中断</td><td>中断上下文可用</td><td>中断上下文不可用</td></tr>
+    <tr><td>性能</td><td>短时高性能</td><td>长时高效</td></tr>
+  </table>
+</section>
+
+<!-- 6. Memory Barrier -->
+<section id="barrier" class="toc-link">
+  <h2><span class="num">06</span> 内存屏障</h2>
+
+  <p>内存屏障（Memory Barrier）用于控制<strong>指令和内存操作的重排序</strong>，确保多处理器系统中的内存一致性。</p>
+
+  <h3>屏障类型</h3>
+  <table>
+    <tr><th>屏障</th><th>指令</th><th>说明</th></tr>
+    <tr><td><code>smp_mb()</code></td><td>全屏障</td><td>阻止所有重排序</td></tr>
+    <tr><td><code>smp_wmb()</code></td><td>写屏障</td><td>阻止写-写重排序</td></tr>
+    <tr><td><code>smp_rmb()</code></td><td>读屏障</td><td>阻止读-读重排序</td></tr>
+    <tr><td><code>smp_store_release()</code></td><td>释放屏障</td><td>之前的读写不会重排到此之后</td></tr>
+    <tr><td><code>smp_load_acquire()</code></td><td>获取屏障</td><td>此后的读写不会重排到此之前</td></tr>
+    <tr><td><code>mb()</code></td><td>完全屏障</td><td>包含编译器屏障 + 硬件屏障</td></tr>
+    <tr><td><code>rmb()</code></td><td>读屏障</td><td>编译器 + 硬件读屏障</td></tr>
+    <tr><td><code>wmb()</code></td><td>写屏障</td><td>编译器 + 硬件写屏障</td></tr>
+  </table>
+
+  <h3>使用示例</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 生产者-消费者模式</span>
+<span class="cm">// 生产者：</span>
+data = <span class="num">42</span>;
+<span class="fn">smp_wmb</span>();             <span class="cm">// 确保 data 在 ready 之前写入</span>
+ready = <span class="num">1</span>;
+
+<span class="cm">// 消费者：</span>
+<span class="kw">if</span> (ready) {
+    <span class="fn">smp_rmb</span>();         <span class="cm">// 确保读 data 在检查 ready 之后</span>
+    x = data;
+}
+
+<span class="cm">// 更简洁的版本：</span>
+<span class="fn">smp_store_release</span>(&ready, <span class="num">1</span>);  <span class="cm">// 替代 smp_wmb + store</span>
+<span class="kw">if</span> (<span class="fn">smp_load_acquire</span>(&ready)) {  <span class="cm">// 替代 load + smp_rmb</span>
+    x = data;
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>Acquire/Release 模型</strong>：Linux 推荐使用 acquire/release 语义而非显式屏障。Acquire 保证此后的操作不会重排到此之前，Release 保证此之前的操作不会重排到此之后。这比全屏障更高效。
+  </div>
+</section>
+
+<!-- 7. Atomic Long -->
+<section id="atomic_long" class="toc-link">
+  <h2><span class="num">07</span> 原子长整型</h2>
+
+  <h3>atomic_long_t</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 32 位系统上 32 位，64 位系统上 64 位</span>
+<span class="ty">atomic_long_t</span> counter;
+
+<span class="fn">atomic_long_set</span>(&counter, <span class="num">100</span>);
+<span class="fn">atomic_long_read</span>(&counter);
+<span class="fn">atomic_long_add</span>(<span class="num">1</span>, &counter);
+<span class="fn">atomic_long_inc</span>(&counter);
+<span class="fn">atomic_long_dec_and_test</span>(&counter);
+<span class="fn">atomic_long_cmpxchg</span>(&counter, old, new);
+<span class="fn">atomic_long_fetch_add</span>(<span class="num">1</span>, &counter);</code></pre>
+  </div>
+
+  <h3>其他原子类型</h3>
+  <table>
+    <tr><th>类型</th><th>大小</th><th>用途</th></tr>
+    <tr><td><code>atomic_t</code></td><td>32 位</td><td>通用原子计数器</td></tr>
+    <tr><td><code>atomic_long_t</code></td><td>32/64 位</td><td>长整型原子计数器</td></tr>
+    <tr><td><code>atomic64_t</code></td><td>64 位</td><td>64 位原子计数器</td></tr>
+    <tr><td><code>refcount_t</code></td><td>32 位</td><td>引用计数（饱和）</td></tr>
+    <tr><td><code>refcount_long_t</code></td><td>32/64 位</td><td>长整型引用计数</td></tr>
+    <tr><td><code>refcount64_t</code></td><td>64 位</td><td>64 位引用计数</td></tr>
+    <tr><td><code>atomic_long_inc_not_zero()</code></td><td>-</td><td>安全增加（检查非零）</td></tr>
+  </table>
+</section>
+
+<!-- 8. Patterns -->
+<section id="patterns" class="toc-link">
+  <h2><span class="num">08</span> 使用模式</h2>
+
+  <h3>引用计数模式</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 典型的引用计数生命周期</span>
+<span class="kw">struct</span> <span class="ty">my_object</span> {
+    <span class="kw">struct</span> <span class="ty">refcount_t</span> refcount;
+    <span class="cm">// ... 其他字段 ...</span>
+};
+
+<span class="cm">// 分配</span>
+<span class="kw">struct</span> <span class="ty">my_object</span> *obj = <span class="fn">kzalloc</span>(sizeof(*obj), GFP_KERNEL);
+<span class="fn">refcount_set</span>(&obj->refcount, <span class="num">1</span>);  <span class="cm">// 初始引用 = 1</span>
+
+<span class="cm">// 获取引用</span>
+<span class="ty">bool</span> ok = <span class="fn">refcount_inc_not_zero</span>(&obj->refcount);
+<span class="kw">if</span> (!ok) <span class="kw">return</span>;  <span class="cm">// 对象可能已释放</span>
+
+<span class="cm">// 释放引用</span>
+<span class="kw">if</span> (<span class="fn">refcount_dec_and_test</span>(&obj->refcount)) {
+    <span class="cm">// 最后一个引用，释放对象</span>
+    <span class="fn">kfree</span>(obj);
+}</code></pre>
+  </div>
+
+  <h3>per-CPU 计数器模式</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 高性能 per-CPU 计数器</span>
+<span class="kw">DEFINE_PER_CPU</span>(<span class="ty">unsigned long</span>, my_counter);
+
+<span class="cm">// 仅访问当前 CPU（无锁）</span>
+<span class="fn">this_cpu_inc</span>(my_counter);
+<span class="fn">this_cpu_dec</span>(my_counter);
+<span class="ty">unsigned long</span> val = <span class="fn">this_cpu_read</span>(my_counter);
+
+<span class="cm">// 需要汇总时遍历所有 CPU</span>
+<span class="ty">unsigned long</span> total = <span class="num">0</span>;
+<span class="fn">for_each_possible_cpu</span>(cpu)
+    total += <span class="fn">per_cpu</span>(my_counter, cpu);</code></pre>
+  </div>
+
+  <h3>常见错误</h3>
+  <div class="callout danger">
+    <strong>不要混用 atomic_t 和 refcount_t</strong>：refcount_t 具有饱和语义，不能替代 atomic_t 的任意计数。反过来，atomic_t 没有溢出保护，不应用于引用计数。<br><br>
+    <strong>不要在持有锁时调用可能睡眠的函数</strong>：spinlock 临界区内不能调用 <code>kmalloc(GFP_KERNEL)</code>、<code>mutex_lock()</code>、<code>msleep()</code> 等。<br><br>
+    <strong>不要忘记 release 语义</strong>：多处理器系统中，分配对象后的初始化必须在引用计数传递给其他 CPU 之前完成。
+  </div>
+</section>
+
+<!-- 9. Source Files -->
+<section id="files" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">include/linux/</span>
+├── <span class="file">atomic.h</span>         <span class="cmt">原子操作核心：4 种内存序变体 (84 行)</span>
+├── <span class="file">refcount.h</span>       <span class="cmt">引用计数：饱和语义 (486 行)</span>
+├── <span class="file">spinlock.h</span>       <span class="cmt">自旋锁定义</span>
+├── <span class="file">spinlock_api_smp.h</span> <span class="cmt">SMP 自旋锁 API</span>
+├── <span class="file">rwlock.h</span>         <span class="cmt">读写锁</span>
+├── <span class="file">seqlock.h</span>        <span class="cmt">顺序锁</span>
+├── <span class="file">rwsem.h</span>          <span class="cmt">读写信号量</span>
+├── <span class="file">mutex.h</span>          <span class="cmt">互斥锁</span>
+├── <span class="file">completion.h</span>     <span class="cmt">完成量</span>
+├── <span class="file">percpu-refcount.h</span> <span class="cmt">per-CPU 引用计数</span>
+├── <span class="file">percpu-rwsem.h</span>   <span class="cmt">per-CPU 读写信号量</span>
+├── <span class="file">percpu.h</span>         <span class="cmt">per-CPU 变量</span>
+└── <span class="file">local_lock.h</span>     <span class="cmt">本地锁（per-CPU）</span>
+
+<span class="dir">include/asm-generic/</span>
+├── <span class="file">atomic.h</span>         <span class="cmt">通用原子操作实现 (133 行)</span>
+├── <span class="file">atomic64.h</span>       <span class="cmt">通用 64 位原子操作</span>
+└── <span class="file">atomic-long.h</span>    <span class="cmt">通用长整型原子操作</span>
+
+<span class="dir">arch/x86/include/asm/</span>
+├── <span class="file">atomic.h</span>         <span class="cmt">x86 32 位原子操作</span>
+├── <span class="file">atomic64_64.h</span>    <span class="cmt">x86-64 原子操作</span>
+└── <span class="file">atomic64_32.h</span>    <span class="cmt">x86 32 位原子操作</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">atomic-long.h</span>     <span class="cmt">atomic_long_t 定义</span>
+├── <span class="file">atomic-instrumented.h</span> <span class="cmt">KCSAN 支持</span>
+└── <span class="file">atomic-arch-fallback.h</span> <span class="cmt">架构回退</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议：</strong><br><code>include/linux/atomic.h</code> 是入口（仅 84 行，定义了 4 种内存序变体的构建宏）.<br><code>include/asm-generic/atomic.h</code> 展示了基于 cmpxchg 的通用实现.<br><code>include/linux/refcount.h</code> 理解饱和语义.<br><code>include/linux/spinlock.h</code> 是自旋锁 API。实际架构实现见 <code>arch/x86/include/asm/atomic64_64.h</code>。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center; padding:30px 20px; border-top:1px solid var(--border); color:var(--text-dim); font-size:0.85em; background: var(--bg);">
+  基于 Linux 7.0.12 源码分析 · include/linux/atomic.h · 生成于 2026-06-12
+</footer>
+
+<script src="common.js"></script>
+
+</body>
+</html>

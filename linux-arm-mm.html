@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux ARM 内存管理深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+
+<div class="hero">
+  <h1>Linux ARM/ARM64 内存管理深度解析</h1>
+  <p class="subtitle">页表、缓存一致性、异常处理 — ARM 架构特有实现</p>
+  <span class="version">Linux 7.0.12 · arch/arm64/mm/ &amp; arch/arm/mm/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#va">虚拟地址空间</a></li>
+    <li><a href="#pgtable">页表实现</a></li>
+    <li><a href="#fault">异常处理</a></li>
+    <li><a href="#tlb">TLB 管理</a></li>
+    <li><a href="#cache">缓存一致性</a></li>
+    <li><a href="#mpam">内存保护</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- 1. Overview -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>ARM/ARM64 架构的内存管理子系统在通用 Linux MM 框架之上，实现了<strong>架构特定的页表操作、TLB 管理、缓存一致性、异常处理</strong>等。ARM64（AArch64）是当前主流的 64 位 ARM 架构，广泛用于手机、服务器、嵌入式系统。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">ARM64 内存管理特性</div>
+      <ul>
+        <li><strong>48/52 位 VA</strong>：支持 LA57 五级页表</li>
+        <li><strong>4KB/16KB/64KB 页面</strong>：可配置页面大小</li>
+        <li><strong>MTE</strong>：内存标签扩展（Memory Tagging）</li>
+        <li><strong>FPHP</strong>：大页支持（64KB/512MB）</li>
+        <li><strong>PAN</strong>：特权访问非特权（Privileged Access Never）</li>
+        <li><strong>UAO</strong>：非特权访问覆盖（User Access Override）</li>
+        <li><strong>Contiguous PTE</strong>：连续 PTE 优化</li>
+        <li><strong>GCS</strong>：Guarded Control Stack</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">ARM vs ARM64 对比</div>
+      <table>
+        <tr><th>特性</th><th>ARM (32位)</th><th>ARM64 (64位)</th></tr>
+        <tr><td>VA 位宽</td><td>32 位</td><td>48/52 位</td></tr>
+        <tr><td>PA 位宽</td><td>40 位 (LPAE)</td><td>52 位</td></tr>
+        <tr><td>页表级数</td><td>2/3 级</td><td>4/5 级</td></tr>
+        <tr><td>页面大小</td><td>4KB</td><td>4/16/64KB</td></tr>
+        <tr><td>物理地址扩展</td><td>LPAE (PAE)</td><td>原生 64 位</td></tr>
+        <tr><td>TLB 格式</td><td>ARMv7 格式</td><td>ARMv8 格式</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 2. Virtual Address Space -->
+<section id="va" class="toc-link">
+  <h2><span class="num">02</span> 虚拟地址空间</h2>
+
+  <h3>ARM64 48 位地址布局</h3>
+  <div class="diagram" style="text-align:left;font-size:0.88em;">
+<pre style="background:none;border:none;padding:0;margin:0;line-height:2;">
+<span class="cm">0xFFFF_FFFF_FFFF_FFFF</span> ┌──────────────────────┐
+                       │  内核空间（高地址）    │ <span class="cm">TTBR1 管理</span>
+<span class="cm">0xFFFF_0000_0000_0000</span> ├──────────────────────┤
+                       │      空洞             │
+<span class="cm">0x0000_7FFF_FFFF_FFFF</span> ├──────────────────────┤
+                       │  用户空间（低地址）    │ <span class="cm">TTBR0 管理</span>
+<span class="cm">0x0000_0000_0000_0000</span> └──────────────────────┘
+
+<span class="cm">内核空间布局 (TTBR1):</span>
+<span class="cm">PAGE_OFFSET</span>           线性映射起始（__pa 转换）
+<span class="cm">PAGE_OFFSET + RAM</span>    线性映射结束
+<span class="cm">KIMAGE_VADDR</span>         内核镜像虚拟地址
+<span class="cm">MODULES_VADDR</span>        模块加载区
+<span class="cm">VMEMMAP_START</span>         struct page 数组
+<span class="cm">PCI_IO_START</span>          PCI I/O 空间
+</pre>
+  </div>
+
+  <h3>关键地址常量</h3>
+  <p class="ref">arch/arm64/include/asm/memory.h:43-64</p>
+  <div class="card">
+    <pre><code><span class="cm">// arch/arm64/include/asm/memory.h</span>
+<span class="kw">#define</span> VA_BITS          CONFIG_ARM64_VA_BITS   <span class="cm">// 48 或 57</span>
+<span class="kw">#define</span> PAGE_OFFSET      (-(<span class="num">1</span>UL << VA_BITS))    <span class="cm">// 线性映射起始</span>
+<span class="kw">#define</span> KIMAGE_VADDR     MODULES_END             <span class="cm">// 内核镜像</span>
+<span class="kw">#define</span> MODULES_VADDR    _PAGE_END(VA_BITS_MIN)  <span class="cm">// 模块区起始</span>
+<span class="kw">#define</span> MODULES_VSIZE    SZ_2G                   <span class="cm">// 模块区大小 2GB</span>
+<span class="kw">#define</span> VMEMMAP_START     (VMEMMAP_END - VMEMMAP_SIZE)
+<span class="kw">#define</span> VMEMMAP_END       (-UL(SZ_1G))           <span class="cm">// struct page 数组</span>
+<span class="kw">#define</span> PCI_IO_START      (VMEMMAP_END + SZ_8M)  <span class="cm">// PCI I/O</span>
+<span class="kw">#define</span> PCI_IO_SIZE       SZ_16M                  <span class="cm">// 16MB PCI I/O</span></code></pre>
+  </div>
+
+  <h3>地址转换宏</h3>
+  <table>
+    <tr><th>宏</th><th>说明</th></tr>
+    <tr><td><code>__pa(x)</code></td><td>虚拟地址 → 物理地址</td></tr>
+    <tr><td><code>__va(x)</code></td><td>物理地址 → 虚拟地址</td></tr>
+    <tr><td><code>phys_to_virt(x)</code></td><td>物理地址 → 虚拟地址（可睡眠）</td></tr>
+    <tr><td><code>virt_to_phys(x)</code></td><td>虚拟地址 → 物理地址（可睡眠）</td></tr>
+    <tr><td><code>page_to_phys(x)</code></td><td>页面结构 → 物理地址</td></tr>
+    <tr><td><code>phys_to_page(x)</code></td><td>物理地址 → 页面结构</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>线性映射</strong>：ARM64 使用线性映射（direct mapping）将物理内存直接映射到虚拟地址空间。映射起始地址为 <code>PAGE_OFFSET</code>，转换公式：<code>__va(pa) = pa + PAGE_OFFSET</code>。这使得内核可以高效访问物理内存。
+  </div>
+</section>
+
+<!-- 3. Page Table -->
+<section id="pgtable" class="toc-link">
+  <h2><span class="num">03</span> 页表实现</h2>
+
+  <h3>ARM64 页表格式</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 页表条目格式（64 位）</span>
+<span class="cm">// [63:59] PBHA (Page-Based Hardware Attributes)</span>
+<span class="cm">// [58]    XN (Execute Never)</span>
+<span class="cm">// [54]    Contiguous hint</span>
+<span class="cm">// [53]    DBM (Dirty Bit Management)</span>
+<span class="cm">// [51:12] 物理地址</span>
+<span class="cm">// [11:9]  ignored</span>
+<span class="cm">// [8:6]   AttrIndx (MAIR 索引)</span>
+<span class="cm">// [5]     nG (not Global)</span>
+<span class="cm">// [4]     AF (Access Flag)</span>
+<span class="cm">// [3:2]   SH (Shareability)</span>
+<span class="cm">// [1:0]   页表类型/描述符类型</span>
+
+<span class="cm">// 描述符类型：</span>
+<span class="cm">// 0b00 = 无效（Fault）</span>
+<span class="cm">// 0b01 = 块描述符（Block, PUD/PMD）</span>
+<span class="cm">// 0b11 = 表描述符（Table, PGD/P4D/PUD）</span>
+<span class="cm">// 0b11 = 页描述符（Page, PTE）</span></code></pre>
+  </div>
+
+  <h3>MAIR（内存属性间接寄存器）</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 8 个内存属性槽，每个 8 位</span>
+<span class="cm">// Linux 使用的默认映射：</span>
+<span class="cm">// AttrIndx 0: Normal, Write-Back (默认)</span>
+<span class="cm">// AttrIndx 1: Normal, Non-Cacheable</span>
+<span class="cm">// AttrIndx 2: Device-nGnRnE (最强排序)</span>
+<span class="cm">// AttrIndx 3: Device-nGnRE (较弱排序)</span>
+<span class="cm">// AttrIndx 4: Normal, Write-Through</span>
+<span class="cm">// AttrIndx 5: Normal, Write-Back (非共享)</span>
+
+<span class="cm">// MAIR 寄存器值</span>
+<span class="kw">#define</span> MAIR_EL1_SET \
+    (<span class="fn">MAIR_ATTR_VALUE</span>(Normal_WB,   <span class="num">0</span>) | \
+     <span class="fn">MAIR_ATTR_VALUE</span>(Normal_NC,   <span class="num">1</span>) | \
+     <span class="fn">MAIR_ATTR_VALUE</span>(Device_nGnRnE, <span class="num">2</span>) | \
+     <span class="fn">MAIR_ATTR_VALUE</span>(Device_nGnRE, <span class="num">3</span>))</code></pre>
+  </div>
+
+  <h3>页面大小配置</h3>
+  <table>
+    <tr><th>CONFIG</th><th>页面大小</th><th>页表级数</th><th>每级索引位</th></tr>
+    <tr><td><code>ARM64_4K_PAGES</code></td><td>4KB</td><td>4 级 (48VA) / 5 级 (52VA)</td><td>9 位</td></tr>
+    <tr><td><code>ARM64_16K_PAGES</code></td><td>16KB</td><td>3 级 (47VA) / 4 级 (52VA)</td><td>11 位</td></tr>
+    <tr><td><code>ARM64_64K_PAGES</code></td><td>64KB</td><td>3 级 (47VA)</td><td>13 位</td></tr>
+  </table>
+
+  <h3>Contiguous PTE</h3>
+  <div class="callout tip">
+    <strong>Contiguous PTE</strong>：ARM64 硬件支持将 16 个连续的 PTE（4KB 页面）或 16 个连续的 PMD（64KB 大页）标记为一个整体。硬件可以一次性翻译这组条目，减少 TLB miss。Linux 通过 <code>contpte.c</code> 实现。
+  </div>
+
+  <h3>关键函数</h3>
+  <table>
+    <tr><th>函数</th><th>文件</th><th>说明</th></tr>
+    <tr><td><code>create_mapping_late()</code></td><td>mmu.c</td><td>创建晚期线性映射</td></tr>
+    <tr><td><code>update_mapping_prot()</code></td><td>mmu.c</td><td>更新页面属性</td></tr>
+    <tr><td><code>ptep_modify_prot_start/commit()</code></td><td>ptdump.c</td><td>原子修改 PTE 属性</td></tr>
+    <tr><td><code>set_pte_vaddr()</code></td><td>pgd.c</td><td>设置指定虚拟地址的 PTE</td></tr>
+    <tr><td><code>kernel_page_table_create()</code></td><td>mmu.c</td><td>创建内核页表</td></tr>
+  </table>
+</section>
+
+<!-- 4. Fault Handling -->
+<section id="fault" class="toc-link">
+  <h2><span class="num">04</span> 异常处理</h2>
+
+  <h3>ARM64 缺页处理流程</h3>
+  <div class="diagram">
+    <div class="flow-box danger">CPU Data/Instruction Abort</div>
+    <div class="flow-down">↓ 读取 ESR_ELx (异常综合寄存器)</div>
+    <div class="flow-box">do_mem_abort()<br><small>arch/arm64/mm/fault.c</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box">esr_to_fault_info(esr)<br><small>ESR → fault_info 查找</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box active">fault->fn(far, esr, regs)<br><small>调用具体处理函数</small></div>
+    <div class="flow-down">↓</div>
+    <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
+      <div class="flow-box">do_page_fault()<br><span class="cm">通用缺页</span></div>
+      <div class="flow-box warn">do_translation_fault()<br><span class="cm">翻译故障</span></div>
+      <div class="flow-box">do_access_fault()<br><span class="cm">访问权限</span></div>
+      <div class="flow-box purple">do_tag_check_fault()<br><span class="cm">MTE 标签</span></div>
+    </div>
+  </div>
+
+  <h3>ESR（异常综合寄存器）解码</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ESR_ELx 关键字段</span>
+ESR_ELx_ISS       <span class="cm">// 规范实施特定信息</span>
+ESR_ELx_ISV       <span class="cm">// 指令特定信息有效</span>
+ESR_ELx_SAS       <span class="cm">// 访问大小（1/2/4/8 字节）</span>
+ESR_ELx_SSE       <span class="cm">// 同步外部中止</span>
+ESR_ELx_SRT       <span class="cm">// 源寄存器</span>
+ESR_ELx_SF        <span class="cm">// 32/64 位访问</span>
+ESR_ELx_AR        <span class="cm">// 无特权访问</span>
+ESR_ELx_WnR       <span class="cm">// 1=写, 0=读</span>
+ESR_ELx_ESC       <span class="cm">// 异常分类（故障类型）</span></code></pre>
+  </div>
+
+  <h3>故障类型</h3>
+  <table>
+    <tr><th>类型</th><th>ESR 值</th><th>说明</th></tr>
+    <tr><td>地址大小错误</td><td>FSC_0b000000</td><td>地址大小错误</td></tr>
+    <tr><td>翻译故障 L0</td><td>FSC_0b000001</td><td>L0 页表翻译故障</td></tr>
+    <tr><td>翻译故障 L1</td><td>FSC_0b000011</td><td>L1 页表翻译故障</td></tr>
+    <tr><td>翻译故障 L2</td><td>FSC_0b000101</td><td>L2 页表翻译故障</td></tr>
+    <tr><td>翻译故障 L3</td><td>FSC_0b000111</td><td>L3 页表翻译故障</td></tr>
+    <tr><td>权限故障 L1-L3</td><td>FSC_0b001xxx</td><td>权限检查失败</td></tr>
+    <tr><td>对齐故障</td><td>FSC_0b100001</td><td>未对齐访问</td></tr>
+  </table>
+</section>
+
+<!-- 5. TLB Management -->
+<section id="tlb" class="toc-link">
+  <h2><span class="num">05</span> TLB 管理</h2>
+
+  <h3>ARM64 TLB 刷新指令</h3>
+  <table>
+    <tr><th>指令</th><th>说明</th></tr>
+    <tr><td><code>TLBI VMALLE1IS</code></td><td>刷新所有 CPU 的 EL1 全局 TLB</td></tr>
+    <tr><td><code>TLBI VAE1IS</code></td><td>刷新指定虚拟地址（所有 ASID）</td></tr>
+    <tr><td><code>TLBI VALE1IS</code></td><td>刷新指定 VA + 最后一级</td></tr>
+    <tr><td><code>TLBI ASIDE1IS</code></td><td>刷新指定 ASID 的所有条目</td></tr>
+    <tr><td><code>TLBI VAAE1IS</code></td><td>刷新指定 VA（所有 ASID）</td></tr>
+    <tr><td><code>TLBI ALLE1IS</code></td><td>刷新所有 EL1 TLB 条目</td></tr>
+    <tr><td><code>DSB ISH</code></td><td>数据同步屏障（确保 TLBI 完成）</td></tr>
+    <tr><td><code>ISB</code></td><td>指令同步屏障</td></tr>
+  </table>
+
+  <h3>TLB 刷新流程</h3>
+  <pre><code><span class="cm">// ARM64 TLB 刷新宏（arch/arm64/include/asm/tlbflush.h）</span>
+
+<span class="cm">// 刷新当前 CPU</span>
+<span class="kw">#define</span> __flush_tlb_local() \
+    <span class="kw">do</span> { \
+        <span class="fn">dsb</span>(nsh); \
+        <span class="fn">tlbi</span>(vmalle1); \
+        <span class="fn">isb</span>(); \
+    } <span class="kw">while</span> (<span class="num">0</span>);
+
+<span class="cm">// 刷新所有 CPU（IS 变体 = Inner Shareable）</span>
+<span class="kw">#define</span> __flush_tlb_all() \
+    <span class="kw">do</span> { \
+        <span class="fn">dsb</span>(ishst); \
+        <span class="fn">tlbi</span>(vmalle1is); \
+        <span class="fn">dsb</span>(ish); \
+        <span class="fn">isb</span>(); \
+    } <span class="kw">while</span> (<span class="num">0</span>);
+
+<span class="cm">// 刷新指定虚拟地址（所有 CPU）</span>
+<span class="kw">#define</span> __flush_tlb_range(vstart, vend) \
+    <span class="kw">do</span> { \
+        <span class="fn">dsb</span>(ishst); \
+        <span class="fn">tlbi</span>(vae1is, <span class="fn">addr_to_vae</span>(vstart)); \
+        <span class="fn">dsb</span>(ish); \
+    } <span class="kw">while</span> (<span class="num">0</span>);</code></pre>
+
+  <div class="callout tip">
+    <strong>ASID</strong>：ARM64 支持 ASID（Address Space Identifier），允许不同进程的 TLB 条目共存。Linux 为每个 mm 分配全局 ASID，避免进程切换时全量 TLB flush。
+  </div>
+</section>
+
+<!-- 6. Cache -->
+<section id="cache" class="toc-link">
+  <h2><span class="num">06</span> 缓存一致性</h2>
+
+  <h3>ARM64 缓存模型</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 典型 ARM64 缓存层级</span>
+L1 I-Cache (32-64KB, 4-8 way)
+L1 D-Cache (32-64KB, 4-8 way)
+L2 Cache   (256KB-1MB, 8-16 way)
+L3 Cache   (共享, 可选)
+
+<span class="cm">// 缓存一致性协议：MOESI / MESIF</span>
+<span class="cm">// 非一致 DMA 需要手动 cache 管理</span></code></pre>
+  </div>
+
+  <h3>缓存管理指令</h3>
+  <table>
+    <tr><th>指令</th><th>说明</th></tr>
+    <tr><td><code>DC CIVAC</code></td><td>Clean + Invalidate by VA to PoC</td></tr>
+    <tr><td><code>DC CVAC</code></td><td>Clean by VA to PoC</td></tr>
+    <tr><td><code>DC CIVAP</code></td><td>Clean + Invalidate by VA to PoP</td></tr>
+    <tr><td><code>DC CVAP</code></td><td>Clean by VA to PoP</td></tr>
+    <tr><td><code>DC CSW</code></td><td>Clean by Set/Way</td></tr>
+    <tr><td><code>IC IALLU</code></td><td>Invalidate all instruction cache</td></tr>
+    <tr><td><code>IC IVAU</code></td><td>Invalidate instruction cache by VA</td></tr>
+  </table>
+
+  <h3>DMA 缓存一致性</h3>
+  <div class="callout warn">
+    <strong>DMA 一致性</strong>：ARM64 是<strong>非一致 DMA</strong>架构。设备通过 DMA 访问内存时，CPU 缓存可能包含脏数据。Linux 通过 <code>dma_map_sg()</code> 等 API 自动处理 cache clean/flush。使用 <code>DMA coherent</code> 映射可以避免手动管理（但性能较低）。
+  </div>
+</section>
+
+<!-- 7. Memory Protection -->
+<section id="mpam" class="toc-link">
+  <h2><span class="num">07</span> 内存保护</h2>
+
+  <h3>ARM64 安全特性</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">PAN（Privileged Access Never）</div>
+      <p>防止内核代码意外访问用户空间内存。设置 PAN 位后，内核使用 <code>uaccess</code> 指令（如 <code>ldtr</code>/<code>sttr</code>）才能访问用户空间。</p>
+    </div>
+    <div class="card">
+      <div class="card-title">UAO（User Access Override）</div>
+      <p>允许内核临时禁用 PAN 以高效访问用户空间内存。通过 <code>access_ok()</code> 和显式 UAO 指令控制。</p>
+    </div>
+  </div>
+
+  <h3>MTE（Memory Tagging Extension）</h3>
+  <div class="card">
+    <p>MTE 是 ARMv8.5 引入的<strong>内存标记</strong>机制，为每个 16 字节内存粒度分配 4 位标签，用于检测缓冲区溢出和 use-after-free。</p>
+    <pre><code><span class="cm">// MTE 工作原理：</span>
+<span class="cm">// 1. 分配内存时生成随机标签（存储在页表扩展位）</span>
+<span class="cm">// 2. 分配时将标签存入指针的高位</span>
+<span class="cm">// 3. 访问时硬件检查指针标签 vs 内存标签</span>
+<span class="cm">// 4. 不匹配时触发 Tag Check Fault</span>
+
+<span class="cm">// Linux MTE 支持：</span>
+<span class="cm">// CONFIG_ARM64_MTE            — 启用 MTE</span>
+<span class="cm">// CONFIG_ARM64_MTE_MEMORY_TAGGING — 内存标签扩展</span>
+<span class="cm">// CONFIG_MTE_ON — 默认启用</span>
+
+<span class="cm">// 配置：</span>
+<span class="cm">// echo 1 > /proc/sys/vm/unprivileged_userfaultfd_disabled</span>
+<span class="cm">// echo 1 > /proc/sys/kernel/unprivileged_userfaultfd_disabled</span></code></pre>
+  </div>
+
+  <h3>FEAT_S1PIE（页表完整性）</h3>
+  <div class="callout tip">
+    <strong>页表完整性</strong>：ARMv8.9/ARMv9.4 引入 <code>FEAT_S1PIE</code>，为页表条目添加完整性校验位，防止恶意篡改页表。Linux 通过 <code>CONFIG_ARM64_PAN</code> 和相关 Kconfig 选项支持。
+  </div>
+</section>
+
+<!-- 8. Source Files -->
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+
+  <div class="grid-2">
+    <div>
+      <h3>ARM64 (AArch64)</h3>
+      <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">arch/arm64/mm/</span>
+├── <span class="file">mmu.c</span>          <span class="cmt">页表创建/映射 (2275 行)</span>
+├── <span class="file">fault.c</span>        <span class="cmt">缺页异常处理 (994 行)</span>
+├── <span class="file">init.c</span>         <span class="cmt">内存初始化</span>
+├── <span class="file">pgd.c</span>          <span class="cmt">PGD 操作</span>
+├── <span class="file">flush.c</span>        <span class="cmt">缓存/TLB flush</span>
+├── <span class="file">context.c</span>      <span class="cmm">ASID 分配</span>
+├── <span class="file">mmap.c</span>         <span class="cmt">内存映射</span>
+├── <span class="file">pageattr.c</span>     <span class="cmt">页面属性修改</span>
+├── <span class="file">contpte.c</span>      <span class="cmt">连续 PTE 支持</span>
+├── <span class="file">mteswap.c</span>      <span class="cmt">MTE swap 支持</span>
+├── <span class="file">gcs.c</span>          <span class="cmt">Guarded Control Stack</span>
+├── <span class="file">trans_pgd.c</span>    <span class="cmt">临时页表（kexec）</span>
+├── <span class="file">hugetlbpage.c</span>  <span class="cmt">大页支持</span>
+├── <span class="file">kasan_init.c</span>   <span class="cmt">KASAN 初始化</span>
+├── <span class="file">ptdump.c</span>       <span class="cmt">页表 dump</span>
+└── <span class="file">iomap.c</span>        <span class="cmt">IO 内存映射</span>
+
+<span class="dir">arch/arm64/include/asm/</span>
+├── <span class="file">memory.h</span>       <span class="cmt">虚拟地址布局 (452 行)</span>
+├── <span class="file">pgtable.h</span>      <span class="cmt">页表操作</span>
+├── <span class="file">tlbflush.h</span>     <span class="cmt">TLB 刷新指令</span>
+├── <span class="file">cacheflush.h</span>   <span class="cmt">缓存管理</span>
+├── <span class="file">mte.h</span>          <span class="cmt">MTE 支持</span>
+├── <span class="file">pgalloc.h</span>      <span class="cmt">页表分配</span>
+└── <span class="file">set_memory.h</span>   <span class="cmt">页面属性设置</span>
+      </pre></div>
+    </div>
+    <div>
+      <h3>ARM (32位)</h3>
+      <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">arch/arm/mm/</span>
+├── <span class="file">mmu.c</span>          <span class="cmt">页表创建/映射</span>
+├── <span class="file">fault.c</span>        <span class="cmt">缺页异常处理</span>
+├── <span class="file">init.c</span>         <span class="cmt">内存初始化</span>
+├── <span class="file">pgd.c</span>          <span class="cmt">PGD 操作</span>
+├── <span class="file">tlb.c</span>          <span class="cmt">TLB 管理</span>
+├── <span class="file">context.c</span>      <span class="cmt">ASID/TTBR 管理</span>
+├── <span class="file">mmap.c</span>         <span class="cmt">内存映射</span>
+├── <span class="file">flush.c</span>        <span class="cmt">缓存 flush</span>
+├── <span class="file">idmap.c</span>        <span class="cmt">恒等映射</span>
+├── <span class="file">alignment.c</span>    <span class="cmt">对齐异常处理</span>
+├── <span class="file">dma-mapping.c</span>  <span class="cmt">DMA 缓存一致性</span>
+├── <span class="file">fault-armv.c</span>   <span class="cmt">ARMv7 特定故障</span>
+├── <span class="file">fsr-2level.c</span>   <span class="cmt">2 级页表 FSR</span>
+├── <span class="file">fsr-3level.c</span>   <span class="cmt">3 级页表 FSR (LPAE)</span>
+├── <span class="file">proc-syms.c</span>    <span class="cmt">/proc/cpuinfo 数据</span>
+├── <span class="file">cache.c</span>        <span class="cmt">缓存管理</span>
+└── <span class="file">cache-l2x0.c</span>   <span class="cmt">PL310 L2 缓存</span>
+
+<span class="dir">arch/arm/include/asm/</span>
+├── <span class="file">memory.h</span>       <span class="cmt">ARM32 地址布局</span>
+├── <span class="file">pgtable.h</span>      <span class="cmt">页表操作</span>
+├── <span class="file">tlbflush.h</span>     <span class="cmt">TLB 刷新</span>
+├── <span class="file">cacheflush.h</span>   <span class="cmt">缓存管理</span>
+├── <span class="file">cachetype.h</span>    <span class="cmt">缓存类型</span>
+└── <span class="file">pgtable-2level.h</span> <span class="cmt">2 级页表</span>
+      </pre></div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议：</strong><br><code>arch/arm64/mm/mmu.c</code>（2275 行）是 ARM64 页表核心，从 <code>create_mapping_late()</code> 开始.<br><code>arch/arm64/mm/fault.c</code> 理解异常处理.<br><code>arch/arm64/include/asm/memory.h</code> 定义地址布局.<br><code>arch/arm64/include/asm/tlbflush.h</code> 展示 TLB 刷新指令.<br><code>arch/arm64/mm/contpte.c</code> 展示连续 PTE 优化。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center; padding:30px 20px; border-top:1px solid var(--border); color:var(--text-dim); font-size:0.85em; background: var(--bg);">
+  基于 Linux 7.0.12 源码分析 · arch/arm64/mm/ &amp; arch/arm/mm/ · 生成于 2026-06-12
+</footer>
+
+<script src="common.js"></script>
+
+</body>
+</html>

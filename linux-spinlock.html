@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核自旋锁深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核自旋锁深度解析</h1>
+  <p class="subtitle">Spinlock / Rwlock / Seqlock — SMP 低延迟同步原语</p>
+  <span class="version">Linux 7.0.12 · include/linux/spinlock*.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">锁类型</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#rt">RT 内核</a></li>
+    <li><a href="#percpu">per-CPU 锁</a></li>
+    <li><a href="#lockdep">Lockdep</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- 1. Overview -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>自旋锁（Spinlock）是 Linux 内核中<strong>最快的同步原语</strong>，适用于短临界区和中断上下文。与互斥锁（mutex）不同，自旋锁在等待时不会睡眠，而是忙等待（busy-wait）。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>忙等待</strong>：不睡眠，适用于不可睡眠上下文</li>
+        <li><strong>低延迟</strong>：获取/释放仅需几条原子指令</li>
+        <li><strong>SMP 支持</strong>：跨 CPU 互斥</li>
+        <li><strong>中断安全</strong>：可在中断上下文中使用</li>
+        <li><strong>不可嵌套</strong>：持有者不能再次获取同一锁</li>
+        <li><strong>不可睡眠</strong>：临界区内不能调用可能睡眠的函数</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">使用场景</div>
+      <table>
+        <tr><th>场景</th><th>原因</th></tr>
+        <tr><td>中断处理</td><td>不能睡眠</td></tr>
+        <tr><td>调度器</td><td>极短临界区</td></tr>
+        <tr><td>网络栈</td><td>高吞吐量要求</td></tr>
+        <tr><td>驱动程序</td><td>寄存器访问保护</td></tr>
+        <tr><td>定时器</td><td>定时器回调不可睡眠</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 2. Lock Types -->
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 锁类型</h2>
+
+  <table>
+    <tr><th>类型</th><th>头文件</th><th>适用场景</th><th>特点</th></tr>
+    <tr><td><code>raw_spinlock_t</code></td><td>spinlock_types_raw.h</td><td>RT 内核的硬中断</td><td>始终自旋，即使在 RT 内核</td></tr>
+    <tr><td><code>spinlock_t</code></td><td>spinlock_types.h</td><td>普通临界区</td><td>RT 内核下变为可睡眠</td></tr>
+    <tr><td><code>rwlock_t</code></td><td>rwlock_types.h</td><td>读多写少</td><td>多个读者可同时持有</td></tr>
+    <tr><td><code>seqlock_t</code></td><td>seqlock.h</td><td>写者优先</td><td>读者不阻塞，读到不一致时重试</td></tr>
+    <tr><td><code>bit_spinlock</code></td><td>bit_spinlock.h</td><td>节省内存</td><td>用一个 bit 的原子操作做锁</td></tr>
+  </table>
+
+  <h3>自旋锁 vs 互斥锁</h3>
+  <div class="card">
+    <table>
+      <tr><th>特性</th><th>spinlock</th><th>mutex</th></tr>
+      <tr><td>等待方式</td><td>忙等待（自旋）</td><td>睡眠等待</td></tr>
+      <tr><td>上下文限制</td><td>不可睡眠</td><td>可睡眠</td></tr>
+      <tr><td>持有时间</td><td>微秒级</td><td>毫秒级</td></tr>
+      <tr><td>中断上下文</td><td>可用</td><td>不可用</td></tr>
+      <tr><td>性能</td><td>短时高性能</td><td>长时高效</td></tr>
+      <tr><td>嵌套</td><td>不可嵌套同一锁</td><td>不可嵌套同一锁</td></tr>
+      <tr><td>公平性</td><td>无保证</td><td>有保证（FIFO）</td></tr>
+    </table>
+  </div>
+
+  <h3>rwlock_t（读写锁）</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 读写锁：多个读者可同时持有，写者独占</span>
+<span class="kw">static</span> <span class="ty">DEFINE_RWLOCK</span>(my_rwlock);
+
+<span class="cm">// 读者</span>
+<span class="fn">read_lock</span>(&my_rwlock);
+<span class="cm">// ... 只读操作 ...</span>
+<span class="fn">read_unlock</span>(&my_rwlock);
+
+<span class="cm">// 写者</span>
+<span class="fn">write_lock</span>(&my_rwlock);
+<span class="cm">// ... 写操作 ...</span>
+<span class="fn">write_unlock</span>(&my_rwlock);
+
+<span class="cm">// 特殊变体</span>
+<span class="fn">read_lock_irqsave</span>(&my_rwlock, flags);
+<span class="fn">write_lock_irqsave</span>(&my_rwlock, flags);
+<span class="fn">read_trylock</span>(&my_rwlock);</code></pre>
+  </div>
+</section>
+
+<!-- 3. Core API -->
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 核心 API</h2>
+
+  <h3>spinlock_t API</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 初始化</span>
+<span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(my_lock);     <span class="cm">// 编译时初始化</span>
+<span class="fn">spin_lock_init</span>(&my_lock);            <span class="cm">// 运行时初始化</span>
+
+<span class="cm">// 获取锁（可能睡眠版本）</span>
+<span class="fn">spin_lock</span>(&my_lock);                 <span class="cm">// 获取</span>
+<span class="fn">spin_trylock</span>(&my_lock);              <span class="cm">// 尝试获取（非阻塞）</span>
+<span class="fn">spin_unlock</span>(&my_lock);               <span class="cm">// 释放</span>
+
+<span class="cm">// 中断安全版本（保存/恢复中断状态）</span>
+<span class="ty">unsigned long</span> flags;
+<span class="fn">spin_lock_irqsave</span>(&my_lock, flags); <span class="cm">// 禁用中断 + 获取锁</span>
+<span class="cm">// ... 临界区 ...</span>
+<span class="fn">spin_unlock_irqrestore</span>(&my_lock, flags); <span class="cm">// 恢复中断 + 释放锁</span>
+
+<span class="cm">// 底半部安全版本</span>
+<span class="fn">spin_lock_bh</span>(&my_lock);             <span class="cm">// 禁用软中断 + 获取锁</span>
+<span class="fn">spin_unlock_bh</span>(&my_lock);           <span class="cm">// 恢复软中断 + 释放锁</span>
+
+<span class="cm">// 检查锁状态</span>
+<span class="ty">int</span> locked = <span class="fn">spin_is_locked</span>(&my_lock);
+<span class="ty">int</span> contended = <span class="fn">spin_is_contended</span>(&my_lock);</code></pre>
+  </div>
+
+  <h3>IRQ 变体选择</h3>
+  <table>
+    <tr><th>变体</th><th>禁用中断</th><th>禁用软中断</th><th>场景</th></tr>
+    <tr><td><code>spin_lock</code></td><td>否</td><td>否</td><td>进程上下文，无中断</td></tr>
+    <tr><td><code>spin_lock_irq</code></td><td>是</td><td>是</td><td>已知本地中断关闭</td></tr>
+    <tr><td><code>spin_lock_irqsave</code></td><td>是</td><td>是</td><td>保存/恢复中断状态（最安全）</td></tr>
+    <tr><td><code>spin_lock_bh</code></td><td>否</td><td>是</td><td>禁用软中断（如网络栈）</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <strong>选择原则</strong>：如果临界区会被中断打断，必须使用 <code>spin_lock_irqsave()</code>。如果不确定是否中断会获取同一锁，也使用 <code>spin_lock_irqsave()</code>。只有在明确知道中断不会获取锁时才使用 <code>spin_lock()</code>。
+  </div>
+</section>
+
+<!-- 4. RT Kernel -->
+<section id="rt" class="toc-link">
+  <h2><span class="num">04</span> RT 内核</h2>
+
+  <p>在 <code>PREEMPT_RT</code> 内核中，大部分 <code>spinlock_t</code> 被转换为<strong>可睡眠的互斥锁</strong>（<code>rt_mutex</code>），只有 <code>raw_spinlock_t</code> 才真正自旋。</p>
+
+  <h3>RT 内核下的锁行为</h3>
+  <table>
+    <tr><th>类型</th><th>普通内核</th><th>PREEMPT_RT</th></tr>
+    <tr><td><code>raw_spinlock_t</code></td><td>自旋</td><td>自旋（硬中断上下文必须）</td></tr>
+    <tr><td><code>spinlock_t</code></td><td>自旋</td><td>可睡眠（rt_mutex）</td></tr>
+    <tr><td><code>rwlock_t</code></td><td>自旋</td><td>可睡眠（rt_mutex）</td></tr>
+    <tr><td><code>local_lock_t</code></td><td>禁用抢占</td><td>禁用抢占（per-CPU）</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>RT 内核选择</strong>：在 PREEMPT_RT 内核中，只有真正需要在硬中断中自旋的锁才使用 <code>raw_spinlock_t</code>。大多数驱动和子系统可以安全使用 <code>spinlock_t</code>，RT 内核会自动处理。新代码建议优先使用 <code>spinlock_t</code>。
+  </div>
+</section>
+
+<!-- 5. per-CPU Lock -->
+<section id="percpu" class="toc-link">
+  <h2><span class="num">05</span> per-CPU 锁</h2>
+
+  <h3>local_lock_t</h3>
+  <div class="card">
+    <pre><code><span class="cm">// local_lock：保护 per-CPU 数据的轻量级锁</span>
+<span class="cm">// 在非 RT 内核中仅禁用抢占（无原子操作）</span>
+<span class="kw">static</span> <span class="ty">DEFINE_LOCAL_LOCK</span>(my_local_lock);
+
+<span class="fn">local_lock</span>(&my_local_lock);
+<span class="cm">// ... 访问 per-CPU 数据 ...</span>
+val = <span class="fn">this_cpu_read</span>(my_counter);
+<span class="fn">local_unlock</span>(&my_local_lock);
+
+<span class="cm">// 中断安全版本</span>
+<span class="fn">local_lock_irqsave</span>(&my_local_lock, flags);
+<span class="fn">local_unlock_irqrestore</span>(&my_local_lock, flags);</code></pre>
+  </div>
+
+  <h3>spinlock_t vs local_lock_t</h3>
+  <table>
+    <tr><th>特性</th><th>spinlock_t</th><th>local_lock_t</th></tr>
+    <tr><td>保护范围</td><td>跨 CPU 共享</td><td>per-CPU 数据</td></tr>
+    <tr><td>开销</td><td>原子操作</td><td>仅禁用抢占（无原子操作）</td></tr>
+    <tr><td>RT 内核</td><td>变为 rt_mutex</td><td>仍禁用抢占</td></tr>
+    <tr><td>适用场景</td><td>共享数据结构</td><td>per-CPU 计数器、per-CPU 缓存</td></tr>
+  </table>
+</section>
+
+<!-- 6. Lockdep -->
+<section id="lockdep" class="toc-link">
+  <h2><span class="num">06</span> Lockdep</h2>
+
+  <p>Lockdep（Lock Dependency Validator）是内核的<strong>死锁检测器</strong>，在运行时分析锁的获取顺序，检测潜在的死锁。</p>
+
+  <h3>Lockdep 功能</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">检测能力</div>
+      <ul>
+        <li><strong>锁顺序违规</strong>：ABBA 死锁</li>
+        <li><strong>自旋锁嵌套</strong>：同一 CPU 重复获取</li>
+        <li><strong>中断上下文违规</strong>：在持有不可中断锁时进入中断</li>
+        <li><strong>RCU 违规</strong>：在 RCU 临界区内睡眠</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">配置选项</div>
+      <table>
+        <tr><th>选项</th><th>说明</th></tr>
+        <tr><td><code>CONFIG_LOCKDEP</code></td><td>启用 lockdep</td></tr>
+        <tr><td><code>CONFIG_PROVE_LOCKING</code></td><td>证明锁的正确性</td></tr>
+        <tr><td><code>CONFIG_DEBUG_LOCK_ALLOC</code></td><td>调试锁分配</td></tr>
+        <tr><td><code>CONFIG_DEBUG_SPINLOCK</code></td><td>调试自旋锁</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <strong>Lockdep 输出</strong>：当检测到问题时，内核会打印详细的锁依赖图和获取历史。开发时强烈建议开启 <code>CONFIG_PROVE_LOCKING</code>。
+  </div>
+</section>
+
+<!-- 7. Patterns -->
+<section id="patterns" class="toc-link">
+  <h2><span class="num">07</span> 使用模式</h2>
+
+  <h3>模式一：保护共享数据</h3>
+  <div class="card">
+    <pre><code><span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(data_lock);
+<span class="kw">static</span> <span class="ty">int</span> shared_data;
+
+<span class="cm">// 更新（写者）</span>
+<span class="fn">spin_lock</span>(&data_lock);
+shared_data = new_value;
+<span class="fn">spin_unlock</span>(&data_lock);
+
+<span class="cm">// 读取（读者）</span>
+<span class="fn">spin_lock</span>(&data_lock);
+val = shared_data;
+<span class="fn">spin_unlock</span>(&data_lock);</code></pre>
+  </div>
+
+  <h3>模式二：中断安全的锁</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 中断处理函数中获取锁</span>
+<span class="ty">irqreturn_t</span> <span class="fn">my_irq_handler</span>(<span class="ty">int</span> irq, <span class="ty">void</span> *dev_id)
+{
+    <span class="fn">spin_lock</span>(&my_lock);  <span class="cm">// 中断中不需要 irqsave（已在中断中）</span>
+    <span class="cm">// ... 处理中断 ...</span>
+    <span class="fn">spin_unlock</span>(&my_lock);
+    <span class="kw">return</span> IRQ_HANDLED;
+}
+
+<span class="cm">// 进程上下文中保护同一数据</span>
+<span class="fn">spin_lock_irqsave</span>(&my_lock, flags); <span class="cm">// 必须禁用中断！</span>
+<span class="cm">// ... 访问共享数据 ...</span>
+<span class="fn">spin_unlock_irqrestore</span>(&my_lock, flags);</code></pre>
+  </div>
+
+  <h3>模式三：嵌套锁</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 嵌套锁：必须按固定顺序获取</span>
+<span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(lock_a);
+<span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(lock_b);
+
+<span class="cm">// 正确：始终先获取 lock_a，再获取 lock_b</span>
+<span class="fn">spin_lock</span>(&lock_a);
+<span class="fn">spin_lock_nested</span>(&lock_b, SINGLE_DEPTH_NESTING);
+<span class="cm">// ... 临界区 ...</span>
+<span class="fn">spin_unlock</span>(&lock_b);
+<span class="fn">spin_unlock</span>(&lock_a);
+
+<span class="cm">// 错误：如果其他地方先获取 lock_b 再 lock_a → 死锁！</span></code></pre>
+  </div>
+
+  <div class="callout danger">
+    <strong>常见错误</strong>：<br>
+    • 忘记在持有 spinlock 时禁用中断 → 中断打断临界区 → 死锁<br>
+    • 临界区内调用可能睡眠的函数（kmalloc(GFP_KERNEL)、mutex_lock）→ 内核警告<br>
+    • 同一 CPU 重复获取同一自旋锁 → 自死锁<br>
+    • 持有 spinlock 时间过长 → 其他 CPU 空转，性能下降
+  </div>
+</section>
+
+<!-- 8. Source Files -->
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">include/linux/</span>
+├── <span class="file">spinlock.h</span>           <span class="cmt">自旋锁核心 API (678 行)</span>
+├── <span class="file">spinlock_types.h</span>     <span class="cmt">自旋锁类型定义</span>
+├── <span class="file">spinlock_types_raw.h</span> <span class="cmt">原始自旋锁类型</span>
+├── <span class="file">spinlock_api_smp.h</span>  <span class="cmt">SMP 自旋锁 API</span>
+├── <span class="file">spinlock_api_up.h</span>   <span class="cmt">UP 自旋锁 API</span>
+├── <span class="file">rwlock.h</span>             <span class="cmt">读写锁定义</span>
+├── <span class="file">rwlock_types.h</span>      <span class="cmt">读写锁类型</span>
+├── <span class="file">rwlock_api_smp.h</span>    <span class="cmt">SMP 读写锁 API</span>
+├── <span class="file">seqlock.h</span>           <span class="cmt">顺序锁</span>
+├── <span class="file">local_lock.h</span>        <span class="cmt">per-CPU 本地锁</span>
+├── <span class="file">bit_spinlock.h</span>      <span class="cmt">位自旋锁</span>
+├── <span class="file">lockdep.h</span>           <span class="cmt">Lockdep 框架</span>
+├── <span class="file">mutex.h</span>             <span class="cmt">互斥锁（可睡眠替代）</span>
+├── <span class="file">rwsem.h</span>             <span class="cmt">读写信号量</span>
+└── <span class="file">preempt.h</span>           <span class="cmt">抢占控制</span>
+
+<span class="dir">kernel/locking/</span>
+├── <span class="file">lockdep.c</span>          <span class="cmt">Lockdep 核心</span>
+├── <span class="file">lockdep_internals.h</span> <span class="cmt">Lockdep 内部</span>
+├── <span class="file">mutex.c</span>            <span class="cmt">互斥锁实现</span>
+├── <span class="file">rwsem.c</span>            <span class="cmt">读写信号量实现</span>
+├── <span class="file">rtmutex.c</span>          <span class="cmt">RT 互斥锁</span>
+└── <span class="file">spinlock_rt.c</span>      <span class="cmt">RT 自旋锁（变为 rt_mutex）</span>
+
+<span class="dir">arch/x86/include/asm/</span>
+├── <span class="file">spinlock.h</span>         <span class="cmt">x86 自旋锁实现</span>
+├── <span class="file">spinlock_types.h</span>   <span class="cmt">x86 自旋锁类型</span>
+├── <span class="file">qspinlock.h</span>        <span class="cmt">queued spinlock（x86 默认）</span>
+└── <span class="file">qspinlock_paravirt.h</span> <span class="cmt">虚拟化优化</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议：</strong><br><code>include/linux/spinlock.h</code>（678 行）是入口，定义所有 spinlock API.<br><code>kernel/locking/lockdep.c</code> 实现死锁检测.<br><code>kernel/locking/spinlock_rt.c</code> 展示 RT 内核下的自旋锁实现.<br><code>include/linux/rwlock.h</code> 是读写锁 API.<br><code>arch/x86/include/asm/qspinlock.h</code> 展示 x86 queued spinlock 实现。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center; padding:30px 20px; border-top:1px solid var(--border); color:var(--text-dim); font-size:0.85em; background:var(--bg);">
+  基于 Linux 7.0.12 源码分析 · include/linux/spinlock*.h · 生成于 2026-06-12
+</footer>
+
+<script src="common.js"></script>
+
+</body>
+</html>

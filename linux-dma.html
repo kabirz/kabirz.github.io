@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 DMA 子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+
+<div class="hero">
+  <h1>Linux 内核 DMA 子系统深度解析</h1>
+  <p class="subtitle">直接内存访问 — 设备与内存的高速数据传输</p>
+  <span class="version">Linux 7.0.12 · kernel/dma/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#coherent">一致性 DMA</a></li>
+    <li><a href="#streaming">流式 DMA</a></li>
+    <li><a href="#swiotlb">SWIOTLB</a></li>
+    <li><a href="#iommu">IOMMU</a></li>
+    <li><a href="#debug">调试</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- 1. Overview -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>DMA（Direct Memory Access）是设备不经过 CPU 直接访问系统内存的技术。Linux DMA 子系统提供了<strong>统一的地址映射框架</strong>，处理 CPU 物理地址与设备总线地址之间的转换，以及缓存一致性管理。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">DMA 的必要性</div>
+      <ul>
+        <li><strong>性能</strong>：设备直接读写内存，释放 CPU</li>
+        <li><strong>批量传输</strong>：网卡收包、磁盘读写等高吞吐场景</li>
+        <li><strong>零拷贝</strong>：减少 CPU 参与的数据复制</li>
+        <li><strong>一致性</strong>：确保 CPU 和设备看到一致的内存数据</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">DMA 映射类型</div>
+      <table>
+        <tr><th>类型</th><th>说明</th></tr>
+        <tr><td>一致性 DMA</td><td>分配即映射，始终一致</td></tr>
+        <tr><td>流式 DMA</td><td>映射已有内存，需要手动同步</td></tr>
+        <tr><td>IOMMU 映射</td><td>通过 IOMMU 进行地址翻译</td></tr>
+        <tr><td>swiotlb</td><td>软件 IO TLB（bounce buffer）</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 2. Architecture -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+
+  <div class="diagram">
+    <div class="flow-box danger" style="min-width:200px">设备驱动<br><small>dma_alloc_coherent / dma_map_sg</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box" style="min-width:200px">DMA 映射层<br><small>dma-mapping.c</small></div>
+    <div class="flow-down">↓</div>
+    <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
+      <div class="flow-box active" style="min-width:120px">直接映射<br><small>dma-direct.c</small></div>
+      <div class="flow-box warn" style="min-width:120px">IOMMU<br><small>swiotlb.c</small></div>
+      <div class="flow-box purple" style="min-width:120px">bounce buf<br><small>swiotlb</small></div>
+    </div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box" style="min-width:200px">硬件 DMA 引擎<br><small>DMA 地址 → 物理地址</small></div>
+  </div>
+
+  <h3>DMA 地址空间</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 三种地址概念</span>
+<span class="cm">// 1. CPU 物理地址（phys_addr_t）— CPU 看到的物理地址</span>
+<span class="cm">// 2. DMA 总线地址（dma_addr_t）— 设备看到的地址</span>
+<span class="cm">// 3. 虚拟地址（void *）— 内核映射的虚拟地址</span>
+
+<span class="cm">// 在简单系统中，三者可能相等</span>
+<span class="cm">// 在有 IOMMU 或 PCI 桥的系统中，需要翻译</span>
+
+<span class="cm">// bus_dma_region 描述 CPU 物理地址到 DMA 地址的映射</span>
+<span class="kw">struct</span> <span class="ty">bus_dma_region</span> {
+    <span class="ty">phys_addr_t</span> cpu_start;    <span class="cm">// CPU 物理地址起始</span>
+    <span class="ty">dma_addr_t</span> dma_start;    <span class="cm">// DMA 总线地址起始</span>
+    <span class="ty">u64</span> size;                <span class="cm">// 区域大小</span>
+};</code></pre>
+  </div>
+</section>
+
+<!-- 3. Core API -->
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 核心 API</h2>
+
+  <h3>地址映射函数</h3>
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>dma_map_single(dev, addr, size, dir)</code></td><td>映射单个连续内存区域</td></tr>
+    <tr><td><code>dma_unmap_single(dev, addr, size, dir)</code></td><td>取消映射</td></tr>
+    <tr><td><code>dma_map_sg(dev, sg, nents, dir)</code></td><td>映射 scatterlist</td></tr>
+    <tr><td><code>dma_unmap_sg(dev, sg, nents, dir)</code></td><td>取消 scatterlist 映射</td></tr>
+    <tr><td><code>dma_map_page(dev, page, offset, size, dir)</code></td><td>映射页面</td></tr>
+    <tr><td><code>dma_mapping_error(dev, addr)</code></td><td>检查映射是否成功</td></tr>
+  </table>
+
+  <h3>一致性 DMA 分配</h3>
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>dma_alloc_coherent(dev, size, addr, gfp)</code></td><td>分配一致性 DMA 缓冲区</td></tr>
+    <tr><td><code>dma_free_coherent(dev, size, addr, dma_addr)</code></td><td>释放一致性缓冲区</td></tr>
+    <tr><td><code>dma_alloc_attrs(dev, size, addr, gfp, attrs)</code></td><td>带属性的分配</td></tr>
+  </table>
+
+  <h3>DMA 方向</h3>
+  <table>
+    <tr><th>方向</th><th>宏</th><th>说明</th></tr>
+    <tr><td>设备→内存</td><td><code>DMA_FROM_DEVICE</code></td><td>设备读取（如网卡收包）</td></tr>
+    <tr><td>内存→设备</td><td><code>DMA_TO_DEVICE</code></td><td>设备写入（如网卡发包）</td></tr>
+    <tr><td>双向</td><td><code>DMA_BIDIRECTIONAL</code></td><td>设备可读可写</td></tr>
+    <tr><td>无方向</td><td><code>DMA_NONE</code></td><td>仅用于调试</td></tr>
+  </table>
+
+  <h3>DMA 属性</h3>
+  <div class="card">
+    <p class="ref">include/linux/dma-mapping.h:21-94</p>
+    <table>
+      <tr><th>属性</th><th>说明</th></tr>
+      <tr><td><code>DMA_ATTR_WEAK_ORDERING</code></td><td>弱序访问</td></tr>
+      <tr><td><code>DMA_ATTR_WRITE_COMBINE</code></td><td>写合并优化</td></tr>
+      <tr><td><code>DMA_ATTR_NO_KERNEL_MAPPING</code></td><td>不创建内核虚拟映射</td></tr>
+      <tr><td><code>DMA_ATTR_SKIP_CPU_SYNC</code></td><td>跳过 CPU 缓存同步</td></tr>
+      <tr><td><code>DMA_ATTR_FORCE_CONTIGUOUS</code></td><td>强制物理连续分配</td></tr>
+      <tr><td><code>DMA_ATTR_ALLOC_SINGLE_PAGES</code></td><td>单页分配（不做大页优化）</td></tr>
+      <tr><td><code>DMA_ATTR_NO_WARN</code></td><td>抑制分配失败警告</td></tr>
+      <tr><td><code>DMA_ATTR_MMIO</code></td><td>MMIO 地址（非系统内存）</td></tr>
+    </table>
+  </div>
+
+  <h3>典型使用模式</h3>
+  <pre><code><span class="cm">// 一致性 DMA（DMA 读写频繁，如 descriptor ring）</span>
+<span class="ty">dma_addr_t</span> dma_handle;
+<span class="ty">void</span> *vaddr;
+vaddr = <span class="fn">dma_alloc_coherent</span>(&pdev->dev, <span class="num">4096</span>, &dma_handle, GFP_KERNEL);
+<span class="cm">// dma_handle → 给设备使用</span>
+<span class="cm">// vaddr → CPU 使用（自动保持一致）</span>
+<span class="fn">dma_free_coherent</span>(&pdev->dev, <span class="num">4096</span>, vaddr, dma_handle);
+
+<span class="cm">// 流式 DMA（批量传输，如网络包）</span>
+<span class="ty">dma_addr_t</span> dma_addr;
+dma_addr = <span class="fn">dma_map_single</span>(&pdev->dev, skb->data, skb->len, DMA_TO_DEVICE);
+<span class="cm">// dma_addr → 给设备使用</span>
+<span class="cm">// ... 设备传输 ...</span>
+<span class="fn">dma_unmap_single</span>(&pdev->dev, dma_addr, skb->len, DMA_TO_DEVICE);</code></pre>
+</section>
+
+<!-- 4. Coherent DMA -->
+<section id="coherent" class="toc-link">
+  <h2><span class="num">04</span> 一致性 DMA</h2>
+
+  <p>一致性 DMA 缓冲区（coherent buffer）在分配时即建立映射，CPU 和设备始终看到一致的数据。适用于<strong>描述符环、中断状态</strong>等需要频繁同步的场景。</p>
+
+  <h3>实现方式</h3>
+  <div class="diagram">
+    <div style="display:flex; justify-content:center; gap:20px; flex-wrap:wrap;">
+      <div>
+        <div class="flow-box active" style="min-width:160px">CMA 分配<br><small>连续物理内存</small></div>
+        <div class="flow-down">↓</div>
+        <div class="flow-box" style="min-width:160px">DMA 域映射<br><small>设备可见地址</small></div>
+      </div>
+      <div>
+        <div class="flow-box warn" style="min-width:160px">IOVA 分配<br><small>IOMMU 管理</small></div>
+        <div class="flow-down">↓</div>
+        <div class="flow-box" style="min-width:160px">IOMMU 映射<br><small>设备地址翻译</small></div>
+      </div>
+      <div>
+        <div class="flow-box purple" style="min-width:160px">swiotlb<br><small>bounce buffer</small></div>
+        <div class="flow-down">↓</div>
+        <div class="flow-box" style="min-width:160px">bounce buffer<br><small>非一致性 DMA</small></div>
+      </div>
+    </div>
+  </div>
+
+  <h3>特点与限制</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">优点</div>
+      <ul>
+        <li>分配即映射，无需手动同步</li>
+        <li>CPU 和设备始终一致</li>
+        <li>适用于高频同步场景</li>
+        <li>可以从中断上下文访问</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">限制</div>
+      <ul>
+        <li>分配可能失败（内存不足）</li>
+        <li>物理内存可能不连续</li>
+        <li>无法用于大块数据传输</li>
+        <li>性能低于流式 DMA</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 5. Streaming DMA -->
+<section id="streaming" class="toc-link">
+  <h2><span class="num">05</span> 流式 DMA</h2>
+
+  <p>流式 DMA（streaming DMA）用于映射<strong>已有的内核缓冲区</strong>给设备使用。需要手动进行缓存同步。</p>
+
+  <h3>操作流程</h3>
+  <div class="diagram">
+    <div class="flow-box danger">准备数据<br><small>填充缓冲区</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box active">dma_map_single(dev, buf, len, DMA_TO_DEVICE)<br><small>Clean cache → 设备可读</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box">设备 DMA 传输<br><small>直接访问内存</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box warn">dma_unmap_single(dev, addr, len, DMA_TO_DEVICE)<br><small>完成后可选同步</small></div>
+  </div>
+
+  <h3>scatterlist DMA</h3>
+  <pre><code><span class="cm">// 散列表 DMA：映射多个不连续的页面</span>
+<span class="kw">struct</span> <span class="ty">scatterlist</span> sg[<span class="num">NR_PAGES</span>];
+
+<span class="cm">// 设置 scatterlist</span>
+<span class="fn">sg_init_table</span>(sg, nr_pages);
+<span class="kw">for</span> (i = <span class="num">0</span>; i < nr_pages; i++)
+    <span class="fn">sg_set_page</span>(&sg[i], pages[i], PAGE_SIZE, <span class="num">0</span>);
+
+<span class="cm">// 映射</span>
+<span class="ty">int</span> nents = <span class="fn">dma_map_sg</span>(dev, sg, nr_pages, DMA_BIDIRECTIONAL);
+
+<span class="cm">// nents 可能 <= nr_pages（硬件合并了相邻段）</span>
+<span class="cm">// 设备使用 sg_dma_address(sg[i]) 和 sg_dma_len(sg[i])</span>
+
+<span class="cm">// 取消映射</span>
+<span class="fn">dma_unmap_sg</span>(dev, sg, nents, DMA_BIDIRECTIONAL);</code></pre>
+
+  <div class="callout warn">
+    <strong>缓存同步</strong>：流式 DMA 需要在合适的时机执行缓存同步。使用 <code>DMA_TO_DEVICE</code> 时在 map 前 clean cache；使用 <code>DMA_FROM_DEVICE</code> 时在 unmap 后 invalidate cache。使用 <code>DMA_BIDIRECTIONAL</code> 时两者都需要。
+  </div>
+</section>
+
+<!-- 6. SWIOTLB -->
+<section id="swiotlb" class="toc-link">
+  <h2><span class="num">06</span> SWIOTLB</h2>
+
+  <p>SWIOTLB（Software IO TLB）是 Linux 的<strong>软件 bounce buffer</strong> 机制，用于设备无法直接访问所有物理内存时的数据中转。</p>
+
+  <h3>工作原理</h3>
+  <div class="diagram">
+    <div class="flow-box">设备 DMA 地址空间有限<br><small>无法访问高位物理地址</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box active">swiotlb bounce buffer<br><small>低位物理内存缓冲区</small></div>
+    <div class="flow-down">↓ 数据复制</div>
+    <div style="display:flex; justify-content:center; gap:12px; flex-wrap:wrap;">
+      <div class="flow-box">CPU 物理内存<br><small>高位地址</small></div>
+      <div class="flow-arrow">↔</div>
+      <div class="flow-box warn">swiotlb buffer<br><small>低位地址</small></div>
+      <div class="flow-arrow">↔</div>
+      <div class="flow-box">设备 DMA<br><small>总线地址</small></div>
+    </div>
+  </div>
+
+  <h3>配置</h3>
+  <table>
+    <tr><th>参数</th><th>说明</th></tr>
+    <tr><td><code>swiotlb=nobounce</code></td><td>禁用 swiotlb</td></tr>
+    <tr><td><code>swiotlb=force</code></td><td>强制使用 swiotlb</td></tr>
+    <tr><td><code>swiotlb=nnounceded</code></td><td>不播报缓冲区大小</td></tr>
+    <tr><td><code>CONFIG_SWIOTLB</code></td><td>编译时启用</td></tr>
+    <tr><td><code>CONFIG_SWIOTLB_DYNAMIC</code></td><td>动态分配（节省内存）</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>何时需要 swiotlb</strong>：当设备的 DMA 地址位宽小于 CPU 物理地址位宽时（如 32 位设备在 64 位系统上），或者设备无法访问所有物理内存时。ARM64 上的 DMA32 设备通常需要 swiotlb。
+  </div>
+</section>
+
+<!-- 7. IOMMU -->
+<section id="iommu" class="toc-link">
+  <h2><span class="num">07</span> IOMMU</h2>
+
+  <p>IOMMU（I/O Memory Management Unit）为设备提供<strong>独立的地址翻译</strong>，类似于 CPU 的 MMU。支持 DMA 重映射、设备直通（passthrough）等。</p>
+
+  <h3>IOMMU 功能</h3>
+  <table>
+    <tr><th>功能</th><th>说明</th></tr>
+    <tr><td>DMA 重映射</td><td>设备看到的地址可以不同于物理地址</td></tr>
+    <tr><td>设备直通</td><td>虚拟机直接使用物理设备</td></tr>
+    <tr><td>中断重映射</td><td>防止恶意中断</td></tr>
+    <tr><td>SVA</td><td>共享虚拟地址（设备直接使用进程地址空间）</td></tr>
+    <tr><td>S1PTW</td><td>设备页表行走（Page Table Walk）</td></tr>
+  </table>
+
+  <h3>ARM SMMU（System MMU）</h3>
+  <div class="card">
+    <p class="ref">drivers/iommu/arm/</p>
+    <pre><code><span class="cm">// ARM SMMU 是 ARM 平台的标准 IOMMU</span>
+<span class="cm">// 支持：DMA 重映射、SVA、IOVA 分配</span>
+
+<span class="cm">// SMMU 工作流程：</span>
+<span class="cm">// 1. 设备发出 DMA 请求（设备地址）</span>
+<span class="cm">// 2. SMMU 查找 IOVA → 物理地址映射</span>
+<span class="cm">// 3. 通过页表翻译为物理地址</span>
+<span class="cm">// 4. 访问物理内存</span>
+
+<span class="cm">// Linux IOMMU API：</span>
+<span class="fn">iommu_map</span>(domain, iova, paddr, size, prot);  <span class="cm">// 建立映射</span>
+<span class="fn">iommu_unmap</span>(domain, iova, size);             <span class="cm">// 移除映射</span>
+<span class="fn">iommu_domain_alloc</span>(dev);                     <span class="cm">// 分配 IOMMU 域</span></code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>VT-d / SMMU</strong>：x86 使用 Intel VT-d，ARM 使用 SMMU。两者都提供 DMA 重映射，但实现细节不同。Linux 通过 IOMMU 框架统一抽象。
+  </div>
+</section>
+
+<!-- 8. Debug -->
+<section id="debug" class="toc-link">
+  <h2><span class="num">08</span> 调试</h2>
+
+  <h3>DMA API Debug</h3>
+  <pre><code><span class="cm">// 启用 DMA 调试</span>
+<span class="cm">// 编译时：CONFIG_DMA_API_DEBUG=y</span>
+<span class="cm">// 运行时：</span>
+echo <span class="num">1</span> > /sys/kernel/debug/dma/debug/enable
+echo <span class="num">500000</span> > /sys/kernel/debug/dma/debug/dma_pools_free_scan_rate
+
+<span class="cm">// 常见检测问题：</span>
+<span class="cm">// 1. DMA 地址超出设备能力</span>
+<span class="cm">// 2. 缺少 unmap 调用</span>
+<span class="cm">// 3. 方向错误（TO_DEVICE vs FROM_DEVICE）</span>
+<span class="cm">// 4. 缓存一致性问题</span>
+<span class="cm">// 5. scatterlist 未正确设置</span></code></pre>
+
+  <h3>调试接口</h3>
+  <table>
+    <tr><th>文件</th><th>说明</th></tr>
+    <tr><td><code>/sys/kernel/debug/dma-debug/enable</code></td><td>启用/禁用 DMA 调试</td></tr>
+    <tr><td><code>/sys/kernel/debug/dma-debug/dma_pools_free_scan_rate</code></td><td>pool 扫描频率</td></tr>
+    <tr><td><code>/proc/dma_debug/*</code></td><td>DMA 映射统计</td></tr>
+  </table>
+</section>
+
+<!-- 9. Source Files -->
+<section id="files" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/dma/</span>
+├── <span class="file">mapping.c</span>       <span class="cmt">DMA 映射核心 API</span>
+├── <span class="file">direct.c</span>        <span class="cmt">直接 DMA 映射（默认）</span>
+├── <span class="file">swiotlb.c</span>       <span class="cmt">SWIOTLB bounce buffer</span>
+├── <span class="file">coherent.c</span>      <span class="cmt">一致性 DMA 分配</span>
+├── <span class="file">contiguous.c</span>    <span class="cmt">CMA 连续内存分配</span>
+├── <span class="file">pool.c</span>          <span class="cmt">小对象 DMA pool</span>
+├── <span class="file">debug.c</span>         <span class="cmt">DMA API 调试</span>
+├── <span class="file">remap.c</span>         <span class="cmt">IOVA 重映射</span>
+├── <span class="file">ops_helpers.c</span>   <span class="cmt">DMA 操作辅助函数</span>
+├── <span class="file">dummy.c</span>         <span class="cmt">无 DMA 时的 stub</span>
+└── <span class="file">map_benchmark.c</span> <span class="cmt">映射性能基准测试</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">dma-mapping.h</span>      <span class="cmt">DMA 映射 API 和属性 (787 行)</span>
+├── <span class="file">dma-map-ops.h</span>      <span class="cmt">DMA 操作结构</span>
+├── <span class="file">dma-direction.h</span>    <span class="cmt">DMA 方向枚举</span>
+├── <span class="file">dma-direct.h</span>       <span class="cmt">直接映射内部 (153 行)</span>
+└── <span class="file">swiotlb.h</span>          <span class="cmt">SWIOTLB 接口</span>
+
+<span class="dir">drivers/iommu/</span>
+├── <span class="file">iommu.c</span>           <span class="cmt">IOMMU 核心框架</span>
+├── <span class="file">iova.c</span>            <span class="cmt">IOVA 地址分配</span>
+├── <span class="file">arm-smmu-v3.c</span>     <span class="cmt">ARM SMMUv3</span>
+├── <span class="file">arm-smmu.c</span>        <span class="cmt">ARM SMMUv2</span>
+├── <span class="file">intel-iommu.c</span>     <span class="cmt">Intel VT-d</span>
+└── <span class="file">amd-iommu.c</span>       <span class="cmt">AMD IOMMU</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议：</strong><br><code>kernel/dma/mapping.c</code> 是 DMA API 入口.<br><code>kernel/dma/direct.c</code> 展示直接映射实现（最简单）.<br><code>kernel/dma/swiotlb.c</code> 是最复杂的文件（bounce buffer）.<br><code>include/linux/dma-mapping.h</code> 定义所有 API 和属性。IOMMU 实现见 <code>drivers/iommu/</code>。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center; padding:30px 20px; border-top:1px solid var(--border); color:var(--text-dim); font-size:0.85em; background: var(--bg);">
+  基于 Linux 7.0.12 源码分析 · kernel/dma/ · 生成于 2026-06-12
+</footer>
+
+<script src="common.js"></script>
+
+</body>
+</html>

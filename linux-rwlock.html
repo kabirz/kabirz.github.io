@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核读写锁深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核读写锁深度解析</h1>
+  <p class="subtitle">Rwlock / Rwsem — 读多写少的同步原语</p>
+  <span class="version">Linux 7.0.12 · include/linux/rwlock*.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">锁类型</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#rwlock">rwlock 详解</a></li>
+    <li><a href="#rwsem">rwsem 详解</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>读写锁（Read-Write Lock）允许多个读者同时访问共享资源，但写者必须独占。这是<strong>读多写少</strong>场景的最优同步机制。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心思想</div>
+      <ul>
+        <li><strong>读并行</strong>：多个读者可同时持有</li>
+        <li><strong>写互斥</strong>：写者独占，阻塞所有其他访问</li>
+        <li><strong>写者优先</strong>：写者等待时新读者也被阻塞</li>
+        <li><strong>零开销读</strong>：理想情况下读者无额外开销</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">适用场景</div>
+      <table>
+        <tr><th>场景</th><th>原因</th></tr>
+        <tr><td>路由表查找</td><td>读极多，写极少</td></tr>
+        <tr><td>模块列表</td><td>加载少，查找多</td></tr>
+        <tr><td>配置数据</td><td>偶尔修改，频繁读取</td></tr>
+      </table>
+    </div>
+  </pre>
+  </div>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 锁类型</h2>
+  <table>
+    <tr><th>类型</th><th>上下文</th><th>等待方式</th><th>说明</th></tr>
+    <tr><td><code>rwlock_t</code></td><td>不可睡眠</td><td>自旋</td><td>忙等（中断/软中断可用）</td></tr>
+    <tr><td><code>rw_semaphore</code></td><td>可睡眠</td><td>睡眠</td><td>进程上下文（推荐）</td></tr>
+    <tr><td><code>percpu_rw_semaphore</code></td><td>可睡眠</td><td>睡眠</td><td>per-CPU 读写信号量</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 核心 API</h2>
+  <div class="card">
+    <pre><code><span class="cm">// ===== rwlock_t（自旋，不可睡眠）=====</span>
+<span class="kw">static DEFINE_RWLOCK</span>(my_rwlock);
+
+<span class="fn">read_lock</span>(&my_rwlock);          <span class="cm">// 读者获取</span>
+<span class="fn">read_unlock</span>(&my_rwlock);        <span class="cm">// 读者释放</span>
+<span class="fn">write_lock</span>(&my_rwlock);         <span class="cm">// 写者获取</span>
+<span class="fn">write_unlock</span>(&my_rwlock);       <span class="cm">// 写者释放</span>
+
+<span class="fn">read_lock_irqsave</span>(&my_rwlock, flags);
+<span class="fn">write_lock_irqsave</span>(&my_rwlock, flags);
+<span class="fn">read_trylock</span>(&my_rwlock);
+<span class="fn">write_trylock</span>(&my_rwlock);
+
+<span class="cm">// ===== rw_semaphore（可睡眠，推荐）=====</span>
+<span class="kw">static DEFINE_RWSEM</span>(my_rwsem);
+
+<span class="fn">down_read</span>(&my_rwsem);          <span class="cm">// 读者获取</span>
+<span class="fn">up_read</span>(&my_rwsem);            <span class="cm">// 读者释放</span>
+<span class="fn">down_write</span>(&my_rwsem);         <span class="cm">// 写者获取</span>
+<span class="fn">up_write</span>(&my_rwsem);           <span class="cm">// 写者释放</span>
+<span class="fn">down_read_trylock</span>(&my_rwsem);
+<span class="fn">down_write_trylock</span>(&my_rwsem);</code></pre>
+  </pre>
+  </div>
+</section>
+
+<section id="rwlock" class="toc-link">
+  <h2><span class="num">04</span> rwlock 详解</h2>
+  <p><code>rwlock_t</code> 是<strong>自旋读写锁</strong>，适用于不可睡眠的上下文。</p>
+  <h3>实现原理</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 基于原子计数器</span>
+<span class="cm">// 正数 = 读者数量</span>
+<span class="cm">// 负数 = 写者已获取</span>
+<span class="cm">// 0 = 空闲</span>
+
+<span class="cm">// read_lock: 原子增加计数</span>
+<span class="cm">// write_lock: CAS 设置为 -1</span>
+<span class="cm">// write_unlock: 设置为 0</span>
+<span class="cm">// read_unlock: 原子减少计数</span></code></pre>
+  </div>
+  <div class="callout warn">
+    <strong>注意</strong>：<code>rwlock_t</code> 在 <code>PREEMPT_RT</code> 内核中变为可睡眠（rt_mutex）。新代码应优先使用 <code>rw_semaphore</code>。
+  </pre>
+  </div>
+</section>
+
+<section id="rwsem" class="toc-link">
+  <h2><span class="num">05</span> rwsem 详解</h2>
+  <p><code>rw_semaphore</code> 是<strong>可睡眠读写信号量</strong>，适用于进程上下文。</p>
+  <h3>与 mmap_lock 的关系</h3>
+  <div class="card">
+    <pre><code><span class="cm">// mm->mmap_lock 就是 rw_semaphore</span>
+<span class="cm">// 用于保护进程的虚拟地址空间</span>
+
+<span class="cm">// 遍历 VMA（读锁）</span>
+<span class="fn">down_read</span>(&mm->mmap_lock);
+<span class="fn">for_each_vma</span>(vma) { <span class="cm">/* 只读遍历 */</span> }
+<span class="fn">up_read</span>(&mm->mmap_lock);
+
+<span class="cm">// 修改 VMA（写锁）</span>
+<span class="fn">down_write</span>(&mm->mmap_lock);
+<span class="fn">do_mmap</span>(...);  <span class="cm">/* 创建新 VMA */</span>
+<span class="fn">up_write</span>(&mm->mmap_lock);</code></pre>
+  </div>
+  <h3>写者优先实现</h3>
+  <div class="callout tip">
+    <strong>写者优先</strong>：当有写者等待时，新的读取请求会被阻塞，防止写者饥饿。这是 Linux rwsem 的默认行为。通过 <code>current_is_kswapd()</code> 等检查，内核会对 kswapd 等关键线程做特殊处理。
+  </pre>
+  </div>
+</section>
+
+<section id="patterns" class="toc-link">
+  <h2><span class="num">06</span> 使用模式</h2>
+  <div class="card">
+    <pre><code><span class="cm">// 模式一：保护配置数据</span>
+<span class="kw">static DEFINE_RWSEM</span>(config_lock);
+<span class="kw">static struct</span> <span class="ty">config_data</span> *config;
+
+<span class="cm">// 读取配置</span>
+<span class="fn">down_read</span>(&config_lock);
+<span class="kw">struct</span> <span class="ty">config_data</span> *c = config;
+val = c->some_field;
+<span class="fn">up_read</span>(&config_lock);
+
+<span class="cm">// 更新配置</span>
+<span class="fn">down_write</span>(&config_lock);
+config = new_config;
+<span class="fn">up_write</span>(&config_lock);
+
+<span class="cm">// 模式二：嵌套锁（必须固定顺序）</span>
+<span class="fn">down_write</span>(&lock_a);
+<span class="fn">down_write_nested</span>(&lock_b, SINGLE_DEPTH_NESTING);
+<span class="cm">// ...</span>
+<span class="fn">up_write</span>(&lock_b);
+<span class="fn">up_write</span>(&lock_a);</code></pre>
+  </pre>
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">include/linux/rwlock.h</span>         <span class="cmt">rwlock_t API</span>
+├── <span class="file">include/linux/rwlock_types.h</span>   <span class="cmt">rwlock_t 类型</span>
+├── <span class="file">include/linux/rwlock_api_smp.h</span> <span class="cmt">SMP rwlock API</span>
+├── <span class="file">include/linux/rwlock_rt.h</span>      <span class="cmt">RT 内核 rwlock</span>
+├── <span class="file">include/linux/rwsem.h</span>          <span class="cmt">rw_semaphore API</span>
+├── <span class="file">kernel/locking/rwsem.c</span>         <span class="cmt">rw_semaphore 实现</span>
+├── <span class="file">kernel/locking/rwsem-xadd.c</span>    <span class="cmt">CAS 实现</span>
+└── <span class="file">kernel/locking/rwsem-spinning.c</span> <span class="cmt">自旋优化</span>
+  </pre>
+  </div>
+</section>
+
+</div>
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

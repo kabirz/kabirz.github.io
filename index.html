@@ -3,411 +3,288 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Linux 内核深度解析 · 文档导航</title>
+<title>技术文档导航</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
 <style>
-  :root { --bg: #f0f2f5; --card: #ffffff; --border: #d0d7de; --accent: #0969da; --accent2: #1a7f37; --accent3: #8250df; --accent4: #bc4c00; --text: #1f2328; --text-dim: #656d76; --code-bg: #f6f8fa; --highlight: #ddf4ff; }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+  .layout { display: flex; min-height: 100vh; }
+  .sidebar { width: 260px; min-width: 260px; background: var(--card); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; z-index: 50; overflow-y: auto; transition: transform 0.3s; }
+  .main { flex: 1; margin-left: 260px; min-height: 100vh; }
 
-  /* Header */
-  .header { background: linear-gradient(135deg, #f6f8fa 0%, #e8ecf0 50%, #f6f8fa 100%); border-bottom: 1px solid var(--border); padding: 48px 20px 36px; text-align: center; position: relative; overflow: hidden; }
-  .header::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle at 30% 50%, rgba(9,105,218,0.06) 0%, transparent 50%), radial-gradient(circle at 70% 50%, rgba(26,127,55,0.04) 0%, transparent 50%); }
-  .header h1 { font-size: 2.2em; font-weight: 700; background: linear-gradient(135deg, #0969da, #8250df); -webkit-background-clip: text; -webkit-text-fill-color: transparent; position: relative; margin-bottom: 8px; }
-  .header .subtitle { color: var(--text-dim); font-size: 1em; position: relative; }
-  .header .stats { display: flex; justify-content: center; gap: 24px; margin-top: 18px; position: relative; }
-  .header .stat { display: flex; flex-direction: column; align-items: center; }
-  .header .stat-num { font-size: 1.5em; font-weight: 700; color: var(--accent); }
-  .header .stat-label { font-size: 0.78em; color: var(--text-dim); }
+  .sidebar-header { padding: 20px 16px 12px; border-bottom: 1px solid var(--border); }
+  .sidebar-header h1 { font-size: 1.1em; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .sidebar-header .sub { font-size: 0.78em; color: var(--text-dim); }
+  .sidebar-stats { display: flex; gap: 16px; margin-top: 10px; }
+  .sidebar-stats span { font-size: 0.75em; color: var(--text-dim); }
+  .sidebar-stats strong { color: var(--accent); }
 
-  /* Search */
-  .search-bar { max-width: 600px; margin: 0 auto; padding: 20px 20px 0; position: relative; }
-  .search-bar input { width: 100%; padding: 12px 16px 12px 44px; border: 1px solid var(--border); border-radius: 10px; font-size: 0.95em; background: var(--card); color: var(--text); outline: none; transition: border-color 0.2s; }
-  .search-bar input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(9,105,218,0.1); }
-  .search-bar input::placeholder { color: var(--text-dim); }
-  .search-bar .search-icon { position: absolute; left: 34px; top: 32px; color: var(--text-dim); pointer-events: none; }
-  .search-bar .clear-btn { position: absolute; right: 32px; top: 32px; background: none; border: none; color: var(--text-dim); cursor: pointer; display: none; font-size: 1.2em; line-height: 1; }
-  .search-bar .clear-btn.visible { display: block; }
+  .sidebar-search { padding: 12px 16px 8px; position: relative; }
+  .sidebar-search input { width: 100%; padding: 8px 12px 8px 32px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85em; background: var(--code-bg); color: var(--text); outline: none; }
+  .sidebar-search input:focus { border-color: var(--accent); }
+  .sidebar-search svg { position: absolute; left: 26px; top: 50%; transform: translateY(-50%); color: var(--text-dim); pointer-events: none; }
 
-  /* Container */
-  .container { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+  .sidebar-cat { border-bottom: 1px solid var(--border); }
+  .sidebar-cat-header { display: flex; align-items: center; gap: 8px; padding: 10px 16px; cursor: pointer; user-select: none; transition: background 0.15s; }
+  .sidebar-cat-header:hover { background: var(--code-bg); }
+  .sidebar-cat-header .arrow { transition: transform 0.2s; font-size: 0.7em; color: var(--text-dim); }
+  .sidebar-cat-header.collapsed .arrow { transform: rotate(-90deg); }
+  .sidebar-cat-title { font-size: 0.85em; font-weight: 600; color: var(--text); flex: 1; }
+  .sidebar-cat-count { font-size: 0.7em; color: var(--text-dim); background: var(--code-bg); padding: 1px 6px; border-radius: 8px; }
+  .sidebar-cat-icon { width: 20px; height: 20px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 0.7em; flex-shrink: 0; }
 
-  /* Category */
-  .category { margin-bottom: 40px; }
-  .category-header { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
-  .category-icon { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .category-icon.core { background: rgba(207,34,46,0.1); }
-  .category-icon.fs { background: rgba(26,127,55,0.1); }
-  .category-icon.driver { background: rgba(9,105,218,0.1); }
-  .category-icon.net { background: rgba(188,76,0,0.1); }
-  .category-title { font-size: 1.05em; font-weight: 600; color: var(--text); }
-  .category-count { font-size: 0.78em; color: var(--text-dim); background: var(--code-bg); padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); }
+  .sidebar-cat-items { overflow: hidden; transition: max-height 0.3s ease; }
+  .sidebar-cat-items.collapsed { max-height: 0 !important; }
+  .sidebar-item { display: block; padding: 6px 16px 6px 44px; font-size: 0.82em; color: var(--text-dim); text-decoration: none; transition: all 0.15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sidebar-item:hover { background: var(--code-bg); color: var(--text); }
 
-  /* Grid */
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
-  @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } .header h1 { font-size: 1.6em; } .header .stats { gap: 16px; } }
-  @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
+  .sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--border); margin-top: auto; }
+  .theme-btn { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--code-bg); color: var(--text); cursor: pointer; font-size: 0.85em; display: flex; align-items: center; gap: 8px; transition: background 0.2s; }
+  .theme-btn:hover { background: var(--highlight); }
 
-  /* Card */
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; text-decoration: none; color: inherit; display: flex; flex-direction: column; gap: 8px; transition: box-shadow 0.2s, border-color 0.2s; }
-  .card:hover { border-color: var(--accent); box-shadow: 0 4px 16px rgba(9,105,218,0.1); transform: translateY(-1px); }
-  .card-top { display: flex; align-items: center; gap: 12px; }
-  .card-icon { width: 38px; height: 38px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .card-icon.blue { background: rgba(9,105,218,0.1); }
-  .card-icon.green { background: rgba(26,127,55,0.1); }
-  .card-icon.purple { background: rgba(130,80,223,0.1); }
-  .card-icon.orange { background: rgba(188,76,0,0.1); }
-  .card-icon.red { background: rgba(207,34,46,0.1); }
-  .card-title { font-size: 1em; font-weight: 600; color: var(--text); flex: 1; }
-  .card-desc { color: var(--text-dim); font-size: 0.85em; line-height: 1.5; }
-  .card-meta { display: flex; gap: 6px; flex-wrap: wrap; }
-  .tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 0.7em; font-weight: 500; }
+  .main-header { padding: 24px 32px 0; }
+  .main-header h2 { font-size: 1.3em; font-weight: 600; color: var(--text); }
+  .main-header p { font-size: 0.88em; color: var(--text-dim); margin: 4px 0 0; }
+  .main-content { padding: 16px 32px 40px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-decoration: none; color: inherit; display: flex; flex-direction: column; gap: 6px; transition: all 0.2s; }
+  .card:hover { border-color: var(--accent); box-shadow: 0 4px 12px rgba(9,105,218,0.08); transform: translateY(-1px); }
+  .card-top { display: flex; align-items: center; gap: 10px; }
+  .card-icon { width: 32px; height: 32px; border-radius: 6px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .card-title { font-size: 0.95em; font-weight: 600; color: var(--text); }
+  .card-desc { color: var(--text-dim); font-size: 0.8em; line-height: 1.4; }
+  .card-meta { display: flex; gap: 4px; flex-wrap: wrap; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 8px; font-size: 0.68em; font-weight: 500; }
   .tag-blue { background: rgba(9,105,218,0.08); color: #0969da; border: 1px solid rgba(9,105,218,0.2); }
   .tag-green { background: rgba(26,127,55,0.08); color: #1a7f37; border: 1px solid rgba(26,127,55,0.2); }
   .tag-purple { background: rgba(130,80,223,0.08); color: #8250df; border: 1px solid rgba(130,80,223,0.2); }
   .tag-orange { background: rgba(188,76,0,0.08); color: #bc4c00; border: 1px solid rgba(188,76,0,0.2); }
   .tag-red { background: rgba(207,34,46,0.08); color: #cf222e; border: 1px solid rgba(207,34,46,0.2); }
-
-  /* Hidden */
   .card.hidden { display: none; }
-  .category.hidden { display: none; }
   .no-results { display: none; text-align: center; padding: 60px 20px; color: var(--text-dim); }
   .no-results.visible { display: block; }
 
-  /* Footer */
-  footer { text-align: center; padding: 24px 20px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 0.8em; }
-  footer a { color: var(--accent); text-decoration: none; }
-  footer a:hover { text-decoration: underline; }
+  .mobile-toggle { display: none; position: fixed; top: 12px; left: 12px; z-index: 100; width: 36px; height: 36px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); cursor: pointer; font-size: 1.1em; }
+  @media (max-width: 768px) {
+    .sidebar { transform: translateX(-100%); }
+    .sidebar.open { transform: translateX(0); }
+    .main { margin-left: 0; }
+    .mobile-toggle { display: flex; align-items: center; justify-content: center; }
+    .overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.3); z-index: 40; }
+    .overlay.visible { display: block; }
+  }
+  [data-theme="dark"] .sidebar-item { color: #6272a4; }
+  [data-theme="dark"] .sidebar-item:hover { background: #343746; color: #f8f8f2; }
 </style>
 </head>
 <body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="overlay" id="overlay"></div>
 
-<div class="header">
-  <h1>Linux 内核深度解析</h1>
-  <p class="subtitle">从源码到架构 · 基于 Linux 7.0.12</p>
-  <div class="stats">
-    <div class="stat"><span class="stat-num" id="total-count">17</span><span class="stat-label">篇文档</span></div>
-    <div class="stat"><span class="stat-num" id="total-chapters">70+</span><span class="stat-label">个章节</span></div>
-    <div class="stat"><span class="stat-num" id="total-lines">~4000</span><span class="stat-label">行代码</span></div>
-  </div>
+<div class="layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h1>📚 技术文档</h1>
+      <div class="sub">深度解析 · 多领域技术栈</div>
+      <div class="sidebar-stats">
+        <span><strong id="total-count">0</strong> 篇</span>
+        <span><strong id="total-topics">0</strong> 领域</span>
+      </div>
+    </div>
+    <div class="sidebar-search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" id="search" placeholder="搜索文档..." autocomplete="off">
+    </div>
+    <nav id="sidebar-nav"></nav>
+    <div class="sidebar-footer">
+      <button class="theme-btn" id="theme-toggle-btn"><span id="theme-icon">🌙</span> <span id="theme-label">暗色主题</span></button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="main-header">
+      <h2 id="main-title">全部文档</h2>
+      <p id="main-subtitle">点击左侧分类筛选，或搜索查找</p>
+    </div>
+    <div class="main-content">
+      <div class="grid" id="main-grid"></div>
+      <div class="no-results" id="no-results">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;margin-bottom:12px"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <div>没有找到匹配的文档</div>
+      </div>
+    </div>
+  </main>
 </div>
 
-<div class="search-bar">
-  <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-  <input type="text" id="search" placeholder="搜索文档... (标题、描述、标签)" autocomplete="off">
-  <button class="clear-btn" id="clear-btn" onclick="clearSearch()">×</button>
-</div>
-
-<div class="container" id="container"></div>
-
-<div class="no-results" id="no-results">
-  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;margin-bottom:12px"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
-  <div>没有找到匹配的文档</div>
-</div>
-
-<footer>
-  Linux 内核深度解析 · <a href="https://github.com">GitHub</a> · 基于 Linux 7.0.12 源码
-</footer>
+<button class="mobile-toggle" id="mobile-toggle">☰</button>
 
 <script>
 // ============================================================
-// 文档数据 — 新增文档只需在此添加一项
+// 文档数据 — 按领域(top)分组，组内按 category 分类
 // ============================================================
 const DOCS = [
-  // ── 内核核心 ──
-  {
-    title: "MMU 实现详解",
-    file: "linux-mmu.html",
-    desc: "从硬件页表到缺页处理 — 五级页表、缺页流程、TLB 管理、内存保护",
-    icon: "blue",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0969da" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
-    tags: ["内存管理", "x86-64", "MMU"],
-    category: "core",
-    categoryLabel: "内核核心",
-    categoryIcon: "core"
-  },
-  {
-    title: "调度器深度解析",
-    file: "linux-scheduler.html",
-    desc: "CFS/RT/Deadline/sched_ext、核心数据结构、负载均衡、抢占模型",
-    icon: "red",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#cf222e" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
-    tags: ["CPU调度", "CFS", "实时"],
-    category: "core",
-    categoryLabel: "内核核心",
-    categoryIcon: "core"
-  },
-  {
-    title: "内存管理深度解析",
-    file: "linux-mm.html",
-    desc: "页面与 Folio、伙伴系统、SLUB、VMA、页面回收、Swap、OOM",
-    icon: "green",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2"/><line x1="2" y1="7" x2="22" y2="7"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="17" x2="22" y2="17"/></svg>',
-    tags: ["内存管理", "伙伴系统", "SLUB"],
-    category: "core",
-    categoryLabel: "内核核心",
-    categoryIcon: "core"
-  },
-  {
-    title: "cgroup 深度解析",
-    file: "linux-cgroup.html",
-    desc: "v1/v2 架构、层级结构、核心数据结构、控制器接口、BPF 集成",
-    icon: "purple",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8250df" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
-    tags: ["资源控制", "容器", "cgroup"],
-    category: "core",
-    categoryLabel: "内核核心",
-    categoryIcon: "core"
-  },
-
-  // ── 文件系统 ──
-  {
-    title: "procfs 深度解析",
-    file: "linux-procfs.html",
-    desc: "伪文件系统 — 架构设计、seq_file、/proc/[pid]、/proc/sys、自定义条目",
-    icon: "green",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
-    tags: ["文件系统", "proc", "伪文件系统"],
-    category: "fs",
-    categoryLabel: "文件系统",
-    categoryIcon: "fs"
-  },
-
-  // ── 设备与驱动 ──
-  {
-    title: "设备模型深度解析",
-    file: "linux-devmodel.html",
-    desc: "kobject、总线/设备/驱动三要素、Probe 流程、设备类、sysfs、PM",
-    icon: "blue",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0969da" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="15" x2="23" y2="15"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="15" x2="4" y2="15"/></svg>',
-    tags: ["设备模型", "驱动", "sysfs"],
-    category: "driver",
-    categoryLabel: "设备与驱动",
-    categoryIcon: "driver"
-  },
-  {
-    title: "pinctrl 子系统深度解析",
-    file: "linux-pinctrl.html",
-    desc: "引脚复用与配置 — 架构、核心数据结构、设备树集成、GPIO 集成",
-    icon: "orange",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#bc4c00" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="8" cy="8" r="1"/><circle cx="16" cy="8" r="1"/><circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/></svg>',
-    tags: ["引脚复用", "硬件", "pinctrl"],
-    category: "driver",
-    categoryLabel: "设备与驱动",
-    categoryIcon: "driver"
-  },
-  {
-    title: "GPIO 驱动深度解析",
-    file: "linux-gpio.html",
-    desc: "通用输入输出 — gpio_chip、gpiolib、消费者 API、GPIO 中断、设备树、sysfs/chardev",
-    icon: "green",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/><line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg>',
-    tags: ["GPIO", "gpiolib", "驱动"],
-    category: "driver",
-    categoryLabel: "设备与驱动",
-    categoryIcon: "driver"
-  },
-  {
-    title: "I2C 驱动深度解析",
-    file: "linux-i2c.html",
-    desc: "I2C 总线 — 适配器/从设备/驱动、i2c_algorithm、SMBus、设备树、编写驱动",
-    icon: "orange",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#bc4c00" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>',
-    tags: ["I2C", "SMBus", "驱动"],
-    category: "driver",
-    categoryLabel: "设备与驱动",
-    categoryIcon: "driver"
-  },
-  {
-    title: "SPI 驱动深度解析",
-    file: "linux-spi.html",
-    desc: "SPI 总线 — spi_device/transfer/message、SPI 模式、SPI-MEM、设备树、编写驱动",
-    icon: "purple",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8250df" stroke-width="2"><path d="M12 2v20M2 12h20M6 6l12 12M18 6L6 18"/></svg>',
-    tags: ["SPI", "spi-mem", "驱动"],
-    category: "driver",
-    categoryLabel: "设备与驱动",
-    categoryIcon: "driver"
-  },
-  {
-    title: "串口驱动深度解析",
-    file: "linux-serial.html",
-    desc: "UART/TTY — uart_ops、控制台、earlycon、设备树、编写驱动",
-    icon: "red",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#cf222e" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 7h4v10H7z"/><line x1="14" y1="7" x2="14" y2="17"/><line x1="17" y1="7" x2="17" y2="17"/><line x1="14" y1="12" x2="17" y2="12"/></svg>',
-    tags: ["串口", "UART", "TTY"],
-    category: "driver",
-    categoryLabel: "设备与驱动",
-    categoryIcon: "driver"
-  },
-  {
-    title: "MMC 驱动深度解析",
-    file: "linux-mmc.html",
-    desc: "SD/eMMC/SDIO — mmc_host、host_ops、卡片初始化、UHS-II、设备树、编写驱动",
-    icon: "green",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 6V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/><line x1="6" y1="12" x2="18" y2="12"/></svg>',
-    tags: ["MMC", "SD", "eMMC"],
-    category: "driver",
-    categoryLabel: "设备与驱动",
-    categoryIcon: "driver"
-  },
-  {
-    title: "LED 驱动深度解析",
-    file: "linux-led.html",
-    desc: "LED 子系统 — led_classdev、触发器框架、sysfs、设备树、编写驱动",
-    icon: "orange",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#bc4c00" stroke-width="2"><circle cx="12" cy="8" r="5"/><path d="M12 13v8"/><path d="M9 21h6"/><line x1="8" y1="17" x2="8" y2="21"/><line x1="16" y1="17" x2="16" y2="21"/></svg>',
-    tags: ["LED", "触发器", "sysfs"],
-    category: "driver",
-    categoryLabel: "设备与驱动",
-    categoryIcon: "driver"
-  },
-  {
-    title: "PWM 驱动深度解析",
-    file: "linux-pwm.html",
-    desc: "脉宽调制 — pwm_chip/pwm_device、pwm_ops、消费者 API、设备树、编写驱动",
-    icon: "purple",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8250df" stroke-width="2"><polyline points="2 12 5 12 8 6 11 18 14 6 17 18 20 12 22 12"/></svg>',
-    tags: ["PWM", "占空比", "驱动"],
-    category: "driver",
-    categoryLabel: "设备与驱动",
-    categoryIcon: "driver"
-  },
-
-  // ── 网络 ──
-  {
-    title: "网络子系统深度解析",
-    file: "linux-network.html",
-    desc: "协议栈架构、sk_buff、net_device、网络驱动、TCP/IP、XDP/BPF、NAPI",
-    icon: "orange",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#bc4c00" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
-    tags: ["网络", "TCP/IP", "XDP"],
-    category: "net",
-    categoryLabel: "网络",
-    categoryIcon: "net"
-  },
-
-  // ── 文件系统 ──
-  {
-    title: "VFS 子系统深度解析",
-    file: "linux-vfs.html",
-    desc: "虚拟文件系统 — 四大对象、DCache、路径查找、读写流程、挂载、sysfs/procfs",
-    icon: "purple",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8250df" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
-    tags: ["VFS", "文件系统", "dcache"],
-    category: "fs",
-    categoryLabel: "文件系统",
-    categoryIcon: "fs"
-  },
-
-  // ── 硬件描述 ──
-  {
-    title: "设备树深度解析",
-    file: "linux-devtree.html",
-    desc: "Device Tree — DTB 格式、语法基础、内核 API、平台设备、绑定规范、DT Overlay",
-    icon: "green",
-    iconSvg: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1a7f37" stroke-width="2"><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="14"/><circle cx="6" cy="19" r="3"/><circle cx="18" cy="19" r="3"/><line x1="12" y1="14" x2="6" y2="16"/><line x1="12" y1="14" x2="18" y2="16"/></svg>',
-    tags: ["设备树", "DTB", "ARM"],
-    category: "other",
-    categoryLabel: "硬件描述与系统",
-    categoryIcon: "driver"
-  }
+  // ── Linux 内核 ──
+  { t:"Linux 内核 MMU 实现详解", f:"linux-mmu.html", d:"五级页表、缺页处理、TLB 管理", i:"blue", tags:["内存管理","MMU","x86-64"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux 内核内存管理", f:"linux-mm.html", d:"伙伴系统、SLUB、VMA、回收、Swap、OOM", i:"green", tags:["内存管理","SLUB","伙伴系统"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux 调度器", f:"linux-scheduler.html", d:"CFS/EEVDF、RT、Deadline、sched_ext", i:"red", tags:["调度","CFS","实时"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux 原子操作", f:"linux-atomic.html", d:"Atomic / Refcount / Spinlock / Memory Barrier", i:"red", tags:["原子操作","同步","屏障"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux 自旋锁", f:"linux-spinlock.html", d:"Spinlock / Rwlock / Seqlock — SMP 低延迟同步", i:"red", tags:["自旋锁","同步","Lockdep"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux CAS 与自旋锁区别", f:"linux-cas-vs-spinlock.html", d:"compare-and-exchange vs spinlock", i:"red", tags:["CAS","原子操作","对比"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux 互斥锁", f:"linux-mutex.html", d:"Mutex — 可睡眠排他锁、优先级继承", i:"blue", tags:["互斥锁","mutex"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux 信号量", f:"linux-semaphore.html", d:"Semaphore / Rwsem — 可计数睡眠锁", i:"blue", tags:["信号量","rwsem"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux 读写锁", f:"linux-rwlock.html", d:"Rwlock / Rwsem — 读多写少同步", i:"purple", tags:["读写锁","rwlock"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux RCU", f:"linux-rcu.html", d:"Tree RCU、SRCU、宽限期、回调", i:"red", tags:["RCU","无锁","宽限期"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux cgroup", f:"linux-cgroup.html", d:"v1/v2 架构、控制器接口、BPF 集成", i:"purple", tags:["cgroup","容器","资源控制"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+  { t:"Linux procfs", f:"linux-procfs.html", d:"伪文件系统 — seq_file、/proc/[pid]", i:"green", tags:["procfs","文件系统"], top:"linux", topLabel:"Linux 内核", cat:"fs", catLabel:"文件系统" },
+  { t:"Linux VFS", f:"linux-vfs.html", d:"四大对象、DCache、路径查找、读写", i:"purple", tags:["VFS","文件系统","dcache"], top:"linux", topLabel:"Linux 内核", cat:"fs", catLabel:"文件系统" },
+  { t:"Linux 设备模型", f:"linux-devmodel.html", d:"bus/device/driver、Probe、sysfs", i:"blue", tags:["设备模型","驱动","sysfs"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux 设备树", f:"linux-devtree.html", d:"DTB 格式、语法、API、Overlay", i:"green", tags:["设备树","DTB","ARM"], top:"linux", topLabel:"Linux 内核", cat:"hw", catLabel:"硬件与平台" },
+  { t:"Linux ARM 内存管理", f:"linux-arm-mm.html", d:"页表、虚拟地址、MTE/PAN/GCS", i:"blue", tags:["ARM64","页表","MMU"], top:"linux", topLabel:"Linux 内核", cat:"hw", catLabel:"硬件与平台" },
+  { t:"Linux pinctrl", f:"linux-pinctrl.html", d:"引脚复用、配置、设备树集成", i:"orange", tags:["pinctrl","引脚复用"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux GPIO", f:"linux-gpio.html", d:"gpio_chip、gpiolib、消费者 API", i:"green", tags:["GPIO","gpiolib"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux I2C", f:"linux-i2c.html", d:"i2c_adapter、SMBus、设备树", i:"orange", tags:["I2C","SMBus"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux SPI", f:"linux-spi.html", d:"spi_device、spi_transfer、SPI-MEM", i:"purple", tags:["SPI","spi-mem"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux 串口", f:"linux-serial.html", d:"uart_ops、控制台、earlycon", i:"red", tags:["串口","UART","TTY"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux MMC", f:"linux-mmc.html", d:"SD/eMMC/SDIO、UHS-II", i:"green", tags:["MMC","SD","eMMC"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux LED", f:"linux-led.html", d:"led_classdev、触发器、sysfs", i:"orange", tags:["LED","触发器"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux PWM", f:"linux-pwm.html", d:"pwm_chip、pwm_ops、消费者 API", i:"purple", tags:["PWM","占空比"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux 时钟", f:"linux-clk.html", d:"clk_ops、PLL、门控、分频", i:"green", tags:["时钟","CCF","PLL"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux DMA", f:"linux-dma.html", d:"一致性/流式 DMA、SWIOTLB、IOMMU", i:"blue", tags:["DMA","IOMMU"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
+  { t:"Linux 网络", f:"linux-network.html", d:"sk_buff、TCP/IP、XDP、NAPI", i:"orange", tags:["网络","TCP/IP","XDP"], top:"linux", topLabel:"Linux 内核", cat:"net", catLabel:"网络" },
 ];
 
-// ============================================================
-// 渲染
-// ============================================================
-function render() {
-  const container = document.getElementById('container');
-  const categories = {};
+const ICON_MAP = {
+  linux: { emoji: "🐧", color: "#0969da" },
+  zephyr: { emoji: "⚡", color: "#1769aa" },
+  docker: { emoji: "🐳", color: "#2496ed" },
+  ai: { emoji: "🤖", color: "#ff6b6b" },
+  embedded: { emoji: "🔧", color: "#bc4c00" },
+  other: { emoji: "📦", color: "#656d76" }
+};
 
-  DOCS.forEach(doc => {
-    if (!categories[doc.category]) {
-      categories[doc.category] = { label: doc.categoryLabel, icon: doc.categoryIcon, items: [] };
-    }
-    categories[doc.category].items.push(doc);
+// ============================================================
+// 渲染侧边栏
+// ============================================================
+function renderSidebar() {
+  const nav = document.getElementById('sidebar-nav');
+  const tops = {};
+  DOCS.forEach(d => {
+    if (!tops[d.top]) tops[d.top] = { label: d.topLabel, items: [] };
+    tops[d.top].items.push(d);
   });
 
   let html = '';
-  for (const [key, cat] of Object.entries(categories)) {
-    html += `<div class="category" data-category="${key}">
-      <div class="category-header">
-        <div class="category-icon ${cat.icon}">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-        </div>
-        <span class="category-title">${cat.label}</span>
-        <span class="category-count">${cat.items.length}</span>
+  for (const [key, top] of Object.entries(tops)) {
+    const info = ICON_MAP[key] || ICON_MAP.other;
+    html += `<div class="sidebar-cat" data-top="${key}">
+      <div class="sidebar-cat-header" onclick="toggleCat(this)">
+        <div class="sidebar-cat-icon" style="background:${info.color}20;color:${info.color}">${info.emoji}</div>
+        <span class="sidebar-cat-title">${top.label}</span>
+        <span class="sidebar-cat-count">${top.items.length}</span>
+        <span class="arrow">▾</span>
       </div>
-      <div class="grid">`;
-
-    cat.items.forEach(doc => {
-      const tagsHtml = doc.tags.map(t => `<span class="tag tag-${doc.icon}">${t}</span>`).join('');
-      html += `<a href="${doc.file}" class="card" data-search="${(doc.title + ' ' + doc.desc + ' ' + doc.tags.join(' ')).toLowerCase()}">
-        <div class="card-top">
-          <div class="card-icon ${doc.icon}">${doc.iconSvg}</div>
-          <div class="card-title">Linux 内核 ${doc.title}</div>
-        </div>
-        <div class="card-desc">${doc.desc}</div>
-        <div class="card-meta">${tagsHtml}<span class="tag tag-purple">Linux 7.0.12</span></div>
-      </a>`;
+      <div class="sidebar-cat-items">`;
+    top.items.forEach(d => {
+      html += `<a href="${d.f}" class="sidebar-item" data-search="${(d.t+' '+d.d+' '+d.tags.join(' ')).toLowerCase()}">${d.t}</a>`;
     });
-
     html += `</div></div>`;
   }
-
-  container.innerHTML = html;
+  nav.innerHTML = html;
 }
 
 // ============================================================
-// 搜索
+// 渲染主内容区
 // ============================================================
+function renderMain(docs) {
+  const grid = document.getElementById('main-grid');
+  const cats = {};
+  (docs || DOCS).forEach(d => {
+    if (!cats[d.cat]) cats[d.cat] = { label: d.catLabel, items: [] };
+    cats[d.cat].items.push(d);
+  });
+
+  let html = '';
+  for (const [key, cat] of Object.entries(cats)) {
+    html += `<div class="category" data-cat="${key}">
+      <div style="display:flex;align-items:center;gap:8px;margin:20px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border);">
+        <span style="font-weight:600;font-size:0.95em;">${cat.label}</span>
+        <span style="font-size:0.75em;color:var(--text-dim);background:var(--code-bg);padding:1px 6px;border-radius:8px;">${cat.items.length}</span>
+      </div>
+      <div class="grid">`;
+    cat.items.forEach(d => {
+      const info = ICON_MAP[d.top] || ICON_MAP.other;
+      const tagsHtml = d.tags.map(t => `<span class="tag tag-${d.i}">${t}</span>`).join('');
+      html += `<a href="${d.f}" class="card" data-search="${(d.t+' '+d.d+' '+d.tags.join(' ')).toLowerCase()}">
+        <div class="card-top">
+          <div class="card-icon" style="background:${info.color}20;color:${info.color}">${info.emoji}</div>
+          <div class="card-title">${d.t}</div>
+        </div>
+        <div class="card-desc">${d.d}</div>
+        <div class="card-meta">${tagsHtml}</div>
+      </a>`;
+    });
+    html += `</div></div>`;
+  }
+  grid.innerHTML = html;
+}
+
+// ============================================================
+// 交互
+// ============================================================
+function toggleCat(h) {
+  const items = h.nextElementSibling;
+  h.classList.toggle('collapsed');
+  if (items.classList.contains('collapsed')) { items.classList.remove('collapsed'); items.style.maxHeight = items.scrollHeight+'px'; }
+  else { items.style.maxHeight = items.scrollHeight+'px'; requestAnimationFrame(()=>items.classList.add('collapsed')); }
+}
+
 const searchInput = document.getElementById('search');
-const clearBtn = document.getElementById('clear-btn');
-const noResults = document.getElementById('no-results');
+let currentTop = null;
 
-searchInput.addEventListener('input', function() {
-  const q = this.value.toLowerCase().trim();
-  clearBtn.classList.toggle('visible', q.length > 0);
+searchInput.addEventListener('input', function() { filterDocs(this.value.toLowerCase().trim(), currentTop); });
 
-  const cards = document.querySelectorAll('.card');
-  const categories = document.querySelectorAll('.category');
-  let totalVisible = 0;
-
-  cards.forEach(card => {
-    const match = !q || card.dataset.search.includes(q);
-    card.classList.toggle('hidden', !match);
-    if (match) totalVisible++;
+function filterDocs(q, top) {
+  let total = 0;
+  document.querySelectorAll('.card').forEach(c => {
+    const mQ = !q || c.dataset.search.includes(q);
+    const mT = !top || c.closest('.category')?.dataset.top === top;
+    c.classList.toggle('hidden', !(mQ && mT));
+    if (mQ && mT) total++;
   });
-
-  categories.forEach(cat => {
-    const visibleCards = cat.querySelectorAll('.card:not(.hidden)');
-    cat.classList.toggle('hidden', visibleCards.length === 0);
+  document.querySelectorAll('.category').forEach(c => {
+    c.style.display = c.querySelectorAll('.card:not(.hidden)').length ? '' : 'none';
   });
-
-  noResults.classList.toggle('visible', totalVisible === 0);
-});
-
-function clearSearch() {
-  searchInput.value = '';
-  searchInput.dispatchEvent(new Event('input'));
-  searchInput.focus();
+  document.getElementById('no-results').classList.toggle('visible', total === 0);
+  document.getElementById('total-count').textContent = total;
 }
 
-// 快捷键：按 / 聚焦搜索
-document.addEventListener('keydown', e => {
-  if (e.key === '/' && document.activeElement !== searchInput) {
-    e.preventDefault();
-    searchInput.focus();
-  }
-  if (e.key === 'Escape' && document.activeElement === searchInput) {
-    clearSearch();
-    searchInput.blur();
+document.addEventListener('click', e => {
+  // 侧边栏分类标题：按领域过滤
+  const ch = e.target.closest('.sidebar-cat-header');
+  if (ch && !e.target.closest('.sidebar-item')) {
+    const top = ch.closest('.sidebar-cat').dataset.top;
+    currentTop = currentTop === top ? null : top;
+    document.querySelectorAll('.sidebar-cat-header').forEach(h => h.style.background = '');
+    if (currentTop) ch.style.background = 'var(--highlight)';
+    document.getElementById('main-title').textContent = currentTop ? (ICON_MAP[currentTop]?.emoji||'') + ' ' + DOCS.find(d=>d.top===currentTop)?.topLabel : '全部文档';
+    filterDocs(searchInput.value.toLowerCase().trim(), currentTop);
   }
 });
 
-// 初始化
-render();
-</script>
+document.getElementById('mobile-toggle').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('overlay').classList.toggle('visible');
+});
+document.getElementById('overlay').addEventListener('click', () => {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('overlay').classList.remove('visible');
+});
 
+document.getElementById('total-count').textContent = DOCS.length;
+document.getElementById('total-topics').textContent = [...new Set(DOCS.map(d=>d.top))].length;
+renderSidebar();
+renderMain();
+</script>
+<script src="common.js"></script>
 </body>
 </html>

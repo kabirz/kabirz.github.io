@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核信号量深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核信号量深度解析</h1>
+  <p class="subtitle">Semaphore / Rwsem — 可计数的睡眠锁</p>
+  <span class="version">Linux 7.0.12</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">锁类型</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#rwsem">读写信号量</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>信号量（Semaphore）是一种<strong>可计数的睡眠锁</strong>，允许多个持有者（计数信号量）或作为排他锁使用。在 Linux 内核中，基本信号量已较少使用，但其思想体现在 <code>rwsem</code>（读写信号量）和 <code>percpu-rwsem</code> 中。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>可计数</strong>：计数器 > 1 允许多个持有者</li>
+        <li><strong>可睡眠</strong>：等待时不消耗 CPU</li>
+        <li><strong>无 owner</strong>：不记录持有者（与 mutex 不同）</li>
+        <li><strong>可从中断调用</strong>：<code>down_trylock()</code></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">vs mutex</div>
+      <table>
+        <tr><th>特性</th><th>semaphore</th><th>mutex</th></tr>
+        <tr><td>计数</td><td>支持</td><td>仅排他（1）</td></tr>
+        <tr><td>owner</td><td>不跟踪</td><td>跟踪</td></tr>
+        <tr><td>优先级继承</td><td>不支持</td><td>支持</td></tr>
+        <tr><td>推荐</td><td>很少使用</td><td>首选</td></tr>
+      </table>
+    </div>
+  </pre>
+  </div>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 锁类型</h2>
+  <table>
+    <tr><th>类型</th><th>说明</th></tr>
+    <tr><td><code>struct semaphore</code></td><td>可计数信号量</td></tr>
+    <tr><td><code>struct rw_semaphore</code></td><td>读写信号量（推荐）</td></tr>
+    <tr><td><code>struct percpu_rw_semaphore</code></td><td>per-CPU 读写信号量</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 核心 API</h2>
+  <div class="card">
+    <pre><code><span class="cm">// 初始化</span>
+<span class="fn">sema_init</span>(&sem, <span class="num">1</span>);     <span class="cm">// 计数=1（排他）</span>
+<span class="fn">sema_init</span>(&sem, <span class="num">3</span>);     <span class="cm">// 计数=3（3个持有者）</span>
+
+<span class="cm">// 获取/释放</span>
+<span class="fn">down</span>(&sem);              <span class="cm">// 获取（计数-1）</span>
+<span class="fn">up</span>(&sem);                <span class="cm">// 释放（计数+1）</span>
+
+<span class="cm">// 可中断版本</span>
+<span class="ty">int</span> ret = <span class="fn">down_interruptible</span>(&sem);
+
+<span class="cm">// 非阻塞版本</span>
+<span class="ty">int</span> ret = <span class="fn">down_trylock</span>(&sem);  <span class="cm">// 可在中断中使用</span>
+
+<span class="cm">// 超时版本</span>
+<span class="ty">int</span> ret = <span class="fn">down_timeout</span>(&sem, <span class="num">100</span>);  <span class="cm">// 100 jiffies</span></code></pre>
+  </div>
+  <div class="callout warn">
+    <strong>注意</strong>：新代码应优先使用 <code>mutex</code>（排他）或 <code>rw_semaphore</code>（读写）。基本 <code>semaphore</code> 已较少直接使用，主要通过 rwsem 间接使用。
+  </pre>
+  </div>
+</section>
+
+<section id="rwsem" class="toc-link">
+  <h2><span class="num">04</span> 读写信号量</h2>
+  <p><code>rw_semaphore</code> 是最重要的信号量变体，允许多个读者同时持有，写者独占。</p>
+  <div class="card">
+    <pre><code><span class="cm">// 初始化</span>
+<span class="kw">static DEFINE_RWSEM</span>(my_rwsem);
+
+<span class="cm">// 读者（可睡眠）</span>
+<span class="fn">down_read</span>(&my_rwsem);
+<span class="cm">// ... 只读操作 ...</span>
+<span class="fn">up_read</span>(&my_rwsem);
+
+<span class="cm">// 写者（可睡眠）</span>
+<span class="fn">down_write</span>(&my_rwsem);
+<span class="cm">// ... 写操作 ...</span>
+<span class="fn">up_write</span>(&my_rwsem);
+
+<span class="cm">// 尝试获取</span>
+<span class="ty">int</span> ret = <span class="fn">down_read_trylock</span>(&my_rwsem);
+<span class="ty">int</span> ret = <span class="fn">down_write_trylock</span>(&my_rwsem);</code></pre>
+  </div>
+  <h3>rwsem vs spinlock_t</h3>
+  <table>
+    <tr><th>特性</th><th>rw_semaphore</th><th>rwlock_t</th></tr>
+    <tr><td>等待</td><td>可睡眠</td><td>忙等</td></tr>
+    <tr><td>上下文</td><td>进程上下文</td><td>可中断上下文</td></tr>
+    <tr><td>临界区</td><td>可长</td><td>必须短</td></tr>
+    <tr><td>写者优先</td><td>是</td><td>视实现</td></tr>
+    <tr><td>适用</td><td>mmap_lock 等</td><td>短时读写保护</td></tr>
+  </table>
+</section>
+
+<section id="patterns" class="toc-link">
+  <h2><span class="num">05</span> 使用模式</h2>
+  <div class="card">
+    <pre><code><span class="cm">// rw_semaphore：mmap_lock 典型用法</span>
+<span class="fn">down_read</span>(&mm->mmap_lock);     <span class="cm">// 遍历 VMA</span>
+<span class="fn">for_each_vma</span>(vma) {
+    <span class="cm">// 只读遍历 VMA 链表</span>
+}
+<span class="fn">up_read</span>(&mm->mmap_lock);
+
+<span class="fn">down_write</span>(&mm->mmap_lock);    <span class="cm">// 修改 VMA</span>
+<span class="fn">do_mmap</span>(...);                  <span class="cm">// 创建新 VMA</span>
+<span class="fn">up_write</span>(&mm->mmap_lock);</code></pre>
+  </pre>
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">include/linux/semaphore.h</span>      <span class="cmt">semaphore API</span>
+├── <span class="file">include/linux/rwsem.h</span>          <span class="cmt">rw_semaphore API</span>
+├── <span class="file">include/linux/percpu-rwsem.h</span>   <span class="cmt">per-CPU rwsem</span>
+├── <span class="file">lib/semaphore.c</span>                <span class="cmt">semaphore 实现</span>
+├── <span class="file">kernel/locking/rwsem.c</span>         <span class="cmt">rw_semaphore 实现</span>
+└── <span class="file">kernel/locking/percpu-rwsem.c</span>  <span class="cmt">per-CPU rwsem 实现</span>
+  </pre>
+  </div>
+</section>
+
+</div>
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

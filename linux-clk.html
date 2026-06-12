@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核时钟子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+
+<div class="hero">
+  <h1>Linux 内核时钟子系统深度解析</h1>
+  <p class="subtitle">Common Clock Framework — 时钟树、速率管理、门控与分频</p>
+  <span class="version">Linux 7.0.12 · drivers/clk/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#ops">clk_ops</a></li>
+    <li><a href="#types">时钟类型</a></li>
+    <li><a href="#dt">设备树</a></li>
+    <li><a href="#driver">编写驱动</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- 1. Overview -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 时钟子系统（Common Clock Framework, CCF）提供了<strong>统一的时钟管理框架</strong>，负责 SoC 内部时钟树的创建、速率设置、门控开关、父子关系管理。几乎所有 SoC 外设都依赖时钟子系统来获取工作时钟。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心职责</div>
+      <ul>
+        <li><strong>时钟树管理</strong>：PLL → 分频器 → 门控 → 外设</li>
+        <li><strong>速率设置</strong>：设置/查询/舍入时钟频率</li>
+        <li><strong>使能/禁用</strong>：引用计数式门控</li>
+        <li><strong>父子关系</strong>：速率传播与父时钟切换</li>
+        <li><strong>通知机制</strong>：速率变更通知</li>
+        <li><strong>调试接口</strong>：debugfs 查看时钟树</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">时钟类型</div>
+      <table>
+        <tr><th>类型</th><th>说明</th></tr>
+        <tr><td>固定速率</td><td>不可更改的参考时钟</td></tr>
+        <tr><td>门控</td><td>可开关的时钟</td></tr>
+        <tr><td>分频器</td><td>父时钟 / 固定因子</td></tr>
+        <tr><td>倍频器</td><td>父时钟 × 固定因子</td></tr>
+        <tr><td>多路选择</td><td>从多个父时钟中选择</td></tr>
+        <tr><td>复合</td><td>组合多种功能</td></tr>
+        <tr><td>PLL</td><td>锁相环（可变倍频）</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 2. Architecture -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+
+  <div class="diagram">
+    <div class="flow-box danger" style="min-width:200px">设备驱动<br><small>clk_get / clk_set_rate</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box" style="min-width:200px">时钟核心<br><small>clk.c (5598 行)</small></div>
+    <div class="flow-down">↓ clk_ops 回调</div>
+    <div class="flow-box active" style="min-width:200px">时钟控制器驱动<br><small>PLL / 分频器 / 门控</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box warn" style="min-width:200px">硬件时钟控制器<br><small>寄存器操作</small></div>
+  </div>
+
+  <h3>时钟树层次</h3>
+  <div class="diagram" style="text-align:left;font-size:0.88em;">
+<pre style="background:none;border:none;padding:0;margin:0;line-height:2;">
+<span class="fn">OSC</span>（24 MHz 晶振）
+  ├──→ <span class="ty">PLL</span>（倍频到 1.2 GHz）
+  │      ├──→ <span class="fn">CPU_CLK</span>（CPU 核心时钟）
+  │      │      ├──→ <span class="fn">cpu_div</span>（÷2 → 600 MHz）
+  │      │      └──→ <span class="fn">cpu_gate</span>（门控）
+  │      ├──→ <span class="fn">BUS_CLK</span>（总线时钟）
+  │      └──→ <span class="fn">MEM_CLK</span>（内存控制器时钟）
+  ├──→ <span class="ty">PLL2</span>（倍频到 500 MHz）
+  │      └──→ <span class="fn">PERIPH_CLK</span>
+  │             ├──→ <span class="fn">uart_clk</span>
+  │             ├──→ <span class="fn">spi_clk</span>
+  │             └──→ <span class="fn">i2c_clk</span>
+  └──→ <span class="fn">RTC_CLK</span>（32.768 KHz）
+</pre>
+  </div>
+
+  <h3>三层模型</h3>
+  <table>
+    <tr><th>层次</th><th>核心结构</th><th>说明</th></tr>
+    <tr><td>消费者</td><td><code>clk_get()</code> / <code>clk_set_rate()</code></td><td>设备驱动使用时钟</td></tr>
+    <tr><td>核心层</td><td><code>clk_core</code> + <code>clk.c</code></td><td>时钟树管理、引用计数、通知</td></tr>
+    <tr><td>提供者</td><td><code>clk_ops</code> + <code>clk_hw</code></td><td>硬件操作回调</td></tr>
+  </table>
+
+  <h3>prepare/enable 分离</h3>
+  <div class="callout tip">
+    <strong>两阶段使能</strong>：Linux 将时钟使能分为 <code>clk_prepare()</code>（可睡眠，如使能稳压器）和 <code>clk_enable()</code>（原子上下文，如写寄存器）。这使得中断上下文中的时钟使能可以快速完成。使用 <code>clk_prepare_enable()</code> 组合两者。
+  </div>
+</section>
+
+<!-- 3. Data Structures -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <h3>struct clk_core（内部核心）</h3>
+  <div class="card">
+    <p class="ref">drivers/clk/clk.c:66-104</p>
+    <pre><code><span class="kw">struct</span> <span class="ty">clk_core</span> {
+    <span class="kw">const char</span> *name;                <span class="cm">// 时钟名</span>
+    <span class="kw">const struct</span> <span class="ty">clk_ops</span> *ops;       <span class="cm">// 操作回调</span>
+    <span class="kw">struct</span> <span class="ty">clk_hw</span> *hw;                <span class="cm">// 硬件句柄</span>
+    <span class="kw">struct</span> <span class="ty">clk_core</span> *parent;          <span class="cm">// 父时钟</span>
+    <span class="kw">struct</span> <span class="ty">clk_parent_map</span> *parents;  <span class="cm">// 可选父时钟列表</span>
+    <span class="ty">u8</span> num_parents;                    <span class="cm">// 父时钟数量</span>
+    <span class="ty">unsigned long</span> rate;               <span class="cm">// 当前频率</span>
+    <span class="ty">unsigned long</span> req_rate;           <span class="cm">// 请求的频率</span>
+    <span class="ty">unsigned long</span> new_rate;           <span class="cm">// 新频率（待应用）</span>
+    <span class="ty">unsigned int</span> enable_count;        <span class="cm">// 使能引用计数</span>
+    <span class="ty">unsigned int</span> prepare_count;       <span class="cm">// 准备引用计数</span>
+    <span class="ty">unsigned long</span> min_rate, max_rate; <span class="cm">// 频率范围</span>
+    <span class="ty">unsigned long</span> accuracy;           <span class="cm">// 精度（ppb）</span>
+    <span class="ty">int</span> phase;                       <span class="cm">// 相位（度）</span>
+    <span class="kw">struct</span> <span class="ty">clk_duty</span> duty;            <span class="cm">// 占空比</span>
+    <span class="kw">struct</span> <span class="ty">hlist_head</span> children;      <span class="cm">// 子时钟链表</span>
+    <span class="kw">struct</span> <span class="ty">device_node</span> *of_node;     <span class="cm">// 设备树节点</span>
+    <span class="ty">unsigned long</span> flags;             <span class="cm">// CLK_SET_RATE_GATE 等</span>
+    <span class="kw">struct</span> <span class="ty">kref</span> ref;                 <span class="cm">// 引用计数</span>
+};</code></pre>
+  </div>
+
+  <h3>struct clk_ops（操作回调）</h3>
+  <div class="card">
+    <p class="ref">include/linux/clk-provider.h:234-250</p>
+    <pre><code><span class="kw">struct</span> <span class="ty">clk_ops</span> {
+    <span class="cm">// 使能控制</span>
+    <span class="ty">int</span> (*prepare)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw);      <span class="cm">// 可睡眠</span>
+    <span class="ty">void</span> (*unprepare)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw);
+    <span class="ty">int</span> (*enable)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw);      <span class="cm">// 原子上下文</span>
+    <span class="ty">void</span> (*disable)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw);
+
+    <span class="cm">// 频率管理</span>
+    <span class="ty">unsigned long</span> (*recalc_rate)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw, <span class="ty">unsigned long</span> parent_rate);
+    <span class="ty">long</span> (*round_rate)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw, <span class="ty">unsigned long</span> rate, <span class="ty">unsigned long</span> *parent_rate);
+    <span class="ty">int</span> (*determine_rate)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw, <span class="kw">struct</span> <span class="ty">clk_rate_request</span> *req);
+    <span class="ty">int</span> (*set_rate)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw, <span class="ty">unsigned long</span> rate, <span class="ty">unsigned long</span> parent_rate);
+
+    <span class="cm">// 父时钟管理</span>
+    <span class="ty">int</span> (*set_parent)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw, <span class="ty">u8</span> index);
+    <span class="ty">u8</span> (*get_parent)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw);
+
+    <span class="cm">// 相位/占空比</span>
+    <span class="ty">int</span> (*get_phase)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw);
+    <span class="ty">int</span> (*set_phase)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw, <span class="ty">int</span> degrees);
+    <span class="ty">int</span> (*get_duty_cycle)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw, <span class="kw">struct</span> <span class="ty">clk_duty</span> *duty);
+    <span class="ty">int</span> (*set_duty_cycle)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw, <span class="ty">unsigned int</span> num, <span class="ty">unsigned int</span> den);
+};</code></pre>
+  </div>
+
+  <h3>struct clk_hw（硬件句柄）</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 提供者向核心层暴露的硬件抽象</span>
+<span class="kw">struct</span> <span class="ty">clk_hw</span> {
+    <span class="kw">struct</span> <span class="ty">clk_core</span> *core;
+    <span class="kw">struct</span> <span class="ty">clk_hw</span> *parent;
+    <span class="kw">struct</span> <span class="ty">clk_hw</span> **parents;
+    <span class="kw">struct</span> <span class="ty">clk_parent_map</span> *parent_map;
+    <span class="ty">unsigned int</span> num_parents;
+    <span class="kw">const char</span> *name;
+    <span class="kw">const char</span> *clk_name;
+    <span class="kw">struct</span> <span class="ty">device</span> *dev;
+    <span class="kw">struct</span> <span class="ty">list_head</span> child_node;
+    <span class="kw">struct</span> <span class="ty">hlist_head</span> children;     <span class="cm">// 子硬件时钟</span>
+};</code></pre>
+  </div>
+</section>
+
+<!-- 4. clk_ops -->
+<section id="ops" class="toc-link">
+  <h2><span class="num">04</span> clk_ops</h2>
+
+  <h3>关键回调详解</h3>
+  <table>
+    <tr><th>回调</th><th>上下文</th><th>说明</th></tr>
+    <tr><td><code>prepare()</code></td><td>可睡眠</td><td>使能前准备（使能稳压器等）</td></tr>
+    <tr><td><code>enable()</code></td><td>原子</td><td>写寄存器使能时钟</td></tr>
+    <tr><td><code>recalc_rate()</code></td><td>可睡眠</td><td>查询硬件当前频率</td></tr>
+    <tr><td><code>determine_rate()</code></td><td>可睡眠</td><td>计算最优频率和父时钟</td></tr>
+    <tr><td><code>set_rate()</code></td><td>可睡眠</td><td>设置硬件频率</td></tr>
+    <tr><td><code>set_parent()</code></td><td>可睡眠</td><td>切换父时钟</td></tr>
+    <tr><td><code>get_parent()</code></td><td>可睡眠</td><td>查询当前父时钟</td></tr>
+    <tr><td><code>set_phase()</code></td><td>可睡眠</td><td>设置输出相位</td></tr>
+    <tr><td><code>save_context()</code></td><td>可睡眠</td><td>保存时钟状态（休眠前）</td></tr>
+    <tr><td><code>restore_context()</code></td><td>可睡眠</td><td>恢复时钟状态（唤醒后）</td></tr>
+  </table>
+
+  <h3>速率设置流程</h3>
+  <div class="diagram">
+    <div class="flow-box danger">clk_set_rate(clk, rate)</div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box">determine_rate()<br><small>核心：选择最优频率和父时钟</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box active">set_parent() → set_rate()<br><small>先切换父时钟，再设置频率</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box warn">recalc_rate()<br><small>重新计算实际频率</small></div>
+    <div class="flow-down">↓</div>
+    <div class="flow-box">通知监听者<br><small>clk_notifier_call_chain()</small></div>
+  </div>
+
+  <h3>引用计数</h3>
+  <div class="callout tip">
+    <strong>引用计数</strong>：每个时钟维护 <code>enable_count</code> 和 <code>prepare_count</code>。只有当计数从 0→1 时才真正使能硬件，从 1→0 时才禁用。这允许多个驱动共享同一时钟。
+  </div>
+</section>
+
+<!-- 5. Clock Types -->
+<section id="types" class="toc-link">
+  <h2><span class="num">05</span> 时钟类型</h2>
+
+  <h3>通用时钟构建块</h3>
+  <table>
+    <tr><th>类型</th><th>文件</th><th>说明</th></tr>
+    <tr><td><code>clk-fixed-rate</code></td><td>clk-fixed-rate.c</td><td>固定频率，不可更改</td></tr>
+    <tr><td><code>clk-gate</code></td><td>clk-gate.c</td><td>可开关的时钟门控</td></tr>
+    <tr><td><code>clk-divider</code></td><td>clk-divider.c</td><td>父时钟 / 固定值</td></tr>
+    <tr><td><code>clk-multiplier</code></td><td>clk-multiplier.c</td><td>父时钟 × 固定值</td></tr>
+    <tr><td><code>clk-mux</code></td><td>clk-mux.c</td><td>从多个父时钟中选择</td></tr>
+    <tr><td><code>clk-composite</code></td><td>clk-composite.c</td><td>组合门控+分频+多路选择</td></tr>
+    <tr><td><code>clk-fixed-factor</code></td><td>clk-fixed-factor.c</td><td>固定倍频/分频比</td></tr>
+    <tr><td><code>clk-fractional-divider</code></td><td>clk-fractional-divider.c</td><td>分数分频</td></tr>
+  </table>
+
+  <h3>设备树中的时钟</h3>
+  <pre><code><span class="cm">// 常见时钟节点</span>
+<span class="ty">clk</span>@<span class="num">0x00</span> {
+    <span class="cm">// 晶振（固定频率）</span>
+    <span class="ty">osc</span>: <span class="fn">oscillator</span>@<span class="num">0</span> {
+        compatible = <span class="st">"fixed-clock"</span>;
+        #clock-cells = <span class="num">&lt;0&gt;</span>;
+        clock-frequency = <span class="num">&lt;24000000&gt;</span>;  <span class="cm">// 24 MHz</span>
+        clock-output-names = <span class="st">"osc"</span>;
+    };
+
+    <span class="cm">// PLL（锁相环）</span>
+    <span class="ty">pll</span>: <span class="fn">pll</span>@<span class="num">0x100</span> {
+        compatible = <span class="st">"vendor,pll"</span>;
+        clocks = <span class="fn">&amp;osc</span>;
+        clock-output-names = <span class="st">"pll"</span>;
+        #clock-cells = <span class="num">&lt;0&gt;</span>;
+    };
+
+    <span class="cm">// 门控时钟</span>
+    <span class="ty">uart_gate</span>: <span class="fn">gate</span>@<span class="num">0x200</span> {
+        compatible = <span class="st">"clk-gate"</span>;
+        clocks = <span class="fn">&amp;pll</span>;
+        #clock-cells = <span class="num">&lt;0&gt;</span>;
+        reg = <span class="num">&lt;0x200 0x4&gt;</span>;
+        bit-shift = <span class="num">&lt;0&gt;</span>;
+    };
+
+    <span class="cm">// 分频器</span>
+    <span class="ty">cpu_div</span>: <span class="fn">div</span>@<span class="num">0x300</span> {
+        compatible = <span class="st">"divider-clock"</span>;
+        clocks = <span class="fn">&amp;pll</span>;
+        #clock-cells = <span class="num">&lt;0&gt;</span>;
+        clock-divisor = <span class="num">&lt;2&gt;</span>;  <span class="cm">// ÷2</span>
+    };
+};</code></pre>
+
+  <h3>时钟引用语法</h3>
+  <table>
+    <tr><th>格式</th><th>说明</th></tr>
+    <tr><td><code>clocks = <b>&amp;pll</b>;</code></td><td>引用单一时钟（#clock-cells=0）</td></tr>
+    <tr><td><code>clocks = <b>&amp;pll 0</b>;</code></td><td>引用时钟 + 索引（#clock-cells>0）</td></tr>
+    <tr><td><code>clock-names = "core";</code></td><td>为时钟引用命名</td></tr>
+    <tr><td><code>assigned-clocks</code></td><td>启动时需要配置的时钟</td></tr>
+    <tr><td><code>assigned-clock-rates</code></td><td>分配的频率值</td></tr>
+    <tr><td><code>assigned-clock-parents</code></td><td>分配的父时钟</td></tr>
+  </table>
+</section>
+
+<!-- 6. Device Tree -->
+<section id="dt" class="toc-link">
+  <h2><span class="num">06</span> 设备树</h2>
+
+  <h3>消费者节点</h3>
+  <pre><code><span class="ty">uart0</span>: <span class="fn">serial</span>@<span class="num">0x10000000</span> {
+    compatible = <span class="st">"ns16550a"</span>;
+    reg = <span class="num">&lt;0x10000000 0x1000&gt;</span>;
+    interrupts = <span class="num">&lt;0 1 IRQ_TYPE_LEVEL_HIGH&gt;</span>;
+
+    <span class="cm">// 时钟引用</span>
+    clocks = <span class="fn">&amp;uart_gate</span>;
+    clock-names = <span class="st">"uart"</span>;
+
+    <span class="cm">// 启动时分配的频率</span>
+    assigned-clocks = <span class="fn">&lt;&amp;uart_gate&gt;</span>;
+    assigned-clock-rates = <span class="num">&lt;115200&gt;</span>;
+};</code></pre>
+
+  <h3>消费者 API</h3>
+  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/clk.h&gt;</span>
+
+<span class="cm">// 获取时钟</span>
+<span class="kw">struct</span> <span class="ty">clk</span> *clk;
+clk = <span class="fn">devm_clk_get</span>(&dev, <span class="st">"uart"</span>);  <span class="cm">// 匹配 clock-names = "uart"</span>
+
+<span class="cm">// 准备并使能</span>
+<span class="fn">clk_prepare_enable</span>(clk);
+
+<span class="cm">// 设置频率</span>
+<span class="fn">clk_set_rate</span>(clk, <span class="num">115200</span>);
+
+<span class="cm">// 查询频率</span>
+<span class="ty">unsigned long</span> rate = <span class="fn">clk_get_rate</span>(clk);
+
+<span class="cm">// 切换父时钟</span>
+<span class="fn">clk_set_parent</span>(clk, new_parent);
+
+<span class="cm">// 禁用并释放</span>
+<span class="fn">clk_disable_unprepare</span>(clk);
+<span class="fn">devm_clk_put</span>(&dev, clk);  <span class="cm">// devm 版本</span></code></pre>
+</section>
+
+<!-- 7. Writing a Driver -->
+<section id="driver" class="toc-link">
+  <h2><span class="num">07</span> 编写驱动</h2>
+
+  <h3>时钟控制器驱动模板</h3>
+  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/clk-provider.h&gt;</span>
+<span class="kw">#include</span> <span class="st">&lt;linux/platform_device.h&gt;</span>
+
+<span class="kw">struct</span> <span class="ty">my_clk_priv</span> {
+    <span class="kw">void</span> __iomem *base;
+    <span class="kw">struct</span> <span class="ty">clk_hw</span> hw;
+    <span class="ty">u32</span> reg;
+};
+
+<span class="kw">#define</span> to_my_clk(_hw) <span class="fn">container_of</span>(_hw, <span class="kw">struct</span> <span class="ty">my_clk_priv</span>, hw)
+
+<span class="kw">static int</span> <span class="fn">my_clk_enable</span>(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw)
+{
+    <span class="kw">struct</span> <span class="ty">my_clk_priv</span> *priv = <span class="fn">to_my_clk</span>(hw);
+    <span class="ty">u32</span> val = <span class="fn">readl</span>(priv->base + priv->reg);
+    val |= <span class="num">1</span>;  <span class="cm">// 使能位</span>
+    <span class="fn">writel</span>(val, priv->base + priv->reg);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="kw">static void</span> <span class="fn">my_clk_disable</span>(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw)
+{
+    <span class="kw">struct</span> <span class="ty">my_clk_priv</span> *priv = <span class="fn">to_my_clk</span>(hw);
+    <span class="ty">u32</span> val = <span class="fn">readl</span>(priv->base + priv->reg);
+    val &= ~<span class="num">1</span>;
+    <span class="fn">writel</span>(val, priv->base + priv->reg);
+}
+
+<span class="kw">static const struct</span> <span class="ty">clk_ops</span> my_clk_ops = {
+    .enable  = my_clk_enable,
+    .disable = my_clk_disable,
+};
+
+<span class="kw">static int</span> <span class="fn">my_clk_probe</span>(<span class="kw">struct</span> <span class="ty">platform_device</span> *pdev)
+{
+    <span class="kw">struct</span> <span class="ty">my_clk_priv</span> *priv;
+    <span class="kw">struct</span> <span class="ty">clk_init_data</span> init = {};
+
+    priv = <span class="fn">devm_kzalloc</span>(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+    priv->base = <span class="fn">devm_platform_ioremap_resource</span>(pdev, <span class="num">0</span>);
+
+    init.name = <span class="fn">of_get_property</span>(pdev->dev.of_node, <span class="st">"clock-output-names"</span>, NULL);
+    init.ops = &my_clk_ops;
+    init.parent_names = &parent_name;
+    init.num_parents = <span class="num">1</span>;
+
+    priv->hw.init = &init;
+    <span class="fn">devm_clk_hw_register</span>(&pdev->dev, &priv->hw);
+
+    <span class="kw">return</span> <span class="fn">of_clk_add_hw_provider</span>(pdev->dev.of_node, <span class="fn">of_clk_hw_simple_get</span>, &priv->hw);
+}</code></pre>
+</section>
+
+<!-- 8. Source Files -->
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/clk/</span>
+├── <span class="file">clk.c</span>              <span class="cmt">时钟核心：树管理/引用计数/通知 (5598 行)</span>
+├── <span class="file">clk-devres.c</span>       <span class="cmt">devm 资源管理</span>
+├── <span class="file">clkdev.c</span>           <span class="cmt">时钟查找表</span>
+├── <span class="file">clk-conf.c</span>         <span class="cmt">设备树时钟配置</span>
+├── <span class="file">clk-fixed-rate.c</span>   <span class="cmt">固定频率时钟</span>
+├── <span class="file">clk-gate.c</span>         <span class="cmt">门控时钟</span>
+├── <span class="file">clk-divider.c</span>      <span class="cmt">分频器时钟</span>
+├── <span class="file">clk-multiplier.c</span>   <span class="cmt">倍频器时钟</span>
+├── <span class="file">clk-mux.c</span>          <span class="cmt">多路选择时钟</span>
+├── <span class="file">clk-composite.c</span>    <span class="cmt">复合时钟</span>
+├── <span class="file">clk-fixed-factor.c</span> <span class="cmt">固定因子时钟</span>
+├── <span class="file">clk-fractional-divider.c</span> <span class="cmt">分数分频</span>
+├── <span class="file">clk-scmi.c</span>         <span class="cmt">SCMI 时钟</span>
+├── <span class="file">clk-rp1.c</span>          <span class="cmt">Raspberry Pi RP1</span>
+├── <span class="file">clk-loongson2.c</span>   <span class="cmt">龙芯 SoC</span>
+├── <span class="file">clk-pwm.c</span>         <span class="cmt">PWM 时钟</span>
+├── <span class="file">clk-gpio.c</span>        <span class="cmt">GPIO 时钟</span>
+│
+└── <span class="dir">bcm/</span>                <span class="cmt">Broadcom 时钟驱动</span>
+    ├── <span class="file">clk-bcm2835.c</span>       <span class="cmt">RPi BCM2835</span>
+    ├── <span class="file">clk-raspberrypi.c</span>  <span class="cmt">RPi 时钟固件</span>
+    ├── <span class="file">clk-iproc-pll.c</span>    <span class="cmt">iProc PLL</span>
+    └── <span class="file">clk-kona.c</span>         <span class="cmt">Kona 时钟</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">clk.h</span>              <span class="cmt">消费者 API</span>
+├── <span class="file">clk-provider.h</span>    <span class="cmt">提供者 API：clk_ops/clk_hw (1708 行)</span>
+├── <span class="file">clkdev.h</span>          <span class="cmt">时钟查找</span>
+└── <span class="file">of_clk.h</span>          <span class="cmt">设备树时钟</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议：</strong><br><code>drivers/clk/clk.c</code>（5598 行）是核心，从 <code>clk_prepare_enable()</code> 和 <code>clk_set_rate()</code> 开始.<br><code>include/linux/clk-provider.h</code> 定义 <code>clk_ops</code> 和 <code>clk_hw</code>.<br><code>clk-gate.c</code> 和 <code>clk-divider.c</code> 是最简单的时钟构建块.<br><code>clk-raspberrypi.c</code> 展示固件时钟驱动。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center; padding:30px 20px; border-top:1px solid var(--border); color:var(--text-dim); font-size:0.85em; background: var(--bg);">
+  基于 Linux 7.0.12 源码分析 · drivers/clk/ · 生成于 2026-06-12
+</footer>
+
+<script src="common.js"></script>
+
+</body>
+</html>
