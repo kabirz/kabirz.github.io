@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 PCI/PCIe 子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核 PCI/PCIe 子系统深度解析</h1>
+  <p class="subtitle">PCI 总线驱动模型 — 配置、枚举、MSI、热插拔</p>
+  <span class="version">Linux 7.0.12 · drivers/pci/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#structs">核心数据结构</a></li>
+    <li><a href="#enum">总线枚举</a></li>
+    <li><a href="#driver">驱动绑定</a></li>
+    <li><a href="#config">配置空间访问</a></li>
+    <li><a href="#msi">MSI/MSI-X</a></li>
+    <li><a href="#pcie">PCIe 能力与 ASPM</a></li>
+    <li><a href="#hp">电源管理与热插拔</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>PCI (Peripheral Component Interconnect) 及其后继 PCIe 是 x86/ARM 服务器的主流外设总线。Linux PCI 子系统负责<strong>枚举总线</strong>、<strong>绑定驱动</strong>、<strong>管理资源</strong>、<strong>处理中断</strong>。</p>
+
+  <p>硬件拓扑：</p>
+<pre><code>┌─────────────────────────────────────────┐
+│                  CPU                     │
+│         ┌──────────────────┐             │
+│         │  Root Complex    │             │
+│         │  (Integrated in   │             │
+│         │   CPU/IO Hub)    │             │
+│         └────────┬─────────┘             │
+└──────────────────┼──────────────────────┘
+                   │ PCIe Link
+       ┌───────────┼───────────┐
+       │           │           │
+   ┌───▼───┐   ┌──▼──┐    ┌───▼───┐
+   │Switch │   │EP   │    │Bridge │
+   │(Port) │   │(GPU)│    │(PCI)  │
+   └───┬───┘   └─────┘    └───────┘
+       │
+   ┌───┼────┐
+   │   │    │
+ ┌─▼┐┌─▼─┐┌─▼┐
+ │EP││EP ││EP│
+ │  ││NIC││NV│
+ └──┘└───┘└──┘
+
+// 总线号：Bus.Device.Function 三段寻址
+// 例如 0000:00:1f.6 = ethernet
+// 配置空间：每个 function 4KB
+
+// Linux PCI 子系统分层：
+//   用户态：lspci, setpci, /sys/bus/pci
+//   内核 PCI 核心：drivers/pci/
+//   架构入口：arch/x86/pci/, arch/arm64/kernel/pci.c
+//   设备驱动：drivers/net/, drivers/gpu/, ...
+</code></pre>
+</section>
+
+<section id="structs" class="toc-link">
+  <h2><span class="num">02</span> 核心数据结构</h2>
+
+<pre><code>// include/linux/pci.h
+
+// 1. struct pci_dev — 单个 PCI 设备
+struct pci_dev {
+    struct list_head      bus_list;        // 同总线上的设备链表
+    struct pci_bus        *bus;            // 所属总线
+    struct pci_bus        *subordinate;    // 该设备是 bridge 时的子总线
+    
+    struct pci_driver     *driver;          // 绑定的驱动
+    
+    struct device          dev;             // 嵌入的 device
+    struct pci_dev         *physfn;         // SR-IOV PF
+    struct list_head       sriov_vfs;       // SR-IOV VF 链表
+    
+    u16                   vendor, device;  // 16-bit ID
+    u16                   subsystem_vendor, subsystem_device;
+    u16                   revision;        // class revision
+    u8                    hdr_type;        // 头类型 (0/1/2)
+    u8                    pcie_cap;        // PCIe capability offset
+    u8                    msi_cap;         // MSI capability offset
+    u8                    msix_cap;        // MSI-X capability offset
+    u8                    pcie_mpss:3;     // Max Payload Size Supported
+    
+    unsigned int          irq;             // legacy INTx# IRQ
+    struct resource       resource[DEVICE_COUNT_RESOURCE];  // BAR 资源
+    struct pci_driver     *driver_overrides;
+    
+    /* config space access */
+    u16                   devcfg_cap;       // devcfg reg offset
+    unsigned int          cfg_size;         // 64 or 4096
+    
+    /* power management */
+    pci_power_t           current_state;    // D0/D1/D2/D3hot/D3cold
+    u8                    pm_cap;           // PM capability offset
+    unsigned int          pmem_len;         // persistent mem
+    unsigned int          d3hot_delay;
+    unsigned int          d3cold_allowed:1;
+    unsigned int          msi_enabled:1;
+    unsigned int          msix_enabled:1;
+    unsigned int          ari_enabled:1;    // Alternative Routing-ID
+    unsigned int          ats_enabled:1;    // Address Translation
+    unsigned int          pasid_enabled:1;  // PASID
+    unsigned int          pri_enabled:1;    // Page Request Interface
+    // ... 40+ flags ...
+};
+
+// 2. struct pci_bus — 总线
+struct pci_bus {
+    struct list_head      node;            // 总线链表
+    struct pci_bus        *parent;         // 父总线
+    struct list_head      children;        // 子总线
+    struct list_head      devices;         // 设备链表
+    struct pci_dev        *self;           // 桥设备
+    struct resource       *resource[PCI_BRIDGE_RESOURCE_NUM];
+    struct resource       io[3];           // I/O 端口
+    struct resource       mem[3];          // 内存
+    struct resource       busn_res;        // 总线号范围
+    struct pci_ops        *ops;            // 配置访问操作
+    struct msi_controller *msi;            // MSI 控制器
+    struct device         *bridge;
+    struct pci_bus_region region[3];
+    unsigned char         number;          // 总线号
+    unsigned char         primary;         // 主总线号
+    unsigned char         max_bus_speed;   // 最大速度
+    unsigned char         cur_bus_speed;
+    char                  name[48];
+    // ...
+};
+
+// 3. struct pci_driver — PCI 驱动
+struct pci_driver {
+    struct list_head      node;
+    const char            *name;
+    const struct pci_device_id  *id_table;   // 支持的设备
+    int                 (*probe)(struct pci_dev *dev, const struct pci_device_id *id);
+    void                (*remove)(struct pci_dev *dev);
+    int                 (*suspend)(struct pci_dev *dev, pm_message_t state);
+    int                 (*resume_noirq)(struct pci_dev *dev);
+    int                 (*resume)(struct pci_dev *dev);
+    void                (*shutdown)(struct pci_dev *dev);
+    int                 (*sriov_configure)(struct pci_dev *dev, int num_vfs);
+    int                 (*sriov_set_msix_vec_count)(struct pci_dev *, int);
+    u32                  sriov_get_vf_total_msix;
+    const struct pci_error_handlers *err_handler;
+    const struct attribute_group **dev_groups;
+    struct device_driver  driver;
+    struct pci_dynids     dynids;
+    bool                  driver_managed_dma;
+};
+</code></pre>
+</section>
+
+<section id="enum" class="toc-link">
+  <h2><span class="num">03</span> 总线枚举</h2>
+
+  <p>BIOS/UEFI 完成硬件枚举（分配总线号、BAR 资源、IRQ）。Linux 启动时再次扫描：</p>
+
+<pre><code>// drivers/pci/probe.c
+
+// 入口（架构相关）：
+// x86: arch/x86/pci/common.c → pcibios_scan_specific_bus()
+// ARM64: arch/arm64/kernel/pci.c → pci_acpi_scan_root()
+// 通用: pci_host_probe() → pci_scan_bus()
+
+// 关键函数：
+// 1. 扫描每条总线
+int pci_scan_bus(struct pci_bus *bus)
+{
+    // 对每个可能的 dev (0..31) × func (0..7)：
+    //   - 读取 vendor ID
+    //   - 如果 != 0xFFFF → 有效设备
+    //   - pci_scan_device() 创建 pci_dev
+    //   - 如果是 bridge → 递归扫描子总线
+}
+
+// 2. 创建 pci_dev
+static struct pci_dev *pci_scan_device(struct pci_bus *bus, int devfn)
+{
+    u32 l;
+    // 读配置 offset 0 (vendor + device)
+    if (pci_bus_read_config_dword(bus, devfn, PCI_VENDOR_ID, &l))
+        return NULL;
+    if (l == 0xffffffff || l == 0x00000000 || l == 0x0000ffff)
+        return NULL;
+    
+    struct pci_dev *dev = pci_alloc_dev(bus);
+    dev->devfn = devfn;
+    dev->vendor = l & 0xffff;
+    dev->device = (l >> 16) & 0xffff;
+    // ...
+    
+    // 初始化 capabilities
+    pci_setup_device(dev);
+    pci_init_capabilities(dev);
+    
+    return dev;
+}
+
+// 3. 初始化 capabilities
+// drivers/pci/probe.c
+static void pci_init_capabilities(struct pci_dev *dev)
+{
+    pci_msi_init(dev);            // MSI/MSI-X
+    pci_msix_init(dev);
+    pci_allocate_vc_save_buf(dev);
+    pci_pm_init(dev);              // Power Management
+    pci_ea_init(dev);              // Enhanced Allocation
+    pci_bridge_resources_init(dev);
+    pci_vpd_init(dev);             // Vital Product Data
+    pci_hpbridge_init(dev);        // Hotplug bridge
+    pci_hpmem_init(dev);
+    pcie_aspm_init_link_state(dev); // PCIe ASPM
+    pcie_bandwidth_notification(dev);
+    pci_ptm_init(dev);              // Precision Time Measurement
+    pci_aer_init(dev);              // Advanced Error Reporting
+    pci_dpc_init(dev);              // Downstream Port Containment
+    pci_doe_init(dev);              // Data Object Exchange
+    pci_ats_init(dev);              // Address Translation Service
+    pci_pri_init(dev);              // Page Request Interface
+    pci_pasid_init(dev);            // PASID
+    pci_iov_init(dev);              // SR-IOV
+    pci_acs_init(dev);              // Access Control Services
+    pci_ile_init(dev);
+    // ...
+}
+
+// 4. 资源分配
+// drivers/pci/setup-bus.c
+// pci_assign_unassigned_bus_resources()
+//   - 收集所有设备的 BAR 需求
+//   - 通过 __pci_assign_resource() 分配
+//   - 写入设备的 BAR 寄存器
+
+// BAR 读取：
+int pci_read_base(struct pci_dev *dev, enum pci_bar_type type,
+                  struct resource *res, unsigned int pos)
+{
+    // 写全 1 到 BAR
+    pci_write_config_dword(dev, pos, 0xFFFFFFFF);
+    // 读回，计算大小（最低位为 0 之前的 0 数）
+    // 类型: mem / io
+    // 32-bit / 64-bit / prefetchable
+    // 写入实际分配的地址
+}
+</code></pre>
+</section>
+
+<section id="driver" class="toc-link">
+  <h2><span class="num">04</span> 驱动绑定</h2>
+
+<pre><code>// drivers/pci/pci-driver.c
+
+// 入口：注册 PCI 驱动
+int __pci_register_driver(struct pci_driver *drv, struct module *owner)
+{
+    // 初始化 driver model
+    drv->driver.bus = &pci_bus_type;
+    drv->driver.owner = owner;
+    drv->driver.mod_name = KBUILD_MODNAME;
+    // ...
+    return driver_register(&drv->driver);
+}
+
+// 设备 + 驱动匹配
+static int pci_bus_match(struct device *dev, struct device_driver *drv)
+{
+    struct pci_dev *pci_dev = to_pci_dev(dev);
+    struct pci_driver *pci_drv = to_pci_driver(drv);
+    
+    if (!pci_driver_for_dma(pci_drv, pci_dev))
+        return false;
+    
+    // 通过 id_table 匹配
+    return pci_match_device(pci_drv, pci_dev) != NULL;
+}
+
+// 匹配函数
+const struct pci_device_id *pci_match_device(struct pci_driver *drv,
+                                              struct pci_dev *dev)
+{
+    // 1. 遍历 drv->id_table 静态表
+    for (id = drv->id_table; id->vendor; id++) {
+        if ((id->vendor == PCI_ANY_ID || id->vendor == dev->vendor) &&
+            (id->device == PCI_ANY_ID || id->device == dev->device) &&
+            (id->subvendor == PCI_ANY_ID || id->subvendor == ...) &&
+            (id->class_mask == 0 || ...))
+            return id;
+    }
+    // 2. 检查动态 id 表（用户态通过 sysfs 添加）
+    // 3. 检查 driver_override
+    return NULL;
+}
+
+// 设备 probe（核心驱动入口）
+static int pci_device_probe(struct device *dev)
+{
+    struct pci_dev *pci_dev = to_pci_dev(dev);
+    struct pci_driver *drv = to_pci_driver(dev->driver);
+    const struct pci_device_id *id;
+    
+    id = pci_match_device(drv, pci_dev);
+    if (!id)
+        return -ENODEV;
+    
+    // 1. 启用设备
+    int error = pci_enable_device(pci_dev);
+    
+    // 2. 调用驱动 probe
+    error = local_pci_probe(pci_dev, id, drv);
+    
+    return error;
+}
+
+// 驱动 probe 的典型代码（驱动开发者写的）：
+static int my_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+{
+    // 1. 启用设备（已由框架做）
+    pci_enable_device_mem(pdev);
+    
+    // 2. 申请区域
+    pci_request_regions(pdev, "my_driver");
+    
+    // 3. 映射 MMIO
+    void __iomem *base = pci_iomap(pdev, 0, 0);
+    
+    // 4. 设置 DMA mask
+    dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+    
+    // 5. 注册 MSI-X 中断
+    int nvec = pci_alloc_irq_vectors(pdev, 1, 32, PCI_IRQ_MSIX);
+    int irq = pci_irq_vector(pdev, 0);
+    request_irq(irq, handler, 0, "my_dev", pdev);
+    
+    // 6. 注册块设备/网卡/字符设备
+    return 0;
+}
+</code></pre>
+</section>
+
+<section id="config" class="toc-link">
+  <h2><span class="num">05</span> 配置空间访问</h2>
+
+<pre><code>// PCI 配置空间：64 字节（基本），4KB（PCIe 扩展）
+
+// 标准 Header（Type 0）：
+//  Offset  Size  Field
+//  0x00    2     Vendor ID
+//  0x02    2     Device ID
+//  0x04    2     Command
+//  0x06    2     Status
+//  0x08    1     Revision ID
+//  0x09    3     Class Code (baseclass/subclass/interface)
+//  0x0C    1     Cache Line Size
+//  0x0D    1     Latency Timer
+//  0x0E    1     Header Type (0/1/2)
+//  0x0F    1     BIST
+//  0x10    4     BAR0
+//  0x14    4     BAR1
+//  0x18    4     BAR2
+//  0x1C    4     BAR3
+//  0x20    4     BAR4
+//  0x24    4     BAR5
+//  0x28    4     Cardbus CIS Pointer
+//  0x2C    2     Subsystem Vendor ID
+//  0x2E    2     Subsystem ID
+//  0x30    4     Expansion ROM Base Address
+//  0x34    1     Capabilities Pointer
+//  0x3C    1     Interrupt Line
+//  0x3D    1     Interrupt Pin
+//  0x3E    1     Min_Gnt
+//  0x3F    1     Max_Lat
+
+// 访问 API：
+int pci_read_config_byte(struct pci_dev *dev, int where, u8 *val);
+int pci_read_config_word(struct pci_dev *dev, int where, u16 *val);
+int pci_read_config_dword(struct pci_dev *dev, int where, u32 *val);
+int pci_write_config_byte(struct pci_dev *dev, int where, u8 val);
+int pci_write_config_word(struct pci_dev *dev, int where, u16 val);
+int pci_write_config_dword(struct pci_dev *dev, int where, u32 val);
+
+// 底层实现通过 struct pci_ops：
+struct pci_ops {
+    int (*add_bus)(struct pci_bus *bus);
+    void (*remove_bus)(struct pci_bus *bus);
+    void __iomem * (*map_bus)(struct pci_bus *bus, unsigned int devfn, int where);
+    int (*read)(struct pci_bus *bus, unsigned int devfn, int where, int size, u32 *val);
+    int (*write)(struct pci_bus *bus, unsigned int devfn, int where, int size, u32 val);
+    void (*release)(struct pci_bus *bus);
+};
+
+// x86 上的访问机制：
+//  - 0xCF8/0xCFC 端口（标准 PCI）
+//  - ECAM MMIO (PCIe, Enhanced Configuration Access Mechanism)
+//    基址由 MCFG ACPI 表提供
+//    地址 = base + (bus << 20 | dev << 15 | fn << 12 | offset)
+</code></pre>
+
+  <p>Capabilities 链表：</p>
+<pre><code>// 从 Capabilities Pointer (offset 0x34) 开始
+// 每个 capability 8-bit ID + 8-bit next ptr
+
+// 常见 capability IDs:
+#define PCI_CAP_ID_PM         0x01    // Power Management
+#define PCI_CAP_ID_AGP        0x02
+#define PCI_CAP_ID_VPD        0x03    // Vital Product Data
+#define PCI_CAP_ID_SLOTID     0x04
+#define PCI_CAP_ID_MSI        0x05    // MSI
+#define PCI_CAP_ID_CHSWP      0x06    // CompactPCI Hot Swap
+#define PCI_CAP_ID_PCIX       0x07
+#define PCI_CAP_ID_HT         0x08    // HyperTransport
+#define PCI_CAP_ID_VNDR       0x09    // Vendor-Specific
+#define PCI_CAP_ID_DBG        0x0A
+#define PCI_CAP_ID_CCRC       0x0B
+#define PCI_CAP_ID_SHPC       0x0C    // SHPC
+#define PCI_CAP_ID_SSVID      0x0D    // Subsystem Vendor
+#define PCI_CAP_ID_AGP3       0x0E
+#define PCI_CAP_ID_SECDEV     0x0F    // Secure Device
+#define PCI_CAP_ID_EXP        0x10    // PCI Express
+#define PCI_CAP_ID_MSIX       0x11    // MSI-X
+#define PCI_CAP_ID_SATA       0x12
+#define PCI_CAP_ID_AF         0x13    // AF (Advanced Features)
+#define PCI_CAP_ID_EA         0x14    // Enhanced Allocation
+#define PCI_CAP_ID_FP         0x15    // Frame Buffer
+#define PCI_CAP_ID_EDS        0x17    // Enhanced DVS
+#define PCI_CAP_ID_DVSEC      0x23    // Designated Vendor-Specific
+
+// PCIe 扩展 capability (extended, 在 0x100+):
+#define PCI_EXT_CAP_ID_ERR    0x01    // AER
+#define PCI_EXT_CAP_ID_VC     0x02    // Virtual Channel
+#define PCI_EXT_CAP_ID_DSN    0x03    // Device Serial Number
+#define PCI_EXT_CAP_ID_PWR    0x04    // Power Budgeting
+#define PCI_EXT_CAP_ID_RCLD   0x05
+#define PCI_EXT_CAP_ID_RCILC  0x06
+#define PCI_EXT_CAP_ID_RCEC   0x07
+#define PCI_EXT_CAP_ID_MFVC   0x08
+#define PCI_EXT_CAP_ID_VC9    0x09
+#define PCI_EXT_CAP_ID_RCRB   0x0A
+#define PCI_EXT_CAP_ID_FLR    0x25    // Function Level Reset
+#define PCI_EXT_CAP_ID_ARI    0x0E
+#define PCI_EXT_CAP_ID_ATS    0x0F
+#define PCI_EXT_CAP_ID_SRIOV  0x10    // SR-IOV
+#define PCI_EXT_CAP_ID_PRI    0x13    // Page Request Interface
+</code></pre>
+</section>
+
+<section id="msi" class="toc-link">
+  <h2><span class="num">06</span> MSI/MSI-X</h2>
+
+  <p>MSI/MSI-X 是 PCIe 的中断机制（详见 <a href="linux-irq.html">通用中断子系统</a>），通过写特定地址触发中断，无需专用引脚。</p>
+
+<pre><code>// drivers/pci/msi/
+
+// MSI-X 描述符
+struct msix_entry {
+    u32    vector;          // Linux IRQ 号
+    u16    entry;           // 设备内 entry 编号
+};
+
+// 启用 MSI-X 的典型流程：
+int pci_alloc_irq_vectors(struct pci_dev *dev, unsigned int min_vecs,
+                          unsigned int max_vecs, unsigned int flags)
+{
+    // flags = PCI_IRQ_MSIX | PCI_IRQ_MSI | PCI_IRQ_LEGACY
+    // 优先尝试 MSI-X，失败则 MSI，最后 INTx
+    
+    if (flags & PCI_IRQ_MSIX)
+        nvec = __pci_enable_msix_range(dev, NULL, min_vecs, max_vecs, NULL, 0);
+    if (nvec < 0 && flags & PCI_IRQ_MSI)
+        nvec = __pci_enable_msi_range(dev, min_vecs, max_vecs, NULL);
+    // ...
+    return nvec;
+}
+
+// 获取 IRQ 号
+int pci_irq_vector(struct pci_dev *dev, unsigned int nr)
+{
+    // dev->irq 是 INTx IRQ 或第一个 MSI vector
+    // nr > 0 时返回 MSI-X vector N
+    if (dev->msix_enabled)
+        return msi_get_virq(&dev->dev, nr);
+    return dev->irq;
+}
+
+// MSI 与 MSI-X 对比：
+//  ┌────────────┬────────────────────┬─────────────────────┐
+//  │            │       MSI          │        MSI-X        │
+//  ├────────────┼────────────────────┼─────────────────────┤
+//  │ 最大数量   │ 32                 │ 2048                │
+//  │ 地址/数据  │ 共享 1 组          │ 每 vector 独立       │
+//  │ 寄存器位置 │ capability (0x05)  │ BAR 中的 table       │
+//  │ Mask 位    │ 1 组 (32 bits)     │ 每 vector 独立       │
+//  │ 灵活性     │ 低                  │ 高                  │
+//  └────────────┴────────────────────┴─────────────────────┘
+
+// MSI-X Table 通过 BAR 暴露给驱动
+// 每项 16 字节：Message Address + Message Upper Addr + Message Data + Vector Control
+// Mask Bit 在 Vector Control bit 0
+</code></pre>
+
+  <p>使用模式：</p>
+<pre><code>// 单 vector（最常见）：
+int nvec = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_MSIX);
+int irq = pci_irq_vector(pdev, 0);
+request_irq(irq, handler, 0, name, pdev);
+
+// 多 vector（NVMe 等高 IO 设备）：
+int nvec = pci_alloc_irq_vectors(pdev, 1, 32, PCI_IRQ_MSIX);
+for (i = 0; i < nvec; i++) {
+    int irq = pci_irq_vector(pdev, i);
+    request_irq(irq, handler_i, 0, name, ctx_i);
+}
+
+// Affinity 提示（per-CPU 中断）：
+irq_set_affinity_hint(irq, cpumask_of(cpu));
+</code></pre>
+</section>
+
+<section id="pcie" class="toc-link">
+  <h2><span class="num">07</span> PCIe 能力与 ASPM</h2>
+
+<pre><code>// drivers/pci/pcie/aspm.c — Active State Power Management
+
+// ASPM 链路状态：
+//  L0: 全活跃
+//  L0s: 部分省电（双向独立，进入快，恢复也快）
+//  L1: 更深省电（必须双向同时）
+//  L1.1 / L1.2: 极深省电（关闭 PLL，恢复慢）
+
+// 链路状态切换通过：
+//  - 硬件自动（基于链路 idle 计时器）
+//  - 软件显式（驱动空闲时主动切换）
+
+// 配置策略：
+//  pcie_aspm=performance (默认): L0s 禁用，性能优先
+//  pcie_aspm=powersave: 启用所有 ASPM
+//  pcie_aspm=off: 完全禁用
+
+// API：
+//  pci_disable_link_state(pdev, PCIE_LINK_STATE_L0S | PCIE_LINK_STATE_L1);
+//  pci_enable_link_state(pdev, ...);
+
+// drivers/pci/pcie/aer.c — Advanced Error Reporting
+// AER 提供更详细的错误信息：
+//   - Correctable errors: bad TLP, bad DLLP, replay timeout
+//   - Uncorrectable (non-fatal): malformed TLP, completion timeout
+//   - Uncorrectable (fatal): DLP, surprise down
+
+// 注册 AER 处理：
+//  pci_dev->dev.driver->err_handler 提供：
+//    error_detected() - 通知错误发生
+//    mmio_enabled()   - MMIO 重新启用
+//    slot_reset()     - 设备重置完成
+//    resume()         - 完全恢复
+
+// drivers/pci/iov.c — SR-IOV (Single Root I/O Virtualization)
+//  - PF (Physical Function): 完整设备
+//  - VF (Virtual Function): 轻量设备，用于虚拟化直通
+//  - 一个 PF 可创建多个 VF
+//  - VF 通过 PCI_EXT_CAP_ID_SRIOV capability 暴露
+
+// 启用 SR-IOV：
+//  echo N > /sys/bus/pci/devices/XXX/sriov_numvfs
+//  → 调用 driver->sriov_configure(pdev, N)
+//  → 创建 N 个 VF pci_dev
+//  → VF 可独立分配给 VM (via vfio-pci)
+</code></pre>
+</section>
+
+<section id="hp" class="toc-link">
+  <h2><span class="num">08</span> 电源管理与热插拔</h2>
+
+<pre><code>// 电源管理状态：
+typedef int __bitwise pci_power_t;
+#define PCI_D0     ((pci_power_t) 0)
+#define PCI_D1     ((pci_power_t) 1)
+#define PCI_D2     ((pci_power_t) 2)
+#define PCI_D3hot  ((pci_power_t) 3)
+#define PCI_D3cold ((pci_power_t) 4)
+#define PCI_UNKNOWN  ((pci_power_t) 5)
+#define PCI_POWER_ERROR ((pci_power_t) -1)
+
+// 设置电源状态：
+int pci_set_power_state(struct pci_dev *dev, pci_power_t state);
+//   - 写 PM capability Power State 寄存器
+//   - D3hot: 关闭大部分时钟
+//   - D3cold: 移除电源（需要 hotplug 支持）
+
+// 启用/禁用设备：
+int pci_enable_device(struct pci_dev *dev);  // 唤醒，分配资源
+void pci_disable_device(struct pci_dev *dev);  // 禁用，释放
+
+// 唤醒（用于 suspend）：
+int pci_enable_wake(struct pci_dev *dev, pci_power_t state, bool enable);
+//   - 配置 PME (Power Management Event)
+//   - 设备可触发中断唤醒系统
+
+// drivers/pci/hotplug/ — PCIe 热插拔框架
+// 标准：
+//   - PCIEHP (PCIe native hotplug)
+//   - SHPC (Standard Hot-Plug Controller)
+//   - ACPI based hotplug
+//   - cPCI (CompactPCI)
+
+// PCIEHP 流程：
+// 1. Slot 状态变化（插入/拔出）触发中断
+// 2. pciehp_isr() 读取 Slot Status
+// 3. 调度 pciehp_handle_presence_or_link_change()
+// 4. 调用 pci_hp_add_bridge() / pci_stop_and_remove_bus()
+// 5. 通过 kobject_uevent 通知用户态
+// 6. udev 触发驱动 probe/remove
+
+// ACPI hotplug：
+//  - ACPI 表定义 hotplug slot
+//  - 通过 _EJ0 method 控制电源
+//  - 用于服务器 ProLiant 等
+</code></pre>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">drivers/pci/probe.c</span>           <span class="cmt">总线枚举、pci_scan_bus、pci_setup_device</span>
+├── <span class="file">drivers/pci/pci.c</span>              <span class="cmt">通用 PCI 操作、pci_enable_device 等</span>
+├── <span class="file">drivers/pci/pci-driver.c</span>       <span class="cmt">pci_driver 注册、match、probe</span>
+├── <span class="file">drivers/pci/setup-bus.c</span>        <span class="cmt">总线资源分配</span>
+├── <span class="file">drivers/pci/setup-res.c</span>        <span class="cmt">pci_dev->resource[] 配置</span>
+├── <span class="file">drivers/pci/bus.c</span>               <span class="cmt">总线操作</span>
+├── <span class="file">drivers/pci/remove.c</span>            <span class="cmt">设备/总线移除</span>
+├── <span class="file">drivers/pci/syscall.c</span>           <span class="cmt">pciconfig 系统调用</span>
+├── <span class="file">drivers/pci/access.c</span>            <span class="cmt">配置空间访问通用层</span>
+├── <span class="file">drivers/pci/rom.c</span>               <span class="cmt">Expansion ROM 操作</span>
+├── <span class="file">drivers/pci/msi/</span>                <span class="cmt">MSI/MSI-X 子目录</span>
+│   ├── <span class="file">pcidev_msi.c</span>             <span class="cmt">PCI 设备 MSI 适配</span>
+│   └── <span class="file">api.c</span>                      <span class="cmt">pci_alloc_irq_vectors API</span>
+├── <span class="file">drivers/pci/pcie/</span>               <span class="cmt">PCIe 特定功能</span>
+│   ├── <span class="file">aspm.c</span>                     <span class="cmt">Active State Power Management</span>
+│   ├── <span class="file">aer.c</span>                      <span class="cmt">Advanced Error Reporting</span>
+│   ├── <span class="file">aer_inject.c</span>                <span class="cmt">AER 注入（调试）</span>
+│   ├── <span class="file">dpc.c</span>                       <span class="cmt">Downstream Port Containment</span>
+│   ├── <span class="file">ptm.c</span>                       <span class="cmt">Precision Time Measurement</span>
+│   ├── <span class="file">pme.c</span>                       <span class="cmt">Power Management Event</span>
+│   └── <span class="file">err.c</span>                       <span class="cmt">错误恢复框架</span>
+├── <span class="file">drivers/pci/hotplug/</span>           <span class="cmt">热插拔框架</span>
+│   ├── <span class="file">pciehp_core.c</span>              <span class="cmt">PCIe native hotplug</span>
+│   ├── <span class="file">pciehp_ctrl.c</span>              <span class="cmt">控制（按钮、LED）</span>
+│   ├── <span class="file">pciehp_hpc.c</span>               <span class="cmt">硬件寄存器访问</span>
+│   ├── <span class="file">shpchp_*.c</span>                  <span class="cmt">SHPC</span>
+│   └── <span class="file">acpiphp_*.c</span>                 <span class="cmt">ACPI hotplug</span>
+├── <span class="file">drivers/pci/iov.c</span>               <span class="cmt">SR-IOV PF/VF 管理</span>
+├── <span class="file">drivers/pci/vc.c</span>                <span class="cmt">Virtual Channel</span>
+├── <span class="file">drivers/pci/vpd.c</span>               <span class="cmt">Vital Product Data</span>
+├── <span class="file">drivers/pci/ats.c</span>               <span class="cmt">ATS/PRI/PASID</span>
+├── <span class="file">drivers/pci/pci-mid.c</span>            <span class="cmt">middleware</span>
+├── <span class="file">drivers/pci/slot.c</span>               <span class="cmt">PCI slot 抽象</span>
+├── <span class="file">drivers/pci/ecam.c</span>               <span class="cmt">ECAM MMIO 访问（通用）</span>
+├── <span class="file">drivers/pci/pci-acpi.c</span>          <span class="cmt">ACPI 集成</span>
+├── <span class="file">drivers/pci/proc.c</span>               <span class="cmt">/proc/bus/pci</span>
+├── <span class="file">drivers/pci/sysfs.c</span>              <span class="cmt">/sys/bus/pci</span>
+├── <span class="file">include/linux/pci.h</span>              <span class="cmt">所有 PCI 核心 API 和结构</span>
+├── <span class="file">include/uapi/linux/pci.h</span>         <span class="cmt">用户态 PCI 定义</span>
+└── <span class="file">include/linux/pci_regs.h</span>         <span class="cmt">PCI 寄存器定义</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>include/linux/pci.h</code> 全体 PCI API 的源头。<br>
+    <code>drivers/pci/probe.c</code> 总线枚举的核心，理解 PCI 设备如何被发现。<br>
+    <code>drivers/pci/pci-driver.c</code> 看 driver model 集成。<br>
+    <code>drivers/pci/msi/api.c</code> 学习 MSI-X 启用流程。<br>
+    <code>drivers/pci/pcie/aspm.c</code> 现代 PCIe 节能机制。<br>
+    <code>drivers/nvme/host/pci.c</code> 一个完整的现代 PCI 驱动范例。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

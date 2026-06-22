@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核性能监控与追踪子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核性能监控与追踪子系统深度解析</h1>
+  <p class="subtitle">perf_events、Tracepoint、kprobe/uprobe — 性能与可观测性基础设施</p>
+  <span class="version">Linux 7.0.12 · kernel/events/ · kernel/trace/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#core">perf 核心框架</a></li>
+    <li><a href="#pmu">PMU 与硬件事件</a></li>
+    <li><a href="#ringbuf">perf 环形缓冲区</a></li>
+    <li><a href="#sw-events">软件事件 & Tracepoint</a></li>
+    <li><a href="#tp-perf">Tracepoint 与 perf 的连接</a></li>
+    <li><a href="#kprobe">kprobe 内核探针</a></li>
+    <li><a href="#uprobe">uprobe 用户探针</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 内核的可观测性（observability）由多个子系统组成。本文档聚焦<strong>性能监控</strong>层，与已有的 <a href="linux-ftrace.html">ftrace 深度解析</a> 互补。</p>
+
+<pre><code>┌──────────────────────────────────────────────┐
+│  用户态工具                                    │
+│  perf / bpftrace / strace / ftrace / dtrace   │
+└────────────┬───────────────────┬──────────────┘
+             │                   │
+┌────────────▼─────────┐  ┌──────▼──────────────┐
+│  perf_events 子系统  │  │  ftrace 子系统      │
+│  (kernel/events/)    │  │  (kernel/trace/)    │
+│  - 硬件 PMU 采样     │  │  - 函数跟踪         │
+│  - 软件事件          │  │  - trace event      │
+│  - 事件聚合          │  │  - ring buffer      │
+└─────────┬────────────┘  └──────────┬──────────┘
+          │                          │
+          │      共享基础设施         │
+          ├──────────────────────────┤
+          │                          │
+┌─────────▼──────────┐  ┌────────────▼──────────┐
+│  Tracepoints       │  │  kprobe / uprobe      │
+│  静态插桩点         │  │  动态插桩             │
+│  (include/trace/)  │  │  (kernel/trace/)      │
+└────────────────────┘  └───────────────────────┘
+</code></pre>
+
+  <p>四个层次的关系：</p>
+  <table>
+    <tr><th>组件</th><th>用户态接口</th><th>典型场景</th></tr>
+    <tr><td>perf_events</td><td><code>perf_event_open()</code></td><td>CPU 采样、分支跟踪、PMU 分析</td></tr>
+    <tr><td>Tracepoint</td><td>tracefs / perf / eBPF</td><td>静态事件监控（sched、irq）</td></tr>
+    <tr><td>kprobe</td><td><code>/sys/kernel/debug/kprobe_events</code></td><td>任意内核函数入口跟踪</td></tr>
+    <tr><td>uprobe</td><td><code>/sys/kernel/debug/uprobe_events</code></td><td>用户态函数入口跟踪</td></tr>
+  </table>
+</section>
+
+<section id="core" class="toc-link">
+  <h2><span class="num">02</span> perf 核心框架</h2>
+
+<pre><code>// include/linux/perf_event.h
+struct perf_event {
+    struct list_head                event_entry;
+    struct list_head                sibling_list;
+    struct list_head                active_list;
+    int                             nr_siblings;
+    
+    struct perf_event              *group_leader;
+    struct pmu                     *pmu;
+    void                           *pmu_private;
+    
+    enum perf_event_active_type     state;
+    unsigned int                    attach_state;
+    local64_t                       count;
+    atomic64_t                      child_count;
+    
+    struct perf_event_attr          attr;
+    
+    u64                             event_limit;
+    
+    struct hw_perf_event            hw;
+    struct perf_event_context      *ctx;
+    atomic_t                        event_limit;
+    
+    struct pid_namespace           *ns;
+    pid_t                           pid;
+    pid_t                           tgid;
+    
+    atomic_t                        event_access_disabled;
+    
+    struct fasync_struct           *fasync;
+    struct wake_up_head __rcu      *head;
+    struct wake_q_head             *wake_q;
+    
+    /* read() 返回结构 */
+    struct perf_read_event_groups   read_event_groups;
+    
+    /* ring buffer */
+    struct perf_buffer             *rb;
+    struct list_head                rb_entry;
+    unsigned long                   rcu_batches;
+    int                             oncpu;
+    int                             cpu;
+    
+    struct list_head                owner_node;
+    struct task_struct             *owner;
+    
+    /* mmap event count */
+    struct mutex                    mmap_mutex;
+    struct list_head                event_caps;
+    
+    struct perf_addr_filters_head   addr_filters;
+    
+    /* bpf, cgroup, intel_pt 等 */
+    void                           *bpf_output_ctx;
+    void                           *prog;
+    void                           *overflow_handler_context;
+    
+    struct callback_head            callback_head;
+    struct irq_work                 pending;
+    int                             pending_disable;
+    int                             pending_wakeup;
+    int                             pending_kill;
+    
+    struct wake_up_head             pending_event;
+    // ... 100+ 字段 ...
+};
+
+// struct pmu — 性能监控单元抽象
+struct pmu {
+    int                     capabilities;
+    int                     module;
+    /* capability flags: PERF_PMU_CAP_*
+       NO_NMI, PEBS, NO_INTERRUPT, ...
+    */
+    
+    int                    (*enable)(struct perf_event *event);
+    void                   (*disable)(struct perf_event *event);
+    int                    (*add)(struct perf_event *event, int flags);
+    void                   (*del)(struct perf_event *event, int flags);
+    void                   (*start)(struct perf_event *event, int flags);
+    void                   (*stop)(struct perf_event *event, int flags);
+    void                   (*read)(struct perf_event *event);
+    void                   (*start_txn)(struct pmu *pmu, unsigned int flags);
+    int                    (*commit_txn)(struct pmu *pmu);
+    int                    (*cancel_txn)(struct pmu *pmu);
+    int                    (*event_idx)(struct perf_event *event);
+    void                   (*sched_task)(struct perf_event_context *ctx, bool sched_in);
+    void                   (*swap_task_ctx)(struct perf_event_context *prev_ctx,
+                                            struct perf_event_context *next_ctx);
+    void                   (*addr_filters_sync)(struct perf_event *event);
+    
+    /* TPMU only */
+    int                     capabilities;
+    int                     capabilities_set;
+    int                     capabilities_lock;
+    
+    /* for hrtimer based PMU */
+    struct hrtimer          hrtimer;
+    
+    /* event_init — 必需 */
+    int                    (*event_init)(struct perf_event *event);
+    
+    /* filter */
+    int                     filter;
+    
+    /* pmu specific attrs */
+    struct attribute_group **attr_groups;
+    struct attribute_group  *attr_update;
+    struct device           *pmu_dev;
+    
+    char                    *name;
+    int                     type;
+    int                     task_ctx_nr;
+    int                     perf_event_idx;
+};
+</code></pre>
+
+  <p>perf_event_open 系统调用：</p>
+<pre><code>// kernel/events/core.c
+SYSCALL_DEFINE5(perf_event_open,
+                struct perf_event_attr __user *, attr_uptr,
+                pid_t, pid, int, cpu, int, group_fd, unsigned long, flags)
+{
+    // 1. 解析 attr
+    struct perf_event_attr attr;
+    if (copy_from_user(&attr, attr_uptr, sizeof(attr)))
+        return -EFAULT;
+    
+    // 2. 查找 PMU（根据 attr.type）
+    pmu = perf_init_event(&attr);
+    
+    // 3. 分配 perf_event
+    event = perf_event_alloc(&attr, cpu, task, group_leader, NULL,
+                              NULL, NULL, flags);
+    event->pmu = pmu;
+    
+    // 4. 调用 pmu->event_init(event)
+    err = pmu->event_init(event);
+    
+    // 5. 添加到 ctx（每 task 或每 CPU）
+    perf_install_in_context(ctx, event, event->cpu);
+    
+    // 6. 创建 fd
+    fd = get_unused_fd_flags(O_RDWR);
+    file = anon_inode_getfile("[perf_event]", &perf_fops, event, O_RDWR);
+    fd_install(fd, file);
+    
+    return fd;
+}
+
+// attr 关键字段：
+struct perf_event_attr {
+    __u32   type;           // PERF_TYPE_HARDWARE / SOFTWARE / TRACEPOINT / HW_CACHE / RAW / BREAKPOINT
+    __u32   size;
+    __u64   config;         // type-specific 配置
+    __u64   sample_period;  // 采样周期
+    __u64   sample_type;    // PERF_SAMPLE_* 标志（IP/TID/TIME/CALLCHAIN...）
+    __u64   read_format;
+    __u64   flags;          // disabled, inherit, pinned, exclusive, ...
+    union { __u64 wakeup_events; __u64 wakeup_watermark; };
+    __u32   bp_type;        // breakpoint type
+    __u64   config1, config2;
+    __u64   branch_sample_type;
+    __u64   sample_regs_user;
+    __u32   sample_stack_user;
+    __s32   clockid;
+    __u64   sample_regs_intr;
+    __u32   aux_watermark;
+    __u16   sample_max_stack;
+    __u16   __reserved_2;
+    __u32   aux_sample_size;
+    __u32   __reserved_3;
+    // ... sig_data, config3, ...
+};
+</code></pre>
+</section>
+
+<section id="pmu" class="toc-link">
+  <h2><span class="num">03</span> PMU 与硬件事件</h2>
+
+  <p>硬件 PMU (Performance Monitoring Unit) 通过架构特定驱动实现。x86 上是 Intel/AMD PMU：</p>
+
+<pre><code>// arch/x86/events/intel/core.c (Intel PMU)
+static struct pmu intel_pmu = {
+    .name           = "intel",
+    .task_ctx_nr    = perf_hw_context,
+    .event_init     = intel_pmu_event_init,
+    .add            = intel_pmu_add,
+    .del            = intel_pmu_del,
+    .start          = intel_pmu_start,
+    .stop           = intel_pmu_stop,
+    .read           = intel_pmu_read,
+    .start_txn      = intel_pmu_start_txn,
+    .commit_txn     = intel_pmu_commit_txn,
+    .cancel_txn     = intel_pmu_cancel_txn,
+    .capabilities   = INTEL_PMU_CAPABILITIES,
+    .sched_task     = intel_pmu_sched_task,
+    .check_period  = intel_pmu_check_period,
+    .aux_output_match = intel_pmu_aux_output_match,
+    .filter         = intel_pmu_filter,
+};
+
+// 硬件事件 (PERF_TYPE_HARDWARE)：
+enum perf_hw_id {
+    PERF_COUNT_HW_CPU_CYCLES,        // CPU 周期数
+    PERF_COUNT_HW_INSTRUCTIONS,      // 已退休指令数
+    PERF_COUNT_HW_CACHE_REFERENCES,
+    PERF_COUNT_HW_CACHE_MISSES,
+    PERF_COUNT_HW_BRANCH_INSTRUCTIONS,
+    PERF_COUNT_HW_BRANCH_MISSES,
+    PERF_COUNT_HW_BUS_CYCLES,
+    PERF_COUNT_HW_STALLED_CYCLES_FRONTEND,
+    PERF_COUNT_HW_STALLED_CYCLES_BACKEND,
+    PERF_COUNT_HW_REF_CPU_CYCLES,
+    PERF_COUNT_HW_MAX,
+};
+
+// 缓存事件 (PERF_TYPE_HW_CACHE)：
+// 由 (cache_id, op, result) 组合
+//   cache_id: L1D, L1I, LL, DTLB, ITLB, BPU, NODE
+//   op: READ, WRITE, PREFETCH
+//   result: ACCESS, MISS
+
+// raw 事件 (PERF_TYPE_RAW)：
+// 直接传 PMU specific 编码
+// 例如 Intel 的 mem-loads 事件
+
+// hw_perf_event — 架构特定部分：
+struct hw_perf_event {
+    union {
+        struct { /* hardware */
+            u64         config;
+            u64         last_tag;
+            unsigned long config_base;
+            unsigned long event_base;
+            int         event_base_rdpmc;
+            int         idx;
+            int         last_cpu;
+            int         flags;
+            struct hw_perf_event_extra extra_reg;
+            struct hw_perf_event_extra branch_reg;
+        };
+        struct { /* software */
+            struct hrtimer  hrtimer;
+            struct task_struct *target;
+        };
+        struct { /* tracepoint */
+            struct tracepoint *tp;
+        };
+        struct { /* intel_pt */
+            u64             intel_pt_config;
+        };
+        struct { /* breakpoint */
+            struct arch_hw_breakpoint info;
+            struct list_head   bp_list;
+        };
+    };
+    u64                 sample_period;
+    u64                 last_period;
+    local64_t           period_left;
+    u64                 interrupts_seq;
+    u64                 interrupts;
+    u64                 freq_time;
+    u64                 freq_count;
+    u64                 freq_interrupts;
+    u64                 pwr_acc;
+    u64                 ptmsc;
+    struct perf_addr_filter_range *addr_filters;
+    struct list_head    addr_filters_online;
+    int                 state;
+};
+</code></pre>
+
+  <p>PEBS (Processor Event-Based Sampling)：Intel 的精确采样机制：</p>
+<pre><code>// PEBS 在事件触发时让 CPU 自动写入一个状态记录
+// 包含 RIP, RSP, RFLAGS, RAX-R15（无内核切换开销）
+// 比 IRQ-based 采样精度高得多
+
+// arch/x86/events/intel/ds.c
+struct pebs_basic {
+    u64 format_size;
+    u64 ip;
+    u64 applicable_counters;
+    u64 tsc;
+};
+
+struct pebs_lbr {
+    // LBR (Last Branch Record) 链
+    // 记录最近的分支跳转
+};
+</code></pre>
+</section>
+
+<section id="ringbuf" class="toc-link">
+  <h2><span class="num">04</span> perf 环形缓冲区</h2>
+
+<pre><code>// kernel/events/ring_buffer.c
+
+struct perf_buffer {
+    struct rcu_head            rcu_head;
+    refcount_t                 refcount;
+    struct work_struct         work;
+    int                        cpu;
+    
+    /* user-visible ring buffer */
+    struct perf_event_mmap_page *user_page;        // 用户态 mmap 的元数据页
+    void                      *data_pages[0];       // 数据页
+    unsigned int               data_pages_nr_pages;
+    unsigned int               aux_pages_nr_pages;
+    void                      *aux_pages[0];
+    unsigned int               aux_nr_pages;
+    long                       aux_overwrite;
+    
+    /* 内核侧 */
+    struct {
+        unsigned int           head;                // 内核写入位置
+        unsigned int           nest;                // 嵌套计数
+        unsigned int           aux_head;
+        unsigned int           aux_nest;
+    };
+    
+    struct {
+        atomic_t               poll;
+        atomic_t               events;
+        local_t                lost;
+        local_t                wakeup;
+    } ____cacheline_aligned;
+    
+    struct user_struct        *mmap_user;
+    
+    struct perf_event_mmap_page *user_page_kernel_copy;
+    atomic_t                  vm_pgoff;
+    /* workqueue */
+    struct irq_work           irq_work;
+    unsigned long             wakeq;
+    struct callback_head      lost_event_callback;
+};
+
+// 用户态 mmap 布局：
+//   [元数据页 (1页)]
+//   [数据页 (N页)]
+//   [aux 页 (M 页，可选，用于 Intel PT)]
+//
+// 元数据页结构：
+struct perf_event_mmap_page {
+    __u32 version;
+    __u32 compat_version;
+    __u32 lock;
+    __u32 index;
+    __u64 offset;
+    __u64 time_enabled;
+    __u64 time_running;
+    __u64 capabilities;
+    __u64 pmc_width;
+    __u64 time_shift;
+    __u64 time_mult;
+    __u64 time_offset;
+    __u64 time_zero;
+    __u32 size;
+    __u32 __reserved_1;
+    __u64 time_cycles;
+    __u64 time_mask;
+    __u64 __reserved[2];
+    __u64 data_head;          // 内核写入位置
+    __u64 data_tail;          // 用户读取位置
+    __u64 data_offset;
+    __u64 data_size;
+    __u64 aux_head;
+    __u64 aux_tail;
+    __u64 aux_offset;
+    __u64 aux_size;
+};
+
+// 写入流程：
+int perf_output_begin(struct perf_output_handle *handle,
+                       struct perf_sample_data *data,
+                       struct perf_event *event, unsigned int size)
+{
+    struct perf_buffer *rb = rcu_dereference(event->rb);
+    
+    // 1. 计算写入位置
+    handle->head = local_read(&rb->head);
+    head = handle->head;
+    offset = head & (rb->data_pages_nr_pages << PAGE_SHIFT);
+    
+    // 2. 检查空间（避免覆盖未读数据）
+    if (unlikely(head - local_read(&rb->user_page->data_tail) >= ...))
+        return -ENOSPC;
+    
+    // 3. memcpy 写入（处理页边界）
+    // 4. smp_wmb() 内存屏障
+    // 5. 更新 data_head（用户态可见）
+}
+
+void perf_output_end(struct perf_output_handle *handle)
+{
+    // 释放锁
+    // 如有 pending wakeup → 触发
+}
+</code></pre>
+
+  <p>Intel PT (Processor Trace)：</p>
+<pre><code>// Intel PT 是硬件辅助的执行追踪
+// 通过 aux buffer 输出
+// 包含：执行路径、时序、分支、时间戳
+// perf record -e intel_pt// ...
+
+// aux buffer 与 data buffer 不同
+// aux buffer 不经过格式化，直接是 PT 数据
+</code></pre>
+</section>
+
+<section id="sw-events" class="toc-link">
+  <h2><span class="num">05</span> 软件事件 & Tracepoint</h2>
+
+  <p>perf 不只是硬件采样，还支持软件事件：</p>
+
+<pre><code>// 软件事件 (PERF_TYPE_SOFTWARE)：
+enum perf_sw_ids {
+    PERF_COUNT_SW_CPU_CLOCK,         // CPU 时钟
+    PERF_COUNT_SW_TASK_CLOCK,        // 任务 CPU 时间
+    PERF_COUNT_SW_PAGE_FAULTS,       // 缺页
+    PERF_COUNT_SW_CONTEXT_SWITCHES,  // 上下文切换
+    PERF_COUNT_SW_CPU_MIGRATIONS,    // CPU 迁移
+    PERF_COUNT_SW_PAGE_FAULTS_MIN,
+    PERF_COUNT_SW_PAGE_FAULTS_MAJ,
+    PERF_COUNT_SW_ALIGNMENT_FAULTS,
+    PERF_COUNT_SW_EMULATION_FAULTS,
+    PERF_COUNT_SW_MAX,
+};
+
+// 实现：kernel/events/core.c
+// 每个 sw 事件在对应内核路径被记录：
+//   - CPU clock 用 hrtimer 周期采样
+//   - page fault 在 do_page_fault 中 perf_sw_event()
+//   - context switch 在 __schedule 中 perf_event_task_sched_out()
+
+void perf_sw_event(u32 event_id, u64 nr, struct pt_regs *regs, u64 addr)
+{
+    // 遍历当前 CPU 上所有已注册的 perf_event
+    // 如果 type == PERF_TYPE_SOFTWARE 且 config == event_id
+    //   累加 count
+    //   按 sample_period 采样
+}
+
+// Tracepoint 事件 (PERF_TYPE_TRACEPOINT)：
+// include/trace/ 下定义的静态插桩点
+// 例如 sched/sched_switch.c：
+TRACE_EVENT(sched_switch,
+    TP_PROTO(bool preempt, struct task_struct *prev,
+             struct task_struct *next),
+    TP_ARGS(preempt, prev, next),
+    
+    TP_STRUCT__entry(
+        __array(char,        prev_comm, TASK_COMM_LEN)
+        __field(pid_t,       prev_pid)
+        __field(int,         prev_prio)
+        __field(long,        prev_state)
+        __array(char,        next_comm, TASK_COMM_LEN)
+        __field(pid_t,       next_pid)
+        __field(int,         next_prio)
+    ),
+    
+    TP_fast_assign(
+        memcpy(__entry->prev_comm, prev->comm, TASK_COMM_LEN);
+        __entry->prev_pid = prev->pid;
+        // ...
+    ),
+    
+    TP_printk("prev_comm=%s prev_pid=%d ...", ...)
+);
+</code></pre>
+
+  <p>Tracepoint 内部结构：</p>
+<pre><code>// include/linux/tracepoint-defs.h
+struct tracepoint {
+    const char              *name;
+    struct static_call_key  *key;             // 静态调用入口
+    struct tracepoint_func __rcu *funcs;       // 注册函数链表
+    int                      state;
+    struct tp_stub          *stub;
+};
+
+// 注册函数：tracepoint_probe_register()
+// 在 include/trace/events/ 中：
+// DECLARE_TRACE(name, proto, args)
+//   展开为：
+//     - trace_<name>() 内联函数（无操作如果未启用）
+//     - register_trace_<name>(fn) 注册回调
+//     - unregister_trace_<name>(fn) 注销
+
+// 静态调用优化：
+//   未启用时：trace_xxx() 是 nop
+//   启用时：static_call patch 为 jmp 到 callbacks
+//   无条件分支预测，性能开销极低
+</code></pre>
+</section>
+
+<section id="tp-perf" class="toc-link">
+  <h2><span class="num">06</span> Tracepoint 与 perf 的连接</h2>
+
+<pre><code>// kernel/trace/trace_event_perf.c
+int perf_trace_init(struct perf_event *perf_event)
+{
+    struct trace_event_call *tp_event;
+    
+    // 根据 perf_event->attr.config 找 tracepoint
+    // config 是 tracepoint 的 ID（来自 /sys/kernel/debug/tracing/events）
+    list_for_each_entry(tp_event, &ftrace_events, list) {
+        if (tp_event->event.type == perf_event->attr.config) {
+            // 找到，注册 perf callback
+            return perf_trace_event_init(tp_event, perf_event);
+        }
+    }
+    return -ENOENT;
+}
+
+int perf_trace_event_init(struct trace_event_call *tp_event,
+                            struct perf_event *perf_event)
+{
+    int ret;
+    
+    // 1. 注册 perf callback 到 tracepoint
+    ret = tracepoint_probe_register(tp_event->tp,
+                                     tp_event->class->perf_probe,
+                                     perf_event);
+    
+    // 2. 增加 tracepoint refcount
+    perf_event->tp_event = tp_event;
+    
+    return ret;
+}
+
+// tp_event->class->perf_probe 是统一回调
+// 由 trace event 自动生成：
+// kernel/trace/trace_export.c (TRACE_EVENT macro 扩展)
+
+// 路径：
+// 1. trace_<name>() 被内核代码调用
+// 2. 静态调用到注册的 perf_probe
+// 3. perf_probe 复制 trace 数据到 perf_sample_data
+// 4. perf_output_begin/end 写入 ring buffer
+// 5. 用户态通过 read/mmap 读取
+
+// perf_tp_event — 共享入口
+void perf_tp_event(u16 event_type, u64 count, void *record,
+                    struct pt_regs *regs, struct hlist_head *head,
+                    struct task_struct *task, struct perf_event *event_only,
+                    struct pt_regs *entry_regs)
+{
+    // 遍历所有关注的 perf_event
+    // 对每个写入 ring buffer
+}
+</code></pre>
+
+  <div class="callout">
+    <strong>tracepoint 的核心优势:</strong><br>
+    静态插桩：在编译时确定位置，开销稳定。<br>
+    共享消费者：ftrace、perf、eBPF 可同时使用一个 tracepoint。<br>
+    类型安全：通过 DECLARE_TRACE/TRACE_EVENT 宏自动生成。<br>
+    关闭时零开销：static_call 优化为 nop。<br>
+    但只能用于预先定义的位置，无灵活性（这是 kprobe 的用武之地）。
+  </div>
+</section>
+
+<section id="kprobe" class="toc-link">
+  <h2><span class="num">07</span> kprobe 内核探针</h2>
+
+  <p>kprobe 允许在<strong>任意内核指令</strong>处动态插入探针。</p>
+
+<pre><code>// include/linux/kprobes.h
+struct kprobe {
+    struct hlist_node     hlist;
+    struct list_head      list;
+    unsigned long         nmissed;
+    kprobe_opcode_t      *addr;                // 目标地址
+    const char           *symbol_name;          // 符号名（替代 addr）
+    unsigned int          offset;
+    kprobe_pre_handler_t  pre_handler;          // 入口回调
+    kprobe_post_handler_t post_handler;         // 出口回调
+    kprobe_opcode_t       opcode;               // 原始 opcode
+    kprobe_opcode_t      *ainsn;                // 架构特定副本
+    u32                   flags;
+    bool                  enabled;
+};
+
+// 注册：
+int register_kprobe(struct kprobe *p);
+int register_kprobes(struct kprobe **pps, int num);
+void unregister_kprobe(struct kprobe *p);
+
+// 实现机制（x86）：
+// 1. register_kprobe()
+//    - 找到目标地址 p->addr
+//    - 备份原始字节（通常 1 字节）
+//    - 写入 int3 (0xCC)
+//    
+// 2. 内核执行到 int3
+//    - 触发 #BP 异常
+//    - 进入 do_int3() → kprobe_int3_handler()
+//    - 查找 kprobe hash table
+//    - 调用 p->pre_handler(p, regs)
+//    - single-step 执行原始指令
+//    - 调用 p->post_handler(p, regs, flags)
+//    - 返回到下一条指令
+//
+// 3. unregister: 恢复原始字节
+
+// ftrace-based kprobe（优化）：
+// 如果目标函数已被 ftrace 插桩（mcount）
+// 则不用 int3，而是利用 ftrace hook
+// 性能开销从 ~100ns (int3) 降到 ~10ns
+// 内核启动时若 CONFIG_KPROBE_EVENTS_ON_NOTRACE=y 启用此优化
+
+// kretprobe — 函数返回探针
+struct kretprobe {
+    struct kprobe          kp;
+    kretprobe_handler_t    handler;
+    int                    maxactive;
+    int                    nmissed;
+    size_t                 data_size;
+    struct list_head        free_instances;
+    raw_spinlock_t          lock;
+};
+
+// 实现：
+// 1. kprobe 在函数入口拦截
+// 2. 保存返回地址，替换为 trampoline
+// 3. 函数返回时跳到 trampoline
+// 4. trampoline 调用 handler，然后跳回原始返回地址
+</code></pre>
+
+  <p>通过 tracefs 使用 kprobe：</p>
+<pre><code>// /sys/kernel/debug/tracing/kprobe_events
+// 添加：
+echo 'p:my_probe vfs_read' > kprobe_events
+echo 'r:my_ret vfs_read $retval' >> kprobe_events
+
+// 启用：
+echo 1 > events/kprobes/my_probe/enable
+
+// 输出格式在 events/kprobes/my_probe/format
+
+// 实现路径：
+// 1. 文件写入 → kprobe_events 命令解析
+// 2. 解析器 (kernel/trace/trace_kprobe.c)
+//    - 创建 struct trace_kprobe
+//    - register_kprobe(&tk->rp.kp)
+// 3. 注册为 trace event call
+// 4. 可被 perf / ftrace / eBPF 共同消费
+</code></pre>
+</section>
+
+<section id="uprobe" class="toc-link">
+  <h2><span class="num">08</span> uprobe 用户探针</h2>
+
+  <p>uprobe 是 kprobe 的用户态对应物，可以追踪用户态程序的函数入口。</p>
+
+<pre><code>// kernel/trace/uprobe.c
+struct uprobe {
+    struct rb_node         rb_node;          // 全局红黑树节点
+    refcount_t             ref;
+    struct rw_semaphore    register_rwsem;
+    struct rw_semaphore    consumer_rwsem;
+    struct list_head        pending_list;
+    struct uprobe_consumer *consumers;
+    struct inode           *inode;            // 用户 ELF 文件的 inode
+    loff_t                  offset;           // 文件偏移
+    struct delayed_work     work;
+    struct rcu_head         rcu;
+    bool                    text_dwarf;
+};
+
+struct uprobe_consumer {
+    int (*handler)(struct uprobe_consumer *self, struct pt_regs *regs);
+    int (*ret_handler)(struct uprobe_consumer *self,
+                       unsigned long func, struct pt_regs *regs);
+    bool (*filter)(struct uprobe_consumer *self, enum uprobe_filter_ctx ctx,
+                    struct mm_struct *mm);
+    struct list_head        cons_node;
+    unsigned long           flags;
+};
+
+// 注册：
+int uprobe_register(struct inode *inode, loff_t offset,
+                     struct uprobe_consumer *uc);
+int uprobe_register_refctr(struct inode *inode, loff_t offset,
+                            loff_t ref_ctr_offset,
+                            struct uprobe_consumer *uc);
+void uprobe_unregister(struct inode *inode, loff_t offset,
+                        struct uprobe_consumer *uc);
+
+// 实现：
+// 1. uprobe_register
+//    - 在 inode+offset 处插入断点
+//    - 实现是 page-precise 的：内核替换该页的内容
+//    - 写入 arch 的 breakpoint 指令（x86: 0xCC）
+//    
+// 2. 程序执行到断点
+//    - 触发 SIGTRAP
+//    - uprobe_notify() 检查是否为 uprobe
+//    - 调用 handler(consumer, regs)
+//
+// 3. uretprobe
+//    - 在入口替换返回地址为 trampoline
+//    - 函数返回时跳到 trampoline 调用 ret_handler
+//    - 然后返回到原始地址
+
+// 通过 tracefs 使用：
+// /sys/kernel/debug/tracing/uprobe_events
+echo 'p:my_probe /bin/bash:0x42450' > uprobe_events
+echo 'r:my_ret /bin/bash:0x42450' >> uprobe_events
+
+// 应用场景：
+// - strace 替代（更高性能）
+// - 用户态程序 hot path 分析
+// - 函数调用统计
+// - eBPF uprobe 程序
+</code></pre>
+
+  <p>uprobe vs kprobe 对比：</p>
+  <table>
+    <tr><th></th><th>kprobe</th><th>uprobe</th></tr>
+    <tr><td>地址空间</td><td>内核态</td><td>用户态</td></tr>
+    <tr><td>断点指令</td><td>int3 (内核代码)</td><td>int3 (用户代码)</td></tr>
+    <tr><td>处理器上下文</td><td>内核 IRQ 上下文</td><td>进程上下文</td></tr>
+    <tr><td>可观察对象</td><td>所有内核函数</td><td>用户 ELF 文件任意地址</td></tr>
+    <tr><td>典型开销</td><td>~100ns</td><td>~1μs (mm 切换)</td></tr>
+  </table>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">kernel/events/core.c</span>            <span class="cmt">perf_events 核心、perf_event_open</span>
+├── <span class="file">kernel/events/ring_buffer.c</span>     <span class="cmt">perf ring buffer</span>
+├── <span class="file">kernel/events/callchain.c</span>       <span class="cmt">调用栈采集</span>
+├── <span class="file">kernel/events/internal.h</span>        <span class="cmt">perf 内部结构</span>
+├── <span class="file">kernel/events/branch.c</span>          <span class="cmt">BTS / LBR 分支采样</span>
+├── <span class="file">kernel/events/hw_breakpoint.c</span>   <span class="cmt">硬件断点事件</span>
+├── <span class="file">kernel/events/uprobes.c</span>          <span class="cmt">uprobe 框架（同时被 perf/tracer 使用）</span>
+├── <span class="file">kernel/events/tracepoint.c</span>      <span class="cmt">tracepoint perf 适配</span>
+├── <span class="file">arch/x86/events/core.c</span>          <span class="cmt">x86 PMU 通用层</span>
+├── <span class="file">arch/x86/events/intel/core.c</span>    <span class="cmt">Intel PMU 驱动</span>
+├── <span class="file">arch/x86/events/intel/ds.c</span>      <span class="cmt">PEBS、BTS、DS</span>
+├── <span class="file">arch/x86/events/intel/pt.c</span>      <span class="cmt">Intel Processor Trace</span>
+├── <span class="file">arch/x86/events/amd/core.c</span>      <span class="cmt">AMD PMU 驱动</span>
+├── <span class="file">arch/x86/events/arm64/</span>          <span class="cmt">ARM64 PMU 驱动</span>
+├── <span class="file">kernel/trace/trace.c</span>            <span class="cmt">ftrace 主框架（ring buffer）</span>
+├── <span class="file">kernel/trace/trace_output.c</span>     <span class="cmt">trace 输出格式化</span>
+├── <span class="file">kernel/trace/trace_event_perf.c</span> <span class="cmt">tracepoint ↔ perf 连接</span>
+├── <span class="file">kernel/trace/trace_events.c</span>     <span class="cmt">trace_event_call 注册框架</span>
+├── <span class="file">kernel/trace/trace_export.c</span>     <span class="cmt">trace_event 自动生成代码</span>
+├── <span class="file">kernel/trace/trace_kprobe.c</span>     <span class="cmt">kprobe_events 实现</span>
+├── <span class="file">kernel/trace/trace_uprobe.c</span>     <span class="cmt">uprobe_events 实现</span>
+├── <span class="file">kernel/trace/trace_probe.c</span>      <span class="cmt">trace_probe 共享框架</span>
+├── <span class="file">kernel/trace/bpf_trace.c</span>        <span class="cmt">BPF trace 程序支持</span>
+├── <span class="file">kernel/kprobes.c</span>                <span class="cmt">kprobe 核心机制</span>
+├── <span class="file">kernel/tracepoint.c</span>             <span class="cmt">tracepoint 注册机制</span>
+├── <span class="file">include/linux/perf_event.h</span>      <span class="cmt">perf_event、pmu 等核心结构</span>
+├── <span class="file">include/linux/tracepoint.h</span>      <span class="cmt">DECLARE_TRACE/TRACE_EVENT 宏</span>
+├── <span class="file">include/linux/tracepoint-defs.h</span> <span class="cmt">struct tracepoint</span>
+├── <span class="file">include/trace/events/</span>           <span class="cmt">所有 trace event 定义</span>
+│   ├── <span class="file">sched.h</span>                      <span class="cmt">sched_switch 等</span>
+│   ├── <span class="file">irq.h</span>                         <span class="cmt">irq_entry/exit</span>
+│   ├── <span class="file">net.h</span>                         <span class="cmt">网络事件</span>
+│   └── <span class="file">...</span>
+├── <span class="file">include/uapi/linux/perf_event.h</span> <span class="cmt">用户态 perf 接口</span>
+└── <span class="file">include/uapi/linux/tracefs.h</span>    <span class="cmt">tracefs 接口</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>include/linux/perf_event.h</code> 看 perf_event、pmu 数据结构。<br>
+    <code>kernel/events/core.c</code> 看 perf_event_open 流程。<br>
+    <code>arch/x86/events/intel/core.c</code> 现代 PMU 实现范例。<br>
+    <code>include/linux/tracepoint.h</code> + <code>include/trace/define_trace.h</code> 理解 tracepoint 宏机制。<br>
+    <code>kernel/trace/trace_kprobe.c</code> kprobe 框架实现。<br>
+    <code>kernel/kprobes.c</code> kprobe 核心机制。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

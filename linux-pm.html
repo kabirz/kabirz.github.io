@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核电源管理子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核电源管理子系统深度解析</h1>
+  <p class="subtitle">系统休眠、运行时 PM、CPU 频率与空闲管理</p>
+  <span class="version">Linux 7.0.12 · kernel/power/ · drivers/base/power/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#dev-pm">设备电源管理</a></li>
+    <li><a href="#runtime-pm">Runtime PM</a></li>
+    <li><a href="#suspend">系统休眠与唤醒</a></li>
+    <li><a href="#cpufreq">CPU 频率管理 (cpufreq)</a></li>
+    <li><a href="#cpuidle">CPU 空闲管理 (cpuidle)</a></li>
+    <li><a href="#pm-domain">PM 域与 QoS</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 电源管理 (PM) 是一个分层系统，覆盖四个层面：</p>
+
+<pre><code>┌─────────────────────────────────────────┐
+│  系统级 PM (System-wide PM)              │
+│  ┌─────────────────────────────────┐    │
+│  │  Suspend-to-Idle (s2idle)        │    │
+│  │  Suspend-to-RAM (mem/standby)    │    │
+│  │  Hibernation (suspend-to-disk)   │    │
+│  │  Shutdown (poweroff)             │    │
+│  └─────────────────────────────────┘    │
+└─────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│  Runtime PM (每设备运行时)               │
+│  ┌─────────────────────────────────┐    │
+│  │  Per-device auto-suspend         │    │
+│  │  Active / Suspended / Idle 状态  │    │
+│  │  autosuspend_delay               │    │
+│  └─────────────────────────────────┘    │
+└─────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│  CPU 频率管理 (cpufreq)                  │
+│  ┌─────────────────────────────────┐    │
+│  │  Governor: performance/powersave │    │
+│  │            ondemand/schedutil    │    │
+│  │  Driver: acpi/intel_pstate       │    │
+│  └─────────────────────────────────┘    │
+└─────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│  CPU 空闲管理 (cpuidle)                  │
+│  ┌─────────────────────────────────┐    │
+│  │  C-states: C0/C1/C2/C3...      │    │
+│  │  Governor: menu/ladder/teo      │    │
+│  │  Driver: intel_idle/acpi_idle   │    │
+│  └─────────────────────────────────┘    │
+└─────────────────────────────────────────┘
+</code></pre>
+
+  <p>核心子目录：</p>
+  <table>
+    <tr><th>目录</th><th>职责</th></tr>
+    <tr><td><code>kernel/power/</code></td><td>系统级 PM（suspend/hibernate）</td></tr>
+    <tr><td><code>drivers/base/power/</code></td><td>设备 PM、Runtime PM 核心</td></tr>
+    <tr><td><code>drivers/cpufreq/</code></td><td>CPU 调频框架和驱动</td></tr>
+    <tr><td><code>drivers/cpuidle/</code></td><td>CPU 空闲框架和驱动</td></tr>
+    <tr><td><code>include/linux/pm.h</code></td><td>PM 核心结构</td></tr>
+    <tr><td><code>include/linux/pm_runtime.h</code></td><td>Runtime PM 接口</td></tr>
+  </table>
+</section>
+
+<section id="dev-pm" class="toc-link">
+  <h2><span class="num">02</span> 设备电源管理</h2>
+
+  <p>每个设备实现一组 PM 回调，定义在 <code>struct dev_pm_ops</code> 中：</p>
+
+<pre><code>// include/linux/pm.h
+struct dev_pm_ops {
+    int (*prepare)(struct device *dev);
+    void (*complete)(struct device *dev);
+    int (*suspend)(struct device *dev);
+    int (*resume)(struct device *dev);
+    int (*freeze)(struct device *dev);
+    int (*thaw)(struct device *dev);
+    int (*poweroff)(struct device *dev);
+    int (*restore)(struct device *dev);
+    int (*suspend_late)(struct device *dev);
+    int (*resume_early)(struct device *dev);
+    int (*freeze_late)(struct device *dev);
+    int (*thaw_early)(struct device *dev);
+    int (*poweroff_late)(struct device *dev);
+    int (*restore_early)(struct device *dev);
+    int (*suspend_noirq)(struct device *dev);
+    int (*resume_noirq)(struct device *dev);
+    int (*freeze_noirq)(struct device *dev);
+    int (*thaw_noirq)(struct device *dev);
+    int (*poweroff_noirq)(struct device *dev);
+    int (*restore_noirq)(struct device *dev);
+    int (*runtime_suspend)(struct device *dev);
+    int (*runtime_resume)(struct device *dev);
+    int (*runtime_idle)(struct device *dev);
+};
+</code></pre>
+
+  <p>回调的三个时机：</p>
+  <table>
+    <tr><th>时机</th><th>阶段</th><th>说明</th></tr>
+    <tr><td><code>xxx</code></td><td>正常</td><td>设备仍可工作</td></tr>
+    <tr><td><code>xxx_late</code></td><td>晚</td><td>设备已被部分驱动操作</td></tr>
+    <tr><td><code>xxx_noirq</code></td><td>无 IRQ</td><td>IRQ 已禁用（不可睡眠）</td></tr>
+  </table>
+
+  <p>系统级 PM 与运行时 PM 的区别：</p>
+  <table>
+    <tr><th></th><th>系统级 PM</th><th>Runtime PM</th></tr>
+    <tr><td>触发</td><td>显式 suspend</td><td>设备空闲自动</td></tr>
+    <tr><td>回调</td><td>suspend/resume</td><td>runtime_suspend/resume</td></tr>
+    <tr><td>持续</td><td>系统级</td><td>单个设备</td></tr>
+    <tr><td>延迟</td><td>秒级</td><td>毫秒级</td></tr>
+  </table>
+
+  <p>PM 域：</p>
+<pre><code>// include/linux/pm_domain.h
+struct generic_pm_domain {
+    struct device          domain;
+    struct list_head       gpd_list_node;
+    struct list_head       master_links;        // 主域链表
+    struct list_head       slave_links;
+    struct list_head       dev_list;            // 该域的设备
+    struct dev_power_governor *gov;
+    struct work_struct     power_off_work;
+    struct work_struct     power_on_work;
+    struct fwnode_handle   *provider;
+    bool                   has_provider;
+    unsigned int           device_count;
+    unsigned int           suspended_count;
+    unsigned int           performance_state;
+    int (*power_off)(struct generic_pm_domain *domain);
+    int (*power_on)(struct generic_pm_domain *domain);
+    struct raw_notifier_head power_notifiers;
+    s64                    max_off_time_ns;
+    bool                   max_off_time_changed;
+    bool                   cached_power_off_ok;
+    bool                   cached_suspend_ok;
+    unsigned int           state_idx;
+    // ... 一组 runtime 状态、电源域锁 ...
+};
+
+// PM 域通常对应硬件电源岛（power island）
+// 例如 SoC 上：CPU domain、GPU domain、Display domain
+// 一个域内的设备一起上下电
+</code></pre>
+</section>
+
+<section id="runtime-pm" class="toc-link">
+  <h2><span class="num">03</span> Runtime PM</h2>
+
+  <p>Runtime PM 让设备在<strong>空闲时自动进入低功耗状态</strong>，活动时再唤醒。核心是引用计数状态机：</p>
+
+<pre><code>// drivers/base/power/runtime.c
+
+// 设备 PM 状态：
+enum rpm_status {
+    RPM_ACTIVE = 0,       // 完全活跃
+    RPM_RESUMING,         // 正在唤醒
+    RPM_SUSPENDED,        // 已挂起
+    RPM_SUSPENDING,       // 正在挂起
+};
+
+// 每设备维护：
+//   power.usage_count       - 主引用计数
+//   power.child_count       - 子设备活跃数
+//   power.disable_depth     - PM 禁用深度
+//   power.runtime_status    - 当前状态
+//   power.request_pending   - 等待处理
+//   power.timer_expires     - autosuspend 超时
+
+// 主要 API：
+// include/linux/pm_runtime.h
+
+int pm_runtime_get_sync(struct device *dev);
+//   usage_count++
+//   如果当前 SUSPENDED → runtime_resume()
+
+int pm_runtime_put_sync(struct device *dev);
+//   usage_count--
+//   如果降到 0 → idle 回调 → 可能 suspend
+
+int pm_runtime_put_sync_autosuspend(struct device *dev);
+//   usage_count--
+//   标记等待 autosuspend_delay 后 suspend
+
+int pm_runtime_idle(struct device *dev);
+//   调用 idle 回调
+//   idle 回调决定是否触发 suspend
+
+// 自动挂起延迟：
+//   autosuspend_delay = 50ms (默认)
+//   设备 last_busy 之后该时间内不活动才挂起
+pm_runtime_mark_last_busy(dev);
+pm_runtime_use_autosuspend(dev);
+pm_runtime_set_autosuspend_delay(dev, 100);
+</code></pre>
+
+  <p>状态转移图：</p>
+<pre><code>            get_sync
+   ┌──────────────────────────┐
+   │                          ▼
+┌──┴───────┐               ┌─────────┐
+│SUSPENDED │ ←─ suspend ── │ ACTIVE  │
+└──┬───────┘               └────┬────┘
+   │                          │
+   │       resume             │
+   │   ┌──────────────────────┘
+   │   ▼
+   └─►ACTIVE (从 SUSPENDED 经 RESUMING)
+   
+   ACTIVE → SUSPENDING → SUSPENDED
+   SUSPENDED → RESUMING → ACTIVE
+
+// 关键约定：
+// 1. 驱动在每次访问设备前调用 pm_runtime_get_sync()
+// 2. 访问结束后调用 pm_runtime_put_*()
+// 3. 在 suspend/resume 回调中调用硬件寄存器配置
+// 4. runtime_resume 必须能从 SUSPENDED 恢复到可用状态
+</code></pre>
+</section>
+
+<section id="suspend" class="toc-link">
+  <h2><span class="num">04</span> 系统休眠与唤醒</h2>
+
+<pre><code>// kernel/power/suspend.c
+
+// 主要入口：state_store() / sysfs /sys/power/state
+// 用户态：echo mem > /sys/power/state
+
+// 三种 sleep 状态：
+const char *const pm_states[PM_SUSPEND_MAX] = {
+    [PM_SUSPEND_TO_IDLE] = "freeze",
+    [PM_SUSPEND_STANDBY] = "standby",
+    [PM_SUSPEND_MEM]     = "mem",
+};
+
+// Suspend 流程：
+int pm_suspend(suspend_state_t state)
+{
+    int error = enter_state(state);
+    return error;
+}
+
+static int enter_state(suspend_state_t state)
+{
+    // 1. 同步文件系统
+    pm_prepare_console();
+    sys_sync();                  // 强制 sync
+    
+    // 2. 通知用户态（PM_SUSPEND_PREPARE）
+    pm_notifier_call_chain(PM_SUSPEND_PREPARE);
+    
+    // 3. 冻结用户进程（停止 fork/exit）
+    freeze_processes();
+    
+    // 4. 冻结内核线程
+    freeze_kernel_threads();
+    
+    // 5. 关中断，进入 suspend
+    error = suspend_devices_and_enter(state);
+    
+    // 6. 解冻
+    thaw_processes();
+    
+    return error;
+}
+
+int suspend_devices_and_enter(suspend_state_t state)
+{
+    // 1. 调用每个设备的 dev_pm_ops.prepare
+    dpm_prepare(NULL);
+    
+    // 2. 关闭外设 IRQ
+    suspend_device_irqs();
+    
+    // 3. 调用 platform_suspend_ops->prepare
+    //    例如 ACPI 设置 _PTS
+    error = platform_suspend_begin(state);
+    
+    // 4. 调用所有设备的 dev_pm_ops.suspend(_late/_noirq)
+    dpm_suspend_start(PMSG_SUSPEND);
+    dpm_suspend_noirq(PMSG_SUSPEND);
+    
+    // 5. 调用 syscore_ops->suspend
+    //    保存关键状态：clockevents, tick, hrtimers
+    error = syscore_suspend();
+    
+    // 6. 调用 platform_suspend_ops->enter
+    //    这一步 CPU 实际进入睡眠 (WFI/WFE)
+    //    直到 wake source 触发
+    error = suspend_ops->enter(state);
+    
+    // 7. 唤醒路径：反向操作
+    //    syscore_resume → dpm_resume → platform_resume_done
+    // ...
+    
+    return 0;
+}
+
+// 唤醒源 (wakeup source)：
+struct wakeup_source {
+    const char         *name;
+    struct list_head    entry;
+    struct timer_list   expire_timer;
+    unsigned long       timer_expires;
+    spinlock_t          lock;
+    unsigned long       hit_count;
+    unsigned long       reconnect_count;
+    unsigned long       wakeup_count;
+    ktime_t             last_time;
+    ktime_t             start_prevent_time;
+    ktime_t             prevent_sleep_time;
+    unsigned long       event_count;
+    unsigned long       active_count;
+    unsigned long       relax_count;
+    unsigned long       expire_count;
+    unsigned long       prevent_sleep_count;
+    bool                active:1;
+    bool                autosleep_enabled:1;
+    // ...
+};
+
+// enable_irq_wake(irq) 让某个 IRQ 成为唤醒源
+// 设备驱动通过 pm_wakeup_event() 报告唤醒事件
+</code></pre>
+
+  <p>Hibernation（Suspend-to-Disk）：</p>
+<pre><code>// kernel/power/hibernate.c
+// 流程不同：将内存内容写入 swap 文件/分区，然后断电
+// 恢复时从 swap 读回内存内容
+
+// 1. freeze_processes
+// 2. 创建 snapshot（COW 复制所有页面）
+// 3. 写入 swap（swsusp）
+// 4. poweroff
+// 5. boot 时检测 resume partition
+// 6. 读回 snapshot，覆盖现有内存
+// 7. 跳转到原内核执行
+</code></pre>
+</section>
+
+<section id="cpufreq" class="toc-link">
+  <h2><span class="num">05</span> CPU 频率管理 (cpufreq)</h2>
+
+  <p>cpufreq 框架管理 CPU 核心电压和频率的<strong>动态调整</strong>（DVFS）。</p>
+
+<pre><code>// drivers/cpufreq/cpufreq.c
+
+// 驱动接口：
+struct cpufreq_driver {
+    char                   name[CPUFREQ_NAME_LEN];
+    u16                    flags;
+    void                  *driver_data;
+    
+    /* 必需回调 */
+    int                  (*init)(struct cpufreq_policy *policy);
+    int                  (*verify)(struct cpufreq_policy_data *policy);
+    int                  (*setpolicy)(struct cpufreq_policy *policy);
+    int                  (*target)(struct cpufreq_policy *policy,
+                                    unsigned int target_freq,
+                                    unsigned int relation);
+    int                  (*target_index)(struct cpufreq_policy *policy,
+                                          unsigned int index);
+    unsigned int         (*get)(unsigned int cpu);
+    int                  (*bios_limit)(int cpu, unsigned int *limit);
+    int                  (*online)(struct cpufreq_policy *policy);
+    int                  (*offline)(struct cpufreq_policy *policy);
+    int                  (*exit)(struct cpufreq_policy *policy);
+    void                 (*stop_cpu)(struct cpufreq_policy *policy);
+    int                  (*suspend)(struct cpufreq_policy *policy);
+    int                  (*resume)(struct cpufreq_policy *policy);
+    struct freq_attr    **attr;
+    
+    /* fast switch (无锁，用于 schedutil) */
+    unsigned int         (*fast_switch)(struct cpufreq_policy *policy,
+                                         unsigned int target_freq);
+    
+    /* boost (超频) */
+    int                  (*set_boost)(struct cpufreq_policy *policy, int state);
+    
+    /* register with PM OPP */
+    bool                  register_em;
+    
+    const char           *name;
+};
+
+// Policy：一组核心共享相同电压/频率
+struct cpufreq_policy {
+    struct cpufreq_cpuinfo    cpuinfo;
+    struct cpufreq_frequency_table *freq_table;
+    struct list_head          policy_list;
+    struct list_head          instance_list;
+    struct cpufreq_governor  *governor;
+    struct cpufreq_governor  *last_governor;
+    void                     *governor_data;
+    struct work_struct        update;
+    struct work_struct        dvfs_work;
+    struct freq_constraints   constraints;
+    struct freq_qos          *qos;
+    struct cpufreq_frequency_table *cached_freq_table;
+    unsigned int              min;
+    unsigned int              max;
+    unsigned int              cur;
+    unsigned int              restore_freq;
+    unsigned int              suspend_freq;
+    unsigned int              policy_cpu;
+    unsigned int              last_cpu;
+    unsigned int              cpu;
+    unsigned int              last_freq_req;
+    cpumask_var_t             related_cpus;
+    cpumask_var_t             real_cpus;
+    cpumask_var_t             cpus;
+    // ... fast_switch_possible, shared_type, etc.
+};
+
+// 流程：
+//   1. governor 决定目标频率（根据负载/利用率）
+//   2. driver->target_index(policy, idx) 设置频率
+//   3. driver 内部调用 SMC/MCR 调整硬件
+</code></pre>
+
+  <p>主要 governors：</p>
+  <table>
+    <tr><th>Governor</th><th>策略</th><th>用途</th></tr>
+    <tr><td><code>performance</code></td><td>始终最高频率</td><td>延迟敏感</td></tr>
+    <tr><td><code>powersave</code></td><td>始终最低频率</td><td>省电优先</td></tr>
+    <tr><td><code>userspace</code></td><td>用户态指定</td><td>细粒度控制</td></tr>
+    <tr><td><code>ondemand</code></td><td>动态调整（按 idle/利用率）</td><td>通用默认（旧）</td></tr>
+    <tr><td><code>conservative</code></td><td>类似 ondemand，但更慢</td><td>稳定性高</td></tr>
+    <tr><td><code>schedutil</code></td><td>调度器集成（CFS/EEVDF）</td><td>现代默认</td></tr>
+  </table>
+
+<pre><code>// schedutil（最现代）：
+// drivers/cpufreq/cpufreq_schedutil.c
+// 利用调度器的 util_est 预测
+// 在调度 tick 中通过 fast_switch 更新频率
+// 无需 context switch，响应极快
+
+// 流程：
+//   sched_tick → cpu_util() → sugov_update_* → fast_switch
+//   调度器决定 PELT 利用率，governor 直接应用
+
+// intel_pstate：
+//   Intel CPU 特定 driver
+//   直接用 HWP（Hardware P-states）
+//   遗留 mode（active / passive）影响 governor
+</code></pre>
+</section>
+
+<section id="cpuidle" class="toc-link">
+  <h2><span class="num">06</span> CPU 空闲管理 (cpuidle)</h2>
+
+  <p>cpuidle 管理 CPU 在 idle 时进入的<strong>不同深度睡眠状态</strong>（C-states）。</p>
+
+<pre><code>// drivers/cpuidle/cpuidle.c
+
+struct cpuidle_driver {
+    const char              *name;
+    struct module           *owner;
+    unsigned int            bctes;
+    int                     rating;
+    struct cpuidle_state     states[CPUIDLE_STATE_MAX];
+    atomic_t                refcnt;
+    struct cpumask          *cpumask;
+    struct cpuidle_state0   *safe_state;
+    struct cpuidle_state0   *stop_state;
+    int                     state_count;
+    int                     disabled;
+    // ...
+};
+
+struct cpuidle_state {
+    char                    name[CPUIDLE_NAME_LEN];
+    char                    desc[CPUIDLE_DESC_LEN];
+    u64                     flags;
+    u64                     exit_latency;     // 退出延迟（ns）
+    u64                     target_residency; // 推荐停留时间（ns）
+    int                    (*enter)(struct cpuidle_device *dev,
+                                     struct cpuidle_driver *drv,
+                                     int index);
+    int                    (*enter_dead)(struct cpuidle_device *dev, int index);
+    int                     exit_latency_ns;
+    // ... 计数、统计 ...
+};
+
+// CPU 进入 idle：
+// kernel/sched/idle.c
+void cpu_startup_entry(enum cpuhp_state state)
+{
+    cpuidle_loop();          // 进入 idle 循环
+}
+
+// 流程：
+//   while (need_resched() == false):
+//     1. 调用 cpuidle_select() 选 C-state
+//        governor 根据历史 idle 时间预测
+//     2. cpuidle_enter(dev, drv, idx)
+//        调用 states[idx].enter(dev, drv, idx)
+//     3. CPU 真正执行 mwait/halt 指令
+//     4. 中断唤醒，从 enter 返回
+
+// 关键决策：governor
+// menu (默认): 基于 idle 历史预测是否值得进深 C-state
+// ladder: 步进式，每次只下一级
+// teo: Timer Events Oriented，基于定时器预测
+// haltpoll: 简单 polling fallback
+
+// 退出延迟 (exit_latency) vs 停留时间 (target_residency)
+//   深度状态退出慢，但更省电
+//   如果 idle 时间 < target_residency，进入反而亏
+//   governor 的工作就是预测下一个中断何时来
+</code></pre>
+
+  <p>典型 C-states：</p>
+  <table>
+    <tr><th>状态</th><th>退出延迟</th><th>省电</th><th>说明</th></tr>
+    <tr><td>C0</td><td>0</td><td>0%</td><td>运行</td></tr>
+    <tr><td>C1 (Halt)</td><td>~1μs</td><td>少量</td><td>停核心时钟</td></tr>
+    <tr><td>C1E</td><td>~10μs</td><td>更多</td><td>降频 + 停时钟</td></tr>
+    <tr><td>C3 (Sleep)</td><td>~60μs</td><td>显著</td><td>清空 L1/L2</td></tr>
+    <tr><td>C6 (Deep Sleep)</td><td>~100μs</td><td>更多</td><td>保存状态，关电压</td></tr>
+    <tr><td>C7/C8/C9/C10</td><td>~ms</td><td>极多</td><td>更深的省电</td></tr>
+  </table>
+</section>
+
+<section id="pm-domain" class="toc-link">
+  <h2><span class="num">07</span> PM 域与 QoS</h2>
+
+  <p>PM QoS (Quality of Service) 让<strong>需求方表达对延迟的约束</strong>，PM 框架据此决策。</p>
+
+<pre><code>// include/linux/pm_qos.h
+
+enum pm_qos_flags_status {
+    PM_QOS_FLAGS_UNDEFINED = -1,
+    PM_QOS_FLAGS_NONE,
+    PM_QOS_FLAGS_SOME,
+    PM_QOS_FLAGS_ALL,
+};
+
+enum pm_qos_type {
+    PM_QOS_UNITIALIZED,
+    PM_QOS_MAX,            // 约束为"最多"
+    PM_QOS_MIN,            // 约束为"至少"
+    PM_QOS_SUM,            // 总和
+};
+
+enum pm_qos_req_action {
+    PM_QOS_ADD_REQ,
+    PM_QOS_UPDATE_REQ,
+    PM_QOS_REMOVE_REQ,
+};
+
+// 约束分类：
+#define PM_QOS_RESUME_LATENCY     1   // 唤醒延迟（us）
+#define PM_QOS_LATENCY_TOLERANCE  2   // 容许延迟
+#define PM_QOS_LATENCY_TOLERANCE_NO_C0  3
+#define PM_QOS_MIN_FREQUENCY      4
+#define PM_QOS_MAX_FREQUENCY      5
+#define PM_QOS_FLAGS              6
+#define PM_QOS_MAX_DEFAULT_VALUE  INT_MAX
+#define PM_QOS_MIN_DEFAULT_VALUE  0
+
+// API：
+struct dev_pm_qos_request {
+    // 嵌入到 per-device 约束链表
+};
+
+int dev_pm_qos_add_request(struct device *dev, struct dev_pm_qos_request *req,
+                            enum dev_pm_qos_req_type type, s32 value);
+int dev_pm_qos_update_request(struct dev_pm_qos_request *req, s32 new_value);
+int dev_pm_qos_remove_request(struct dev_pm_qos_request *req);
+
+// 示例：CPU 设置最低频率
+struct dev_pm_qos_request min_freq;
+dev_pm_qos_add_request(cpu_dev, &min_freq, DEV_PM_QOS_MIN_FREQUENCY, 1000000);
+
+// 影响：
+//   - cpufreq 不会降到 1GHz 以下
+//   - cpuidle 不会进入超出 latency 的 C-state
+//   - Runtime PM 不会 suspend 不符合约束的设备
+</code></pre>
+
+  <p>电源域集成：</p>
+<pre><code>// drivers/base/power/domain.c
+// genpd (Generic Power Domain) 框架
+// 关键概念：
+//   - 一个域包含多个设备
+//   - 域内所有设备都 suspended 才能关域
+//   - 任一设备 active 就要开域
+
+// 关键 API：
+int pm_genpd_init(struct generic_pm_domain *genpd,
+                  struct dev_power_governor *gov, bool is_off);
+int pm_genpd_remove(struct generic_pm_domain *genpd);
+int of_genpd_add_provider_simple(struct device_node *np,
+                                  struct generic_pm_domain *genpd);
+struct generic_pm_domain *of_genpd_remove_last(struct device_node *np);
+
+// 设备添加到域：
+int genpd_device_pm_attach(struct device *dev);
+
+// 性能状态：
+int dev_pm_genpd_set_performance_state(struct device *dev, unsigned int state);
+
+// 例：GPU 驱动根据负载要求不同性能
+// 域 governor 决定整个域的电压
+</code></pre>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">kernel/power/main.c</span>             <span class="cmt">PM 子系统入口</span>
+├── <span class="file">kernel/power/suspend.c</span>          <span class="cmt">系统休眠 (s2idle/mem)</span>
+├── <span class="file">kernel/power/hibernate.c</span>        <span class="cmt">Hibernation (suspend-to-disk)</span>
+├── <span class="file">kernel/power/snapshot.c</span>         <span class="cmt">Hibernation 快照</span>
+├── <span class="file">kernel/power/swap.c</span>              <span class="cmt">Hibernation swap I/O</span>
+├── <span class="file">kernel/power/user.c</span>              <span class="cmt">/dev/snapshot 用户态接口</span>
+├── <span class="file">kernel/power/qos.c</span>               <span class="cmt">PM QoS 核心</span>
+├── <span class="file">kernel/power/process.c</span>           <span class="cmt">进程冻结/解冻</span>
+├── <span class="file">kernel/power/console.c</span>           <span class="cmt">PM console 切换</span>
+├── <span class="file">kernel/power/wakelock.c</span>          <span class="cmt">wakelock (Android)</span>
+├── <span class="file">kernel/power/poweroff.c</span>          <span class="cmt"> orderly_poweroff</span>
+├── <span class="file">drivers/base/power/main.c</span>        <span class="cmt">dpm_suspend / dpm_resume</span>
+├── <span class="file">drivers/base/power/runtime.c</span>     <span class="cmt">Runtime PM 状态机</span>
+├── <span class="file">drivers/base/power/common.c</span>      <span class="cmt">device PM 公共</span>
+├── <span class="file">drivers/base/power/domain.c</span>      <span class="cmt">genpd (Generic PM Domain)</span>
+├── <span class="file">drivers/base/power/domain_governor.c</span> <span class="cmt">域 governor</span>
+├── <span class="file">drivers/base/power/wakeup.c</span>      <span class="cmt">wakeup source</span>
+├── <span class="file">drivers/base/power/sysfs.c</span>       <span class="cmt">/sys/devices/.../power</span>
+├── <span class="file">drivers/base/power/qos.c</span>          <span class="cmt">device PM QoS</span>
+├── <span class="file">drivers/base/power/trace.c</span>       <span class="cmt">PM 跟踪</span>
+├── <span class="file">drivers/cpufreq/cpufreq.c</span>        <span class="cmt">cpufreq 核心框架</span>
+├── <span class="file">drivers/cpufreq/cpufreq_schedutil.c</span> <span class="cmt">schedutil governor</span>
+├── <span class="file">drivers/cpufreq/cpufreq_ondemand.c</span> <span class="cmt">ondemand governor</span>
+├── <span class="file">drivers/cpufreq/cpufreq_performance.c</span> <span class="cmt">performance governor</span>
+├── <span class="file">drivers/cpufreq/intel_pstate.c</span>   <span class="cmt">Intel HWP 驱动</span>
+├── <span class="file">drivers/cpufreq/acpi-cpufreq.c</span>   <span class="cmt">ACPI cpufreq 驱动</span>
+├── <span class="file">drivers/cpufreq/scmi-cpufreq.c</span>   <span class="cmt">SCMI (System Control) cpufreq</span>
+├── <span class="file">drivers/cpuidle/cpuidle.c</span>        <span class="cmt">cpuidle 核心框架</span>
+├── <span class="file">drivers/cpuidle/governors/menu.c</span> <span class="cmt">menu governor</span>
+├── <span class="file">drivers/cpuidle/governors/ladder.c</span> <span class="cmt">ladder governor</span>
+├── <span class="file">drivers/cpuidle/governors/teo.c</span>  <span class="cmt">teo governor</span>
+├── <span class="file">drivers/cpuidle/intel_idle.c</span>     <span class="cmt">Intel C-states 驱动</span>
+├── <span class="file">drivers/cpuidle/acpi_idle.c</span>      <span class="cmt">ACPI C-states 驱动</span>
+├── <span class="file">drivers/cpuidle/cpuidle-arm.c</span>    <span class="cmt">ARM PSCI cpuidle</span>
+├── <span class="file">include/linux/pm.h</span>                <span class="cmt">dev_pm_ops、dev_pm_domain</span>
+├── <span class="file">include/linux/pm_runtime.h</span>       <span class="cmt">pm_runtime_get_sync 等 API</span>
+├── <span class="file">include/linux/pm_domain.h</span>        <span class="cmt">generic_pm_domain</span>
+├── <span class="file">include/linux/pm_qos.h</span>           <span class="cmt">PM QoS 接口</span>
+├── <span class="file">include/linux/cpufreq.h</span>          <span class="cmt">cpufreq_driver、cpufreq_policy</span>
+└── <span class="file">include/linux/cpuidle.h</span>           <span class="cmt">cpuidle_driver、cpuidle_state</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>include/linux/pm.h</code> 看 dev_pm_ops 全部回调。<br>
+    <code>drivers/base/power/runtime.c</code> Runtime PM 状态机。<br>
+    <code>kernel/power/suspend.c</code> 系统休眠完整流程。<br>
+    <code>drivers/cpufreq/cpufreq.c</code> + <code>cpufreq_schedutil.c</code> 现代调频。<br>
+    <code>drivers/cpuidle/cpuidle.c</code> + <code>governors/menu.c</code> idle 决策算法。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>
