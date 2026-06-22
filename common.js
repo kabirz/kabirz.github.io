@@ -49,6 +49,7 @@
     { t:"Linux tun/tap", f:"linux-tun-tap.html", top:"net" },
     { t:"数据包接收流程", f:"linux-rx-packet.html", top:"net" },
     { t:"数据包发送流程", f:"linux-tx-packet.html", top:"net" },
+    { t:"select/poll/epoll", f:"linux-select-poll-epoll.html", top:"linux" },
     { t:"Linux ftrace", f:"linux-ftrace.html", top:"linux" },
     { t:"Linux io_uring", f:"linux-io-uring.html", top:"linux" },
     { t:"Linux 通用中断", f:"linux-irq.html", top:"linux" },
