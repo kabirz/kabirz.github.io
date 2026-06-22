@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核块设备子系统 (Block Layer) 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核块设备子系统 (Block Layer) 深度解析</h1>
+  <p class="subtitle">块 IO 全路径 — bio、request、blk-mq、I/O 调度</p>
+  <span class="version">Linux 7.0.12 · block/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#bio">struct bio</a></li>
+    <li><a href="#queue">gendisk 与 request_queue</a></li>
+    <li><a href="#submit">IO 提交路径</a></li>
+    <li><a href="#blk-mq">blk-mq 多队列</a></li>
+    <li><a href="#request">struct request 与标签</a></li>
+    <li><a href="#scheduler">I/O 调度器</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>块设备子系统管理所有<strong>按块（sector）寻址</strong>的存储设备：硬盘、SSD、NVMe、U盘、虚拟磁盘（loop、ramdisk）。</p>
+
+  <p>关键演进：</p>
+  <table>
+    <tr><th>阶段</th><th>结构</th><th>说明</th></tr>
+    <tr><td>2.4 时代</td><td>单队列 (legacy)</td><td>全局锁，多核扩展差</td></tr>
+    <tr><td>2.6 时代</td><td>legacy + I/O scheduler</td><td>cfq、deadline、anticipatory</td></tr>
+    <tr><td>4.x (2014)</td><td>blk-mq 引入</td><td>多硬件队列，每 CPU software queue</td></tr>
+    <tr><td>5.x</td><td>blk-mq 唯一</td><td>移除 legacy，全面 blk-mq</td></tr>
+  </table>
+
+  <p>IO 路径概览：</p>
+<pre><code>┌─────────────────────────────────────────┐
+│   用户态：read/write/fsync                │
+│   direct I/O / buffered I/O              │
+└────────────────┬────────────────────────┘
+                 │ VFS
+┌────────────────▼────────────────────────┐
+│   文件系统层 (ext4/xfs/btrfs)             │
+│   - 聚合 page cache → multi-page bio    │
+└────────────────┬────────────────────────┘
+                 │ submit_bio()
+┌────────────────▼────────────────────────┐
+│   块层 (Block Layer)                     │
+│   ┌─────────────────────────────────┐   │
+│   │ bio → blk-mq plugging            │   │
+│   │ → request → software queue       │   │
+│   │ → hardware queue → driver        │   │
+│   └─────────────────────────────────┘   │
+└────────────────┬────────────────────────┘
+                 │ queue_rq
+┌────────────────▼────────────────────────┐
+│   设备驱动 (SCSI/NVMe/MMC)               │
+│   - DMA 传输                            │
+│   - IRQ 完成                            │
+└─────────────────────────────────────────┘
+</code></pre>
+</section>
+
+<section id="bio" class="toc-link">
+  <h2><span class="num">02</span> struct bio</h2>
+
+  <p><code>bio</code> (Block IO) 是块层最核心的数据结构，描述一次 I/O 操作：</p>
+
+<pre><code>// include/linux/blk_types.h
+struct bio {
+    struct bio              *bi_next;       // 链表下一个
+    struct block_device     *bi_bdev;       // 目标块设备
+    unsigned int             bi_opf;        // 操作 + 标志
+    u16                      bi_flags;      // BIO_* 状态
+    u16                      bi_status;     // BLK_STS_* 结果
+    struct bvec_iter         bi_iter;       // 当前位置
+    atomic_t                 bi_remaining;  // clone 计数
+    unsigned short           bi_vcnt;       // 段总数
+    unsigned short           bi_max_vecs;   // 容量
+    unsigned int             bi_size;       // 总字节数
+    unsigned int             bi_seg_front_size;
+    unsigned int             bi_seg_back_size;
+    struct bio_vec          *bi_io_vec;     // 段数组
+    struct bio_set          *bi_pool;
+    void                   (*bi_end_io)(struct bio *);
+    void                    *bi_private;
+    blk_qc_t                 bi_cookie;     // polling cookie
+    struct bio_vec           bi_inline_vecs[];  // 内联数组
+};
+</code></pre>
+
+  <p>关键概念：</p>
+<pre><code>// 操作码 (bi_opf 的高位):
+enum req_op {
+    REQ_OP_READ      = 0,
+    REQ_OP_WRITE     = 1,
+    REQ_OP_FLUSH     = 2,    // 刷新 volatile cache
+    REQ_OP_DISCARD   = 3,    // trim/unmap
+    REQ_OP_SECURE_ERASE = 4,
+    REQ_OP_ZONE_OPEN = 5,
+    REQ_OP_ZONE_CLOSE = 6,
+    REQ_OP_ZONE_FINISH = 7,
+    REQ_OP_ZONE_APPEND = 8,
+    REQ_OP_ZONE_RESET = 9,
+    REQ_OP_DRV_IN/OUT = 10/11,
+    REQ_OP_WRITE_ZEROES = 12,
+};
+
+// 标志位 (bi_opf 的低位):
+REQ_FAILFAST_DEV/TRANSPORT/DRIVER   // 失败不重试
+REQ_PREFLUSH                        // 写前 FLUSH
+REQ_FUA                             // Force Unit Access
+REQ_NOUNMAP                         // 不允许 unmap
+REQ_BACKGROUND                      // 后台 IO
+REQ_NOWAIT                          // 不可等待时立即失败
+REQ_META                            // 元数据 IO
+REQ_PRIO                            // 高优先级
+REQ_IDLE                            // 后续无 IO（hint）
+
+// bi_iter 追踪当前位置
+struct bvec_iter {
+    sector_t        bi_sector;      // 起始扇区
+    unsigned int    bi_size;        // 剩余字节
+    unsigned int    bi_idx;         // 当前 bio_vec 索引
+    unsigned int    bi_bvec_done;   // 当前段已处理字节
+};
+</code></pre>
+
+  <p>bio_vec — I/O 段：</p>
+<pre><code>// include/linux/bvec.h
+struct bio_vec {
+    struct page    *bv_page;       // 内存页
+    unsigned int    bv_len;        // 段长度
+    unsigned int    bv_offset;     // 页内偏移
+};
+
+// bio 由若干 bio_vec 组成
+// 这些段可以在物理上不连续
+// 但驱动/VFS 期望它们尽量合并
+
+// BIO 组装 API：
+bio_alloc_bioset(gfp_mask, nr_vecs, bio_set);
+bio_add_page(bio, page, len, off);
+bio_alloc(GFP_KERNEL, 1);  // 单页
+</code></pre>
+</section>
+
+<section id="queue" class="toc-link">
+  <h2><span class="num">03</span> gendisk 与 request_queue</h2>
+
+<pre><code>// include/linux/blkdev.h
+struct gendisk {
+    int                 major;
+    int                 first_minor;
+    int                 minors;
+    char                disk_name[DISK_NAME_LEN];   // "sda", "nvme0n1"
+    struct block_device *part0;                     // 整个磁盘 bdev
+    struct block_device **part;                      // 分区表
+    struct hd_struct    part0_hdr;
+    short               flags;
+    unsigned long       nr_sects;
+    sector_t            capacity;
+    struct request_queue *queue;                     // 请求队列
+    const struct block_device_operations *fops;     // open/release/ioctl
+    struct mutex        open_mutex;
+    struct kobject      *slave_dir;
+    struct timer_rand_state *random;
+    atomic_t            sync_io;
+    struct blk_integrity *integrity;
+    struct blk_independent_access_ranges *iar;
+    // ... 引用计数、热插拔 ...
+};
+
+// block_device_operations - 设备 ops
+struct block_device_operations {
+    int  (*open)(struct block_device *, fmode_t);
+    void (*release)(struct gendisk *, fmode_t);
+    int  (*ioctl)(struct block_device *, fmode_t, unsigned, unsigned long);
+    int  (*compat_ioctl)(struct block_device *, fmode_t, unsigned, unsigned long);
+    unsigned int (*check_events)(struct gendisk *, unsigned int clearing);
+    int  (*revalidate_disk)(struct gendisk *);
+    int  (*getgeo)(struct block_device *, struct hd_geometry *);
+    void (*unlock_native_capacity)(struct gendisk *);
+    int  (*get_unique_id)(struct gendisk *, u8 *, enum blk_unique_id);
+    int  (*report_zones)(struct gendisk *, sector_t, unsigned int, ...);
+    void (*free_disk)(struct gendisk *);
+    // ...
+};
+</code></pre>
+
+  <p>请求队列：</p>
+<pre><code>// include/linux/blkdev.h
+struct request_queue {
+    struct blk_mq_tags   *queue_tags;        // 共享标签
+    struct xarray         blkcg_pols;
+    struct request       *cached_request;     // 快速路径缓存
+    struct list_head      flush_queue;
+    unsigned long         nr_requests;
+    unsigned int          rq_timeout;          // 默认超时
+    int                   rq_alloc_time;
+    atomic_t              nr_active_requests_shared_sbitmap;
+    unsigned int          queue_depth;
+    unsigned int          request_pm_only;
+    struct blk_flush_queue *fq;                // FLUSH 状态机
+    struct list_head      requeue_list;
+    struct list_head      unused_hctx_list;
+    struct blk_mq_tag_set *tag_set;            // 标签集
+    struct blk_mq_queue_data *mq_ops;          // 块设备 mq ops
+
+    /* queue limits */
+    struct queue_limits   limits;
+    unsigned long         limit_pfn;
+    // ... queue limits (max_sectors, max_segments, virt_boundary, ...)
+    
+    /* I/O scheduler */
+    struct elevator_queue *elevator;           // 附加的 I/O 调度器
+    
+    unsigned int          nr_queues;           // 硬件队列数
+    unsigned int          nr_hw_queues;
+    struct blk_mq_hw_ctx **queue_hw_ctx;       // 硬件上下文数组
+    
+    struct blk_crypto_profile *crypto_profile;
+    // ... 多达 100+ 字段 ...
+} ____cacheline_aligned_in_smp;
+
+// 关键限制：
+struct queue_limits {
+    unsigned short        max_segments;        // bio 最大段数
+    unsigned int          max_discard_segments;
+    unsigned int          max_write_zeroes_sectors;
+    unsigned int          max_hw_sectors;      // 硬件最大单 IO 大小
+    unsigned int          max_user_sectors;
+    unsigned int          max_dev_sectors;
+    unsigned int          chunk_sectors;
+    unsigned int          max_sectors;         // 当前最大（可调）
+    unsigned int          max_segment_size;    // 段最大字节
+    unsigned int          logical_block_size;  // 逻辑块大小（512/4K）
+    unsigned int          physical_block_size;
+    unsigned int          io_min;
+    unsigned int          io_opt;
+    // ... dma alignment、discard granularity 等 ...
+};
+</code></pre>
+</section>
+
+<section id="submit" class="toc-link">
+  <h2><span class="num">04</span> IO 提交路径</h2>
+
+<pre><code>// 完整路径：syscall → submit_bio → blk-mq
+
+// 1. 系统调用入口（块设备文件直接读写）
+// block/fops.c
+ssize_t blkdev_read_iter(struct kiocb *iocb, struct iov_iter *to)
+{
+    // 通过 iomap 或 buffer cache → bio
+    return filemap_read_folio_or_page(...);
+}
+
+ssize_t blkdev_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+    // 设置 REQ_PREFLUSH / REQ_FUA
+    // 写入 page cache → bio → submit
+}
+
+// 2. submit_bio 是块层核心入口
+// block/blk-core.c
+void submit_bio(struct bio *bio)
+{
+    // 设置 bio 时间戳（统计）
+    // 检查 bio 合法性
+    if (bio_check_eod(bio))
+        goto end_io;
+    
+    // 分发到 blk-mq
+    if (!bio->bi_bdev->bd_disk->fops->submit_bio)
+        __submit_bio(bio);                    // 通用路径
+    else
+        bio->bi_bdev->bd_disk->fops->submit_bio(bio);  // 驱动自管
+}
+EXPORT_SYMBOL(submit_bio);
+
+// 3. blk-mq 接管
+static void __submit_bio(struct bio *bio)
+{
+    // 找到当前 CPU 的软件队列上下文
+    struct blk_plug *plug = current->blk_plug;
+    struct request_queue *q = bdev_get_queue(bio->bi_bdev);
+    
+    // 如果当前任务有 plug（批量缓冲）
+    if (plug) {
+        // 暂存到 plug list，等 flush
+        blk_add_bio_to_plug(plug, bio, ...);
+    } else {
+        // 直接提交到软件队列
+        __submit_bio_noacct_mq(q, bio);
+    }
+}
+
+// 4. blk-mq 提交
+static void __submit_bio_noacct_mq(struct request_queue *q, struct bio *bio)
+{
+    struct blk_mq_alloc_data data = { .bio = bio, .q = q, ... };
+    
+    // 分配/复用 request
+    rq = blk_mq_get_request(q, bio, &data);
+    
+    // 把 bio 数据合并到 rq
+    blk_mq_bio_to_request(rq, bio, nr_segs);
+    
+    // 提交到 hctx（硬件队列上下文）
+    blk_mq_request_issue_directly(rq, false);
+}
+</code></pre>
+
+  <p>Plugging 机制（批量优化）：</p>
+<pre><code>// 当线程连续提交多个 bio 时
+// 使用 blk_start_plug() / blk_finish_plug() 标记
+// 在 plug 内的 bio 先暂存
+// 在 finish_plug 时一次性提交
+
+blk_start_plug(&plug);
+for (...) {
+    // 这些 bio 在内部进入 plug
+    submit_bio(bio);
+}
+blk_finish_plug(&plug);
+// 此时一次性 flush
+//   - 同地址/同方向的 bio 合并
+//   - 排序，让驱动看到顺序 IO
+
+// struct blk_plug 维护在 task_struct 中
+struct blk_plug {
+    struct request *mq_list;        // 待 flush
+    struct request *cached_rq;      // 最近分配的
+    bool            mq_plug_cb;
+    struct list_head cb_list;
+    struct list_head rq_list;
+    // ...
+};
+</code></pre>
+</section>
+
+<section id="blk-mq" class="toc-link">
+  <h2><span class="num">05</span> blk-mq 多队列</h2>
+
+  <p>blk-mq (Block Multi-Queue) 是现代块层核心。设计目标：<strong>多核扩展性</strong>，让多 CPU 不再争抢一个全局队列。</p>
+
+<pre><code>// 三层队列：
+//   software queue (每 CPU 一个) 
+//   → hardware context (hctx)
+//   → hardware queue (hw queue, NVMe SQ)
+
+// include/linux/blk-mq.h
+struct blk_mq_hw_ctx {
+    struct {
+        spinlock_t              lock;
+        struct list_head        dispatch;       // 待 dispatch
+        unsigned long           state;          // BLK_MQ_S_*
+    } ____cacheline_aligned_in_smp;
+    
+    unsigned long               queue_num;      // hctx 索引
+    struct blk_mq_ctx          **ctxs;          // 关联的 CPU 上下文
+    unsigned int                nr_ctx;
+    unsigned int                curr_ctx;
+    struct blk_mq_tags         *tags;            // 标签
+    struct request_queue       *queue;
+    struct blk_flush_queue     *fq;
+    
+    struct list_head           hctx_list;
+    
+    struct delayed_work        run_work;        // 延迟运行
+    cpumask_var_t              cpumask;         // 绑定的 CPU
+    int                        next_cpu;
+    int                        next_cpu_batch;
+    
+    struct blk_mq_ctx          *tags_from;
+    unsigned long              queued;
+    unsigned long              run;
+    
+    atomic_t                   nr_active;
+    
+    struct hlist_node          cpuhp_dead;
+    struct kobject             kobj;
+    
+    unsigned long              dequeue_tag_busy;
+    
+    unsigned int               nr_requests;
+    
+    /* driver data */
+    void                      *driver_data;
+    
+    /* Block driver own state */
+    unsigned long              state;
+} ____cacheline_aligned_in_smp;
+</code></pre>
+
+  <p>blk_mq_ops — 驱动实现的接口：</p>
+<pre><code>// include/linux/blk-mq.h
+struct blk_mq_queue_data {
+    blk_status_t (*queue_rq)(struct blk_mq_hw_ctx *,
+                              const struct blk_mq_queue_data *);
+    void         (*commit_rqs)(struct blk_mq_hw_ctx *);
+    void         (*get_budget)(struct request_queue *);
+    void         (*put_budget)(struct request_queue *);
+    enum blk_eh_timer_return (*timeout)(struct request *);
+    int          (*poll)(struct blk_mq_hw_ctx *);
+    int          (*init_hctx)(struct blk_mq_hw_ctx *, void *, unsigned int);
+    void         (*exit_hctx)(struct blk_mq_hw_ctx *, unsigned int);
+    int          (*init_request)(struct blk_mq_tag_set *, struct request *,
+                                  unsigned int, unsigned int);
+    void         (*exit_request)(struct blk_mq_tag_set *, struct request *,
+                                  unsigned int);
+    void         (*initialize_rq_fn)(struct request *);
+    void         (*cleanup_rq)(struct request *);
+    void         (*busy)(struct request_queue *);
+    void         (*complete)(struct request *);
+    void         (*finish_request)(struct request *);
+    void         (*init_queue)(struct request_queue *);
+    void         (*exit_queue)(struct request_queue *);
+    int          (*get_rqs_zoned)(struct request_queue *, ...);
+    // ...
+};
+
+// 关键回调：queue_rq
+// nvme 驱动示例：
+static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
+                                    const struct blk_mq_queue_data *bd)
+{
+    struct request *rq = bd->rq;
+    struct nvme_queue *nvmeq = hctx->driver_data;
+    
+    // 准备命令、构建 SQE、提交到 NVMe 提交队列
+    // 返回 BLK_STS_OK 表示已接受
+    return BLK_STS_OK;
+}
+</code></pre>
+
+  <p>提交路径细节：</p>
+<pre><code>// block/blk-mq.c
+blk_status_t blk_mq_request_issue_directly(struct request *rq, bool last)
+{
+    struct blk_mq_hw_ctx *hctx = rq->mq_hctx;
+    blk_status_t ret;
+    
+    // 调用驱动的 queue_rq
+    ret = __blk_mq_try_issue_directly(hctx, rq, ...);
+    if (ret == BLK_STS_RESOURCE || ret == BLK_STS_DEV_RESOURCE)
+        // 资源不足，加入 dispatch 列表等待
+        blk_mq_request_bypass_insert(rq, false, last);
+    
+    return ret;
+}
+
+void blk_mq_dispatch_rq_list(struct blk_mq_hw_ctx *hctx,
+                              struct list_head *list, ...)
+{
+    // 遍历 dispatch 列表
+    // 对每个 request 调用 queue_rq
+    // 直到队列空或硬件返回忙碌
+    // 不成功的 rq 放回列表
+}
+</code></pre>
+</section>
+
+<section id="request" class="toc-link">
+  <h2><span class="num">06</span> struct request 与标签</h2>
+
+<pre><code>// include/linux/blk-mq.h
+struct request {
+    struct request_queue    *q;
+    struct blk_mq_ctx       *mq_ctx;
+    struct blk_mq_hw_ctx    *mq_hctx;
+    struct blk_mq_tags      *tag;
+    
+    unsigned int            cmd_flags;     // REQ_*
+    req_flags_t             rq_flags;
+    
+    int                     tag;           // 标签
+    int                     internal_tag;
+    
+    atomic_t                ref;
+    
+    unsigned int            timeout;
+    
+    struct list_head        queuelist;     // 软件队列链表
+    
+    struct hd_struct       *part;          // 分区信息
+    
+    unsigned long           start_time_ns; // 提交时间
+    unsigned long           io_start_time_ns;
+    
+    struct bio             *bio;           // 第一个 bio
+    struct bio             *biotail;       // 最后一个 bio
+    
+    struct hd_struct       *rq_part;
+    
+    unsigned short          write_hint;
+    
+    unsigned long           __sector;       // 起始扇区
+    unsigned int            __data_len;     // 总字节数
+    
+    int                     nr_phys_segments;  // 物理段数
+    
+    unsigned int            rq_flags;
+    
+    struct list_head        timeout_list;   // 超时链表
+    
+    struct blk_mq_rq_data   mq_data;
+    
+    void                   *end_io_data;
+    void                  (*end_io)(struct request *);
+    
+    struct request          *next_rq;       // 用于 merge
+    
+    // 驱动特定数据
+    union {
+        struct {
+            struct hlist_node hash;
+            struct list_head depth_list;
+            // ...
+        };
+        struct {
+            rq_end_io_fn     *saved_end_io;
+            unsigned long     start_time_nsec;
+            // ...
+        };
+    };
+    
+    // 驱动私有数据（cmd_flags 区分）
+    char                    cmd[BLK_MAX_CDB];
+    // ...
+};
+</code></pre>
+
+  <p>标签 (tag) 管理：</p>
+<pre><code>// 标签是 request 在驱动中的索引
+// 每个硬件队列有自己的标签池
+
+// include/linux/blk-mq.h
+struct blk_mq_tags {
+    unsigned int            nr_tags;
+    unsigned int            nr_reserved_tags;
+    atomic_t                active_queues;
+    
+    struct sbitmap_queue    bitmap_tags;       // 普通标签
+    struct sbitmap_queue    breserved_tags;    // 保留标签
+    
+    struct request         *rqs[];             // request 数组
+    struct request         *static_rqs[];      // 静态分配的 rqs
+    struct list_head        page_list;         // 内存页
+};
+
+// 分配标签：
+// blk_mq_get_tag() → sbitmap_get() → 返回 tag 索引
+// blk_mq_put_tag() → sbitmap_clear_bit()
+
+// 标签的作用：
+// 1. 限制在途请求数（防 DMA 溢出）
+// 2. request 的快速查找（avoid linked list 遍历）
+// 3. NVMe Completion Queue entry 包含 tag
+</code></pre>
+</section>
+
+<section id="scheduler" class="toc-link">
+  <h2><span class="num">07</span> I/O 调度器</h2>
+
+  <p>I/O 调度器（电梯）在 request 之间做合并和排序，提高吞吐或公平性。</p>
+
+<pre><code>// include/linux/elevator.h
+struct elevator_mq_ops {
+    int  (*init_sched)(struct request_queue *, struct elevator_queue *);
+    void (*exit_sched)(struct elevator_queue *);
+    int  (*init_hctx)(struct blk_mq_hw_ctx *, unsigned int);
+    void (*exit_hctx)(struct blk_mq_hw_ctx *, unsigned int);
+    bool (*has_work)(struct blk_mq_hw_ctx *);
+    void (*insert_requests)(struct blk_mq_hw_ctx *, struct list_head *, bool);
+    struct request *(*dispatch_request)(struct blk_mq_hw_ctx *);
+    void (*completed_request)(struct request *, u64);
+    void (*requeue_request)(struct request *);
+    struct request *(*former_request)(struct request_queue *, struct request *);
+    struct request *(*next_request)(struct request_queue *, struct request *);
+    void (*finish_request)(struct request *);
+    bool (*allow_merge)(struct request *, struct bio *);
+    bool (*bio_merge)(struct blk_mq_hw_ctx *, struct bio *, unsigned int);
+    int  (*request_merge)(struct request_queue *, struct request **, struct bio *);
+    void (*requests_merged)(struct request_queue *, struct request *, struct request *);
+    void (*request_merged)(struct request_queue *, struct request *, enum elv_merge);
+    // ...
+};
+
+// 三种主流调度器：
+
+// 1. mq-deadline (block/mq-deadline.c)
+//   - 两个队列：read / write
+//   - 按 sector 排序
+//   - dispatch 时按 deadline 选择
+//   - 默认调度器（适合 HDD）
+
+// 2. BFQ (Block Flexible Queuing, block/bfq*.c)
+//   - 按 task 分队列
+//   - 权重分配（cgroup 集成）
+//   - 适合桌面系统（音频/视频流畅）
+
+// 3. Kyber (block/kyber-iosched.c)
+//   - 自适应节流
+//   - read/write 分别限速
+//   - 适合 NVMe（防止 read starving write）
+</code></pre>
+
+  <p>调度器的关键决策：</p>
+  <table>
+    <tr><th>决策</th><th>说明</th></tr>
+    <tr><td>合并 (merge)</td><td>相同扇区的 bio 合并到同一 request</td></tr>
+    <tr><td>插入 (insert)</td><td>新 request 加入调度器队列</td></tr>
+    <tr><td>分发 (dispatch)</td><td>从调度器队列取出交给驱动</td></tr>
+    <tr><td>排序 (sort)</td><td>按扇区排序，减少寻道（HDD）</td></tr>
+    <tr><td>公平 (fair)</td><td>各 task/cgroup 轮流获得 IO</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>选用建议:</strong><br>
+    <code>mq-deadline</code>：HDD（机械硬盘）默认。简单、按 sector 排序最大化吞吐。<br>
+    <code>BFQ</code>：桌面环境、低延迟需求。可保证响应性但开销大。<br>
+    <code>Kyber</code>：NVMe / 高并发场景。限制 in-flight，防止 read starvation。<br>
+    <code>none</code>：完全不调度（直通 blk-mq）。NVMe/SSD 上常用。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">block/blk-core.c</span>                <span class="cmt">submit_bio、blk_cleanup_queue、核心 IO 路径</span>
+├── <span class="file">block/blk-mq.c</span>                  <span class="cmt">blk-mq 主框架</span>
+├── <span class="file">block/blk-mq.h</span>                  <span class="cmt">blk-mq 内部结构</span>
+├── <span class="file">block/blk-mq-tag.c</span>              <span class="cmt">标签管理 (sbitmap)</span>
+├── <span class="file">block/blk-mq-sched.c</span>            <span class="cmt">调度器与 blk-mq 桥接</span>
+├── <span class="file">block/blk-mq-debugfs.c</span>          <span class="cmt">debugfs 接口</span>
+├── <span class="file">block/blk-settings.c</span>            <span class="cmt">queue limits 设置</span>
+├── <span class="file">block/blk-sysfs.c</span>               <span class="cmt">/sys/block/.../queue 接口</span>
+├── <span class="file">block/blk-lib.c</span>                 <span class="cmt">辅助函数 (blkdev_issue_*)</span>
+├── <span class="file">block/blk-map.c</span>                 <span class="cmt">bio → request 映射</span>
+├── <span class="file">block/blk-merge.c</span>               <span class="cmt">bio/request 合并</span>
+├── <span class="file">block/blk-flush.c</span>               <span class="cmt">FLUSH 状态机</span>
+├── <span class="file">block/blk-timeout.c</span>             <span class="cmt">超时处理</span>
+├── <span class="file">block/blk-ioc.c</span>                 <span class="cmt">io_context（每 task IO 状态）</span>
+├── <span class="file">block/blk-ioprio.c</span>              <span class="cmt">IO 优先级</span>
+├── <span class="file">block/blk-cgroup.c</span>              <span class="cmt">blkcg cgroup 控制</span>
+├── <span class="file">block/blk-throttle.c</span>            <span class="cmt">throttle policy</span>
+├── <span class="file">block/blk-iolatency.c</span>           <span class="cmt">IO 延迟控制</span>
+├── <span class="file">block/blk-wbt.c</span>                 <span class="cmt">Writeback throttling</span>
+├── <span class="file">block/blk-zoned.c</span>               <span class="cmt">Zoned Block Device (SMR)</span>
+├── <span class="file">block/blk-crypto.c</span>              <span class="cmt">硬件加密</span>
+├── <span class="file">block/blk-integrity.c</span>           <span class="cmt">T10 PI 数据完整性</span>
+├── <span class="file">block/bounce.c</span>                  <span class="cmt">bounce buffer（低内存设备）</span>
+├── <span class="file">block/elevator.c</span>                <span class="cmt">调度器框架</span>
+├── <span class="file">block/mq-deadline.c</span>             <span class="cmt">mq-deadline 调度器</span>
+├── <span class="file">block/bfq-iosched.c</span>             <span class="cmt">BFQ 调度器</span>
+├── <span class="file">block/kyber-iosched.c</span>           <span class="cmt">Kyber 调度器</span>
+├── <span class="file">block/fops.c</span>                    <span class="cmt">块设备文件操作</span>
+├── <span class="file">block/genhd.c</span>                   <span class="cmt">gendisk 注册/管理</span>
+├── <span class="file">block/partitions/*.c</span>            <span class="cmt">分区表解析 (MBR/GPT)</span>
+├── <span class="file">block/bsg.c</span>                     <span class="cmt">Block SCSI Generic</span>
+├── <span class="file">include/linux/blk_types.h</span>       <span class="cmt">struct bio、REQ_OP_*</span>
+├── <span class="file">include/linux/blk-mq.h</span>          <span class="cmt">blk_mq_hw_ctx、blk_mq_ops、struct request</span>
+├── <span class="file">include/linux/blkdev.h</span>          <span class="cmt">gendisk、request_queue</span>
+├── <span class="file">include/linux/bio.h</span>             <span class="cmt">bio 操作 API</span>
+├── <span class="file">include/linux/bvec.h</span>            <span class="cmt">bio_vec、bvec_iter</span>
+└── <span class="file">include/linux/elevator.h</span>        <span class="cmt">elevator_mq_ops</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>include/linux/blk_types.h</code> 看 bio 字段和 REQ_OP。<br>
+    <code>block/blk-core.c</code> 看 submit_bio 主路径。<br>
+    <code>block/blk-mq.c</code> blk-mq 核心机制。<br>
+    <code>block/mq-deadline.c</code> 学习调度器实现的最佳起点。<br>
+    <code>drivers/nvme/host/pci.c</code> 现代 NVMe 驱动范例。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

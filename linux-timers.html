@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核时间子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核时间子系统深度解析</h1>
+  <p class="subtitle">定时器、高精度定时器、时间维护与 Tick 管理</p>
+  <span class="version">Linux 7.0.12 · kernel/time/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#timer-wheel">定时器轮 (Timer Wheel)</a></li>
+    <li><a href="#hrtimer">高精度定时器 (hrtimer)</a></li>
+    <li><a href="#clockevent">时钟事件设备</a></li>
+    <li><a href="#timekeeping">时间维护</a></li>
+    <li><a href="#tick">Tick 管理 (NO_HZ)</a></li>
+    <li><a href="#clocksource">时钟源</a></li>
+    <li><a href="#posix">POSIX 时钟与定时器</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 时间子系统是内核最复杂的子系统之一，它由多个层次组成，每一层抽象下层硬件细节。</p>
+
+<pre><code>┌─────────────────────────────────────────┐
+│  用户态接口 (clock_gettime, timer_create)│
+│  posix-cpu-timers.c / posix-timers.c    │
+└────────────────┬────────────────────────┘
+                 │
+┌────────────────▼────────────────────────┐
+│  hrtimer 层 (高精度定时器)               │
+│  kernel/time/hrtimer.c                  │
+│  - 红黑树组织定时器                      │
+│  - CLOCK_MONOTONIC / REALTIME / BOOTTIME│
+└────────────────┬────────────────────────┘
+                 │
+┌────────────────▼────────────────────────┐
+│  时间维护层 (Timekeeping)                │
+│  kernel/time/timekeeping.c              │
+│  - 累加 ns 到 wall time / monotonic     │
+│  - NTP 调整                             │
+└────────────────┬────────────────────────┘
+                 │
+┌────────────────▼────────────────────────┐
+│  Tick 层 (Clock Event Devices)           │
+│  kernel/time/tick-*.c                   │
+│  - 周期性 tick 或 NO_HZ                  │
+└────────────────┬────────────────────────┘
+                 │
+┌────────────────▼────────────────────────┐
+│  时钟源 (Clock Source) & 时钟事件设备    │
+│  TSC / HPET / ACPI PM / LAPIC / ARM Timer│
+└─────────────────────────────────────────┘
+</code></pre>
+
+  <p>三件套概念：</p>
+  <table>
+    <tr><th>概念</th><th>方向</th><th>说明</th></tr>
+    <tr><td><code>clocksource</code></td><td>读时间</td><td>单调递增的计数器，只能读不能控制</td></tr>
+    <tr><td><code>clock_event_device</code></td><td>触发事件</td><td>可编程的定时器中断源</td></tr>
+    <tr><td><code>tick_device</code></td><td>系统心跳</td><td>对 clock_event_device 的封装，定期产生 tick</td></tr>
+  </table>
+</section>
+
+<section id="timer-wheel" class="toc-link">
+  <h2><span class="num">02</span> 定时器轮 (Timer Wheel)</h2>
+
+  <p>低精度定时器（<code>timer_list</code>）使用多级轮 (timer wheel)。它优化了<strong>大批量超时</strong>（如 TCP 重传）场景，不是精确触发。</p>
+
+<pre><code>// include/linux/timer_types.h
+struct timer_list {
+    struct hlist_node       entry;          // 链表节点
+    unsigned long           expires;        // 超时时间（jiffies）
+    void                  (*function)(struct timer_list *);
+    u32                     flags;          // TIMER_* flags
+#ifdef CONFIG_LOCKDEP
+    struct lockdep_map      lockdep_map;
+#endif
+};
+</code></pre>
+
+  <p>API 使用范式：</p>
+<pre><code>struct timer_list my_timer;
+
+// 1. 初始化（旧 API setup_timer 已废弃）
+timer_setup(&my_timer, my_callback, 0);
+
+// 2. 设置超时和回调
+static void my_callback(struct timer_list *t) {
+    pr_info("Timer fired!\n");
+}
+
+// 3. 启动定时器
+mod_timer(&my_timer, jiffies + msecs_to_jiffies(100));
+
+// 4. 取消（可睡眠上下文中）
+del_timer_sync(&my_timer);
+// 或非阻塞版本
+if (del_timer(&my_timer)) {
+    // 已成功取消（callback 还没运行）
+}
+</code></pre>
+
+  <p>多级轮结构：</p>
+<pre><code>// kernel/time/timer.c
+
+#define LVL_DEPTH   6                  // 6 级
+#define LVL_BITS    6                  // 每级 6 位
+#define LVL_SIZE    (1 << LVL_BITS)    // 64 个桶
+#define LVL_CLKDIV  (1LL << (LVL_BITS * lvl))
+#define WHEEL_SIZE  (LVL_SIZE * LVL_DEPTH)   // 384 桶
+
+struct timer_base {
+    raw_spinlock_t          lock;
+    struct hlist_head       vectors[WHEEL_SIZE];
+    unsigned long           clk;            // 当前 tick
+    unsigned long           next_expiry;    // 下一个到期时间
+    unsigned int            cpu;
+    bool                    is_idle;
+    bool                    must_forward_clk;
+    // ...
+};
+
+// 6 级时间复杂度：
+//   Lvl 0:   1 tick 内的定时器（≤ 1 jiffy）
+//   Lvl 1:   2-64 jiffies
+//   Lvl 2:   65-4096 jiffies (~40 ms - 4 s @250HZ)
+//   Lvl 3:   4097-262144 jiffies
+//   Lvl 4:   262145-16777216 jiffies
+//   Lvl 5:   更长
+// 级联 (cascade)：当 clk 进入下一级范围时，重新分桶
+</code></pre>
+
+  <div class="callout">
+    <strong>timer vs hrtimer 何时用:</strong><br>
+    <code>timer_list</code>：低精度（jiffies 级，~1-4ms），大批量超时，弱时序保证。<br>
+    <code>hrtimer</code>：纳秒精度，红黑树组织，硬实时保证。<br>
+    现代 Linux 已经把所有 timer 内部都用 hrtimer 模拟，但接口和精度不同。
+  </div>
+</section>
+
+<section id="hrtimer" class="toc-link">
+  <h2><span class="num">03</span> 高精度定时器 (hrtimer)</h2>
+
+  <p><code>hrtimer</code> (High Resolution Timer) 提供<strong>纳秒精度</strong>的定时器，使用红黑树组织所有挂起的定时器。</p>
+
+<pre><code>// include/linux/hrtimer_types.h
+struct hrtimer {
+    struct timerqueue_node      node;           // 红黑树节点
+    ktime_t                     _softexpires;   // 软超时
+    struct hrtimer_clock_base  *base;
+    u8                          state;          // HRTIMER_STATE_*
+    u8                          is_rel;         // 是否相对时间
+    u8                          is_soft;        // 是否软中断上下文
+    u8                          is_hard;        // 强制硬中断上下文
+    enum hrtimer_restart      (*function)(struct hrtimer *);
+};
+</code></pre>
+
+  <p>使用范式：</p>
+<pre><code>struct hrtimer my_hr;
+
+// 初始化
+hrtimer_init(&my_hr, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+
+// 设置回调
+static enum hrtimer_restart my_callback(struct hrtimer *t) {
+    // 返回 HRTIMER_RESTART 让定时器继续触发
+    // 返回 HRTIMER_NORESTART 让定时器停止
+    return HRTIMER_NORESTART;
+}
+my_hr.function = my_callback;
+
+// 启动（1ms 后）
+hrtimer_start(&my_hr, ms_to_ktime(1), HRTIMER_MODE_REL);
+
+// 取消
+hrtimer_cancel(&my_hr);
+
+// 前向（重复触发的定时器）
+hrtimer_forward(&my_hr, ktime_get(), ms_to_ktime(10));
+</code></pre>
+
+  <p>hrtimer 基 (base) 的组织：</p>
+<pre><code>// 每个 CPU 有自己的 hrtimer_base 数组（按 clock type）
+struct hrtimer_clock_base {
+    struct hrtimer_cpu_base   *cpu_base;        // 所属 CPU base
+    unsigned int               active;          // 是否有定时器
+    ktime_t                    offset;          // 时间偏移
+    enum hrtimer_base_type     index;
+    struct timerqueue_head     head;            // 红黑树根
+};
+
+struct hrtimer_cpu_base {
+    raw_spinlock_t             lock;
+    unsigned int               cpu;
+    unsigned int               active_bases;    // 哪些 base 有定时器
+    unsigned int               clock_was_set_seq;
+    unsigned int               hres_active:1,
+                               hang_detected:1,
+                               softirq_activated:1;
+    ktime_t                    expires_next;    // 下一个到期时间
+    struct hrtimer_clock_base  clock_base[HRTIMER_MAX_CLOCK_BASES];
+    unsigned int               nr_retries;
+    unsigned int               nr_hangs;
+    // ...
+};
+
+// HRTIMER_MAX_CLOCK_BASES 通常是 4：HRTIMER_BASE_MONOTONIC、
+// HRTIMER_BASE_REALTIME、HRTIMER_BASE_BOOTTIME、HRTIMER_BASE_TAI
+</code></pre>
+
+  <p>触发流程：</p>
+<pre><code>// 1. 高精度 tick 设备到期，触发 IRQ
+// 2. hrtimer_interrupt() 处理所有已到期定时器
+//    - 红黑树最左节点为最近超时
+//    - 遍历到期节点，调用 callback
+//    - 重新编程硬件为下一个最近超时
+// 3. 软中断版的 hrtimer：
+//    - HRTIMER_MODE_SOFT 标记的 hrtimer 在软中断中执行
+//    - 拆分硬/软中断，减少 IRQ 延迟
+
+// hrtimer_run_queues() 在每个 tick 检查是否到期
+// 在高精度模式下，硬件中断直接处理
+</code></pre>
+</section>
+
+<section id="clockevent" class="toc-link">
+  <h2><span class="num">04</span> 时钟事件设备</h2>
+
+  <p><code>clock_event_device</code> 抽象可编程的中断源（如 LAPIC Timer、HPET、ARM Generic Timer）：</p>
+
+<pre><code>// include/linux/clockchips.h
+struct clock_event_device {
+    void                  (*event_handler)(struct clock_event_device *);
+    int                   (*set_next_event)(unsigned long evt, struct clock_event_device *);
+    int                   (*set_next_ktime)(ktime_t expires, struct clock_event_device *);
+    enum clock_event_state   state;
+    unsigned int             features;        // CLOCK_EVT_FEAT_*
+    unsigned long            max_delta_ns;
+    unsigned long            min_delta_ns;
+    u32                      mult;
+    u32                      shift;
+    enum hrtimer_restart   (*mult_mult);     // unused
+    ktime_t                  next_event;
+    int                      retries;
+    int                      set_state_periodic;
+    int                      set_state_oneshot;
+    int                      set_state_oneshot_stopped;
+    int                      tick_resume;
+    const char              *name;
+    int                      rating;
+    int                      irq;
+    int                      bound_on;
+    const struct cpumask    *cpumask;
+    struct list_head         list;
+    struct module           *owner;
+} ____cacheline_aligned;
+</code></pre>
+
+  <p>关键状态：</p>
+<pre><code>enum clock_event_state {
+    CLOCK_EVT_STATE_DETACHED,   // 未使用
+    CLOCK_EVT_STATE_SHUTDOWN,   // 已关闭
+    CLOCK_EVT_STATE_PERIODIC,   // 周期模式（系统 tick）
+    CLOCK_EVT_STATE_ONESHOT,    // 单发模式（hrtimer）
+    CLOCK_EVT_STATE_ONESHOT_STOPPED,  // 单发但暂停
+};
+</code></pre>
+
+  <p>事件处理器的层次：</p>
+<pre><code>// tick_device 是对 clock_event_device 的封装
+enum tick_device_mode {
+    TICKDEV_MODE_PERIODIC,    // 周期 tick（低精度）
+    TICKDEV_MODE_ONESHOT,     // 单发（高精度 / NOHZ）
+};
+
+struct tick_device {
+    struct clock_event_device *evtdev;
+    enum tick_device_mode      mode;
+};
+
+// 系统启动后：
+// 1. 所有 tick_device 处于 PERIODIC 模式
+// 2. 时间稳定后切换到 ONESHOT（高精度模式）
+// 3. 在 ONESHOT 下每次重编程下一个事件
+</code></pre>
+
+  <p>广播 (Broadcast) 机制：</p>
+<pre><code>// 问题：某些 CPU 进入深睡眠时停止本地定时器（如 C-states）
+// 解决：用全局广播设备（如 HPET）代替，唤醒这些 CPU
+
+// kernel/time/tick-broadcast.c
+// tick_broadcast_setup_oneshot() 配置广播设备
+// tick_handle_oneshot_broadcast() 在广播设备中断时
+//   通知所有到期的 CPU
+
+// 类型：
+// - 周期性广播（旧）
+// - 单发广播（NOHZ）
+// - hrtimer 广播（高精度）
+</code></pre>
+</section>
+
+<section id="timekeeping" class="toc-link">
+  <h2><span class="num">05</span> 时间维护</h2>
+
+  <p>Timekeeping 维护<strong>当前时间</strong>（wall time, monotonic, boottime 等），通过周期性读取 clocksource 累加 ns。</p>
+
+<pre><code>// kernel/time/timekeeping.c
+static struct {
+    seqcount_raw_spinlock_t   seq;
+    struct timekeeper         tk;
+    raw_spinlock_t            lock;
+    bool                      ptp_reset_counter;
+} tk_core ____cacheline_aligned;
+
+// include/linux/timekeeper_internal.h
+struct timekeeper {
+    struct tk_read_base       tkr_mono;        // 单调时钟读取器
+    struct tk_read_base       tkr_raw;         // 原始时钟读取器
+    u64                       xtime_sec;       // 当前 wall time 秒
+    unsigned long             xtime_nsec;      // 秒内 ns（按 shift 缩放）
+    struct timespec64         wall_to_monotonic;  // wall → mono 偏移
+    struct timespec64         offset_sec;
+    ktime_t                   offs_real;       // mono → real 偏移
+    ktime_t                   offs_boot;       // mono → boot 偏移
+    ktime_t                   offs_tai;        // mono → TAI 偏移
+    unsigned long             cycles_interval;  // NTP 周期
+    unsigned long             xtime_interval;   // 每次 cycle 的 ns
+    s64                       ntp_error;
+    u32                       raw_interval;
+    u32                       ntp_error_shift;
+    u32                       cycle_last;
+    unsigned long             flags;
+    // ...
+};
+</code></pre>
+
+  <p>时间读取的快速路径：</p>
+<pre><code>// 用户态调用 clock_gettime(CLOCK_MONOTONIC, &ts)
+// → ktime_get_ts64()
+// → read_tkr(&tk->tkr_mono, ...) 
+//   关键：使用 seqcount 防止读到中间状态
+//   - seqcount_read_retry() 自旋等待写入完成
+//   - readb() 读 cycle counter（如 rdtsc）
+//   - 计算 delta = (cycle_now - cycle_last) & mask
+//   - 转换为 ns：delta = cyc2ns(delta, mult, shift)
+//   - 累加：now_ns = base + delta
+
+// 关键的 ktime_get_* 函数家族：
+ktime_get()                    // CLOCK_MONOTONIC（不可回退）
+ktime_get_real()               // CLOCK_REALTIME（wall time）
+ktime_get_boottime()           // CLOCK_BOOTTIME（含睡眠）
+ktime_get_raw()                // CLOCK_MONOTONIC_RAW（无 NTP）
+ktime_get_clocktai()           // CLOCK_TAI（国际原子时）
+ktime_get_ns()                 // 仅 ns 值（高频使用）
+</code></pre>
+
+  <p>NTP 调整：</p>
+<pre><code>// kernel/time/ntp.c
+// 通过调整 mult（clocksource 到 ns 的转换系数）实现：
+// - 长期偏快：降低 mult（让 ns 累加变慢）
+// - 长期偏慢：升高 mult（让 ns 累加变快）
+// - adjtimex() 系统调用让用户态（chronyd/ntpd）反馈
+
+// 关键函数：timekeeping_advance() 在每个 tick 调用
+//   - 累加 cycles → ns
+//   - 更新 xtime_sec（满 1 秒进位）
+//   - 应用 NTP 校正
+//   - 检查是否需要插入/删除闰秒
+</code></pre>
+</section>
+
+<section id="tick" class="toc-link">
+  <h2><span class="num">06</span> Tick 管理 (NO_HZ)</h2>
+
+  <p>Tick 是系统周期性中断（默认 HZ=250，每 4ms）。NO_HZ 优化减少不必要的 tick：</p>
+
+<pre><code>// kernel/time/tick-sched.h
+struct tick_sched {
+    struct hrtimer            sched_timer;       // hrtimer 模拟 tick
+    u64                       last_tick;         // 上次 tick 时间
+    u64                       next_tick;         // 下次 tick 时间
+    unsigned long             check_clocks;      // ANNOYING标志
+    unsigned int              inidle:1,          // 处于 idle
+                              tick_stopped:1,    // tick 已停止
+                              idle_active:1,     // 在 idle 中
+                              do_timer_last:1,
+                              nohz_enabled:1,
+                              tick_programmed:1;
+    ktime_t                   idle_entrytime;    // 进入 idle 时间
+    ktime_t                   idle_waketime;     // 唤醒时间
+    u64                       idle_sleeptime;    // 累计睡眠时间
+    u64                       iowait_sleeptime;  // I/O 等待睡眠
+    unsigned long             last_jiffies;
+    unsigned long             next_jiffies;
+    u32                       nohz_length;
+    // ...
+};
+</code></pre>
+
+  <p>三种 NO_HZ 配置：</p>
+  <table>
+    <tr><th>配置</th><th>行为</th><th>用途</th></tr>
+    <tr><td>无 NO_HZ</td><td>每个 CPU 每 tick 都中断</td><td>极旧系统</td></tr>
+    <tr><td><code>NO_HZ_IDLE</code></td><td>空闲 CPU 停止 tick</td><td>默认，省电</td></tr>
+    <tr><td><code>NO_HZ_FULL</code></td><td>无任务 CPU 完全停止 tick</td><td>实时 / HPC</td></tr>
+  </table>
+
+<pre><code>// NO_HZ_IDLE 实现：
+// 1. CPU 进入 idle
+// 2. tick_nohz_idle_enter() 计算"下一次需要的 tick"
+//    - 最近的 hrtimer 超时
+//    - 最近的 RCU GP
+// 3. 重编程 clock_event_device 为该时间
+// 4. tick_stopped = 1
+// 5. CPU 进入 idle（mwait/halt）
+// 6. 唤醒后 tick_nohz_idle_exit() 恢复
+
+// NO_HZ_FULL 实现：
+// 1. 一个 CPU 上只有一个任务
+// 2. tick_nohz_full_kick_cpu() 通知其他 CPU
+// 3. 停止该 CPU 的所有 tick
+// 4. 任务自行运行，无中断
+// 5. 仍需处理：RCU 静默、定时器超时
+
+// 系统级 timekeeping 用一个 housekeeping CPU：
+//   - 该 CPU 始终保留 tick，维护 wall time
+//   - 通过 isolcpus=domain nohz_full=2-N 隔离
+</code></pre>
+</section>
+
+<section id="clocksource" class="toc-link">
+  <h2><span class="num">07</span> 时钟源</h2>
+
+  <p><code>clocksource</code> 抽象单调递增的计数器：</p>
+
+<pre><code>// include/linux/clocksource.h
+struct clocksource {
+    u64                   (*read)(struct clocksource *cs);
+    u64                       mask;             // 计数器位宽 mask
+    u32                       mult;             // cycle → ns 转换
+    u32                       shift;            // 配合 mult 的位移
+    u64                       max_idle_ns;      // 最长空闲
+    u32                       maxadj;           // NTP 最大调整量
+    u32                       uncert_fod;
+    const char              *name;
+    struct list_head         list;             // 全局链表
+    int                      rating;           // 质量评分
+    enum vclock_mode         vclock_mode;      // VDSO 模式
+    enum clocksource_ids     id;               // 系统枚举
+    // ... watchdog、suspend、resume ...
+};
+</code></pre>
+
+  <p>质量评分 (rating) 系统：</p>
+  <table>
+    <tr><th>Rating 范围</th><th>含义</th></tr>
+    <tr><td>1-99</td><td>非常差，仅作 fallback</td></tr>
+    <tr><td>100-199</td><td>基础（如 jiffies、PIT）</td></tr>
+    <tr><td>200-299</td><td>可用（ACPI PM、HPET）</td></tr>
+    <tr><td>300-399</td><td>快速且正确（如 HPET 64-bit）</td></tr>
+    <tr><td>400-499</td><td>理想（TSC、ARM SysTimer）</td></tr>
+  </table>
+
+  <p>常见时钟源对比：</p>
+<pre><code>// x86:
+//   TSC (Time Stamp Counter) - rating 400, VDSO 可直接读
+//   HPET (High Precision Event Timer) - rating 250
+//   ACPI PM Timer - rating 200
+
+// ARM:
+//   arch_sys_counter (CNTVCT_EL0) - rating 400
+//   各种 SoC 内部 timer
+
+// Watchdog：
+//   每秒检查一次，如果主时钟源偏移过大
+//   自动降级并切换到次优时钟源
+//   防止硬件故障导致时间错乱
+</code></pre>
+
+  <p>用户态 VDSO 加速：</p>
+<pre><code>// gettimeofday / clock_gettime 调用
+// 如果时钟源支持 vclock_mode，可通过 VDSO 直接读
+// 不进入内核态，性能 ~20ns（vs syscall ~100ns）
+
+// arch/x86/entry/vdso/vclock_gettime.c
+// gtod_tsc_read() 直接 rdtsc + 应用已知 mult/shift
+</code></pre>
+</section>
+
+<section id="posix" class="toc-link">
+  <h2><span class="num">08</span> POSIX 时钟与定时器</h2>
+
+  <p>用户态使用的标准时钟 API，全部由 hrtimer 支撑：</p>
+
+<pre><code>// clockid_t 标识：
+CLOCK_REALTIME           // 系统时间（可被 settime 调整）
+CLOCK_MONOTONIC          // 单调时钟（不受 settime 影响）
+CLOCK_PROCESS_CPUTIME_ID // 进程 CPU 时间
+CLOCK_THREAD_CPUTIME_ID  // 线程 CPU 时间
+CLOCK_MONOTONIC_RAW      // 原始单调（无 NTP）
+CLOCK_REALTIME_COARSE    // 粗粒度（快但精度低）
+CLOCK_MONOTONIC_COARSE
+CLOCK_BOOTTIME           // 含睡眠的单调时钟
+CLOCK_TAI                // 国际原子时
+CLOCK_BOOTTIME_ALARM     // 可唤醒系统的时钟
+
+// POSIX 定时器
+timer_create(clockid_t, struct sigevent *, timer_t *);
+timer_settime(timer_t, int flags, struct itimerspec *, ...);
+timer_gettime(timer_t, struct itimerspec *);
+timer_delete(timer_t);
+
+// 内核实现：
+// kernel/time/posix-timers.c
+// struct k_itimer 内部嵌入 hrtimer
+
+// CPU 定时器（每进程/线程的 CPU 时间上限）：
+// kernel/time/posix-cpu-timers.c
+// 触发 SIGXCPU、SIGKILL
+// 通过 task->cputime_expires 跟踪
+</code></pre>
+
+  <p>三种系统调用：</p>
+  <table>
+    <tr><th>接口</th><th>类型</th><th>精度</th></tr>
+    <tr><td><code>setitimer/getitimer</code></td><td>老式（ITIMER_*）</td><td>ms 级</td></tr>
+    <tr><td><code>timer_create/settime/gettime</code></td><td>POSIX.1b</td><td>纳秒</td></tr>
+    <tr><td><code>timerfd_create/settime</code></td><td>FD 风格（pollable）</td><td>纳秒</td></tr>
+  </table>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">kernel/time/time.c</span>              <span class="cmt">通用辅助函数</span>
+├── <span class="file">kernel/time/timer.c</span>            <span class="cmt">定时器轮 — struct timer_list</span>
+├── <span class="file">kernel/time/hrtimer.c</span>          <span class="cmt">高精度定时器 — struct hrtimer</span>
+├── <span class="file">kernel/time/timekeeping.c</span>      <span class="cmt">时间维护 — struct timekeeper</span>
+├── <span class="file">kernel/time/timekeeper_internal.h</span> <span class="cmt">timekeeper 内部结构</span>
+├── <span class="file">kernel/time/ntp.c</span>              <span class="cmt">NTP 调整、adjtimex</span>
+├── <span class="file">kernel/time/clocksource.c</span>      <span class="cmt">clocksource 注册、watchdog</span>
+├── <span class="file">kernel/time/clockevents.c</span>      <span class="cmt">clock_event_device 注册</span>
+├── <span class="file">kernel/time/tick-common.c</span>      <span class="cmt">tick 设备管理</span>
+├── <span class="file">kernel/time/tick-sched.c</span>       <span class="cmt">tick_sched、NO_HZ_IDLE/FULL</span>
+├── <span class="file">kernel/time/tick-broadcast.c</span>   <span class="cmt">tick 广播</span>
+├── <span class="file">kernel/time/tick-oneshot.c</span>     <span class="cmt">单发模式</span>
+├── <span class="file">kernel/time/posix-timers.c</span>     <span class="cmt">POSIX timer (timer_create 等)</span>
+├── <span class="file">kernel/time/posix-cpu-timers.c</span> <span class="cmt">CPU 定时器（RLIMIT_CPU）</span>
+├── <span class="file">kernel/time/posix-clock.c</span>      <span class="cmt">动态 POSIX 时钟</span>
+├── <span class="file">kernel/time/vsyscall.c</span>         <span class="cmt">VDSO 时间数据更新</span>
+├── <span class="file">kernel/time/test_clocksource.c</span> <span class="cmt">clocksource 单元测试</span>
+├── <span class="file">include/linux/timer.h</span>          <span class="cmt">timer_list API</span>
+├── <span class="file">include/linux/hrtimer.h</span>        <span class="cmt">hrtimer API</span>
+├── <span class="file">include/linux/clockchips.h</span>     <span class="cmt">clock_event_device API</span>
+├── <span class="file">include/linux/clocksource.h</span>    <span class="cmt">clocksource API</span>
+├── <span class="file">include/linux/timekeeping.h</span>    <span class="cmt">ktime_get_* 时间读取</span>
+└── <span class="file">arch/x86/kernel/tsc.c</span>          <span class="cmt">x86 TSC clocksource 实现</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>include/linux/hrtimer.h</code> 看高精度定时器接口。<br>
+    <code>kernel/time/hrtimer.c</code> 红黑树组织和到期处理逻辑。<br>
+    <code>kernel/time/timekeeping.c</code> 时间累加的核心算法。<br>
+    <code>kernel/time/tick-sched.c</code> NO_HZ 实现细节。<br>
+    <code>kernel/time/clocksource.c</code> 时钟源选择和 watchdog 机制。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>
