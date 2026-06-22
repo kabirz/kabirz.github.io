@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核安全模块 (LSM) 框架深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核安全模块 (LSM) 框架深度解析</h1>
+  <p class="subtitle">可堆叠安全框架 — SELinux、AppArmor、seccomp、Landlock</p>
+  <span class="version">Linux 7.0.12 · security/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#framework">LSM 框架核心</a></li>
+    <li><a href="#init">初始化与 LSM 栈</a></li>
+    <li><a href="#hooks">关键安全钩子</a></li>
+    <li><a href="#seccomp">seccomp</a></li>
+    <li><a href="#selinux">SELinux</a></li>
+    <li><a href="#apparmor">AppArmor</a></li>
+    <li><a href="#landlock">Landlock</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 安全模块 (Linux Security Modules, LSM) 框架是一个<strong>可堆叠的钩子系统</strong>，允许不同的安全策略（MAC、能力、沙箱）共存并依次执行。</p>
+
+  <p>架构定位：</p>
+<pre><code>┌─────────────────────────────────────────┐
+│  用户态：进程、文件操作                    │
+└────────────────┬────────────────────────┘
+                 │ syscall
+┌────────────────▼────────────────────────┐
+│  VFS、网络、内存等子系统                  │
+│  (resource access)                       │
+└────────────────┬────────────────────────┘
+                 │ 访问决策点
+┌────────────────▼────────────────────────┐
+│  LSM 框架 (security/security.c)          │
+│  security_*() 钩子分发器                 │
+└────────────────┬────────────────────────┘
+                 │ static call / list
+       ┌─────────┴──────────┐
+       │                    │
+┌──────▼──────┐      ┌──────▼──────┐
+│  Capabilities│      │  SELinux    │
+│  (capability)│      │ (selinux)   │
+└─────────────┘      └─────────────┘
+┌─────────────┐      ┌─────────────┐
+│  Yama       │      │ AppArmor    │
+└─────────────┘      └─────────────┘
+┌─────────────┐      ┌─────────────┐
+│  LoadPin    │      │  Landlock   │
+└─────────────┘      └─────────────┘
+┌─────────────┐      ┌─────────────┐
+│  Lockdown   │      │  BPF (LSM)  │
+└─────────────┘      └─────────────┘
+</code></pre>
+
+  <p>核心特征：</p>
+  <ul>
+    <li><strong>不替代 DAC</strong>：DAC (Discretionary Access Control，传统权限检查) 先执行，LSM 在 DAC 通过后才被调用</li>
+    <li><strong>可堆叠</strong>：多个 LSM 可同时活跃（Linux 5.x+ 完全支持）</li>
+    <li><strong>策略独立</strong>：内核不规定策略，只提供 hook 接口</li>
+    <li><strong>不可旁路</strong>：所有资源访问都经过 LSM</li>
+  </ul>
+
+  <p>典型 LSM 与策略：</p>
+  <table>
+    <tr><th>LSM</th><th>类型</th><th>典型应用</th></tr>
+    <tr><td>capabilities</td><td>能力分割</td><td>root 权限细分</td></tr>
+    <tr><td>SELinux</td><td>MAC (Type Enforcement)</td><td>服务器加固</td></tr>
+    <tr><td>AppArmor</td><td>MAC (Path-based)</td><td>Ubuntu/SUSE 默认</td></tr>
+    <tr><td>Yama</td><td>ptrace 限制</td><td>反调试</td></tr>
+    <tr><td>LoadPin</td><td>模块来源限制</td><td>Chrome OS</td></tr>
+    <tr><td>Lockdown</td><td>kernel self-protection</td><td>UEFI Secure Boot</td></tr>
+    <tr><td>Landlock</td><td>Unprivileged sandbox</td><td>应用沙箱</td></tr>
+    <tr><td>BPF (LSM)</td><td>可编程</td><td>动态策略</td></tr>
+  </table>
+</section>
+
+<section id="framework" class="toc-link">
+  <h2><span class="num">02</span> LSM 框架核心</h2>
+
+<pre><code>// include/linux/lsm_hooks.h
+
+// 每个 LSM 通过结构体声明自己的 hooks
+// 例如 capabilities 模块：
+static struct security_hook_list capability_hooks[] = {
+    LSM_HOOK_INIT(capable, cap_capable),
+    LSM_HOOK_INIT(settime, cap_settime),
+    LSM_HOOK_INIT(ptrace_access_check, cap_ptrace_access_check),
+    LSM_HOOK_INIT(ptrace_traceme, cap_ptrace_traceme),
+    LSM_HOOK_INIT(capget, cap_capget),
+    LSM_HOOK_INIT(capset, cap_capset),
+    LSM_HOOK_INIT(bprm_creds_from_file, cap_bprm_creds_from_file),
+    LSM_HOOK_INIT(bprm_secureexec, cap_bprm_secureexec),
+    LSM_HOOK_INIT(inode_need_killpriv, cap_inode_need_killpriv),
+    LSM_HOOK_INIT(inode_killpriv, cap_inode_killpriv),
+    LSM_HOOK_INIT(inode_getsecurity, cap_inode_getsecurity),
+    LSM_HOOK_INIT(mmap_addr, cap_mmap_addr),
+    LSM_HOOK_INIT(mmap_file, cap_mmap_file),
+    LSM_HOOK_INIT(task_fix_setuid, cap_task_fix_setuid),
+    LSM_HOOK_INIT(task_prctl, cap_task_prctl),
+    LSM_HOOK_INIT(task_setscheduler, cap_task_setscheduler),
+    LSM_HOOK_INIT(vm_enough_memory, cap_vm_enough_memory),
+};
+
+// LSM_HOOK_INIT 宏：
+#define LSM_HOOK_INIT(HEAD, HOOK) \
+    { .head = HOOK, .hook = { .HEAD = HOOK } }
+
+// struct security_hook_list
+struct security_hook_list {
+    struct hlist_node       list;
+    struct hlist_head      *head;
+    union security_list_options hook;
+    enum lsm_id             lsmid;
+} __randomize_layout;
+
+// 每个 hook 点对应一个全局 hlist_head
+// 注册时插入到对应 head 的链表
+
+// lsm_id：
+enum lsm_id {
+    LSM_ID_UNDEF = -1,
+    LSM_ID_CAPABILITY,
+    LSM_ID_SELINUX,
+    LSM_ID_SMACK,
+    LSM_ID_TOMOYO,
+    LSM_ID_APPARMOR,
+    LSM_ID_YAMA,
+    LSM_ID_LOADPIN,
+    LSM_ID_LOCKDOWN,
+    LSM_ID_BPF,
+    LSM_ID_LANDLOCK,
+    LSM_ID_IMA,
+    LSM_ID_EVM,
+    // ...
+};
+
+// lsm_info — 模块注册结构
+struct lsm_info {
+    const char              *name;       // 模块名
+    enum lsm_id              id;
+    unsigned long            flags;      // LSM_FLAG_*
+    int                    (*init)(void);    // 初始化函数
+    struct lsm_blob_sizes   *blobs;
+} __randomize_layout;
+
+// 通过 DEFINE_LSM / DEFINE_EARLY_LSM 注册
+static struct lsm_info __lsm_info_selinux __used __section("lsm_info") = {
+    .name = "selinux",
+    .id   = LSM_ID_SELINUX,
+    .init = selinux_init,
+    .blobs = &selinux_blob_sizes,
+};
+</code></pre>
+
+  <p>Blob (安全上下文数据)：</p>
+<pre><code>// 每个需要保存安全状态的内核对象（task、cred、file、inode...）
+// 都有额外的 blob 数据，由各 LSM 共享空间
+struct lsm_blob_sizes {
+    int lbs_cred;
+    int lbs_file;
+    int lbs_inode;
+    int lbs_sock;
+    int lbs_ipc;
+    int lbs_msg_msg;
+    int lbs_task;
+    int lbs_xattr_count;
+    int lbs_superblock;
+    int lbs_vm_area_struct;
+    int lbs_nf_mark;
+    int lbs_nf_conn:
+    int lbs_nf_ct_data;
+    int lbs_tun_dev;
+};
+
+// 访问自己 LSM 的 blob 数据：
+void *selinux_cred(struct cred *cred) {
+    return cred->security + selinux_blob_sizes.lbs_cred;
+    // cred->security 是一个大 blob，各 LSM 按顺序存
+}
+</code></pre>
+</section>
+
+<section id="init" class="toc-link">
+  <h2><span class="num">03</span> 初始化与 LSM 栈</h2>
+
+<pre><code>// security/security.c
+
+// 启动早期调用：
+int __init security_init(void)
+{
+    struct lsm_info *lsm;
+    
+    // 1. 处理 early_lsms (capabilities, lockdown 等)
+    hlist_for_each_entry(lsm, &early_lsm_info, list)
+        initialize_lsm(lsm);
+    
+    ordered_lsms_parse();        // 解析 CONFIG_LSM= 排序
+    
+    // 2. 处理 ordered_lsms (按用户配置的顺序)
+    list_for_each_entry(lsm, &ordered_lsm_head, order_entry) {
+        // 调用每个 LSM 的 init()
+        if (initialize_lsm(lsm) == 0) {
+            // 启用
+            lsm_set_enabled(lsm->name, NULL, LSM_FLAG_LEGACY_MAJOR);
+        }
+    }
+    
+    return 0;
+}
+
+// 排序：CONFIG_LSM= 配置 + 系统默认
+//   lsm=lockdown,capabilities,yama,integrity,selinux,bpf,landlock
+// 启动时通过 /sys/kernel/security/lsm 查看：
+// $ cat /sys/kernel/security/lsm
+// capability,yama,integrity,selinux,bpf
+
+// Hook 注册：
+static inline void __init lsm_early_cred(struct lsm_id *lsmid) { ... }
+void __init security_add_hooks(struct security_hook_list *hooks, int count,
+                                struct lsm_id *lsmid)
+{
+    int i;
+    for (i = 0; i < count; i++) {
+        hooks[i].lsmid = lsmid;
+        hlist_add_tail_rcu(&hooks[i].list, hooks[i].head);
+    }
+}
+
+// 现代 LSM 使用 static_call 优化：
+//   call_void_hook(file_open, ...) 不是间接调用循环
+//   而是被 static_call 替换为直接调用（如果只有一个 LSM）
+//   有多个时仍是函数指针数组
+</code></pre>
+
+  <p>启动时序：</p>
+<pre><code>// 1. early LSM init
+//    (capabilities 必须 early，因为后续都需要它)
+//
+// 2. 内核主体初始化完成
+//
+// 3. security_init()
+//    - 解析命令行 lsm= 参数
+//    - 按 ordered_lsm_head 顺序调用 init
+//
+// 4. 各 LSM 加载策略
+//    - SELinux: 从 /etc/selinux/policy 读取
+//    - AppArmor: 从 /sys/kernel/security/apparmor
+//    - IMA: 校验度量表
+</code></pre>
+</section>
+
+<section id="hooks" class="toc-link">
+  <h2><span class="num">04</span> 关键安全钩子</h2>
+
+<pre><code>// security/security.c 中分发器的例子
+int security_file_open(struct file *file, const struct cred *cred)
+{
+    int ret;
+    
+    // 1. 调用 file_open_alloc 钩子
+    ret = call_int_hook(file_open, file, cred);
+    if (ret)
+        return ret;
+    
+    // 2. 调用 file_open_finished
+    return fsnotify_perm(file, MAY_OPEN);
+}
+
+int security_mmap_file(unsigned long prot, unsigned long flags,
+                        struct file *file, unsigned long addr)
+{
+    unsigned long prot_adj = mmap_prot(prot, flags);
+    int ret;
+    
+    // CAP_SYS_RAWIO 等 capability 检查
+    if (!(prot_adj & PROT_SAO))
+        ret = cap_mmap_file(file, prot, flags);
+    if (ret)
+        return ret;
+    
+    // 调用所有 LSM 的 mmap_file
+    return call_int_hook(mmap_file, prot, flags, file, addr);
+}
+
+int security_bprm_check(struct linux_binprm *bprm)
+{
+    // 执行程序前检查
+    // SELinux/AppArmor 在这里检查是否允许执行
+    return call_int_hook(bprm_check_security, bprm);
+}
+
+int security_sb_mount(const char *dev_name, const struct path *path,
+                       const char *type, unsigned long flags, void *data)
+{
+    // mount syscall 入口检查
+    return call_int_hook(sb_mount, dev_name, path, type, flags, data);
+}
+
+int security_socket_connect(struct socket *sock, struct sockaddr *address, int addrlen)
+{
+    // 网络连接检查
+    return call_int_hook(socket_connect, sock, address, addrlen);
+}
+
+// call_int_hook / call_void_hook 宏：
+#define call_void_hook(FUNC, ...)                       \
+    do {                                                \
+        struct security_hook_list *P;                   \
+        hlist_for_each_entry(P, &security_hook_heads.FUNC, list) \
+            P->hook.FUNC(__VA_ARGS__);                  \
+    } while (0)
+
+#define call_int_hook(FUNC, IRC, ...) ({                \
+    int RC = IRC;                                       \
+    do {                                                \
+        struct security_hook_list *P;                   \
+        hlist_for_each_entry(P, &security_hook_heads.FUNC, list) { \
+            RC = P->hook.FUNC(__VA_ARGS__);             \
+            if (RC != 0) break;                         \
+        }                                               \
+    } while (0);                                        \
+    RC; })
+</code></pre>
+
+  <p>关键 hook 分类：</p>
+  <table>
+    <tr><th>分类</th><th>代表 hooks</th></tr>
+    <tr><td>程序执行</td><td><code>bprm_check_security</code>, <code>bprm_creds_for_exec</code></td></tr>
+    <tr><td>文件系统</td><td><code>file_open</code>, <code>inode_permission</code>, <code>mmap_file</code></td></tr>
+    <tr><td>进程管理</td><td><code>task_kill</code>, <code>task_setscheduler</code>, <code>ptrace_access_check</code></td></tr>
+    <tr><td>网络</td><td><code>socket_connect</code>, <code>socket_bind</code>, <code>socket_accept</code></td></tr>
+    <tr><td>IPC</td><td><code>msg_queue_msgctl</code>, <code>sem_semctl</code></td></tr>
+    <tr><td>挂载</td><td><code>sb_mount</code>, <code>sb_remount</code>, <code>move_mount</code></td></tr>
+    <tr><td>调试</td><td><code>ptrace_*</code></td></tr>
+  </table>
+</section>
+
+<section id="seccomp" class="toc-link">
+  <h2><span class="num">05</span> seccomp</h2>
+
+  <p>seccomp (Secure Computing Mode) 限制进程可调用的系统调用。常用于沙箱（Docker、Chrome renderer、Android zygote）。</p>
+
+<pre><code>// kernel/seccomp.c
+
+// 模式
+#define SECCOMP_MODE_DISABLED    0
+#define SECCOMP_MODE_STRICT      1   // 只能 read/write/exit/sigreturn
+#define SECCOMP_MODE_FILTER      2   // BPF 过滤
+
+struct seccomp {
+    int                  mode;
+    atomic_t             filter_count;
+    struct seccomp_filter __rcu *filter;  // 过滤链
+};
+
+// seccomp_filter — BPF 过滤器
+struct seccomp_filter {
+    refcount_t            usage;
+    bool                  log;
+    bool                  wait_killable_recv;
+    struct seccomp_filter *prev;       // 父过滤器
+    struct bpf_prog       *prog;        // BPF 程序
+    struct list_head      *notifier;
+    struct notify_mm      *notif_mm;
+    struct semaphore      notifier_lock;
+};
+
+// 设置：
+// include/uapi/linux/seccomp.h
+struct seccomp_data {
+    int   nr;                // syscall number
+    __u32 arch;              // AUDIT_ARCH_*
+    __u64 instruction_pointer;
+    __u64 args[6];           // syscall 参数
+};
+
+// seccomp() 系统调用：
+// SECCOMP_SET_MODE_STRICT
+// SECCOMP_SET_MODE_FILTER (用 sock_fprog 提供 BPF 程序)
+// SECCOMP_GET_NOTIF_SIZES
+// SECCOMP_GET_ACTION_AVAIL
+
+// SECCOMP_SET_MODE_FILTER 流程：
+// 1. 用户态提供 BPF 程序（通常用 libseccomp 生成）
+// 2. 内核校验程序（限制 BPF_LD | BPF_W | BPF_ABS，只能读 seccomp_data）
+// 3. 替换/合并到 task->seccomp.filter
+
+// BPF 返回值：
+#define SECCOMP_RET_KILL_PROCESS 0x80000000U   // 杀进程
+#define SECCOMP_RET_KILL_THREAD  0x00000000U   // 杀线程
+#define SECCOMP_RET_TRAP         0x00030000U   // SIGSYS
+#define SECCOMP_RET_ERRNO        0x00050000U   // 返回错误码
+#define SECCOMP_RET_USER_NOTIF   0x7fc00000U   // 通知用户态
+#define SECCOMP_RET_TRACE        0x7ff00000U   // ptrace 处理
+#define SECCOMP_RET_LOG          0x7ffc0000U   // 日志后允许
+#define SECCOMP_RET_ALLOW        0x7fff0000U   // 允许
+
+// 检查入口：
+// syscall 入口处 do_syscall_64() 之前
+// __secure_computing() 调用 __seccomp_filter()
+// 1. 遍历 filter 链
+// 2. 运行每个 BPF 程序
+// 3. 根据返回值决定动作
+
+int __secure_computing(const struct seccomp_data *sd)
+{
+    int this_syscall = sd ? sd->nr : 0;
+    struct seccomp_filter *f;
+    
+    u32 action;
+    
+    switch (current->seccomp.mode) {
+    case SECCOMP_MODE_STRICT:
+        // 只允许 read/write/exit/sigreturn
+        if (this_syscall < 4 && syscall_table_32[this_syscall])
+            return 0;
+        action = SECCOMP_RET_KILL_THREAD;
+        break;
+    
+    case SECCOMP_MODE_FILTER:
+        action = __seccomp_filter(this_syscall, sd, false);
+        break;
+    }
+    
+    switch (action) {
+    case SECCOMP_RET_ALLOW:
+        return 0;
+    case SECCOMP_RET_KILL_THREAD:
+    case SECCOMP_RET_KILL_PROCESS:
+        // 发送 SIGSYS
+        do_seccomp_longjmp();  // 不会返回
+    case SECCOMP_RET_TRAP:
+        force_sig(SIGSYS);
+        return -1;
+    case SECCOMP_RET_ERRNO:
+        return -errno;
+    case SECCOMP_RET_TRACE:
+        return -1;  // ptrace 处理
+    case SECCOMP_RET_USER_NOTIF:
+        // 通过 /dev/seccomp 通知用户态
+        return seccomp_do_user_notification(...);
+    }
+}
+</code></pre>
+
+  <p>典型用法（应用开发者）：</p>
+<pre><code>// 1. 用 SECCOMP_SET_MODE_FILTER + BPF 程序
+// 2. 推荐 libseccomp：
+#include &lt;seccomp.h&gt;
+
+ctx = seccomp_init(SCMP_ACT_KILL);
+seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(read), 0);
+seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(write), 0);
+seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(exit_group), 0);
+seccomp_load(ctx);
+// 之后任何其他 syscall 都被 kill
+
+// TSYNC：同步所有线程
+// SECCOMP_FILTER_FLAG_TSYNC 让所有同进程线程都生效
+</code></pre>
+</section>
+
+<section id="selinux" class="toc-link">
+  <h2><span class="num">06</span> SELinux</h2>
+
+  <p>SELinux (Security-Enhanced Linux) 是 NSA 主导的强制访问控制 (MAC) 实现，采用 Type Enforcement 模型。</p>
+
+<pre><code>// security/selinux/hooks.c
+static struct security_hook_list selinux_hooks[] __ro_after_init = {
+    LSM_HOOK_INIT(bprm_creds_for_exec, selinux_bprm_creds_for_exec),
+    LSM_HOOK_INIT(bprm_committing_creds, selinux_bprm_committing_creds),
+    LSM_HOOK_INIT(bprm_secureexec, selinux_bprm_secureexec),
+    LSM_HOOK_INIT(sb_kern_mount, selinux_sb_kern_mount),
+    LSM_HOOK_INIT(sb_statfs, selinux_sb_statfs),
+    LSM_HOOK_INIT(file_open, selinux_file_open),
+    LSM_HOOK_INIT(file_ioctl, selinux_file_ioctl),
+    LSM_HOOK_INIT(file_lock, selinux_file_lock),
+    LSM_HOOK_INIT(mmap_file, selinux_mmap_addr),
+    LSM_HOOK_INIT(inode_permission, selinux_inode_permission),
+    LSM_HOOK_INIT(inode_setxattr, selinux_inode_setxattr),
+    LSM_HOOK_INIT(task_create, selinux_task_create),
+    LSM_HOOK_INIT(task_kill, selinux_task_kill),
+    LSM_HOOK_INIT(task_setscheduler, selinux_task_setscheduler),
+    LSM_HOOK_INIT(socket_create, selinux_socket_create),
+    LSM_HOOK_INIT(socket_connect, selinux_socket_connect),
+    // ... 100+ hooks ...
+    LSM_HOOK_INIT(getprocattr, selinux_getprocattr),
+    LSM_HOOK_INIT(setprocattr, selinux_setprocattr),
+    LSM_HOOK_INIT(audit_rule_init, selinux_audit_rule_init),
+};
+
+// 核心概念：
+//   - Subject: 通常是进程 (domain)
+//   - Object: 通常是文件/IPC (type)
+//   - Permission: read/write/execute/...
+//
+//   格式：TE 规则
+//     allow source_domain target_type : class { perms };
+//   例：
+//     allow httpd_t httpd_log_t : file { read write append };
+//     deny  unconfined_t shadow_t : file { read };
+//
+//   Type：在 file_contexts 中定义路径到 type 的映射
+//   Domain：在 policy 中定义 type 属性
+//   Role: RBAC 层（user → role → domain）
+
+// AVC (Access Vector Cache):
+// security/selinux/avc.c
+//   高频查询，需要缓存
+//   cache_key = (subject_sid, target_sid, requested_class)
+
+struct avc_node {
+    struct hlist_node    list;
+    struct avc_entry     ae;
+    struct rcu_head      rhead;
+};
+
+struct avc_entry {
+    u32           ssid;        // subject security id
+    u32           tsid;        // target security id
+    u16           tclass;      // target class
+    struct av_decision avd;     // 决策
+};
+
+// 决策路径：
+// 1. selinux_inode_permission() 被调用
+// 2. 收集 (ssid, tsid, tclass, requested)
+// 3. avc_has_perm() 查询缓存
+// 4. 未命中 → security_compute_av() 读策略
+// 5. 缓存结果
+
+// Policy 加载：
+// security/selinux/selinuxfs.c
+//   /sys/fs/selinux/load 写入新 policy
+//   security_load_policy() 解析
+//   - TE rules (allow/deny/auditallow/...)
+//   - type definitions
+//   - role/user mappings
+//   - constraints
+//   - initial SID assignments
+
+// 用户态工具：
+//   sestatus, getenforce, setenforce
+//   semanage (管理策略)
+//   audit2allow (从 audit 日志生成规则)
+//   checkmodule, semodule (编译/加载模块)
+</code></pre>
+
+  <p>SELinux 模式：</p>
+  <table>
+    <tr><th>模式</th><th>行为</th></tr>
+    <tr><td>Disabled</td><td>不启用</td></tr>
+    <tr><td>Permissive</td><td>记录违规但不拒绝（调试）</td></tr>
+    <tr><td>Enforcing</td><td>记录并拒绝违规（生产）</td></tr>
+  </table>
+</section>
+
+<section id="apparmor" class="toc-link">
+  <h2><span class="num">07</span> AppArmor</h2>
+
+  <p>AppArmor 是基于<strong>路径名</strong>的 MAC 实现，比 SELinux 简单易用，Ubuntu/SUSE 默认。</p>
+
+<pre><code>// security/apparmor/lsm.c
+static struct security_hook_list apparmor_hooks[] __ro_after_init = {
+    LSM_HOOK_INIT(bprm_creds_for_exec, aa_bprm_creds_for_exec),
+    LSM_HOOK_INIT(bprm_committing_creds, aa_bprm_committing_creds),
+    LSM_HOOK_INIT(task_free, aa_task_free),
+    LSM_HOOK_INIT(alloc_task, aa_alloc_task),
+    LSM_HOOK_INIT(file_open, aa_file_open),
+    LSM_HOOK_INIT(file_perm, aa_file_perm),
+    LSM_HOOK_INIT(mmap_file, aa_mmap),
+    LSM_HOOK_INIT(mq_open, aa_mq_open),
+    LSM_HOOK_INIT(inode_permission, aa_inode_permission),
+    LSM_HOOK_INIT(inode_getattr, aa_inode_getattr),
+    LSM_HOOK_INIT(file_lock, aa_file_lock),
+    LSM_HOOK_INIT(getprocattr, aa_getprocattr),
+    LSM_HOOK_INIT(setprocattr, aa_setprocattr),
+    LSM_HOOK_INIT(socket_create, aa_socket_create),
+    // ... 50+ hooks ...
+};
+
+// 核心数据结构
+struct aa_profile {
+    const char           *basename;     // profile 名
+    char                 *fqname;
+    char                 *ns;            // namespace
+    struct aa_policydb    rules;          // 规则库
+    struct list_head      aas_head;       // attach by name
+    struct list_head      attach_xattrs;
+    struct aa_ruleset    *rules;
+    struct {
+        struct aa_cap     set, inherit, extended;
+    };
+    
+    unsigned int          audit;
+    unsigned int          mode;            // enforce / complain / kill
+    
+    struct aa_loaddata    *rawdata;
+    
+    struct aa_str_table   file_trans;
+    struct aa_ruleset    *rlim_rules;
+    struct aa_ns          *ns;
+    
+    /* mode */
+    bool                  complain, audit;
+    
+    long                  size;
+    
+    // ...
+};
+
+// 规则类型：
+//   file rules:
+//     /etc/passwd r,
+//     /var/log/** rw,
+//   capability rules:
+//     capability net_admin,
+//   network rules:
+//     network inet stream,
+//   rlimit rules:
+//     set rlimit cpu &lt;= 60,
+//
+// 模式：
+//   enforce  - 违规拒绝
+//   complain - 违规记录（学习模式）
+//   audit    - 记录所有访问
+
+// 用户态：
+//   /sys/kernel/security/apparmor/profiles
+//   /etc/apparmor.d/*  (profile 文件)
+//   apparmor_parser
+//   aa-status
+//   aa-logprof (从日志学习生成 profile)
+
+// Profile 示例（/etc/apparmor.d/usr.sbin.nginx）：
+//   #include &lt;tunables/global&gt;
+//   
+//   profile nginx /usr/sbin/nginx {
+//     #include &lt;abstractions/base&gt;
+//     #include &lt;abstractions/nameservice&gt;
+//     
+//     capability net_bind_service,
+//     capability setgid,
+//     capability setuid,
+//     
+//     /usr/sbin/nginx mr,
+//     /etc/nginx/** r,
+//     /var/log/nginx/* rw,
+//     /var/www/html/** r,
+//   }
+</code></pre>
+
+  <p>SELinux vs AppArmor：</p>
+  <table>
+    <tr><th></th><th>SELinux</th><th>AppArmor</th></tr>
+    <tr><td>标识</td><td>Label (inode attribute)</td><td>Path (filename)</td></tr>
+    <tr><td>策略</td><td>Type Enforcement (复杂)</td><td>Path patterns (简单)</td></tr>
+    <tr><td>学习</td><td>困难，需要理解 TE</td><td>aa-logprof 自动生成</td></tr>
+    <tr><td>覆盖</td><td>广泛（包括 IPC、网络）</td><td>主要文件系统</td></tr>
+    <tr><td>典型</td><td>RHEL/CentOS/Fedora</td><td>Ubuntu/SUSE</td></tr>
+  </table>
+</section>
+
+<section id="landlock" class="toc-link">
+  <h2><span class="num">08</span> Landlock</h2>
+
+  <p>Landlock 是 Linux 5.13+ 引入的<strong>非特权沙箱</strong>机制，普通进程可以限制自己的访问权限。</p>
+
+<pre><code>// security/landlock/
+
+// 与 SELinux/AppArmor 的区别：
+//   - 不需要 root/CAP_SYS_ADMIN
+//   - 进程自愿降权（不能提权）
+//   - 用 ruleset 抽象，简单
+
+// API：
+// landlock_create_ruleset()
+// landlock_add_rule()
+// landlock_restrict_self()
+
+// 1. 创建 ruleset：
+struct landlock_ruleset_attr attr = {
+    .handled_access_fs = LANDLOCK_ACCESS_FS_EXECUTE |
+                          LANDLOCK_ACCESS_FS_WRITE_FILE |
+                          LANDLOCK_ACCESS_FS_READ_FILE |
+                          LANDLOCK_ACCESS_FS_REMOVE_FILE |
+                          LANDLOCK_ACCESS_FS_MAKE_DIR |
+                          // ...
+};
+int ruleset_fd = syscall(SYS_landlock_create_ruleset,
+                          &attr, sizeof(attr), 0);
+
+// 2. 添加规则（white-list）：
+struct landlock_path_beneath_attr path_attr = {
+    .allowed_access = LANDLOCK_ACCESS_FS_READ_FILE |
+                       LANDLOCK_ACCESS_FS_READ_DIR,
+    .parent_fd = open("/tmp", O_PATH | O_CLOEXEC),
+};
+syscall(SYS_landlock_add_rule, ruleset_fd,
+         LANDLOCK_RULE_PATH_BENEATH, &path_attr, 0);
+
+// 3. 应用到自己：
+prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+syscall(SYS_landlock_restrict_self, ruleset_fd, 0);
+
+// 之后：
+//   - 只能 read /tmp 下的文件
+//   - 不能 write /tmp 下的文件
+//   - 不能访问其他路径
+
+// 数据结构：
+struct landlock_ruleset {
+    refcount_t             usage;
+    bool                   living;
+    u32                    num_layers;
+    struct landlock_access_fs access_fs;
+    struct landlock_rule   rules;
+    struct rb_root         root;
+    // ...
+};
+
+struct landlock_rule {
+    struct rb_node         node;
+    struct landlock_object *object;
+    u32                    access;
+};
+
+// 文件系统 hook：
+// security/landlock/fs.c
+// 实现 security_hook_list landlock_hooks[]:
+//   hook_path_truncate
+//   hook_file_open
+//   hook_inode_permission
+//   hook_path_link
+//   hook_path_unlink
+//   hook_path_rmdir
+//   hook_path_mkdir
+//   hook_path_mknod
+//   hook_path_symlink
+//   hook_path_rename
+//   hook_path_chmod
+//   hook_path_chown
+//   hook_file_alloc
+//   hook_file_ioctl
+//   hook_file_truncate
+//   ...
+
+// 进程相关：
+//   hook_cred_prepare  - 拷贝 ruleset 到新 cred
+//   hook_task_kill     - 限制信号发送
+//   hook_ptrace_access_check
+</code></pre>
+
+  <p>Landlock vs seccomp：</p>
+  <table>
+    <tr><th></th><th>seccomp</th><th>Landlock</th></tr>
+    <tr><td>对象</td><td>系统调用</td><td>文件系统访问</td></tr>
+    <tr><td>粒度</td><td>syscall number</td><td>path + access type</td></tr>
+    <tr><td>规则</td><td>BPF</td><td>declarative (path patterns)</td></tr>
+    <tr><td>需要特权</td><td>无（PR_SET_NO_NEW_PRIVS）</td><td>无（同上）</td></tr>
+    <tr><td>共存</td><td>与 LSM 并行</td><td>是 LSM 之一</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>典型应用场景:</strong><br>
+    应用自我沙箱（如浏览器渲染进程）。<br>
+    容器运行时（runc 之外的额外限制）。<br>
+    任意应用降权，无需 root 配置全局策略。<br>
+    仍是 LSM 之一，所以与其他 LSM 同时生效。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">security/security.c</span>             <span class="cmt">LSM 框架核心、hook 分发</span>
+├── <span class="file">security/lsm_syscalls.c</span>         <span class="cmt">lsm_get_self_attr 系统调用</span>
+├── <span class="file">security/commoncap/capability.c</span> <span class="cmt">capabilities LSM</span>
+├── <span class="file">security/selinux/</span>                <span class="cmt">SELinux</span>
+│   ├── <span class="file">hooks.c</span>                      <span class="cmt">所有 SELinux hook 实现</span>
+│   ├── <span class="file">avc.c</span>                        <span class="cmt">Access Vector Cache</span>
+│   ├── <span class="file">ss/</span>                          <span class="cmt">policy 服务</span>
+│   ├── <span class="file">selinuxfs.c</span>                  <span class="cmt">/sys/fs/selinux</span>
+│   ├── <span class="file">netif.c</span>                      <span class="cmt">网络接口安全</span>
+│   ├── <span class="file">netnode.c</span>                    <span class="cmt">网络节点</span>
+│   ├── <span class="file">netport.c</span>                    <span class="cmt">网络端口</span>
+│   ├── <span class="file">ibpkey.c</span>                     <span class="cmt">InfiniBand pkey</span>
+│   └── <span class="file">xfrm.c</span>                       <span class="cmt">IPsec xfrm hook</span>
+├── <span class="file">security/apparmor/</span>              <span class="cmt">AppArmor</span>
+│   ├── <span class="file">lsm.c</span>                         <span class="cmt">所有 AppArmor hook 实现</span>
+│   ├── <span class="file">policy.c</span>                      <span class="cmt">policy 解析</span>
+│   ├── <span class="file">policy_unpack.c</span>              <span class="cmt">policy 二进制解析</span>
+│   ├── <span class="file">file.c</span>                        <span class="cmt">文件系统决策</span>
+│   ├── <span class="file">include/</span>                     <span class="cmt">数据结构定义</span>
+│   ├── <span class="file">lib.c</span>                         <span class="cmt">辅助函数</span>
+│   ├── <span class="file">path.c</span>                        <span class="cmt">路径解析</span>
+│   ├── <span class="file">ipc.c</span>                         <span class="cmt">IPC</span>
+│   ├── <span class="file">net.c</span>                         <span class="cmt">网络</span>
+│   └── <span class="file">apparmorfs.c</span>                  <span class="cmt">/sys/kernel/security/apparmor</span>
+├── <span class="file">security/landlock/</span>              <span class="cmt">Landlock</span>
+│   ├── <span class="file">setup.c</span>                       <span class="cmt">初始化</span>
+│   ├── <span class="file">syscalls.c</span>                    <span class="cmt">syscall 入口</span>
+│   ├── <span class="file">ruleset.c</span>                     <span class="cmt">ruleset 管理</span>
+│   ├── <span class="file">fs.c</span>                          <span class="cmt">文件系统 hook</span>
+│   ├── <span class="file">task.c</span>                        <span class="cmt">task hook</span>
+│   ├── <span class="file">object.c</span>                      <span class="cmt">对象引用</span>
+│   ├── <span class="file">cred.c</span>                        <span class="cmt">cred hook</span>
+│   └── <span class="file">limits.h</span>                      <span class="cmt">限制</span>
+├── <span class="file">security/yama/</span>                  <span class="cmt">Yama (ptrace 限制)</span>
+├── <span class="file">security/loadpin/</span>               <span class="cmt">LoadPin (模块加载来源)</span>
+├── <span class="file">security/lockdown/</span>              <span class="cmt">Lockdown (kernel protection)</span>
+├── <span class="file">security/bpf/</span>                   <span class="cmt">BPF LSM (动态策略)</span>
+├── <span class="file">security/integrity/</span>             <span class="cmt">IMA + EVM (完整性度量)</span>
+│   ├── <span class="file">ima/</span>                          <span class="cmt">Integrity Measurement Architecture</span>
+│   └── <span class="file">evm/</span>                          <span class="cmt">Extended Verification Module</span>
+├── <span class="file">security/tomoyo/</span>                <span class="cmt">TOMOYO (老牌 MAC)</span>
+├── <span class="file">security/smack/</span>                 <span class="cmt">Smack</span>
+├── <span class="file">kernel/seccomp.c</span>                 <span class="cmt">seccomp 实现</span>
+├── <span class="file">include/linux/lsm_hooks.h</span>        <span class="cmt">security_hook_list、lsm_info</span>
+├── <span class="file">include/linux/security.h</span>         <span class="cmt">security_*() 钩子 API</span>
+├── <span class="file">include/uapi/linux/seccomp.h</span>     <span class="cmt">seccomp 用户态接口</span>
+└── <span class="file">include/uapi/linux/landlock.h</span>    <span class="cmt">Landlock 用户态接口</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>include/linux/security.h</code> 看所有 security_* 钩子。<br>
+    <code>include/linux/lsm_hooks.h</code> 理解 LSM 框架结构。<br>
+    <code>security/security.c</code> 看分发器实现。<br>
+    <code>security/selinux/hooks.c</code> 一个完整 LSM 的范例。<br>
+    <code>kernel/seccomp.c</code> seccomp 实现细节。<br>
+    <code>security/landlock/setup.c</code> + <code>syscalls.c</code> 新式 LSM 设计范式。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>
