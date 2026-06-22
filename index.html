@@ -176,6 +176,10 @@ const DOCS = [
   { t:"Linux tun/tap", f:"linux-tun-tap.html", d:"虚拟网络设备 — VPN 与虚拟化的基石", i:"orange", tags:["tun","tap","VPN","虚拟化"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
   { t:"数据包接收流程", f:"linux-rx-packet.html", d:"网卡 → 内存 → 协议栈 → 应用层（UDP 示例）", i:"orange", tags:["NAPI","softirq","IP","UDP","收包"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
   { t:"数据包发送流程", f:"linux-tx-packet.html", d:"应用层 → 协议栈 → 网卡 → 网线（UDP 示例）", i:"orange", tags:["sendto","qdisc","ARP","发包"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
+  { t:"Netfilter/iptables", f:"linux-netfilter.html", d:"防火墙框架 — 钩子、表、链、规则与连接追踪", i:"orange", tags:["netfilter","iptables","conntrack","防火墙"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
+  { t:"XDP/eBPF 网络", f:"linux-xdp-ebpf.html", d:"高性能数据包处理 — 绕过协议栈的可编程网络", i:"orange", tags:["XDP","eBPF","BPF","高性能"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
+  { t:"Linux TCP 协议栈", f:"linux-tcp.html", d:"可靠传输 — 状态机、拥塞控制(CUBIC/BBR)、重传、零拷贝", i:"orange", tags:["TCP","CUBIC","BBR","拥塞控制"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
+  { t:"Linux 网络命名空间", f:"linux-netns.html", d:"容器网络的基石 — 网络栈隔离的完整实现", i:"orange", tags:["netns","容器","Docker","隔离"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
   { t:"select/poll/epoll", f:"linux-select-poll-epoll.html", d:"I/O 多路复用三代演进 — 从线性扫描到事件驱动", i:"red", tags:["epoll","select","poll","I/O多路复用"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
 
   // ── Windows ──

@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux XDP/eBPF 网络深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux XDP/eBPF 网络深度解析</h1>
+  <p class="subtitle">高性能数据包处理 — 绕过协议栈的可编程网络</p>
+  <span class="version">Linux 7.0.12 · net/core/xdp.c · net/core/filter.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#ebpf">eBPF 基础</a></li>
+    <li><a href="#xdp">XDP 架构</a></li>
+    <li><a href="#actions">XDP 五种动作</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#perf">性能对比</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>XDP（eXpress Data Path）是 Linux 内核中的<strong>高性能可编程网络数据路径</strong>。它允许在网卡驱动层直接运行 eBPF 程序处理数据包，绕过整个协议栈，实现百万级 PPS（Packets Per Second）的数据包处理能力。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心优势</div>
+      <ul>
+        <li><strong>零拷贝</strong>：数据包在 DMA 缓冲区原地处理</li>
+        <li><strong>绕过协议栈</strong>：不经过 sk_buff 分配</li>
+        <li><strong>可编程</strong>：eBPF 程序动态加载</li>
+        <li><strong>安全</strong>：JIT 编译 + 验证器检查</li>
+        <li><strong>毫秒级生效</strong>：无需重启内核或应用</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">传统收包 vs XDP</div>
+      <table>
+        <tr><th>特性</th><th>传统路径</th><th>XDP</th></tr>
+        <tr><td>处理位置</td><td>NAPI poll → 协议栈</td><td>驱动层 DMA 后立即</td></tr>
+        <tr><td>内存分配</td><td>sk_buff 分配</td><td>零分配</td></tr>
+        <tr><td>PPS</td><td>~1M</td><td>~24M+（取决于硬件）</td></tr>
+        <tr><td>可编程性</td><td>内核模块</td><td>eBPF 程序动态加载</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="ebpf" class="toc-link">
+  <h2><span class="num">02</span> eBPF 基础</h2>
+  <p>eBPF（extended Berkeley Packet Filter）是 XDP 的编程基础。用户编写 C 程序，经过验证器检查后 JIT 编译为本地机器码，在内核沙箱中安全执行。</p>
+
+  <h3>eBPF 执行流程</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">用户态</span>
+┌──────────────────────────────────────────┐
+│  用户编写 C 程序（如 XDP 过滤器）         │
+│  ↓                                       │
+│  clang/llvm 编译为 BPF 字节码（.o 文件）  │
+│  ↓                                       │
+│  bpftool 加载到内核                       │
+└──────────────────────────────────────────┘
+                   │
+                   │ bpf() 系统调用
+                   ↓
+<span style="color:#8250df">内核态</span>
+┌──────────────────────────────────────────┐
+│  1. BPF Verifier（验证器）                │
+│     - 检查程序安全性                      │
+│     - 确保无无限循环                      │
+│     - 确保内存访问合法                    │
+│                                          │
+│  2. JIT Compiler                         │
+│     - 将 BPF 字节码编译为 x86_64 机器码   │
+│     - 运行时直接执行，无解释开销          │
+│                                          │
+│  3. Attach 到钩子点                      │
+│     - XDP / TC / tracepoint / kprobe 等   │
+└──────────────────────────────────────────┘
+</pre></div>
+
+  <h3>BPF Map — 内核与用户态共享数据</h3>
+  <div class="card">
+    <pre><code><span class="cm">// BPF Map 是内核中的共享数据结构</span>
+<span class="cm">// eBPF 程序和用户态程序都可以读写</span>
+
+<span class="cm">// 常用 Map 类型：</span>
+<span class="cm">// BPF_MAP_TYPE_HASH      — 哈希表（O(1) 查找）</span>
+<span class="cm">// BPF_MAP_TYPE_ARRAY     — 数组（O(1) 索引）</span>
+<span class="cm">// BPF_MAP_TYPE_PERCPU_HASH — 每 CPU 哈希表（无锁）</span>
+<span class="cm">// BPF_MAP_TYPE_RINGBUF   — 环形缓冲区（高效数据传递）</span>
+<span class="cm">// BPF_MAP_TYPE_DEVMAP    — 设备映射（XDP_REDIRECT）</span>
+<span class="cm">// BPF_MAP_TYPE_CPUMAP    — CPU 映射（跨 CPU 转发）</span>
+<span class="cm">// BPF_MAP_TYPE_LRU_HASH  — LRU 哈希表（自动淘汰）</span>
+
+<span class="cm">// 用户态操作：</span>
+bpf_map_create(BPF_MAP_TYPE_HASH, ...);    <span class="cm">// 创建</span>
+bpf_map_update_elem(fd, &amp;key, &amp;val, ...); <span class="cm">// 更新</span>
+bpf_map_lookup_elem(fd, &amp;key, &amp;val);      <span class="cm">// 查找</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="xdp" class="toc-link">
+  <h2><span class="num">03</span> XDP 架构</h2>
+
+  <h3>XDP 在收包路径中的位置</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">传统收包路径（慢）：</span>
+
+  网线 → NIC → DMA → <span style="color:#8250df">IRQ → softIRQ → NAPI poll → sk_buff 分配</span> → 协议栈 → Socket
+                            ↑ 大量内存分配和协议处理
+
+<span style="color:#1a7f37">XDP 快速路径（快）：</span>
+
+  网线 → NIC → DMA → <span style="color:#1a7f37">XDP 程序</span> → 决定动作
+                      ↑ 在驱动层，DMA 后立即执行
+                      ↑ 无 sk_buff，零内存分配
+                      │
+                      ├── XDP_PASS → 走传统协议栈（需要时才升级为 sk_buff）
+                      ├── XDP_DROP → 直接丢弃（DDoS 防护）
+                      ├── XDP_TX  → 原路发回（负载均衡器）
+                      ├── XDP_REDIRECT → 转发到其他网卡/BPF 程序
+                      └── XDP_ABORTED → 丢弃 + trace（调试）
+</pre></div>
+
+  <h3>XDP 运行模式</h3>
+  <table>
+    <tr><th>模式</th><th>说明</th><th>性能</th><th>限制</th></tr>
+    <tr><td><strong>generic</strong></td><td>通用模式，所有网卡都支持</td><td>低（仍需 sk_buff）</td><td>仅用于测试</td></tr>
+    <tr><td><strong>native/driver</strong></td><td>网卡驱动原生支持</td><td>高（真正的零拷贝）</td><td>需要驱动支持</td></tr>
+    <tr><td><strong>offload</strong></td><td>网卡硬件卸载（SmartNIC）</td><td>最高（硬件处理）</td><td>需要特定硬件</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#0969da">generic 模式</span>：协议栈内部执行（需分配 sk_buff）
+  NIC → DMA → 分配 sk_buff → <span style="color:#bc4c00">XDP 程序</span> → 协议栈
+
+<span style="color:#1a7f37">driver 模式</span>：驱动层执行（无 sk_buff，原地处理）
+  NIC → DMA → <span style="color:#1a7f37">XDP 程序</span> → 按动作处理
+
+<span style="color:#8250df">offload 模式</span>：SmartNIC 硬件执行
+  NIC → <span style="color:#8250df">硬件 XDP</span> → 按动作处理（CPU 完全不参与）
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="actions" class="toc-link">
+  <h2><span class="num">04</span> XDP 五种动作</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/uapi/linux/bpf.h:6546</span>
+<span class="kw">enum</span> <span class="ty">xdp_action</span> {
+    XDP_ABORTED  = <span class="num">0</span>,  <span class="cm">// 丢弃 + 触发 trace（调试用）</span>
+    XDP_DROP,           <span class="cm">// 丢弃数据包</span>
+    XDP_PASS,           <span class="cm">// 传递给协议栈</span>
+    XDP_TX,             <span class="cm">// 原路发回同一网卡</span>
+    XDP_REDIRECT,       <span class="cm">// 转发到其他网卡 / CPU / BPF 程序</span>
+};</code></pre>
+  </div>
+
+  <table>
+    <tr><th>动作</th><th>说明</th><th>典型场景</th></tr>
+    <tr><td><code>XDP_DROP</code></td><td>直接丢弃，不分配任何内存</td><td>DDoS 防护、黑名单过滤</td></tr>
+    <tr><td><code>XDP_TX</code></td><td>数据包从同一网卡原路发回</td><td>负载均衡器（DR 模式）</td></tr>
+    <tr><td><code>XDP_REDIRECT</code></td><td>转发到另一个网卡或 CPU</td><td>跨网卡转发、AF_XDP</td></tr>
+    <tr><td><code>XDP_PASS</code></td><td>升级为 sk_buff，进入协议栈</td><td>混合模式（部分包走 XDP，部分走协议栈）</td></tr>
+    <tr><td><code>XDP_ABORTED</code></td><td>丢弃 + 记录 trace 事件</td><td>调试和异常检测</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">05</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/xdp.h:86 — XDP 数据包缓冲区</span>
+<span class="kw">struct</span> <span class="ty">xdp_buff</span> {
+    <span class="ty">void</span> *data;            <span class="cm">// 数据起始指针</span>
+    <span class="ty">void</span> *data_end;        <span class="cm">// 数据结束指针</span>
+    <span class="ty">void</span> *data_meta;       <span class="cm">// 元数据起始指针</span>
+    <span class="ty">void</span> *data_hard_start; <span class="cm">// 硬件起始位置（以太网头之前）</span>
+    <span class="kw">struct</span> <span class="ty">xdp_rxq_info</span> *rxq;  <span class="cm">// 接收队列信息</span>
+    <span class="kw">struct</span> <span class="ty">xdp_txq_info</span> *txq;  <span class="cm">// 发送队列信息</span>
+    <span class="ty">u32</span> frame_sz;          <span class="cm">// 帧大小</span>
+    <span class="ty">u32</span> flags;             <span class="cm">// 标志（是否有 fragments）</span>
+};
+
+<span class="cm">// include/uapi/linux/bpf.h:6557 — 用户态可见的元数据</span>
+<span class="kw">struct</span> <span class="ty">xdp_md</span> {
+    <span class="ty">__u32</span> data;             <span class="cm">// 数据偏移</span>
+    <span class="ty">__u32</span> data_end;         <span class="cm">// 数据结束偏移</span>
+    <span class="ty">__u32</span> data_meta;        <span class="cm">// 元数据偏移</span>
+    <span class="ty">__u32</span> ingress_ifindex;  <span class="cm">// 接收网卡 ifindex</span>
+    <span class="ty">__u32</span> rx_queue_index;   <span class="cm">// 接收队列索引</span>
+    <span class="ty">__u32</span> egress_ifindex;   <span class="cm">// 发送网卡 ifindex</span>
+};</code></pre>
+  </div>
+
+  <h3>xdp_buff 内存布局</h3>
+  <div class="ascii-diagram"><pre>
++----------------+---------------------+-------------------+-----------+
+|                |                     |                   |           |
+|  data_hard     |   data_meta         |   data            |           |
+|  _start        |   (可选元数据)       |   (以太网帧)      |           |
+|                |                     |                   |           |
++----------------+---------------------+-------------------+-----------+
+^                ^                     ^                   ^
+|                |                     |                   |
+└── 预留空间     └── BPF 程序可写       └── 数据包内容      └── tailroom
+    （用于 prepend）   （如 XDP_TX 标记）   （不可修改）       （用于 append）
+
+data_meta 与 data 之间的空间可以存储元数据
+BPF 程序通过 bpf_xdp_meta 的 helper 函数读写元数据
+</pre></div>
+
+  <h3>XDP 与传统 sk_buff 对比</h3>
+  <table>
+    <tr><th>特性</th><th>sk_buff</th><th>xdp_buff</th></tr>
+    <tr><td>内存开销</td><td>~240 字节</td><td>~0（使用 DMA 缓冲区）</td></tr>
+    <tr><td>分配时机</td><td>收到包后立即分配</td><td>无需分配</td></tr>
+    <tr><td>数据指针</td><td>head/data/tail/end 四指针</td><td>data/data_end/data_meta 三指针</td></tr>
+    <tr><td>协议信息</td><td>携带 L2-L4 全部信息</td><td>仅原始以太网帧</td></tr>
+    <tr><td>多分片</td><td>支持 skb_shared_info</td><td>XDP_FLAGS_HAS_FRAGS（7.0+）</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="perf" class="toc-link">
+  <h2><span class="num">06</span> 性能对比</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">数据包处理路径长度对比：</span>
+
+iptables（Netfilter）：
+  NIC → IRQ → softIRQ → <span style="color:#cf222e">sk_buff 分配</span> → NF_PRE_ROUTING → NF_LOCAL_IN
+  → <span style="color:#cf222e">conntrack</span> → <span style="color:#cf222e">filter</span> → socket → 用户态
+  路径长度: ~15 步                <span style="color:#cf222e">PPS: ~1M</span>
+
+DPDK（用户态）：
+  NIC → <span style="color:#1a7f37">UIO/VFIO 绕过内核</span> → 用户态轮询处理
+  路径长度: ~3 步                <span style="color:#1a7f37">PPS: ~30M+</span>
+  代价: 需要独占网卡，内核无法使用
+
+XDP（内核态快速路径）：
+  NIC → DMA → <span style="color:#8250df">XDP 程序（eBPF JIT）</span> → 按动作处理
+  路径长度: ~4 步                <span style="color:#8250df">PPS: ~24M+</span>
+  优势: 内核保留，与协议栈共存
+</pre></div>
+
+  <table>
+    <tr><th>方案</th><th>PPS（百万包/秒）</th><th>延迟</th><th>内核兼容</th><th>适用场景</th></tr>
+    <tr><td>iptables</td><td>~0.5-1M</td><td>高</td><td>完全兼容</td><td>常规防火墙</td></tr>
+    <tr><td>nftables</td><td>~1-2M</td><td>中高</td><td>完全兼容</td><td>新一代防火墙</td></tr>
+    <tr><td>XDP (driver)</td><td>~15-24M</td><td>低</td><td>兼容</td><td>DDoS 防护、负载均衡</td></tr>
+    <tr><td>XDP (offload)</td><td>~100M+</td><td>最低</td><td>兼容</td><td>SmartNIC 硬件处理</td></tr>
+    <tr><td>DPDK</td><td>~30M+</td><td>低</td><td>独占网卡</td><td>用户态网络栈</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="usecases" class="toc-link">
+  <h2><span class="num">07</span> 应用场景</h2>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title" style="color:#cf222e">DDoS 防护</div>
+      <pre><code><span class="cm">// XDP_DROP: 在驱动层直接丢弃</span>
+<span class="cm">// 14.8M PPS 丢弃（单核）</span>
+SEC(<span class="st">"xdp"</span>)
+<span class="ty">int</span> <span class="fn">xdp_drop</span>(<span class="kw">struct</span> <span class="ty">xdp_md</span> *ctx) {
+    <span class="kw">return</span> XDP_DROP;
+}
+
+<span class="cm">// 实际场景：丢弃黑名单 IP</span>
+SEC(<span class="st">"xdp"</span>)
+<span class="ty">int</span> <span class="fn">xdp_filter</span>(<span class="kw">struct</span> <span class="ty">xdp_md</span> *ctx) {
+    <span class="kw">struct</span> <span class="ty">iphdr</span> *ip = ...;
+    <span class="kw">if</span> (<span class="fn">bpf_map_lookup_elem</span>(&amp;blacklist, &amp;ip->saddr))
+        <span class="kw">return</span> XDP_DROP;
+    <span class="kw">return</span> XDP_PASS;
+}</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#1a7f37">负载均衡器</div>
+      <pre><code><span class="cm">// XDP_TX: 原路发回（DR 模式）</span>
+SEC(<span class="st">"xdp"</span>)
+<span class="ty">int</span> <span class="fn">xdp_lbal</span>(<span class="kw">struct</span> <span class="ty">xdp_md</span> *ctx) {
+    <span class="kw">struct</span> <span class="ty">iphdr</span> *ip = ...;
+    <span class="ty">u32</span> key = ip->daddr &amp; <span class="num">0xFF</span>;
+    <span class="ty">u32</span> *srv = <span class="fn">bpf_map_lookup_elem</span>(
+        &amp;servers, &amp;key);
+    <span class="kw">if</span> (srv)
+        <span class="fn">bpf_redirect</span>(*srv, <span class="num">0</span>);
+    <span class="kw">return</span> XDP_PASS;
+}</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#8250df">跨网卡转发</div>
+      <pre><code><span class="cm">// XDP_REDIRECT: 转发到其他网卡</span>
+SEC(<span class="st">"xdp_fwd"</span>)
+<span class="ty">int</span> <span class="fn">xdp_forward</span>(<span class="kw">struct</span> <span class="ty">xdp_md</span> *ctx) {
+    <span class="ty">u32</span> ifindex = <span class="fn">bpf_map_lookup_elem</span>(
+        &amp;redirect_map, &amp;ctx->rx_queue_index);
+    <span class="kw">if</span> (ifindex)
+        <span class="kw">return</span> <span class="fn">bpf_redirect</span>(ifindex, <span class="num">0</span>);
+    <span class="kw">return</span> XDP_PASS;
+}</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#bc4c00">AF_XDP</div>
+      <pre><code><span class="cm">// AF_XDP: 用户态零拷贝收包</span>
+<span class="cm">// XDP_REDIRECT + BPF_MAP_TYPE_XSKMAP</span>
+<span class="cm">// 数据包绕过内核协议栈直达用户态</span>
+<span class="cm">// 用于：高性能网络应用、用户态协议栈</span>
+
+<span class="cm">// 典型用途：</span>
+<span class="cm">// - 用户态网络函数库（如 Seastar）</span>
+<span class="cm">// - 高频交易系统</span>
+<span class="cm">// - 自定义网络协议处理</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/core/</span>
+├── <span class="file">xdp.c</span>              <span class="cmt">XDP 核心框架 (1055 行)</span>
+├── <span class="file">filter.c</span>           <span class="cmt">BPF/eBPF 核心 (12592 行)</span>
+└── <span class="file">dev.c</span>              <span class="cmt">网络设备核心 (13344 行，含 XDP 路径)</span>
+
+<span class="dir">kernel/bpf/</span>
+├── <span class="file">verifier.c</span>         <span class="cmt">BPF 验证器</span>
+├── <span class="file">core.c</span>             <span class="cmt">BPF 核心子系统</span>
+├── <span class="file">jit.c</span>              <span class="cmt">BPF JIT 编译器</span>
+├── <span class="file">hashtab.c</span>          <span class="cmt">哈希表 Map 实现</span>
+└── <span class="file">arraymap.c</span>         <span class="cmt">数组 Map 实现</span>
+
+<span class="dir">include/net/</span>
+├── <span class="file">xdp.h</span>              <span class="cmt">xdp_buff / xdp_frame 定义</span>
+└── <span class="file">xdp_sock.h</span>         <span class="cmt">AF_XDP socket</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">bpf.h</span>              <span class="cmt">bpf_prog / bpf_map 定义</span>
+
+<span class="dir">include/uapi/linux/</span>
+├── <span class="file">bpf.h</span>              <span class="cmt">xdp_action / xdp_md / BPF 命令</span>
+└── <span class="file">bpf_common.h</span>       <span class="cmt">BPF 通用定义</span>
+
+<span class="dir">tools/lib/bpf/</span>
+├── <span class="file">libbpf.c</span>           <span class="cmt">用户态 BPF 库</span>
+└── <span class="file">xsk.c</span>              <span class="cmt">AF_XDP 用户态库</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/core/xdp.c</code> — XDP 核心框架，xdp_buff 处理。<br>
+    <code>net/core/filter.c</code> — BPF/eBPF 核心，XDP 程序执行路径。<br>
+    <code>kernel/bpf/verifier.c</code> — BPF 验证器，理解安全检查。<br>
+    <code>include/net/xdp.h</code> — xdp_buff、xdp_frame 结构定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/core/xdp.c · net/core/filter.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

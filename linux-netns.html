@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 网络命名空间深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 网络命名空间深度解析</h1>
+  <p class="subtitle">容器网络的基石 — 网络栈隔离的完整实现</p>
+  <span class="version">Linux 7.0.12 · net/core/net_namespace.c (1555 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">隔离架构</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#lifecycle">生命周期</a></li>
+    <li><a href="#default">默认命名空间</a></li>
+    <li><a href="#docker">Docker 中的应用</a></li>
+    <li><a href="#cli">配置命令</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>网络命名空间（Network Namespace）是 Linux 内核提供的一种<strong>网络栈隔离机制</strong>。每个命名空间拥有独立的网络设备、IP 地址、路由表、iptables 规则、/proc/net 目录等。它是 Docker、Kubernetes 等容器技术实现网络隔离的基石。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">每个命名空间独立拥有</div>
+      <ul>
+        <li>网络设备（eth0、lo、br0...）</li>
+        <li>IPv4/IPv6 协议栈</li>
+        <li>路由表</li>
+        <li>iptables / netfilter 规则</li>
+        <li>/proc/net 目录</li>
+        <li>socket 端口空间</li>
+        <li>ARP 表</li>
+        <li>Netfilter 连接追踪</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">典型场景</div>
+      <table>
+        <tr><th>场景</th><th>说明</th></tr>
+        <tr><td>Docker 容器</td><td>每个容器一个独立网络命名空间</td></tr>
+        <tr><td>Kubernetes Pod</td><td>Pod 内容器共享网络命名空间</td></tr>
+        <tr><td>网络测试</td><td>模拟复杂网络拓扑</td></tr>
+        <tr><td>VPN</td><td>隔离不同 VPN 隧道的网络</td></tr>
+        <tr><td>防火墙</td><td>隔离不同安全域的网络</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 隔离架构</h2>
+
+  <h3>网络命名空间 vs 其他命名空间</h3>
+  <table>
+    <tr><th>命名空间</th><th>隔离内容</th><th>系统调用</th></tr>
+    <tr><td><strong>NET</strong></td><td>网络设备、IP、路由、iptables</td><td>clone(CLONE_NEWNET)</td></tr>
+    <tr><td>PID</td><td>进程 ID</td><td>clone(CLONE_NEWPID)</td></tr>
+    <tr><td>MNT</td><td>文件系统挂载点</td><td>clone(CLONE_NEWNS)</td></tr>
+    <tr><td>UTS</td><td>主机名、域名</td><td>clone(CLONE_NEWUTS)</td></tr>
+    <tr><td>IPC</td><td>进程间通信</td><td>clone(CLONE_NEWIPC)</td></tr>
+    <tr><td>USER</td><td>用户和组 ID</td><td>clone(CLONE_NEWUSER)</td></tr>
+    <tr><td>CGROUP</td><td>cgroup 根目录</td><td>clone(CLONE_NEWCGROUP)</td></tr>
+  </table>
+
+  <h3>Docker 容器的命名空间全景</h3>
+  <div class="ascii-diagram"><pre>
+┌─────────────────────────────────────────────────────────────┐
+│                     Host (init 网络命名空间)                 │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │              Network Namespace (netns0)              │   │
+│  │                                                      │   │
+│  │   ┌──────────┐  ┌──────┐  ┌──────┐  ┌──────┐       │   │
+│  │   │   eth0   │  │  lo  │  │ veth │  │ ...  │       │   │
+│  │   │172.17.0.1│  │      │  │      │  │      │       │   │
+│  │   └──────────┘  └──────┘  └──┬───┘  └──────┘       │   │
+│  │                              │                       │   │
+│  │                         veth pair                    │   │
+│  │                              │                       │   │
+│  └──────────────────────────────┼───────────────────────┘   │
+│                                 │                           │
+│  ┌──────────────────────────────┼───────────────────────┐   │
+│  │              Network Namespace (netns1)              │   │
+│  │                              │                       │   │
+│  │                         ┌────┴───┐                   │   │
+│  │                         │  veth  │                   │   │
+│  │                         └────┬───┘                   │   │
+│  │                              │                       │   │
+│  │   ┌──────────┐  ┌──────┐  ┌─┴────┐                 │   │
+│  │   │   eth0   │  │  lo  │  │ ...  │                 │   │
+│  │   │172.18.0.2│  │      │  │      │                 │   │
+│  │   └──────────┘  └──────┘  └──────┘                 │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                              │
+│  物理网卡 eth0 (宿主机)                                       │
+│  Docker bridge docker0 (172.17.0.1/16)                       │
+└─────────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/net_namespace.h:62 — 网络命名空间核心结构</span>
+<span class="kw">struct</span> <span class="ty">net</span> {
+    <span class="ty">refcount_t</span>     passive;          <span class="cm">// 引用计数（决定何时释放）</span>
+    <span class="kw">struct</span> <span class="ty">ns_common</span>  ns;            <span class="cm">// 命名空间公共结构（含 ns_ops）</span>
+
+    <span class="cm">/* ──── 网络设备管理 ──── */</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span>  dev_base_head; <span class="cm">// 所有网络设备链表</span>
+    <span class="kw">struct</span> <span class="ty">hlist_head</span> *dev_name_head; <span class="cm">// 按名字索引的设备哈希表</span>
+    <span class="kw">struct</span> <span class="ty">hlist_head</span> *dev_index_head;<span class="cm">// 按 ifindex 索引的设备哈希表</span>
+    <span class="kw">struct</span> <span class="ty">xarray</span>     dev_by_index;  <span class="cm">// 按索引快速查找</span>
+    <span class="ty">struct</span> <span class="ty">net_device</span> *loopback_dev; <span class="cm">// 该命名空间的 loopback 设备</span>
+
+    <span class="cm">/* ──── 协议栈子系统 ──── */</span>
+    <span class="kw">struct</span> <span class="ty">netns_ipv4</span>  ipv4;         <span class="cm">// IPv4 协议栈状态</span>
+    <span class="kw">struct</span> <span class="ty">netns_ipv6</span>  ipv6;         <span class="cm">// IPv6 协议栈状态</span>
+
+    <span class="cm">/* ──── Netfilter ──── */</span>
+<span class="pp">#ifdef CONFIG_NETFILTER</span>
+    <span class="kw">struct</span> <span class="ty">netns_nf</span>    nf;           <span class="cm">// iptables 框架</span>
+    <span class="kw">struct</span> <span class="ty">netns_ct</span>    ct;           <span class="cm">// 连接追踪</span>
+    <span class="kw">struct</span> <span class="ty">netns_nftables</span> nft;      <span class="cm">// nftables</span>
+<span class="pp">#endif</span>
+
+    <span class="cm">/* ──── 其他 ──── */</span>
+    <span class="kw">struct</span> <span class="ty">proc_dir_entry</span> *proc_net; <span class="cm">// /proc/net/</span>
+    <span class="kw">struct</span> <span class="ty">sock</span> *rtnl;              <span class="cm">// rtnetlink socket</span>
+    <span class="kw">struct</span> <span class="ty">user_namespace</span> *user_ns; <span class="cm">// 所属用户命名空间</span>
+
+    <span class="cm">// ... 还有 netns_mib, netns_packet, netns_xfrm 等</span>
+};</code></pre>
+  </div>
+
+  <h3>struct net 的组成</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────────────────────────────────────────────┐
+│                    struct net                             │
+│                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │  ns_common   │  │ net_device   │  │  proc_net    │  │
+│  │  ns_ops      │  │ 设备管理      │  │  /proc/net/  │  │
+│  │  refcount    │  │ dev_base_head│  │              │  │
+│  └──────────────┘  └──────────────┘  └──────────────┘  │
+│                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │  netns_ipv4  │  │ netns_nf     │  │ netns_ct     │  │
+│  │  IPv4 协议栈  │  │ iptables     │  │ 连接追踪      │  │
+│  │  路由/FIB    │  │ nftables     │  │              │  │
+│  └──────────────┘  └──────────────┘  └──────────────┘  │
+│                                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │ netns_xfrm   │  │ netns_bpf    │  │ net_generic  │  │
+│  │ IPsec        │  │ BPF 程序      │  │ 扩展数据      │  │
+│  └──────────────┘  └──────────────┘  └──────────────┘  │
+└──────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="lifecycle" class="toc-link">
+  <h2><span class="num">04</span> 生命周期</h2>
+
+  <h3>创建 → 使用 → 销毁</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">1. 创建网络命名空间</span>
+
+  $ ip netns add myns
+        │
+        ↓
+  clone(CLONE_NEWNET) 或 unshare(CLONE_NEWNET)
+        │
+        ↓
+  内核创建新的 struct net
+  ├── 分配独立的 loopback 设备
+  ├── 初始化 IPv4/IPv6 协议栈
+  ├── 初始化 iptables 框架
+  ├── 创建 /proc/net/ 目录
+  └── 加入命名空间链表
+
+<span style="color:#1a7f37">2. 在命名空间中操作</span>
+
+  $ ip netns exec myns bash
+        │
+        ↓
+  当前进程切换到 myns 命名空间
+  ├── 所有网络操作使用 myns 的网络栈
+  ├── ip addr / ip route 只影响 myns
+  └── iptables 只影响 myns
+
+<span style="color:#8250df">3. 销毁网络命名空间</span>
+
+  $ ip netns delete myns
+        │
+        ↓
+  从链表中移除
+  ├── 等待所有引用计数归零
+  ├── 释放所有网络设备
+  ├── 释放协议栈资源
+  └── 释放 struct net 内存
+</pre></div>
+
+  <h3>关键 API</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 创建（内核态）</span>
+<span class="kw">struct</span> <span class="ty">net</span> *<span class="fn">copy_net_ns</span>(<span class="ty">unsigned int</span> flags,
+                       <span class="kw">struct</span> <span class="ty">user_namespace</span> *user_ns);
+
+<span class="cm">// 切换（内核态）</span>
+<span class="ty">void</span> <span class="fn">switch_task_namespaces</span>(<span class="kw">struct</span> <span class="ty">task_struct</span> *p,
+                            <span class="kw">struct</span> <span class="ty">nsset</span> *nsset);
+
+<span class="cm">// 获取当前命名空间</span>
+<span class="kw">struct</span> <span class="ty">net</span> *<span class="fn">dev_net</span>(<span class="kw">const struct</span> <span class="ty">net_device</span> *dev);
+<span class="kw">struct</span> <span class="ty">net</span> *<span class="fn">sock_net</span>(<span class="kw">const struct</span> <span class="ty">sock</span> *sk);
+
+<span class="cm">// 获取默认命名空间</span>
+<span class="kw">struct</span> <span class="ty">net</span> *<span class="fn">init_net</span>;  <span class="cm">// 全局变量，即 init 命名空间</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="default" class="toc-link">
+  <h2><span class="num">05</span> 默认命名空间</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">init_net</span> — 全局默认网络命名空间
+
+  所有网络命名空间形成一棵树：
+  init_net 是根节点
+  容器的网络命名空间是子节点
+
+  ┌─────────────────────┐
+  │     init_net        │  ← 宿主机的网络命名空间
+  │   (默认命名空间)      │
+  │                     │
+  │   eth0 (物理网卡)    │
+  │   docker0 (bridge)  │
+  │   路由表、iptables   │
+  └─────┬───────┬───────┘
+        │       │
+        ↓       ↓
+  ┌──────────┐ ┌──────────┐
+  │ netns_1  │ │ netns_2  │  ← 容器网络命名空间
+  │ (容器1)   │ │ (容器2)   │
+  │          │ │          │
+  │ eth0     │ │ eth0     │
+  │ (veth)   │ │ (veth)   │
+  │ lo       │ │ lo       │
+  └──────────┘ └──────────┘
+
+  init_net 在内核启动时创建
+  所有未进入其他命名空间的进程都在 init_net 中
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="docker" class="toc-link">
+  <h2><span class="num">06</span> Docker 中的应用</h2>
+
+  <h3>Docker 容器网络创建流程</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">$ docker run -d --name web -p 8080:80 nginx</span>
+        │
+        ↓
+<span style="color:#8250df">1. 创建新的网络命名空间</span>
+        │
+        ├── clone(CLONE_NEWNET)
+        └── 创建 struct net
+        │
+        ↓
+<span style="color:#1a7f37">2. 创建 veth pair</span>
+        │
+        ├── ip link add veth0 type veth peer name veth1
+        └── veth0 在宿主机，veth1 在容器
+        │
+        ↓
+<span style="color:#bc4c00">3. 将 veth1 移入容器命名空间</span>
+        │
+        ├── ip link set veth1 netns &lt;container-pid&gt;
+        └── veth1 出现在容器的 eth0
+        │
+        ↓
+<span style="color:#8250df">4. 在宿主机命名空间</span>
+        │
+        ├── ip link set veth0 master docker0
+        ├── ip addr add 172.17.0.2/16 dev veth0
+        └── ip link set veth0 up
+        │
+        ↓
+<span style="color:#1a7f37">5. 在容器命名空间</span>
+        │
+        ├── ip addr add 172.17.0.2/16 dev eth0
+        ├── ip link set eth0 up
+        ├── ip route add default via 172.17.0.1
+        └── 容器网络就绪！
+</pre></div>
+
+  <h3>容器网络流量路径</h3>
+  <div class="ascii-diagram"><pre>
+容器内应用 → eth0 (172.17.0.2) → 容器网络命名空间
+    │
+    ↓  veth pair
+    │
+宿主机 veth0 → docker0 bridge → 宿主机网络栈
+    │
+    ↓  NAT (iptables POSTROUTING)
+    │
+物理网卡 eth0 → 外部网络
+</pre></div>
+
+  <div class="callout tip">
+    <strong>Pod 网络</strong><br>
+    Kubernetes Pod 中的所有容器共享<strong>同一个网络命名空间</strong>（同一个 IP 地址）。这通过 pause 容器实现——pause 容器创建网络命名空间，其他容器通过 <code>--net=container:pause</code> 加入。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="cli" class="toc-link">
+  <h2><span class="num">07</span> 配置命令</h2>
+
+  <div class="card">
+    <pre><code><span class="cm"># 创建命名空间</span>
+$ ip netns add myns
+
+<span class="cm"># 列出所有命名空间</span>
+$ ip netns list
+myns
+
+<span class="cm"># 在命名空间中执行命令</span>
+$ ip netns exec myns ip addr
+1: lo: &lt;LOOPBACK&gt; mtu 65536 qdisc noop state DOWN
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+
+<span class="cm"># 创建 veth pair 并连接两个命名空间</span>
+$ ip link add veth0 type veth peer name veth1
+$ ip link set veth1 netns myns
+$ ip addr add 10.0.0.1/24 dev veth0
+$ ip link set veth0 up
+$ ip netns exec myns ip addr add 10.0.0.2/24 dev veth1
+$ ip netns exec myns ip link set veth1 up
+
+<span class="cm"># 在命名空间中添加路由</span>
+$ ip netns exec myns ip route add default via 10.0.0.1
+
+<span class="cm"># 在命名空间中配置 iptables</span>
+$ ip netns exec myns iptables -L
+
+<span class="cm"># 删除命名空间</span>
+$ ip netns delete myns
+
+<span class="cm"># 查看进程所属的网络命名空间</span>
+$ ls -la /proc/&lt;pid&gt;/ns/net
+lrwxrwxrwx 1 root root 0 ... /proc/&lt;pid&gt;/ns/net -&gt; 'net:[4026531992]'
+
+<span class="cm"># 在不同命名空间间建立 veth 连接</span>
+$ ip link add ns0-ns1 type veth peer name ns1-ns0
+$ ip link set ns0-ns1 netns ns0
+$ ip link set ns1-ns0 netns ns1
+$ ip netns exec ns0 ip addr add 10.0.0.1/24 dev ns0-ns1
+$ ip netns exec ns0 ip link set ns0-ns1 up
+$ ip netns exec ns1 ip addr add 10.0.0.2/24 dev ns1-ns0
+$ ip netns exec ns1 ip link set ns1-ns0 up</code></pre>
+  </div>
+
+  <h3>完整网络拓扑示例</h3>
+  <div class="ascii-diagram"><pre>
+$ ip netns add ns1
+$ ip netns add ns2
+$ ip link add veth1 type veth peer name veth2
+$ ip link set veth1 netns ns1
+$ ip link set veth2 netns ns2
+$ ip netns exec ns1 ip link set lo up
+$ ip netns exec ns1 ip addr add 10.0.0.1/24 dev veth1
+$ ip netns exec ns1 ip link set veth1 up
+$ ip netns exec ns2 ip link set lo up
+$ ip netns exec ns2 ip addr add 10.0.0.2/24 dev veth2
+$ ip netns exec ns2 ip link set veth2 up
+
+$ ip netns exec ns1 ping 10.0.0.2
+PING 10.0.0.2: 64 bytes from 10.0.0.2: icmp_seq=1 ttl=64 time=0.041 ms  ✓
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/core/</span>
+└── <span class="file">net_namespace.c</span>     <span class="cmt">网络命名空间核心 (1555 行)</span>
+                         <span class="cmt">创建/销毁/切换</span>
+
+<span class="dir">include/net/</span>
+└── <span class="file">net_namespace.h</span>     <span class="cmt">struct net 定义</span>
+
+<span class="dir">include/uapi/linux/</span>
+└── <span class="file">net_namespace.h</span>     <span class="cmt">用户态接口</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">nsproxy.h</span>           <span class="cmt">nsproxy（命名空间代理）</span>
+
+<span class="dir">kernel/</span>
+└── <span class="file">nsproxy.c</span>           <span class="cmt">命名空间代理管理</span>
+
+<span class="dir">net/ipv4/</span>
+├── <span class="file">af_inet.c</span>           <span class="cmt">inet socket（绑定到命名空间）</span>
+└── <span class="file">ping.c</span>              <span class="cmt">ICMP ping（per-namespace）</span>
+
+<span class="dir">net/bridge/</span>
+└── <span class="file">br_netfilter.c</span>      <span class="cmt">bridge + netfilter 集成</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/core/net_namespace.c</code> — 核心文件，理解创建/切换/销毁流程。<br>
+    <code>include/net/net_namespace.h</code> — struct net 结构定义，理解哪些子系统被隔离。<br>
+    <code>kernel/nsproxy.c</code> — nsproxy 命名空间代理，理解 task_struct 如何引用命名空间。<br>
+    <code>drivers/net/veth.c</code> — veth 驱动，命名空间间通信的桥梁。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/core/net_namespace.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

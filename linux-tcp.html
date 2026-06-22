@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux TCP 协议栈深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux TCP 协议栈深度解析</h1>
+  <p class="subtitle">可靠传输的完整实现 — 状态机、拥塞控制、重传与零拷贝</p>
+  <span class="version">Linux 7.0.12 · net/ipv4/ · 22602 行</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">协议栈架构</a></li>
+    <li><a href="#state">TCP 状态机</a></li>
+    <li><a href="#handshake">三次握手 / 四次挥手</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#congestion">拥塞控制</a></li>
+    <li><a href="#retransmit">重传机制</a></li>
+    <li><a href="#zerocopy">零拷贝发送</a></li>
+    <li><a href="#tuning">性能调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux TCP 协议栈是世界上使用最广泛的 TCP 实现之一。内核 <code>net/ipv4/</code> 目录下包含超过 <strong>22602 行</strong>代码，实现了 TCP 协议的所有核心功能：可靠传输、流量控制、拥塞控制、重传、零拷贝等。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>tcp_input.c</td><td>7821</td><td>接收处理、ACK、拥塞控制</td></tr>
+        <tr><td>tcp_output.c</td><td>4642</td><td>发送处理、段分割</td></tr>
+        <tr><td>tcp.c</td><td>5372</td><td>socket 操作、系统调用</td></tr>
+        <tr><td>tcp_ipv4.c</td><td>3747</td><td>IPv4 协议注册</td></tr>
+        <tr><td>tcp_minisocks.c</td><td>1020</td><td>TIME_WAIT 处理</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">内核默认拥塞控制</div>
+      <ul>
+        <li><strong>CUBIC</strong>（默认）：基于三次函数的拥塞窗口增长</li>
+        <li><strong>BBR</strong>：Google 开发，基于带宽-延迟模型</li>
+        <li><strong>Reno</strong>：经典 AIMD（加性增/乘性减）</li>
+      </ul>
+      <pre><code><span class="cm"># 查看当前拥塞控制算法</span>
+$ sysctl net.ipv4.tcp_congestion_control
+net.ipv4.tcp_congestion_control = cubic
+
+<span class="cm"># 切换为 BBR</span>
+$ sudo sysctl -w net.ipv4.tcp_congestion_control=bbr</code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 协议栈架构</h2>
+
+  <h3>TCP 在内核中的位置</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────────────────────────────────────────────┐
+│                   用户态                                   │
+│                                                           │
+│  ┌──────────┐   send() / recv()                          │
+│  │  应用程序  │   write() / read()                         │
+│  └────┬─────┘   sendmsg() / recvmsg()                     │
+│       │  syscall                                          │
+│  ═════╪══════════════════════════════════════════════════  │
+│       ↓                  内核态                             │
+│  ┌──────────┐                                              │
+│  │ Socket层 │   socket.c → inet_stream_ops               │
+│  └────┬─────┘                                              │
+│       ↓                                                    │
+│  ┌──────────┐                                              │
+│  │  TCP层   │   tcp.c → tcp_prot                          │
+│  │          │   tcp_input.c  ← 接收（7821 行）             │
+│  │          │   tcp_output.c ← 发送（4642 行）             │
+│  └────┬─────┘                                              │
+│       ↓                                                    │
+│  ┌──────────┐                                              │
+│  │   IP层   │   ip_output.c / ip_rcv.c                    │
+│  └────┬─────┘                                              │
+│       ↓                                                    │
+│  ┌──────────┐                                              │
+│  │ 网络设备  │   net/core/dev.c                            │
+│  └────┬─────┘                                              │
+│       ↓                                                    │
+│  ┌──────────┐                                              │
+│  │ 网卡驱动  │   ndo_start_xmit → DMA                     │
+│  └──────────┘                                              │
+└──────────────────────────────────────────────────────────┘
+</pre></div>
+
+  <h3>数据发送流程</h3>
+  <div class="ascii-diagram"><pre>
+  应用调用 send()
+      │
+      ↓
+  <span style="color:#8250df">tcp_sendmsg()</span> — tcp.c
+      │
+      ├── 1. 将用户数据拷贝到 skb（发送缓冲区）
+      │      如果缓冲区满 → 等待（sk_stream_wait_memory）
+      │
+      ├── 2. 调用 tcp_write_xmit()
+      │      │
+      │      ├── 3. 拥塞窗口检查：snd_cwnd ≥ snd_nxt - snd_una ?
+      │      │      不满足 → 停止发送（拥塞控制）
+      │      │
+      │      ├── 4. 滑动窗口检查：接收窗口允许？
+      │      │      不满足 → 停止发送（流量控制）
+      │      │
+      │      ├── 5. tcp_transmit_skb() — 构造 TCP 头
+      │      │      ├── 设置序号、确认号、窗口大小
+      │      │      ├── 计算校验和
+      │      │      └── 添加选项（MSS、SACK、TS、窗口缩放）
+      │      │
+      │      └── 6. ip_queue_xmit() → IP 层发送
+      │
+      ↓
+  数据包进入 IP 层 → 网卡 → 网线
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="state" class="toc-link">
+  <h2><span class="num">03</span> TCP 状态机</h2>
+
+  <h3>11 种 TCP 状态</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">include/net/tcp_states.h — 11 个状态枚举：</span>
+
+TCP_ESTABLISHED  = 1    <span style="color:#656d76">连接已建立</span>
+TCP_SYN_SENT     = 2    <span style="color:#656d76">已发送 SYN（主动连接方）</span>
+TCP_SYN_RECV     = 3    <span style="color:#656d76">已收到 SYN（被动连接方）</span>
+TCP_FIN_WAIT1    = 4    <span style="color:#656d76">已发送 FIN（主动关闭方）</span>
+TCP_FIN_WAIT2    = 5    <span style="color:#656d76">已收到 ACK，等待对方 FIN</span>
+TCP_TIME_WAIT    = 6    <span style="color:#656d76">等待 2MSL（主动关闭方最终状态）</span>
+TCP_CLOSE        = 7    <span style="color:#656d76">关闭</span>
+TCP_CLOSE_WAIT   = 8    <span style="color:#656d76">收到 FIN，等待应用关闭（被动关闭方）</span>
+TCP_LAST_ACK     = 9    <span style="color:#656d76">已发送 FIN，等待最后的 ACK</span>
+TCP_LISTEN       = 10   <span style="color:#656d76">监听状态（服务端）</span>
+TCP_CLOSING      = 11   <span style="color:#656d76">双方同时关闭</span>
+TCP_NEW_SYN_RECV = 12   <span style="color:#656d76">新 SYN 到达 LISTEN socket</span>
+</pre></div>
+
+  <h3>状态转换全景图</h3>
+  <div class="ascii-diagram"><pre>
+                                主动打开                          被动打开
+                              （客户端）                        （服务端）
+                                 │                               │
+                                 ↓                               ↓
+  ┌──────────┐           ┌────────────┐                   ┌──────────┐
+  │  CLOSED  │──SYN──→  │  SYN_SENT  │                   │  LISTEN  │
+  └──────────┘           └─────┬──────┘                   └─────┬────┘
+                          收到 SYN+ACK                     收到 SYN
+                          发送 ACK                            │
+                               │                          SYN+ACK
+                               ↓                          发送 ACK
+                     ┌─────────────────┐                      │
+                     │  ESTABLISHED    │←─────────────────────┘
+                     └──┬──────────┬───┘
+                        │          │
+                   主动关闭      被动关闭
+                   发送 FIN      收到 FIN
+                        │          │
+                        ↓          ↓
+                 ┌──────────┐  ┌───────────┐
+                 │FIN_WAIT1 │  │CLOSE_WAIT │
+                 └────┬─────┘  └─────┬─────┘
+                      │              │
+                 收到 ACK         发送 FIN
+                      │              │
+                      ↓              ↓
+                 ┌──────────┐  ┌──────────┐
+                 │FIN_WAIT2 │  │LAST_ACK  │
+                 └────┬─────┘  └────┬─────┘
+                      │              │
+                 收到 FIN         收到 ACK
+                 发送 ACK              │
+                      │              ↓
+                      ↓          ┌──────────┐
+                 ┌──────────┐    │  CLOSED  │
+                 │TIME_WAIT │    └──────────┘
+                 │(2MSL)    │
+                 └────┬─────┘
+                      │
+                 超时
+                      │
+                      ↓
+                 ┌──────────┐
+                 │  CLOSED  │
+                 └──────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="handshake" class="toc-link">
+  <h2><span class="num">04</span> 三次握手 / 四次挥手</h2>
+
+  <h3>三次握手</h3>
+  <div class="ascii-diagram"><pre>
+   客户端                              服务端
+     │                                   │
+     │  ──── SYN (seq=x) ─────────→     │   ① 客户端 → 服务端
+     │                                   │      进入 SYN_SENT
+     │                                   │      服务端收到 → tcp_v4_recv()
+     │                                   │      创建 request_sock → SYN_RECV
+     │  ←── SYN+ACK (seq=y, ack=x+1) ── │   ② 服务端 → 客户端
+     │                                   │      进入 SYN_RECV
+     │  进入 ESTABLISHED                  │
+     │  ──── ACK (ack=y+1) ────────→    │   ③ 客户端 → 服务端
+     │                                   │      服务端收到 → tcp_v4_reqsk_done()
+     │                                   │      创建子 socket → ESTABLISHED
+     │       数据传输开始                  │
+</pre></div>
+
+  <h3>四次挥手</h3>
+  <div class="ascii-diagram"><pre>
+   主动关闭方                          被动关闭方
+     │                                   │
+     │  ──── FIN (seq=u) ─────────→     │   ① 主动方发送 FIN
+     │  进入 FIN_WAIT1                   │      进入 CLOSE_WAIT
+     │                                   │      被动方应用收到 EOF
+     │  ←── ACK (ack=u+1) ────────────  │   ② 被动方回复 ACK
+     │  进入 FIN_WAIT2                   │      等待应用关闭
+     │                                   │
+     │      （被动方可能继续发数据）        │
+     │                                   │
+     │  ←── FIN (seq=w) ──────────────  │   ③ 被动方发送 FIN
+     │  进入 TIME_WAIT                   │      进入 LAST_ACK
+     │  ──── ACK (ack=w+1) ────────→    │   ④ 主动方回复 ACK
+     │  等待 2MSL（60秒）                 │      进入 CLOSED
+     │  最终进入 CLOSED                   │
+</pre></div>
+
+  <h3>TIME_WAIT 的作用</h3>
+  <div class="callout tip">
+    <strong>为什么需要 TIME_WAIT（2MSL）？</strong><br>
+    ① <strong>确保最后一个 ACK 能到达</strong>：如果 ACK 丢失，被动方会重发 FIN，主动方需要能回复<br>
+    ② <strong>防止旧连接的延迟包影响新连接</strong>：等待 2MSL 确保网络中该连接的所有数据包都已消亡<br>
+    ③ <strong>确保被动方正确关闭</strong>：如果 ACK 丢失，被动方不会收到 ACK 而卡在 LAST_ACK
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">05</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/tcp.h:197 — TCP 协议私有数据</span>
+<span class="kw">struct</span> <span class="ty">tcp_sock</span> {
+    <span class="cm">// 继承自 inet_connection_sock → inet_sock → sock</span>
+    <span class="kw">struct</span> <span class="ty">inet_connection_sock</span> inet_conn;
+
+    <span class="cm">/* ──── 发送路径 ──── */</span>
+    <span class="ty">u32</span>  max_window;       <span class="cm">// 收到的最大窗口</span>
+    <span class="ty">u32</span>  mss_cache;        <span class="cm">// 缓存的 MSS</span>
+    <span class="ty">u32</span>  snd_cwnd;         <span class="cm">// ★ 拥塞窗口（cwnd）</span>
+    <span class="ty">u32</span>  snd_ssthresh;     <span class="cm">// ★ 慢启动阈值</span>
+    <span class="ty">u32</span>  lost_out;         <span class="cm">// 丢失的包数</span>
+    <span class="ty">u32</span>  sacked_out;       <span class="cm">// SACK 确认的包数</span>
+    <span class="ty">u32</span>  retrans_out;      <span class="cm">// 重传中的包数</span>
+    <span class="ty">u32</span>  write_seq;        <span class="cm">// 发送缓冲区尾部序号</span>
+    <span class="ty">u32</span>  snd_nxt;          <span class="cm">// 下一个要发的序号</span>
+    <span class="ty">u32</span>  snd_una;          <span class="cm">// 最早未确认的序号（窗口左边界）</span>
+
+    <span class="cm">/* ──── 接收路径 ──── */</span>
+    <span class="ty">u32</span>  copied_seq;       <span class="cm">// 未读数据的头序号</span>
+    <span class="ty">u32</span>  rcv_ssthresh;     <span class="cm">// 接收慢启动阈值</span>
+    <span class="kw">struct</span> <span class="ty">rb_root</span>  out_of_order_queue; <span class="cm">// OOO 乱序队列</span>
+
+    <span class="cm">/* ──── RTT 测量 ──── */</span>
+    <span class="ty">u32</span>  rttvar_us;        <span class="cm">// RTT 方差</span>
+    <span class="ty">u32</span>  mdev_us;          <span class="cm">// 平均偏差</span>
+
+    <span class="cm">/* ──── 统计 ──── */</span>
+    <span class="ty">u64</span>  bytes_sent;        <span class="cm">// 总发送字节数</span>
+    <span class="ty">u32</span>  segs_out;          <span class="cm">// 总发送段数</span>
+    <span class="ty">u32</span>  segs_in;           <span class="cm">// 总接收段数</span>
+};</code></pre>
+  </div>
+
+  <h3>继承层次</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────┐
+│     struct sock  │  ← 最基础的 socket 结构
+├──────────────────┤
+│ inet_sock        │  ← 添加 IP 地址/端口信息
+├──────────────────┤
+│ inet_connection_sock │ ← 添加连接状态、重传定时器
+├──────────────────┤
+│ tcp_sock         │  ← TCP 专有：cwnd/ssthresh/RTT/序号等
+└──────────────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="congestion" class="toc-link">
+  <h2><span class="num">06</span> 拥塞控制</h2>
+
+  <h3>拥塞控制算法框架</h3>
+  <div class="card">
+    <pre><code><span class="cm">// include/net/tcp.h:1276 — 拥塞控制算法接口</span>
+<span class="kw">struct</span> <span class="ty">tcp_congestion_ops</span> {
+    <span class="cm">// 经典算法接口（Reno/CUBIC）</span>
+    <span class="ty">void</span> (*cong_avoid)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, <span class="ty">u32</span> ack, <span class="ty">u32</span> acked);
+
+    <span class="cm">// 自定义算法接口（BBR 等）</span>
+    <span class="ty">void</span> (*cong_control)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, <span class="ty">u32</span> ack,
+                        <span class="ty">int</span> flag, <span class="kw">const struct</span> <span class="ty">rate_sample</span> *rs);
+
+    <span class="cm">// 慢启动阈值（丢包后计算新 ssthresh）</span>
+    <span class="ty">u32</span> (*ssthresh)(<span class="kw">struct</span> <span class="ty">sock</span> *sk);
+
+    <span class="cm">// 撤销拥塞窗口</span>
+    <span class="ty">u32</span> (*undo_cwnd)(<span class="kw">struct</span> <span class="ty">sock</span> *sk);
+
+    <span class="ty">char</span> name[TCP_CA_NAME_MAX];
+};</code></pre>
+  </div>
+
+  <h3>CUBIC vs BBR</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">CUBIC</span>（基于丢包的拥塞控制）：
+
+  拥塞窗口
+  (cwnd)
+    │
+    │          ╱‾‾‾‾‾‾‾‾‾╲           ← 三次函数增长
+    │        ╱              ╲
+    │      ╱                  ╲        ← 丢包！cwnd 减半
+    │    ╱                      ╲
+    │  ╱                          ╲
+    │╱                              ╲
+    └────────────────────────────────── 时间
+
+  核心：丢包 = 网络拥塞 → 降低发送速率
+  缺点：需要丢包才能感知拥塞，高带宽延迟积(BDP)网络效率低
+
+
+<span style="color:#1a7f37">BBR</span>（基于带宽-延迟模型的拥塞控制）：
+
+  发送速率
+    │
+    │    ╱‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾  ← 达到链路容量
+    │  ╱
+    │╱                               ← 探测带宽
+    └────────────────────────────────── 时间
+
+  核心：测量 RTprop（最小延迟）和 BtlBw（最大带宽）
+       发送速率 = min(BtlBw, cwnd/RTT)
+  优势：不依赖丢包感知拥塞，高 BDP 网络表现优异
+</pre></div>
+
+  <table>
+    <tr><th>特性</th><th>CUBIC</th><th>BBR</th></tr>
+    <tr><td>触发机制</td><td>丢包</td><td>带宽 + 延迟测量</td></tr>
+    <tr><td>cwnd 增长</td><td>三次函数</td><td>探测最大带宽</td></tr>
+    <tr><td>丢包处理</td><td>cwnd 减半</td><td>降低发送速率到 BtlBw</td></tr>
+    <tr><td>高 BDP 网络</td><td>慢启动阶段浪费带宽</td><td>快速收敛到最优速率</td></tr>
+    <tr><td>公平性</td><td>与 Reno/CUBIC 公平</td><td>可能抢占其他流带宽</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="retransmit" class="toc-link">
+  <h2><span class="num">07</span> 重传机制</h2>
+
+  <h3>四种重传方式</h3>
+  <table>
+    <tr><th>机制</th><th>触发条件</th><th>说明</th></tr>
+    <tr><td><strong>超时重传</strong></td><td>RTO 定时器到期</td><td>最基本的重传，等待确认超时后重发最早的未确认段</td></tr>
+    <tr><td><strong>快速重传</strong></td><td>收到 3 个重复 ACK</td><td>不等超时，立即重传丢失的段</td></tr>
+    <tr><td><strong>SACK 重传</strong></td><td>收到 SACK 信息</td><td>根据 SACK 确定哪些段已到达，只重传真正丢失的</td></tr>
+    <tr><td><strong>TLP</strong></td><td>Tail Loss Probe</td><td>在最后一个包丢失时，避免等待 RTO，主动发送探测包</td></tr>
+  </table>
+
+  <h3>重传流程</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">超时重传：</span>
+
+  发送 seq=1,2,3,4,5
+       │
+       ▼
+  RTO 定时器到期（仍有序号未确认）
+       │
+       ▼
+  tcp_retransmit_skb() → 重传最早的未确认段
+       │
+       ▼
+  调整 ssthresh = cwnd / 2
+  重新进入拥塞避免
+
+<span style="color:#1a7f37">快速重传：</span>
+
+  发送 seq=1,2,3,4,5
+  seq=3 丢失
+       │
+       ▼
+  收到重复 ACK（ACK=3）× 3 次
+       │
+       ▼
+  tcp_fastretrans_alert() → 立即重传 seq=3
+       │
+       ▼
+  进入 Recovery 状态
+  不需要等待 RTO
+</pre></div>
+
+  <h3>RTO 计算</h3>
+  <div class="card">
+    <pre><code><span class="cm">// RTO = SRTT + 4 × RTTVAR</span>
+<span class="cm">// SRTT  = 平滑 RTT（指数加权移动平均）</span>
+<span class="cm">// RTTVAR = RTT 方差</span>
+<span class="cm">//</span>
+<span class="cm">// SRTT 新值 = (1 - α) × SRTT旧 + α × 测量RTT</span>
+<span class="cm">//   α = 1/8</span>
+<span class="cm">//</span>
+<span class="cm">// RTTVAR 新值 = (1 - β) × RTTVAR旧 + β × |SRTT - 测量RTT|</span>
+<span class="cm">//   β = 1/4</span>
+<span class="cm">//</span>
+<span class="cm">// RTO 下限: 200ms（min_rto）</span>
+<span class="cm">// RTO 上限: 120s（TCP_RTO_MAX）</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="zerocopy" class="toc-link">
+  <h2><span class="num">08</span> 零拷贝发送</h2>
+
+  <h3>TCP 零拷贝的层次</h3>
+  <table>
+    <tr><th>层次</th><th>机制</th><th>说明</th></tr>
+    <tr><td><strong>MSG_ZEROCOPY</strong></td><td>sendmsg() 标志</td><td>用户态内存零拷贝到内核，通过 CQ 通知完成</td></tr>
+    <tr><td><strong>SF_NOCACHE</strong></td><td>sendfile() 优化</td><td>文件→网卡零拷贝（splice/sendfile）</td></tr>
+    <tr><td><strong>GSO/GRO</strong></td><td>通用分段/聚合</td><td>减少协议栈处理次数</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">传统发送（有拷贝）：</span>
+
+  用户态 buffer  ─── memcpy ──→  内核发送缓冲区  ───→  网卡
+                        ↑ 一次拷贝
+
+<span style="color:#1a7f37">MSG_ZEROCOPY（零拷贝）：</span>
+
+  用户态 buffer  ─── 引用计数 ──→  内核引用用户态内存  ───→  网卡
+                   （无 memcpy）
+                         ↑ DMA scatter-gather 直接读用户态页面
+
+  完成通知：通过 errqueue 返回 ZEROCOPY_DONE 消息
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="tuning" class="toc-link">
+  <h2><span class="num">09</span> 性能调优</h2>
+
+  <table>
+    <tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+    <tr><td><code>tcp_congestion_control</code></td><td>cubic</td><td>拥塞控制算法（cubic/bbr/reno）</td></tr>
+    <tr><td><code>tcp_rmem</code></td><td>4096 131072 6291456</td><td>接收缓冲区 min/default/max</td></tr>
+    <tr><td><code>tcp_wmem</code></td><td>4096 65536 16777216</td><td>发送缓冲区 min/default/max</td></tr>
+    <tr><td><code>tcp_max_syn_backlog</code></td><td>4096</td><td>SYN 队列长度（连接数多时需调大）</td></tr>
+    <tr><td><code>tcp_fin_timeout</code></td><td>60</td><td>FIN_WAIT2 超时（秒）</td></tr>
+    <tr><td><code>tcp_tw_reuse</code></td><td>0</td><td>复用 TIME_WAIT 连接（客户端）</td></tr>
+    <tr><td><code>tcp_slow_start_after_idle</code></td><td>1</td><td>空闲后重新慢启动（关闭可加速短连接）</td></tr>
+    <tr><td><code>tcp_mtu_probing</code></td><td>0</td><td>路径 MTU 发现（开启可提升大包性能）</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>高并发服务器调优建议</strong><br>
+    ① 增大 <code>net.core.somaxconn</code>（backlog 上限）<br>
+    ② 增大 <code>net.ipv4.tcp_max_syn_backlog</code>（SYN 队列）<br>
+    ③ 启用 <code>net.ipv4.tcp_tw_reuse</code>（复用 TIME_WAIT）<br>
+    ④ 调整 <code>net.ipv4.tcp_rmem</code> 和 <code>tcp_wmem</code>（缓冲区大小）<br>
+    ⑤ 考虑切换为 <code>net.ipv4.tcp_congestion_control=bbr</code>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">10</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/ipv4/</span>                      <span class="cmt">TCP/IPv4 核心 (22602 行)</span>
+├── <span class="file">tcp.c</span>                <span class="cmt">socket 操作 (5372 行)</span>
+├── <span class="file">tcp_input.c</span>          <span class="cmt">接收处理 (7821 行)</span>
+├── <span class="file">tcp_output.c</span>         <span class="cmt">发送处理 (4642 行)</span>
+├── <span class="file">tcp_ipv4.c</span>           <span class="cmt">IPv4 注册 (3747 行)</span>
+├── <span class="file">tcp_minisocks.c</span>      <span class="cmt">TIME_WAIT 处理 (1020 行)</span>
+├── <span class="file">tcp_timer.c</span>          <span class="cmt">定时器管理</span>
+├── <span class="file">tcp_recovery.c</span>       <span class="cmt">快速恢复</span>
+├── <span class="file">tcp_rate.c</span>           <span class="cmt">速率采样（BBR 依赖）</span>
+└── <span class="file">bbr.c</span>                <span class="cmt">BBR 拥塞控制算法</span>
+
+<span class="dir">net/ipv4/</span>
+├── <span class="file">cubic.c</span>              <span class="cmt">CUBIC 拥塞控制算法</span>
+├── <span class="file">reno.c</span>               <span class="cmt">Reno 拥塞控制算法</span>
+└── <span class="file">tcp_cong.c</span>           <span class="cmt">拥塞控制框架</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">tcp.h</span>                <span class="cmt">tcp_sock 结构定义</span>
+
+<span class="dir">include/net/</span>
+├── <span class="file">tcp.h</span>                <span class="cmt">tcp_congestion_ops / TCP 内部 API</span>
+└── <span class="file">tcp_states.h</span>         <span class="cmt">TCP 状态枚举</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/ipv4/tcp.c</code> — 从 tcp_sendmsg() 开始，理解数据如何从应用层进入内核。<br>
+    <code>net/ipv4/tcp_input.c</code> — 最大文件（7821 行），从 tcp_rcv_state_process() 开始理解状态机。<br>
+    <code>net/ipv4/tcp_output.c</code> — tcp_write_xmit() 和 tcp_transmit_skb() 是发送核心。<br>
+    <code>net/ipv4/bbr.c</code> — BBR 算法实现，理解基于带宽-延迟模型的拥塞控制。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/ipv4/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

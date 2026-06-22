@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Netfilter/iptables 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Netfilter/iptables 深度解析</h1>
+  <p class="subtitle">防火墙框架 — 钩子、表、链、规则与连接追踪</p>
+  <span class="version">Linux 7.0.12 · net/netfilter/ · 99623 行</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#hooks">钩子机制</a></li>
+    <li><a href="#tables">表（Tables）</a></li>
+    <li><a href="#chains">链（Chains）</a></li>
+    <li><a href="#rules">规则（Rules）</a></li>
+    <li><a href="#priority">表优先级与执行顺序</a></li>
+    <li><a href="#conntrack">连接追踪</a></li>
+    <li><a href="#kernel">内核实现</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Netfilter 是 Linux 内核中的<strong>数据包处理框架</strong>，iptables 是其用户空间的配置工具。Netfilter 在协议栈的 IP 层设置了 5 个钩子点，允许内核模块在这些点注册回调函数，对经过的数据包进行修改、过滤或丢弃。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Netfilter 项目</div>
+      <ul>
+        <li><strong>内核框架</strong>：net/netfilter/ (99623 行代码)</li>
+        <li><strong>5 个钩子</strong>：PRE_ROUTING / LOCAL_IN / FORWARD / LOCAL_OUT / POST_ROUTING</li>
+        <li><strong>表驱动</strong>：filter / nat / mangle / raw / security</li>
+        <li><strong>连接追踪</strong>：nf_conntrack 模块</li>
+        <li><strong>动态模块</strong>：自动加载 NAT、conntrack 等内核模块</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">iptables 工具</div>
+      <ul>
+        <li><strong>用户空间程序</strong>：通过 Netlink 与内核通信</li>
+        <li><strong>规则管理</strong>：配置表、链、规则</li>
+        <li><strong>命令</strong>：iptables / ip6tables（IPv6）</li>
+        <li><strong>nftables</strong>：下一代替代品（Linux 3.13+）</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="hooks" class="toc-link">
+  <h2><span class="num">02</span> 钩子机制</h2>
+
+  <h3>5 个钩子点位置</h3>
+  <div class="ascii-diagram"><pre>
+                                          Incoming
+                                             ↓
+                                    +-------------------+
+                                    | NF_IP_PRE_ROUTING |
+                                    +-------------------+
+                                             |
+                                             ↓
+                                    +------------------+
+                                    |                  |        +----------------+
+                                    | routing decision |-------&gt;| NF_IP_LOCAL_IN |
+                                    |                  |        +----------------+
+                                    +------------------+                |
+                                             |                          |
+                                             |                          ↓
+                                             |                 +-----------------+
+                                             |                 | local processes |
+                                             |                 +-----------------+
+                                             |                          |
+                                             ↓                          ↓
+                                    +---------------+          +-----------------+
+                                    | NF_IP_FORWARD |          | NF_IP_LOCAL_OUT |
+                                    +---------------+          +-----------------+
+                                             |                          |
+                                             ↓                          |
+                                    +------------------+                 |
+                                    |                  |                 |
+                                    | routing decision |&lt;---------------+
+                                    |                  |
+                                    +------------------+
+                                             |
+                                             ↓
+                                    +--------------------+
+                                    | NF_IP_POST_ROUTING |
+                                    +--------------------+
+                                             |
+                                             ↓
+                                           Outgoing
+</pre></div>
+
+  <table>
+    <tr><th>钩子</th><th>位置</th><th>触发条件</th></tr>
+    <tr><td><code>NF_INET_PRE_ROUTING</code></td><td>数据包刚进入 IP 层</td><td>所有进入的数据包（路由选择之前）</td></tr>
+    <tr><td><code>NF_INET_LOCAL_IN</code></td><td>路由选择后，目的 IP 是本机</td><td>发给本机的数据包</td></tr>
+    <tr><td><code>NF_INET_FORWARD</code></td><td>路由选择后，目的 IP 不是本机</td><td>转发的数据包</td></tr>
+    <tr><td><code>NF_INET_LOCAL_OUT</code></td><td>本地程序发出的数据包刚到 IP 层</td><td>本机发出（路由选择之前）</td></tr>
+    <tr><td><code>NF_INET_POST_ROUTING</code></td><td>即将交给下层发送</td><td>所有出去的数据包（路由选择之后）</td></tr>
+  </table>
+
+  <h3>数据包的三条路径</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 路径 1：本机收到的数据包（目的 IP 是本机）</span>
+PRE_ROUTING → LOCAL_IN → <span class="ty">local processes</span>
+
+<span class="cm">// 路径 2：转发的数据包（目的 IP 不是本机）</span>
+PRE_ROUTING → FORWARD → POST_ROUTING
+
+<span class="cm">// 路径 3：本机发出的数据包</span>
+LOCAL_OUT → POST_ROUTING</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="tables" class="toc-link">
+  <h2><span class="num">03</span> 表（Tables）</h2>
+  <p>iptables 用表来分类管理规则。每个表包含一组规则，根据功能划分：</p>
+
+  <table>
+    <tr><th>表</th><th>功能</th><th>典型用途</th></tr>
+    <tr><td><strong>filter</strong></td><td>数据包过滤</td><td>防火墙（允许/拒绝访问）</td></tr>
+    <tr><td><strong>nat</strong></td><td>网络地址转换</td><td>SNAT / DNAT / MASQUERADE</td></tr>
+    <tr><td><strong>mangle</strong></td><td>修改数据包头</td><td>修改 TTL、TOS、MARK</td></tr>
+    <tr><td><strong>raw</strong></td><td>跳过连接追踪</td><td>高性能场景（跳过 conntrack）</td></tr>
+    <tr><td><strong>security</strong></td><td>SELinux 标记</td><td>与 SELinux 模块配合</td></tr>
+  </table>
+
+  <h3>各表可注册的链</h3>
+  <div class="ascii-diagram"><pre>
+                    PRE_ROUTING    LOCAL_IN    FORWARD    LOCAL_OUT    POST_ROUTING
+                    ──────────    ────────    ───────    ─────────    ────────────
+raw                    ✓                                      ✓
+conntrack              ✓             ✓           ✓          ✓              ✓
+mangle                 ✓             ✓           ✓          ✓              ✓
+nat (DNAT)             ✓                                      ✓
+nat (SNAT)                          ✓                        ✓              ✓
+filter                            ✓           ✓          ✓
+security                          ✓           ✓          ✓
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="chains" class="toc-link">
+  <h2><span class="num">04</span> 链（Chains）</h2>
+  <p>链（Chain）决定了<strong>什么时候触发规则</strong>。每个链对应一个钩子点。</p>
+
+  <table>
+    <tr><th>链</th><th>对应钩子</th><th>说明</th></tr>
+    <tr><td><code>PREROUTING</code></td><td>NF_IP_PRE_ROUTING</td><td>所有进入的数据包</td></tr>
+    <tr><td><code>INPUT</code></td><td>NF_IP_LOCAL_IN</td><td>发给本机的数据包</td></tr>
+    <tr><td><code>FORWARD</code></td><td>NF_IP_FORWARD</td><td>转发的数据包</td></tr>
+    <tr><td><code>OUTPUT</code></td><td>NF_IP_LOCAL_OUT</td><td>本机发出的数据包</td></tr>
+    <tr><td><code>POSTROUTING</code></td><td>NF_IP_POST_ROUTING</td><td>即将发送出去的数据包</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>用户自定义链</strong><br>
+    除了 5 个内置链，用户可以在表中定义自定义链。自定义链没有和钩子绑定，不会自动触发，只能从其他链的规则中跳转过来。这类似于函数调用——自定义链是函数，内置链是入口。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="rules" class="toc-link">
+  <h2><span class="num">05</span> 规则（Rules）</h2>
+  <p>规则（Rule）存放在特定表的特定链上，由两部分组成：</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">匹配条件（Matching）</div>
+      <ul>
+        <li>协议类型（TCP/UDP/ICMP）</li>
+        <li>源/目的 IP 地址</li>
+        <li>源/目的端口</li>
+        <li>输入/输出接口（eth0、br0）</li>
+        <li>包头数据</li>
+        <li>连接状态（ESTABLISHED / NEW）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">目标动作（Target）</div>
+      <table>
+        <tr><th>Target</th><th>说明</th></tr>
+        <tr><td><code>ACCEPT</code></td><td>放行数据包</td></tr>
+        <tr><td><code>DROP</code></td><td>丢弃数据包</td></tr>
+        <tr><td><code>REJECT</code></td><td>丢弃并返回 ICMP 错误</td></tr>
+        <tr><td><code>RETURN</code></td><td>跳出当前链</td></tr>
+        <tr><td><code>QUEUE</code></td><td>送往用户空间处理</td></tr>
+        <tr><td><code>SNAT</code></td><td>源地址转换</td></tr>
+        <tr><td><code>DNAT</code></td><td>目的地址转换</td></tr>
+        <tr><td><code>MASQUERADE</code></td><td>动态 SNAT</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="priority" class="toc-link">
+  <h2><span class="num">06</span> 表优先级与执行顺序</h2>
+  <p>当多个表在同一个钩子上都有规则时，按<strong>优先级</strong>从高到低执行：</p>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">NF_IP_PRE_ROUTING 钩子上的执行顺序：</span>
+
+    ┌──────────────────────────────────────────┐
+    │  1. raw.PREROUTING                       │ ← 最高优先级
+    │  2. conntrack（自动，不可配置）             │
+    │  3. mangle.PREROUTING                    │
+    │  4. nat.DNAT                             │ ← 最低优先级
+    └──────────────────────────────────────────┘
+
+<span style="color:#1a7f37">NF_IP_LOCAL_IN 钩子上的执行顺序：</span>
+
+    ┌──────────────────────────────────────────┐
+    │  1. mangle.INPUT                         │
+    │  2. filter.INPUT                         │
+    │  3. security.INPUT                       │
+    │  4. nat.SNAT                             │
+    └──────────────────────────────────────────┘
+
+<span style="color:#8250df">NF_IP_LOCAL_OUT 钩子上的执行顺序：</span>
+
+    ┌──────────────────────────────────────────┐
+    │  1. raw.OUTPUT                           │
+    │  2. conntrack（自动）                     │
+    │  3. mangle.OUTPUT                        │
+    │  4. nat.DNAT                             │
+    │  5. filter.OUTPUT                        │
+    │  6. security.OUTPUT                      │
+    └──────────────────────────────────────────┘
+</pre></div>
+
+  <h3>完整执行路径（本机收到数据包）</h3>
+  <div class="ascii-diagram"><pre>
+数据包到达 PRE_ROUTING：
+    → raw.PREROUTING      <span style="color:#656d76">(1) 检查是否跳过 conntrack</span>
+    → conntrack            <span style="color:#656d76">(2) 记录连接状态</span>
+    → mangle.PREROUTING   <span style="color:#656d76">(3) 修改包头（如 MARK）</span>
+    → nat.DNAT            <span style="color:#656d76">(4) 目的地址转换</span>
+
+路由选择 → 目的 IP 是本机 → 进入 LOCAL_IN：
+
+    → mangle.INPUT        <span style="color:#656d76">(5) 修改包头</span>
+    → filter.INPUT        <span style="color:#656d76">(6) 防火墙过滤（ACCEPT/DROP）</span>
+    → security.INPUT      <span style="color:#656d76">(7) SELinux 检查</span>
+    → nat.SNAT            <span style="color:#656d76">(8) 源地址转换</span>
+
+→ 交给本地进程
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="conntrack" class="toc-link">
+  <h2><span class="num">07</span> 连接追踪（Connection Tracking）</h2>
+  <p>Conntrack 是 Netfilter 最强大也最消耗资源的功能之一。它追踪<strong>所有</strong>经过的数据包的连接状态（不仅是 TCP，UDP 和 ICMP 也被视为"连接"）。</p>
+
+  <h3>连接状态</h3>
+  <table>
+    <tr><th>状态</th><th>说明</th><th>示例</th></tr>
+    <tr><td><code>NEW</code></td><td>新检测到的连接的第一个包</td><td>TCP SYN 包、任意 UDP 包</td></tr>
+    <tr><td><code>ESTABLISHED</code></td><td>连接已建立（收到反方向的包）</td><td>TCP 收到 SYN/ACK、UDP 收到回复</td></tr>
+    <tr><td><code>RELATED</code></td><td>与已有 ESTABLISHED 连接相关的新连接</td><td>FTP 数据连接、ICMP 错误</td></tr>
+    <tr><td><code>INVALID</code></td><td>不属于任何连接，且不是合法的新连接</td><td>无关联的 TCP RST</td></tr>
+    <tr><td><code>UNTRACKED</code></td><td>被 raw 表标记为不追踪</td><td>raw 表中 NOTRACK 规则</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Conntrack 在协议栈中的位置：</span>
+
+PRE_ROUTING  ──→  <span style="color:#bc4c00">conntrack</span>  ──→  mangle  ──→  nat.DNAT
+                      │
+                      │ 检查数据包是否匹配已有连接
+                      │
+                      ├── 匹配 → 更新连接状态
+                      ├── NEW   → 创建新连接记录
+                      └── INVALID → 标记为无效
+
+LOCAL_OUT  ──→  <span style="color:#bc4c00">conntrack</span>  ──→  mangle  ──→  nat.DNAT  ──→  filter
+</pre></div>
+
+  <div class="callout tip">
+    <strong>查看连接追踪</strong><br>
+    <code>cat /proc/net/nf_conntrack</code> — 查看所有追踪的连接<br>
+    <code>conntrack -L</code> — 用户空间查看工具<br>
+    <code>iptables -t raw -A PREROUTING -p tcp --dport 80 -j NOTRACK</code> — 跳过追踪
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="kernel" class="toc-link">
+  <h2><span class="num">08</span> 内核实现</h2>
+
+  <h3>nf_hook_ops — 钩子操作结构</h3>
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/netfilter.h:98</span>
+<span class="kw">struct</span> <span class="ty">nf_hook_ops</span> {
+    <span class="kw">struct</span> <span class="ty">list_head</span>    list;       <span class="cm">// 链表节点</span>
+    <span class="kw">struct</span> <span class="ty">rcu_head</span>      rcu;        <span class="cm">// RCU 释放</span>
+    <span class="ty">nf_hookfn</span>           *hook;       <span class="cm">// 回调函数指针</span>
+    <span class="kw">struct</span> <span class="ty">net_device</span>   *dev;        <span class="cm">// 绑定的网络设备</span>
+    <span class="ty">void</span>                *priv;       <span class="cm">// 私有数据</span>
+    <span class="ty">u8</span>                  pf;          <span class="cm">// 协议族（AF_INET / AF_INET6）</span>
+    <span class="ty">unsigned int</span>        hooknum;     <span class="cm">// 钩子编号（NF_INET_PRE_ROUTING 等）</span>
+    <span class="ty">int</span>                 priority;    <span class="cm">// 优先级（越小越先执行）</span>
+};
+
+<span class="cm">// 钩子回调函数签名</span>
+<span class="kw">typedef unsigned int</span> (*<span class="ty">nf_hookfn</span>)(
+    <span class="kw">unsigned int</span> hooknum,           <span class="cm">// 钩子编号</span>
+    <span class="kw">struct</span> <span class="ty">sk_buff</span> *skb,            <span class="cm">// 数据包</span>
+    <span class="kw">const struct</span> <span class="ty">nf_hook_state</span> *state  <span class="cm">// 钩子状态</span>
+);
+
+<span class="cm">// 返回值：</span>
+<span class="cm">// NF_ACCEPT  — 继续处理</span>
+<span class="cm">// NF_DROP    — 丢弃数据包</span>
+<span class="cm">// NF_STOLEN  — 接管数据包（不再由协议栈处理）</span>
+<span class="cm">// NF_QUEUE   — 送往用户空间</span>
+<span class="cm">// NF_REPEAT  — 重新调用此钩子</span></code></pre>
+  </div>
+
+  <h3>nf_inet_hooks 枚举</h3>
+  <div class="card">
+    <pre><code><span class="cm">// include/uapi/linux/netfilter.h:42</span>
+<span class="kw">enum</span> <span class="ty">nf_inet_hooks</span> {
+    NF_INET_PRE_ROUTING,   <span class="cm">// = 0</span>
+    NF_INET_LOCAL_IN,      <span class="cm">// = 1</span>
+    NF_INET_FORWARD,       <span class="cm">// = 2</span>
+    NF_INET_LOCAL_OUT,     <span class="cm">// = 3</span>
+    NF_INET_POST_ROUTING,  <span class="cm">// = 4</span>
+    NF_INET_NUMHOOKS,      <span class="cm">// = 5</span>
+    NF_INET_INGRESS,       <span class="cm">// = 5 ( ingress 特殊钩子 )</span>
+};</code></pre>
+  </div>
+
+  <h3>iptables 规则注册流程</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">$ iptables -A INPUT -s 10.0.0.0/8 -j DROP</span>
+        │
+        ↓
+iptables 用户空间程序
+        │
+        │  Netlink (NETFILTER_SUBSYS_*)
+        ↓
+<span style="color:#8250df">内核 nfnetlink 模块</span> — net/netfilter/nfnetlink.c
+        │
+        ↓
+<span style="color:#1a7f37">xt_table.c / nf_tables</span> — 解析规则并插入链
+        │
+        ↓
+<span style="color:#bc4c00">数据包到达 NF_INET_LOCAL_IN 钩子</span>
+        │
+        ↓
+遍历 filter.INPUT 链上的所有规则
+        │
+        ├── 规则 1: -s 10.0.0.0/8 -j DROP → 匹配！→ NF_DROP（丢弃）
+        │
+        └── 规则 2: ... → 不到达
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/netfilter/</span>                    <span class="cmt">总计 99623 行</span>
+├── <span class="file">core.c</span>               <span class="cmt">Netfilter 核心框架</span>
+├── <span class="file">nf_conntrack_core.c</span>  <span class="cmt">连接追踪核心</span>
+├── <span class="file">nf_conntrack_netlink.c</span> <span class="cmt">conntrack Netlink 接口</span>
+├── <span class="file">nf_conntrack_proto.c</span> <span class="cmt">协议追踪（TCP/UDP/ICMP）</span>
+├── <span class="file">nf_tables_api.c</span>     <span class="cmt">nftables API（新一代）</span>
+├── <span class="file">xt_table.c</span>          <span class="cmt">xtables 表管理</span>
+├── <span class="file">xt_TCPMSS.c</span>         <span class="cmt">TCP MSS 修改</span>
+├── <span class="file">nf_nat_masquerade.c</span> <span class="cmt">MASQUERADE 实现</span>
+└── <span class="file">...数百个模块</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">netfilter.h</span>         <span class="cmt">nf_hook_ops / nf_hook_entries</span>
+└── <span class="file">netfilter_ipv4.h</span>    <span class="cmt">IPv4 Netfilter 接口</span>
+
+<span class="dir">include/uapi/linux/</span>
+├── <span class="file">netfilter.h</span>         <span class="cmt">nf_inet_hooks 枚举</span>
+├── <span class="file">netfilter/</span>
+│   ├── <span class="file">nf_tables.h</span>    <span class="cmt">nftables 用户态接口</span>
+│   └── <span class="file">xt_*.h</span>         <span class="cmt">xtables 匹配/目标扩展</span>
+└── <span class="file">iptables.h</span>         <span class="cmt">iptables 内核接口</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/netfilter/core.c</code> — Netfilter 框架核心，理解钩子注册和调用。<br>
+    <code>net/netfilter/nf_conntrack_core.c</code> — 连接追踪核心，理解状态机。<br>
+    <code>net/netfilter/xt_table.c</code> — xtables 表管理，规则如何匹配数据包。<br>
+    <code>include/linux/netfilter.h</code> — nf_hook_ops 结构定义。
+  </div>
+  <div class="callout tip">
+    <strong>参考链接</strong><br>
+    <a href="https://segmentfault.com/a/1190000009043962" target="_blank">netfilter/iptables简介</a> — 本文基于该文章内容与内核源码深度整合。<br>
+    <a href="https://segmentfault.com/a/1190000009043962" target="_blank">https://segmentfault.com/a/1190000009043962</a>
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/netfilter/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
