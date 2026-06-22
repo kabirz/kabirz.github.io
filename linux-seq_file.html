@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 seq_file 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核 seq_file 深度解析</h1>
+  <p class="subtitle">顺序文件接口 — 内核数据导出的标准范式</p>
+  <span class="version">Linux 7.0.12 · fs/seq_file.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#callbacks">核心回调</a></li>
+    <li><a href="#output">输出函数</a></li>
+    <li><a href="#iterate">遍历模式</a></li>
+    <li><a href="#single">single_open 快捷方式</a></li>
+    <li><a href="#procfs">procfs 实战</a></li>
+    <li><a href="#impl">实现原理</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- 1 Overview -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>内核需要向用户态导出大量数据 — <code>/proc/cpuinfo</code>、<code>/proc/meminfo</code>、<code>/proc/slabinfo</code>…… 传统的 <code>read()</code> + <code>mmap()</code> 接口需要开发者自己管理缓冲区、处理跨多次 read 调用的位置跟踪。</p>
+  <p><strong>seq_file</strong> 将"遍历数据"和"格式化输出"完全解耦。开发者只需实现 4 个回调，框架处理所有缓冲、分页、seek 逻辑。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">struct seq_operations</div>
+<pre><code>struct seq_operations {
+    void * (*start)(struct seq_file *m,
+                    loff_t *pos);
+    void   (*stop) (struct seq_file *m,
+                    void *v);
+    void * (*next) (struct seq_file *m,
+                    void *v, loff_t *pos);
+    int    (*show) (struct seq_file *m,
+                    void *v);
+};</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title">struct seq_file</div>
+<pre><code>struct seq_file {
+    char *buf;             // 内部缓冲区
+    size_t size;           // 缓冲区大小
+    size_t count;          // 已写入字节数
+    size_t from;           // 已读取偏移
+    loff_t index;          // 当前序号
+    loff_t read_pos;       // 当前 read 位置
+    u64 version;           // 版本号
+    const struct seq_operations *op;
+    void *private;
+};</code></pre>
+    </div>
+  </div>
+
+  <p>核心思想：<strong>start → show(item1) → next → show(item2) → … → stop</strong>。框架自动在后台管理缓冲区溢出、重分配和迭代恢复。</p>
+</section>
+
+<!-- 2 Callbacks -->
+<section id="callbacks" class="toc-link">
+  <h2><span class="num">02</span> 核心回调</h2>
+
+  <table>
+    <tr><th>回调</th><th>功能</th><th>返回</th></tr>
+    <tr>
+      <td><code>start(m, pos)</code></td>
+      <td>开始或继续迭代。定位到 <code>pos</code> 指向的位置，返回第一个对象。</td>
+      <td>NULL = 结束；非 NULL = 当前对象</td>
+    </tr>
+    <tr>
+      <td><code>show(m, v)</code></td>
+      <td>打印对象 v。使用 seq_printf 等输出函数向缓冲区追加内容。</td>
+      <td>0 = 成功；SEQ_SKIP = 跳过该对象</td>
+    </tr>
+    <tr>
+      <td><code>next(m, v, pos)</code></td>
+      <td>前进到下一个对象。更新 <code>*pos</code> 指向新位置。</td>
+      <td>NULL = 没有更多；非 NULL = 下一个对象</td>
+    </tr>
+    <tr>
+      <td><code>stop(m, v)</code></td>
+      <td>结束迭代。释放 start/next 中获取的资源（如锁）。</td>
+      <td>void</td>
+    </tr>
+  </table>
+
+  <p><strong>pos 语义</strong>：</p>
+  <ul>
+    <li>pos = 0：开始（首次打开或 seek 到开头）</li>
+    <li>pos = 0xffffffff：结束</li>
+    <li>0 < pos < EOF：继续迭代</li>
+    <li>start() 返回 NULL 且 pos > 0：停止迭代</li>
+  </ul>
+
+  <div class="callout">
+    <strong>注意:</strong><br>
+    start() 中获取的锁（如 RCU 读锁）必须在 stop() 中释放。<br>
+    seq_file 本身不管理锁——这完全由回调负责。
+  </div>
+</section>
+
+<!-- 3 Output Functions -->
+<section id="output" class="toc-link">
+  <h2><span class="num">03</span> 输出函数</h2>
+
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>seq_printf(m, fmt, ...)</code></td><td>格式化打印</td></tr>
+    <tr><td><code>seq_puts(m, s)</code></td><td>打印字符串</td></tr>
+    <tr><td><code>seq_putc(m, c)</code></td><td>打印单个字符</td></tr>
+    <tr><td><code>seq_write(m, buf, len)</code></td><td>写入原始二进制数据</td></tr>
+    <tr><td><code>seq_path(m, path, esc)</code></td><td>输出路径名（带转义）</td></tr>
+    <tr><td><code>seq_bitmap(m, bitmap, nbits)</code></td><td>输出位图（%*pb 格式）</td></tr>
+    <tr><td><code>seq_hex_dump(m, ...)</code></td><td>hex dump 格式输出</td></tr>
+    <tr><td><code>seq_has_overflowed(m)</code></td><td>检查缓冲区是否已满</td></tr>
+    <tr><td><code>seq_commit(m, bytes)</code></td><td>提交写入（配合 read 使用）</td></tr>
+  </table>
+
+  <p>缓冲区溢出后，之前输出被丢弃。框架分配更大的缓冲区，从 pos = 0 重新迭代。</p>
+</section>
+
+<!-- 4 Iteration Pattern -->
+<section id="iterate" class="toc-link">
+  <h2><span class="num">04</span> 遍历模式</h2>
+
+  <p>seq_file 的核心伪代码：</p>
+<pre><code>// seq_read() 内部逻辑
+ssize_t seq_read(struct file *file, char __user *buf,
+                 size_t size, loff_t *ppos)
+{
+    // 1. 调用 start 开始迭代
+    void *v = m->op->start(m, &m->index);
+    while (v) {
+        // 2. 调用 show 输出
+        int err = m->op->show(m, v);
+        if (err || seq_has_overflowed(m))
+            break;  // 缓冲区满了
+        // 3. 前进到下一个
+        v = m->op->next(m, v, &m->index);
+    }
+    // 4. 结束迭代
+    m->op->stop(m, v);
+
+    // 5. 如果溢出，扩大缓冲区重新开始
+    if (seq_has_overflowed(m)) {
+        kvfree(m->buf);
+        m->buf = kvmalloc(m->size &lt;&lt; 1, GFP_KERNEL);
+        m->size &lt;&lt;= 1;
+        m->count = 0;
+        m->index = 0;  // 从头开始
+        goto restart;
+    }
+
+    // 6. 拷贝到用户态
+    return copy_to_user(buf, m->buf + m->from, ...);
+}
+</code></pre>
+
+  <p>缓冲区的增长策略：</p>
+  <ul>
+    <li>初始大小：1 页（PAGE_SIZE）</li>
+    <li>溢出后翻倍增长：1P → 2P → 4P → 8P</li>
+    <li>最大限制：通常 4 × PAGE_SIZE（可通过 <code>seq_buf_alloc</code> 调整）</li>
+    <li>seek 操作重置迭代位置</li>
+  </ul>
+</section>
+
+<!-- 5 Single Shot -->
+<section id="single" class="toc-link">
+  <h2><span class="num">05</span> single_open 快捷方式</h2>
+
+  <p>对于"一次性输出"的单条目文件，不需要 start/next/stop 的完整迭代逻辑：</p>
+
+<pre><code>// include/linux/seq_file.h
+int single_open(struct file *file,
+                int (*show)(struct seq_file *, void *),
+                void *data);
+void single_release(struct inode *inode, struct file *file);
+
+// 典型用法：/proc/version
+static int version_proc_show(struct seq_file *m, void *v)
+{
+    seq_printf(m, "%s version %s\n",
+               utsname()->sysname, utsname()->release);
+    return 0;
+}
+
+static int __init proc_version_init(void)
+{
+    proc_create_single("version", 0, NULL, version_proc_show);
+    return 0;
+}
+</code></pre>
+
+  <p>对于驱动程序，还有更方便的 <code>DEFINE_SHOW_ATTRIBUTE</code> 宏：</p>
+
+<pre><code>// include/linux/seq_file.h
+#define DEFINE_SHOW_ATTRIBUTE(__name)                   \
+static int __name ## _open(struct inode *inode,          \
+                           struct file *file)            \
+{                                                        \
+    return single_open(file, __name ## _show,            \
+                       inode->i_private);                \
+}                                                        \
+static const struct proc_ops __name ## _proc_ops = {     \
+    .proc_open    = __name ## _open,                     \
+    .proc_read    = seq_read,                            \
+    .proc_lseek   = seq_lseek,                           \
+    .proc_release = single_release,                      \
+}
+</code></pre>
+</section>
+
+<!-- 6 procfs Examples -->
+<section id="procfs" class="toc-link">
+  <h2><span class="num">06</span> procfs 实战</h2>
+
+  <h3>/proc/cpuinfo — 完整迭代模式</h3>
+<pre><code>// arch/x86/kernel/cpu/proc.c
+static struct seq_operations cpuinfo_op = {
+    .start = c_start,    // 定位到第 n 个 CPU
+    .next  = c_next,     // 移动到下一个在线 CPU
+    .stop  = c_stop,     // 释放 RCU 读锁
+    .show  = show_cpuinfo, // 打印这个 CPU 的详细参数
+};
+
+static void *c_start(struct seq_file *m, loff_t *pos)
+{
+    // pos 从 0 开始，找到第 *pos 个在线 CPU
+    // 获取 RCU 读锁（需要在 stop 中释放）
+    return *pos &lt; nr_cpu_ids ? (void *)(*pos + 1) : NULL;
+}
+
+static int show_cpuinfo(struct seq_file *m, void *v)
+{
+    int cpu = (unsigned long)v - 1;
+    struct cpuinfo_x86 *c = &cpu_data(cpu);
+    seq_printf(m, "processor\t: %u\n"
+                   "vendor_id\t: %s\n"
+                   "model name\t: %s\n"
+                   "cpu MHz\t\t: %d\n"
+                   "...",
+               cpu, c->x86_vendor_id, c->x86_model_name,
+               cpu_khz / 1000);
+    return 0;
+}
+</code></pre>
+
+  <h3>/proc/meminfo — single_open 模式</h3>
+<pre><code>// fs/proc/meminfo.c
+static int meminfo_proc_show(struct seq_file *m, void *v)
+{
+    unsigned long pages[NR_LRU_LISTS];
+
+    si_mem_available();
+    seq_printf(m, "MemTotal:       %8lu kB\n",
+               global_zone_page_state(NR_FILE_PAGES) &lt;&lt; (PAGE_SHIFT-10));
+    // ... 数十行类似输出 ...
+    return 0;
+}
+
+static int __init proc_meminfo_init(void)
+{
+    proc_create_single("meminfo", 0, NULL, meminfo_proc_show);
+    return 0;
+}
+</code></pre>
+</section>
+
+<!-- 7 Implementation -->
+<section id="impl" class="toc-link">
+  <h2><span class="num">07</span> 实现原理</h2>
+
+  <h3>seq_read — 读取循环</h3>
+<pre><code>ssize_t seq_read(struct file *file, char __user *buf,
+                 size_t size, loff_t *ppos)
+{
+    struct seq_file *m = file->private_data;
+    size_t copied = 0;
+
+    // 处理从上次 read 未读完的数据
+    if (m->count) {
+        copied =min(m->count - m->from, size);
+        if (copy_to_user(buf, m->buf + m->from, copied))
+            return -EFAULT;
+        m->from += copied;
+        return copied;
+    }
+
+    // 重新填充缓冲区
+    while (1) {
+        v = m->op->start(m, &m->index);
+        while (v) {
+            if (m->op->show(m, v) &lt; 0)
+                break;
+            if (seq_has_overflowed(m))
+                break;
+            v = m->op->next(m, v, &m->index);
+        }
+        m->op->stop(m, v);
+        if (!seq_has_overflowed(m))
+            break;
+        // 缓冲区溢出：翻倍后重试
+        kvfree(m->buf);
+        m->size &lt;&lt;= 1;
+        m->buf = kvmalloc(m->size, GFP_KERNEL_ACCOUNT);
+        m->count = 0;
+        m->index = 0;
+    }
+    // 拷贝到用户态
+}
+</code></pre>
+
+  <h3>seq_lseek — 重置迭代</h3>
+  <p>每次 seek 操作会重置内部状态（index = 0, count = 0），下次 read 从 start 开始重新遍历。</p>
+
+  <h3>SEQ_SKIP 返回值</h3>
+<pre><code>// 在 show 回调中返回 SEQ_SKIP 可以跳过当前对象
+// 框架会立即调用 next() 前进到下一个
+#define SEQ_SKIP 1
+</code></pre>
+
+  <div class="callout">
+    <strong>关键设计:</strong><br>
+    seq_file 的缓冲区可能在多次 <code>read()</code> 调用之间累积数据。<br>
+    这意味着 <code>start()</code> 可能被调用多次（每次 read 都从上次的 pos 开始），<br>
+    但 <code>show()</code> 只对每个对象调用一次——前提是缓冲区够用。
+  </div>
+</section>
+
+<!-- 8 Source Files -->
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">include/linux/seq_file.h</span>      <span class="cmt">seq_operations / seq_file 定义、全部 API 声明</span>
+├── <span class="file">fs/seq_file.c</span>                <span class="cmt">seq_read / seq_lseek / seq_release 实现</span>
+├── <span class="file">fs/proc/meminfo.c</span>            <span class="cmt">/proc/meminfo 示例（single_open）</span>
+├── <span class="file">arch/x86/kernel/cpu/proc.c</span>   <span class="cmt">/proc/cpuinfo 示例（完整迭代）</span>
+├── <span class="file">fs/proc/proc_sysctl.c</span>        <span class="cmt">sysctl 的 seq_file 实现</span>
+├── <span class="file">include/linux/kernfs.h</span>        <span class="cmt">seq_file 在 kernfs 中的桥接</span>
+└── <span class="file">Documentation/filesystems/seq_file.rst</span>  <span class="cmt">内核文档</span>
+  </pre></div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

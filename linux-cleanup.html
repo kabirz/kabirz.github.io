@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 cleanup.h 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核 cleanup.h 深度解析</h1>
+  <p class="subtitle">Scope-Based Resource Management — C 语言版的 RAII</p>
+  <span class="version">Linux 7.0.12 · include/linux/cleanup.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#api">核心宏 API</a></li>
+    <li><a href="#builtins">内置类型</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#advanced">高级用法</a></li>
+    <li><a href="#compare">与 goto error 对比</a></li>
+    <li><a href="#impl">实现原理</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- 1 Overview -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 内核中资源管理的传统做法是 <code>goto error</code> 模式 — 每个错误出口都要手动释放已获取的资源。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">传统 goto error 模式</div>
+<pre><code>p = kzalloc(...);
+if (!p) goto out;
+r = devm_request_irq(..., handler, ...);
+if (r &lt; 0) goto free_p;
+m = kzalloc(...);
+if (!m) goto free_irq;
+// ... 正常路径 ...
+return 0;
+
+free_irq: free_irq(...);
+free_p: kfree(p);
+out: return -ENOMEM;</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title">cleanup 模式</div>
+<pre><code>struct my *p __free(kfree) = kzalloc(...);
+if (!p) return -ENOMEM;
+r = devm_request_irq(..., handler, ...);
+if (r &lt; 0) return r;
+struct my2 *m __free(kfree) = kzalloc(...);
+if (!m) return -ENOMEM;
+// ... 正常路径 ...
+return 0;
+// 无需任何 cleanup 代码</code></pre>
+    </div>
+  </div>
+  <p>cleanup.h 利用 C 编译器的 <code>__attribute__((__cleanup__))</code>，在变量出作用域时自动调用释放函数。这可以看作 C 语言领域的 RAII。</p>
+  <p>该机制提供<strong>四个宏家族</strong>：</p>
+  <table>
+    <tr><th>宏族</th><th>用途</th></tr>
+    <tr><td><code>__free()</code></td><td>自动释放内存/资源</td></tr>
+    <tr><td><code>guard()</code></td><td>作用域锁（整个块）</td></tr>
+    <tr><td><code>scoped_guard()</code></td><td>块级作用域锁</td></tr>
+    <tr><td><code>CLASS()</code></td><td>带状态的资源包装</td></tr>
+  </table>
+</section>
+
+<!-- 2 Core API -->
+<section id="api" class="toc-link">
+  <h2><span class="num">02</span> 核心宏 API</h2>
+
+  <h3>DEFINE_FREE / __free</h3>
+<pre><code>// 定义释放函数：free_expr 在变量出作用域时执行
+DEFINE_FREE(name, type, free_expr)
+
+// 声明变量：value 出作用域时自动调用 DEFINE_FREE 指定的表达式
+type var __free(name) = value;</code></pre>
+
+  <h3>no_free_ptr / return_ptr</h3>
+<pre><code>// 释放所有权，不释放资源（从 cleanup 托管中取出）
+type *no_free_ptr(var)
+
+// 释放所有权并返回指针
+return_ptr(var)
+</code></pre>
+
+  <h3>DEFINE_GUARD / guard</h3>
+<pre><code>// 定义锁的类型：
+// lock_expr 获取锁，unlock_expr 释放锁
+DEFINE_GUARD(name, type, lock_expr, unlock_expr)
+
+// 在作用域内持有锁，作用域结束时自动释放
+guard(name)(lock_var)
+</code></pre>
+
+  <h3>DEFINE_GUARD_COND / ACQUIRE</h3>
+<pre><code>// 条件锁（如 trylock）
+DEFINE_GUARD_COND(name, ext, condlock_expr)
+
+// 获取条件锁，失败时跳转到 scope_err
+ACQUIRE(name, lock_var)
+
+// 获取条件锁，返回错误码
+ACQUIRE_ERR(name, lock_var)
+</code></pre>
+
+  <h3>scoped_guard</h3>
+<pre><code>// 块级作用域锁，锁仅在该块内持有
+scoped_guard(name, lock_var) {
+    // 在此块中持有锁
+    // 块结束时自动释放
+}
+</code></pre>
+
+  <h3>CLASS</h3>
+<pre><code>// 声明一个带有 init/exit 作用域的类实例
+CLASS(name, var) { ... }
+</code></pre>
+</section>
+
+<!-- 3 Built-in Types -->
+<section id="builtins" class="toc-link">
+  <h2><span class="num">03</span> 内置类型</h2>
+  <p>内核已经预定义了大量的 <code>DEFINE_FREE</code> 和 <code>DEFINE_GUARD</code>，开箱即用。</p>
+
+  <h3>内置 __free 类型</h3>
+  <table>
+    <tr><th>DEFINE_FREE</th><th>释放动作</th><th>定义位置</th></tr>
+    <tr><td><code>kfree</code></td><td><code>kfree(_T)</code></td><td>cleanup.h</td></tr>
+    <tr><td><code>kvfree</code></td><td><code>kvfree(_T)</code></td><td>cleanup.h</td></tr>
+    <tr><td><code>kfree_sensitive</code></td><td><code>kfree_sensitive(_T)</code></td><td>cleanup.h</td></tr>
+    <tr><td><code>vfree</code></td><td><code>vfree(_T)</code></td><td>mm.h</td></tr>
+    <tr><td><code>fput</code></td><td><code>fput(_T)</code></td><td>file.h</td></tr>
+    <tr><td><code>fdput</code></td><td><code>fdput(_T)</code></td><td>fdtable.h</td></tr>
+    <tr><td><code>pci_dev_put</code></td><td><code>pci_dev_put(_T)</code></td><td>pci.h</td></tr>
+    <tr><td><code>put_device</code></td><td><code>put_device(_T)</code></td><td>device.h</td></tr>
+    <tr><td><code>put_net</code></td><td><code>put_net(_T)</code></td><td>net_namespace.h</td></tr>
+    <tr><td><code>of_node_put</code></td><td><code>of_node_put(_T)</code></td><td>of.h</td></tr>
+    <tr><td><code>iounmap</code></td><td><code>iounmap(_T)</code></td><td>io.h</td></tr>
+    <tr><td><code>page_frag_free</code></td><td><code>page_frag_free(_T)</code></td><td>gfp.h</td></tr>
+  </table>
+
+  <h3>内置 guard 类型</h3>
+  <table>
+    <tr><th>DEFINE_GUARD</th><th>获取锁</th><th>释放锁</th></tr>
+    <tr><td><code>guard(mutex)(&m)</code></td><td><code>mutex_lock(m)</code></td><td><code>mutex_unlock(m)</code></td></tr>
+    <tr><td><code>guard(spinlock_irq)(&l)</code></td><td><code>spin_lock_irq(l)</code></td><td><code>spin_unlock_irq(l)</code></td></tr>
+    <tr><td><code>guard(spinlock_irqsave)(&l)</code></td><td><code>spin_lock_irqsave(l, flags)</code></td><td><code>spin_unlock_irqrestore(l, flags)</code></td></tr>
+    <tr><td><code>guard(read_lock)(&l)</code></td><td><code>read_lock(l)</code></td><td><code>read_unlock(l)</code></td></tr>
+    <tr><td><code>guard(write_lock)(&l)</code></td><td><code>write_lock(l)</code></td><td><code>write_unlock(l)</code></td></tr>
+    <tr><td><code>guard(rcu)()</code></td><td><code>rcu_read_lock()</code></td><td><code>rcu_read_unlock()</code></td></tr>
+  </table>
+</section>
+
+<!-- 4 Usage Patterns -->
+<section id="patterns" class="toc-link">
+  <h2><span class="num">04</span> 使用模式</h2>
+
+  <h3>模式一：自动释放 kmalloc</h3>
+<pre><code>struct foo *p __free(kfree) = kzalloc(sizeof(*p), GFP_KERNEL);
+if (!p)
+    return -ENOMEM;
+// 使用 p... 无需手动 kfree
+if (err)
+    return -EINVAL;  // p 自动释放
+return 0;            // p 自动释放
+</code></pre>
+
+  <h3>模式二：作用域锁</h3>
+<pre><code>// 在整个函数作用域持有锁
+int my_func(struct my *m)
+{
+    guard(mutex)(&m->lock);
+    // 互斥访问
+    // 函数返回时自动释放
+    return 0;
+}
+</code></pre>
+
+  <h3>模式三：块级锁</h3>
+<pre><code>// 锁仅在 if 块内持有
+if (need_lock) {
+    scoped_guard(mutex, &m->lock) {
+        // 锁在此块中
+        update_locked_data();
+    } // 离开块自动释放
+}
+// 锁已释放
+</code></pre>
+
+  <h3>模式四：嵌套锁</h3>
+<pre><code>void nested(void)
+{
+    guard(mutex)(&outer);
+    guard(spinlock_irqsave)(&inner);
+    // 按 LIFO 顺序释放：先 inner 再 outer
+}
+</code></pre>
+</section>
+
+<!-- 5 Advanced -->
+<section id="advanced" class="toc-link">
+  <h2><span class="num">05</span> 高级用法</h2>
+
+  <h3>return_ptr — 转移所有权</h3>
+<pre><code>struct obj *create_obj(void)
+{
+    struct obj *o __free(kfree) = kzalloc(sizeof(*o), GFP_KERNEL);
+    if (!o)
+        return NULL;
+
+    if (init_failed) {
+        return NULL;  // 自动 kfree
+    }
+
+    // 转移所有权给调用者
+    return_ptr(o);
+}
+</code></pre>
+
+  <h3>ACQUIRE — trylock 模式</h3>
+<pre><code>// 尝试获取锁，失败则退出
+ACQUIRE(mutex_try, &m->lock);
+// 成功获取锁
+// 作用域结束时自动释放
+</code></pre>
+
+  <h3>scoped_guard 的 trylock 变体</h3>
+<pre><code>// 尝试获取锁，锁可用才进入块
+scoped_guard(mutex_try, &m->lock) {
+    // 成功获取锁
+} else {
+    // 锁不可用时的处理
+}
+</code></pre>
+</section>
+
+<!-- 6 vs goto error -->
+<section id="compare" class="toc-link">
+  <h2><span class="num">06</span> 与 goto error 对比</h2>
+
+  <p>传统驱动的 probe 函数 — 这是最容易产生资源泄漏的模式。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">传统写法（冗长）</div>
+<pre><code>static int my_probe(struct platform_device *pdev)
+{
+    struct my *m;
+    int r;
+
+    m = kzalloc(sizeof(*m), GFP_KERNEL);
+    if (!m) { r = -ENOMEM; goto out; }
+
+    m->res = platform_get_resource(pdev,...);
+    if (!m->res) { r = -ENXIO; goto free_m; }
+
+    m->base = devm_ioremap(dev, m->res);
+    if (!m->base) { r = -ENOMEM; goto free_m; }
+
+    r = request_irq(irq, handler, 0, "my", m);
+    if (r) goto free_m;
+
+    r = register_something(m);
+    if (r) goto free_irq;
+
+    return 0;
+
+free_irq: free_irq(irq, m);
+free_m: kfree(m);
+out: return r;
+}</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title">cleanup 写法（简洁）</div>
+<pre><code>static int my_probe(struct platform_device *pdev)
+{
+    struct my *m __free(kfree) = kzalloc(...);
+    if (!m) return -ENOMEM;
+
+    m->res = platform_get_resource(pdev,...);
+    if (!m->res) return -ENXIO;
+
+    m->base = devm_ioremap(dev, m->res);
+    if (!m->base) return -ENOMEM;
+
+    // 注意：这里 request_irq 注册了回调引用了 m
+    // 但 __free(kfree) 在成功路径上也被调用了
+    // 需要 return_ptr(m) 转移所有权
+    // 或使用 devm_request_irq
+
+    int r = devm_request_irq(dev, irq, handler,...);
+    if (r) return r;
+
+    r = register_something(m);
+    if (r) return r;
+
+    // 所有权转移给 devm
+    return_ptr(m);
+}</code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- 7 Implementation -->
+<section id="impl" class="toc-link">
+  <h2><span class="num">07</span> 实现原理</h2>
+
+  <h3>编译器基础：__attribute__((__cleanup__))</h3>
+<pre><code>// GCC/Clang 内置特性
+void cleanup_func(void *ptr) { kfree(*(void **)ptr); }
+
+int test(void)
+{
+    // 当 'p' 出作用域时，自动调用 cleanup_func(&p)
+    void *p __attribute__((__cleanup__(cleanup_func))) = kmalloc(100);
+    return p ? 0 : -ENOMEM;
+}
+</code></pre>
+
+  <h3>__free 的实现</h3>
+<pre><code>// cleanup.h
+#define __free(name) \
+    __attribute__((__cleanup__(__free_##name)))
+
+// DEFINE_FREE 展开为：
+// static inline void __free_kfree(void *p) { kfree(*(void **)p); }
+</code></pre>
+
+  <h3>guard 的实现</h3>
+<pre><code>// guard(mutex)(&m) 展开为：
+// 1. 在栈上创建一个匿名变量，类型为 guard_mutex
+// 2. 初始化时调用 mutex_lock(&m)
+// 3. 析构时调用 mutex_unlock(&m)
+
+#define guard(name) \
+    DEFINE_GUARD(name, ...)
+
+#define DECLARE_GUARD(name, type, lock, unlock) \
+    static inline void __guard_##name(type *p) { unlock(*p); } \
+    typedef struct { type lock; } guard_##name; \
+    static inline guard_##name *__guard_##name##_init(type *l) \
+    { lock(*l); return (guard_##name *)l; }
+</code></pre>
+
+  <h3>scoped_guard 的 for 循环技巧</h3>
+<pre><code>// scoped_guard(mutex, &m)
+// 展开为利用 for 循环创建块级作用域：
+for (guard(mutex)(&m), *done = 0; done == 0; done = 1)
+    // 块只执行一次
+
+// 因为 for 循环的初始化语句创建了一个作用域
+// 锁在初始化时获取，在循环迭代间释放
+</code></pre>
+</section>
+
+<!-- 8 Source Files -->
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">include/linux/cleanup.h</span>    <span class="cmt">核心宏定义：DEFINE_FREE / DEFINE_GUARD / guard / scoped_guard / CLASS</span>
+├── <span class="file">include/linux/mutex.h</span>      <span class="cmt">DEFINE_GUARD(mutex) 定义</span>
+├── <span class="file">include/linux/spinlock.h</span>   <span class="cmt">DEFINE_GUARD(spinlock_irq) / spinlock_irqsave 定义</span>
+├── <span class="file">include/linux/rcupdate.h</span>    <span class="cmt">DEFINE_GUARD(rcu) 定义</span>
+├── <span class="file">include/linux/file.h</span>        <span class="cmt">DEFINE_FREE(fput) 定义</span>
+├── <span class="file">include/linux/pci.h</span>         <span class="cmt">DEFINE_FREE(pci_dev_put) 定义</span>
+├── <span class="file">include/linux/device.h</span>      <span class="cmt">DEFINE_FREE(put_device) 定义</span>
+└── <span class="file">Documentation/core-api/cleanup.rst</span>  <span class="cmt">内核文档</span>
+  </pre></div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

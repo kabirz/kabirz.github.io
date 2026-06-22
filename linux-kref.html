@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 kref 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核 kref 深度解析</h1>
+  <p class="subtitle">引用计数 — 对象生命周期管理的正确范式</p>
+  <span class="version">Linux 7.0.12 · include/linux/kref.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#rules">四条黄金法则</a></li>
+    <li><a href="#patterns">使用模式</a></li>
+    <li><a href="#compare">与原始 refcount_t 对比</a></li>
+    <li><a href="#impl">实现原理</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>内核对象管理有一个经典问题：一个对象可能在多个子系统间共享（如 PCI 设备、网络套接字、驱动实例），需要知道最后一个使用者什么时候释放它。直接使用 <code>refcount_t</code> 虽然能实现计数，但语义不精确，容易误用——比如在引用计数归零后继续 <code>get()</code>，或者在释放时忘记检查是否归零。</p>
+
+  <p><strong>kref</strong> 是 Linux 内核的"类智能指针"机制，用约 60 行代码将 <code>refcount_t</code> 包装成一套"难以误用"的 API。</p>
+
+<pre><code>struct kref {
+    refcount_t refcount;  // 底层就是 refcount_t
+};</code></pre>
+
+  <p>kref 的核心设计：</p>
+  <ul>
+    <li><strong>自动调用 release</strong>：refcount 到 0 时自动调用 release 回调</li>
+    <li><strong>防 double-free</strong>：release 只被调用一次</li>
+    <li><strong>防 UAF</strong>：<code>kref_put()</code> 返回后对象已无效</li>
+    <li><strong>安全竞态处理</strong>：<code>kref_get_unless_zero()</code> 防止 race with last put</li>
+  </ul>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">02</span> 核心 API</h2>
+
+  <table>
+    <tr><th>函数</th><th>说明</th></tr>
+    <tr><td><code>kref_init(kref)</code></td><td>将 refcount 初始化为 1</td></tr>
+    <tr><td><code>kref_read(kref)</code></td><td>读取当前引用计数（仅用于 debug）</td></tr>
+    <tr><td><code>kref_get(kref)</code></td><td>递增引用计数。调用者必须已持有一次引用。</td></tr>
+    <tr><td><code>kref_put(kref, release)</code></td><td>递减引用计数。归零时调用 release，返回 true。</td></tr>
+    <tr><td><code>kref_get_unless_zero(kref)</code></td><td>如果 refcount > 0 则递增，否则返回 false。竞态安全。</td></tr>
+    <tr><td><code>kref_put_mutex(kref, release, mutex)</code></td><td>put + 在 release 前获得 mutex。防止 release 中访问共享数据。</td></tr>
+    <tr><td><code>kref_put_lock(kref, release, lock)</code></td><td>put + 在 release 前获得 spinlock（irqsave 版本）。</td></tr>
+    <tr><td><code>kref_sub(kref, count, release)</code></td><td>一次性减去 count（>=1），归零时调用 release。</td></tr>
+  </table>
+
+<pre><code>// 典型用法：嵌入式 kref
+struct my_obj {
+    struct kref ref;
+    int data;
+};
+
+static void my_release(struct kref *ref)
+{
+    struct my_obj *obj = container_of(ref, struct my_obj, ref);
+    kfree(obj);
+}
+
+struct my_obj *obj = kzalloc(sizeof(*obj), GFP_KERNEL);
+kref_init(&obj->ref);     // refcount = 1
+kref_get(&obj->ref);      // refcount = 2
+kref_put(&obj->ref, my_release);  // refcount = 1
+kref_put(&obj->ref, my_release);  // refcount = 0 → 调 my_release → kfree(obj)
+</code></pre>
+</section>
+
+<section id="rules" class="toc-link">
+  <h2><span class="num">03</span> 四条黄金法则</h2>
+
+  <p>来自 <code>Documentation/core-api/kref.rst</code> 的官方规则：</p>
+
+  <div class="card">
+    <div class="card-title">规则 1：kref_get 必须对应已知活跃的对象</div>
+    <p>如果你不确定对象是否还活着，不能用 <code>kref_get()</code>。必须用 <code>kref_get_unless_zero()</code>。后者只有在 refcount > 0 时才会递增，防止在对象回收瞬间的竞态。</p>
+<pre><code>// 错误：可能 race with last put
+struct my_obj *obj = lookup_table_find(key);
+kref_get(&obj->ref);  // 如果 obj 已从 lookup 移除但尚未释放呢？
+                      // 不对——lookup 本身必须保证对象活着
+
+// 正确：如果 lookup 只持有引用但不保证存活
+struct my_obj *obj = lookup_table_find(key);
+if (obj &amp;&amp; kref_get_unless_zero(&obj->ref)) {
+    // 成功获取引用，obj 现在安全
+} else {
+    // obj 已经或即将被释放
+}
+</code></pre>
+  </div>
+
+  <div class="card">
+    <div class="card-title">规则 2：release 中不可持有 kref_get 路径上的锁</div>
+    <p>如果你在 release 回调中获取锁 A，而某个函数在持有锁 A 的时候调用了 <code>kref_put()</code>，就会死锁。</p>
+<pre><code>// 死锁场景
+mutex_lock(&m);
+kref_put(&obj->ref, my_release);  // → my_release 试图 mutex_lock(&m)
+                                  // → 死锁！
+</code></pre>
+  </div>
+
+  <div class="card">
+    <div class="card-title">规则 3：kref_put 返回后对象已释放</div>
+    <p><code>kref_put()</code> 返回 true 表示 release 已被调用，对象已无效。不能再访问对象的任何字段。</p>
+<pre><code>if (kref_put(&obj->ref, my_release)) {
+    // obj 已经被 kfree（或资源已释放）
+    // 不能再访问 obj->anything
+}
+</code></pre>
+  </div>
+
+  <div class="card">
+    <div class="card-title">规则 4：kref_get_unless_zero 必须配对 kref_put</div>
+    <p>用 <code>kref_get_unless_zero</code> 获取的引用，最终还是用 <code>kref_put</code> 释放。</p>
+  </div>
+</section>
+
+<section id="patterns" class="toc-link">
+  <h2><span class="num">04</span> 使用模式</h2>
+
+  <h3>模式一：对象查找 + 自动释放</h3>
+<pre><code>// drivers/usb/common/ulpi.c — ULPI 总线
+static struct ulpi *ulpi_alloc(struct device *parent)
+{
+    struct ulpi *ulpi;
+
+    ulpi = kzalloc(sizeof(*ulpi), GFP_KERNEL);
+    if (!ulpi)
+        return NULL;
+    kref_init(&ulpi->kref);  // refcount = 1
+    // ...
+    return ulpi;
+}
+
+void ulpi_put(struct ulpi *ulpi)
+{
+    // 递减引用计数，到 0 时调 ulpi_release
+    kref_put(&ulpi->kref, ulpi_release);
+}
+
+static void ulpi_release(struct kref *kref)
+{
+    struct ulpi *ulpi = container_of(kref, struct ulpi, kref);
+    // 最后一个引用已释放，清理资源
+    kfree(ulpi);
+}
+</code></pre>
+
+  <h3>模式二：kref_get_unless_zero 安全查找</h3>
+<pre><code>// drivers/scsi/scsi_scan.c — SCSI target
+static struct scsi_target *__scsi_find_target(
+    struct device *parent, int channel, uint id)
+{
+    struct scsi_target *starget;
+    // 遍历查找目标对象
+    list_for_each_entry(starget, &shost->__targets, siblings) {
+        if (starget->channel == channel &amp;&amp; starget->id == id) {
+            // 如果对象活着就递增引用，否则跳过
+            if (kref_get_unless_zero(&starget->reap_ref))
+                return starget;
+        }
+    }
+    return NULL;  // 找不到或正在释放
+}
+
+// 之后始终配对 kref_put
+scsi_target_reap(starget_put(starget));
+</code></pre>
+
+  <h3>模式三：kref_put_mutex — 带互斥的释放</h3>
+<pre><code>// drivers/firmware/raspberrypi.c — RPi firmware
+static void rpi_firmware_delete(struct kref *kref)
+{
+    struct rpi_firmware *fw = container_of(
+        kref, struct rpi_firmware, consumers);
+
+    // release 时需要访问共享结构
+    // 用传入的 mutex 保护
+    // ...
+    device_unregister(fw-&gt;cl_dev);
+    mbox_free_channel(fw-&gt;chan);
+    kfree(fw);
+}
+
+void rpi_firmware_put(struct rpi_firmware *fw)
+{
+    // put + release 前自动获取 mutex
+    // 确保 release 中对共享资源的访问是互斥的
+    kref_put_mutex(&fw->consumers,
+                   rpi_firmware_delete,
+                   &fw-&gt;lock);
+}
+</code></pre>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">05</span> 与原始 refcount_t 对比</h2>
+
+  <table>
+    <tr><th>操作</th><th><code>refcount_t</code></th><th><code>kref</code></th></tr>
+    <tr>
+      <td>初始化</td>
+      <td><code>refcount_set(&r, 1)</code></td>
+      <td><code>kref_init(k)</code> — 自动为 1</td>
+    </tr>
+    <tr>
+      <td>递增</td>
+      <td><code>refcount_inc(&r)</code></td>
+      <td><code>kref_get(k)</code></td>
+    </tr>
+    <tr>
+      <td>安全递增</td>
+      <td><code>refcount_inc_not_zero(&r)</code></td>
+      <td><code>kref_get_unless_zero(k)</code></td>
+    </tr>
+    <tr>
+      <td>递减</td>
+      <td><code>refcount_dec_and_test(&r)</code> → 手动 if(true) release</td>
+      <td><code>kref_put(k, release)</code> — 自动释放</td>
+    </tr>
+    <tr>
+      <td>溢出保护</td>
+      <td>有（饱和到 0）</td>
+      <td>同 refcount_t</td>
+    </tr>
+    <tr>
+      <td>release 同步</td>
+      <td>手动实现</td>
+      <td><code>kref_put_mutex</code> / <code>kref_put_lock</code></td>
+    </tr>
+  </table>
+
+  <div class="callout">
+    <strong>核心区别:</strong><br>
+    refcount_t 是"原始计数工具"；kref 是"生命周期管理范式"。<br>
+    kref 强迫你遵循正确的模式：release 通过回调注入，避免遗漏。
+  </div>
+</section>
+
+<section id="impl" class="toc-link">
+  <h2><span class="num">06</span> 实现原理</h2>
+
+  <p>kref 的整个实现都在 <code>include/linux/kref.h</code> 中，全是 static inline，没有单独的 .c 文件。</p>
+
+<pre><code>// include/linux/kref.h
+struct kref {
+    refcount_t refcount;
+};
+
+void kref_init(struct kref *kref)
+{
+    refcount_set(&kref->refcount, 1);
+}
+
+void kref_get(struct kref *kref)
+{
+    // refcount_inc 内部有溢出饱和保护
+    refcount_inc(&kref->refcount);
+}
+
+int kref_put(struct kref *kref,
+             void (*release)(struct kref *kref))
+{
+    // dec_and_test: 如果到 0 就调 release
+    if (refcount_dec_and_test(&kref->refcount)) {
+        release(kref);
+        return 1;
+    }
+    return 0;
+}
+
+int kref_get_unless_zero(struct kref *kref)
+{
+    // 原子条件：如果当前 >0 就递增，否则不操作
+    return refcount_inc_not_zero(&kref->refcount);
+}
+
+int kref_put_mutex(struct kref *kref,
+    void (*release)(struct kref *kref),
+    struct mutex *lock)
+{
+    // 先 dec，然后获取 mutex，再调 release
+    // 这样 release 在 mutex 保护中执行
+    if (refcount_dec_and_mutex_lock(&kref->refcount, lock)) {
+        release(kref);
+        mutex_unlock(lock);
+        return 1;
+    }
+    return 0;
+}
+</code></pre>
+
+  <p><code>refcount_dec_and_mutex_lock()</code> 是 <code>refcount_t</code> 和 <code>mutex</code> 配合的原子操作——先递减 refcount，成功后自动获取 mutex，期间不会丢失竞态。</p>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">include/linux/kref.h</span>          <span class="cmt">所有 kref API 定义（全是 static inline）</span>
+├── <span class="file">include/linux/refcount.h</span>      <span class="cmt">底层 refcount_t 实现</span>
+├── <span class="file">Documentation/core-api/kref.rst</span>  <span class="cmt">kref 官方文档（四条规则）</span>
+├── <span class="file">drivers/usb/common/ulpi.c</span>    <span class="cmt">kref_init + kref_put 示例</span>
+├── <span class="file">drivers/firmware/raspberrypi.c</span> <span class="cmt">kref_put_mutex 示例</span>
+├── <span class="file">drivers/scsi/scsi_scan.c</span>      <span class="cmt">kref_get_unless_zero 示例</span>
+├── <span class="file">drivers/gpu/host1x/syncpt.c</span>   <span class="cmt">kref_put_mutex 示例</span>
+└── <span class="file">drivers/opp/core.c</span>            <span class="cmt">kref_put_mutex + kref_get_unless_zero 示例</span>
+  </pre></div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

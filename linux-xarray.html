@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 XArray 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核 XArray 深度解析</h1>
+  <p class="subtitle">可扩展稀疏数组 — 取代 radix tree 的统一数据结构</p>
+  <span class="version">Linux 7.0.12 · lib/xarray.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#api">API 分层</a></li>
+    <li><a href="#internals">内部数据结构</a></li>
+    <li><a href="#ops">核心操作</a></li>
+    <li><a href="#locking">锁模型</a></li>
+    <li><a href="#marks">标记系统</a></li>
+    <li><a href="#multi">多索引</a></li>
+    <li><a href="#compare">与 radix tree 对比</a></li>
+    <li><a href="#usage">内核实战</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>XArray（eXtensible Array）是 2017 年由 Matthew Wilcox 引入内核的数据结构，用于取代 radix tree。虽然底层仍然是多叉树，但它提供<strong>"数组"级别的心智模型</strong>——一个可以存储任意指针的、按 <code>unsigned long</code> 索引的稀疏数组。</p>
+
+<pre><code>struct xarray {
+    spinlock_t xa_lock;      // 内置锁
+    gfp_t xa_flags;          // 分配标志
+    void __rcu *xa_head;     // 头结点（叶子指针或内部节点）
+};</code></pre>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">简单如数组</div>
+<pre><code>// 存、取、删 — 和使用普通数组一样简单
+xa_init(&amp;xa);
+xa_store(&amp;xa, 42, ptr, GFP_KERNEL);
+ptr = xa_load(&amp;xa, 42);
+xa_erase(&amp;xa, 42);</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title">强大如树</div>
+<pre><code>// 但支持稀疏存储、标记、多索引范围
+// ULONG_MAX 个 slot
+// 内置 spinlock 保护
+// RCU 安全的读路径
+// 自动扩展/收缩</code></pre>
+    </div>
+  </div>
+
+  <p>XArray 是 page cache（<code>mapping->i_pages</code>）、PID 分配器、文件描述符表等核心子系统的底层存储。</p>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">02</span> API 分层</h2>
+
+  <p>XArray 提供三层 API，覆盖从简单到高级的所有需求。</p>
+
+  <h3>第一层：简单 API（Simple）</h3>
+<pre><code>xa_init(&amp;xa);                        // 初始化
+xa_store(&amp;xa, index, entry, gfp);    // 存入，返回旧值
+xa_load(&amp;xa, index);                 // 读取
+xa_erase(&amp;xa, index);                // 删除，返回旧值
+xa_cmpxchg(&amp;xa, index, old, new, gfp); // CAS 语义
+
+xa_for_each(&amp;xa, index, entry) {     // 遍历全部
+    // ...
+}
+xa_for_each_marked(&amp;xa, index, entry, mark) {
+    // 遍历打了标记的
+}
+</code></pre>
+
+  <h3>第二层：高级 API（Advanced）</h3>
+<pre><code>xa_reserve(&amp;xa, index, gfp);         // 预留 slot（不会失败）
+xa_alloc(&amp;xa, &amp;id, entry, limit, gfp); // 自动分配 ID
+xa_alloc_cyclic(&amp;xa, &amp;id, entry, limit, gfp); // 循环分配
+xa_get_mark(&amp;xa, index, mark);      // 读取标记
+xa_set_mark(&amp;xa, index, mark);      // 设置标记
+xa_clear_mark(&amp;xa, index, mark);    // 清除标记
+</code></pre>
+
+  <h3>第三层：迭代器 API（Iterator / xas）</h3>
+<pre><code>// 使用 xa_state 结构体，需要手动管理锁
+XA_STATE(xas, &amp;xa, first_index);
+xas_lock(&amp;xas);
+xas_for_each(&amp;xas, entry, max) {
+    // 手动控制迭代过程
+    if (xas_retry(&amp;xas, entry))
+        continue;
+    // ...
+}
+xas_unlock(&amp;xas);
+</code></pre>
+
+  <div class="callout">
+    <strong>什么时候用哪层?</strong><br>
+    - 简单 API：95% 的场景（page cache 的普通操作、ID 分配）<br>
+    - 高级 API：需要避免分配失败的原子场景、IDA 模式<br>
+    - 迭代器：需要批处理、在遍历中修改、需要 mmap 回写感知
+  </div>
+</section>
+
+<section id="internals" class="toc-link">
+  <h2><span class="num">03</span> 内部数据结构</h2>
+
+  <p>XArray 内部是一棵 N-叉前缀树。每个节点有 64 个 slot（6 bit 地址），树的高度取决于最大索引值。</p>
+
+<pre><code>// lib/xarray.c — 节点结构
+struct xa_node {
+    unsigned char shift;     // 当前层位移（决定覆盖范围）
+    unsigned char offset;    // 在父节点中的位置
+    unsigned char count;     // 非空 slot 数
+    unsigned char nr_values; // 值类型的 slot 数
+    struct xa_node *parent;  // 父节点
+    struct rcu_head rcu_head;
+    void __rcu *slots[64];   // 64 个 slot
+    unsigned long tags[3];   // 3 组标记位图
+};
+
+// entry 编码（低 2 位标记类型）：
+// - 00: 普通指针
+// - 01: 内部节点
+// - 10: 值条目（value entry）
+// - 11: 兄弟条目（sibling，多索引用）
+
+#define XA_ZERO_ENTRY     xa_mk_internal(257)
+#define XA_RETRY_ENTRY    xa_mk_internal(256)
+</code></pre>
+
+  <p>树的高度（shift 值）随着条目数量动态调整：</p>
+  <table>
+    <tr><th>条目数范围</th><th>shift</th><th>树高</th><th>叶子范围</th></tr>
+    <tr><td>0</td><td>—</td><td>0（空）</td><td>—</td></tr>
+    <tr><td>1</td><td>—</td><td>0（单指针）</td><td>—</td></tr>
+    <tr><td>2 到 64</td><td>0</td><td>1</td><td>0-63</td></tr>
+    <tr><td>65 到 4096</td><td>6</td><td>2</td><td>0-4095</td></tr>
+    <tr><td>4097 到 262k</td><td>12</td><td>3</td><td>0-262143</td></tr>
+    <tr><td>超出时继续增长</td><td>+=6</td><td>+1 层</td><td>×64 每层</td></tr>
+  </table>
+</section>
+
+<section id="ops" class="toc-link">
+  <h2><span class="num">04</span> 核心操作</h2>
+
+  <h3>xa_load — 查找</h3>
+<pre><code>void *xa_load(struct xarray *xa, unsigned long index)
+{
+    XA_STATE(xas, xa, index);
+    void *entry;
+
+    rcu_read_lock();
+    do {
+        entry = xas_load(&amp;xas);
+        if (xas_retry(&amp;xas, entry))
+            continue;
+        break;
+    } while (true);
+    rcu_read_unlock();
+    return entry;
+}
+
+// 内部 xas_load 从根节点开始
+// 按 shift 位提取逐级下沉，直到叶子节点
+// slot == NULL → 未分配
+// slot 指向内部节点 → 继续下沉
+// slot 是值 → 返回
+</code></pre>
+
+  <h3>xa_store — 插入/更新</h3>
+<pre><code>void *xa_store(struct xarray *xa, unsigned long index,
+               void *entry, gfp_t gfp)
+{
+    XA_STATE(xas, xa, index);
+    void *curr;
+
+    // 1. 预留节点（如果需要分裂树）
+    // 2. 获取锁
+    xas_lock(&amp;xas);
+    // 3. 插入
+    curr = xas_store(&amp;xas, entry);
+    xas_unlock(&amp;xas);
+    // 4. 释放旧值（如果有）
+    return curr;
+}
+</code></pre>
+
+  <p>xa_store 内部自动处理：</p>
+  <ul>
+    <li>空 xarray → 直接设为单条目的叶子节点</li>
+    <li>超出当前树范围 → 逐层增加内部节点</li>
+    <li>替换已有条目 → 返回旧值</li>
+    <li>覆盖 NULL → 插入</li>
+    <li>内存不足 → 返回 ERR_PTR(-ENOMEM)</li>
+  </ul>
+</section>
+
+<section id="locking" class="toc-link">
+  <h2><span class="num">05</span> 锁模型</h2>
+
+  <table>
+    <tr><th>API 层</th><th>读</th><th>写</th></tr>
+    <tr>
+      <td>简单 API</td>
+      <td><code>xa_load</code>: 内部 RCU 读锁</td>
+      <td><code>xa_store</code>: 内部 spinlock</td>
+    </tr>
+    <tr>
+      <td>高级 API</td>
+      <td><code>xa_get_mark</code>: RCU 读锁</td>
+      <td><code>xa_set_mark</code>: 内部 spinlock</td>
+    </tr>
+    <tr>
+      <td>迭代器</td>
+      <td colspan="2">调用者必须自己管理 <code>xas_lock/xas_unlock</code></td>
+    </tr>
+  </table>
+
+<pre><code>// 迭代器模式下，调用者负责锁
+XA_STATE(xas, &amp;xa, 0);
+xas_lock(&amp;xas);
+xas_for_each(&amp;xas, entry, ULONG_MAX) {
+    // 在遍历中进行修改
+    if (should_remove)
+        xas_store(&amp;xas, NULL);
+}
+xas_unlock(&amp;xas);
+
+// spinlock 变体：
+xas_lock_irq(&amp;xas);   // 关中断版
+xas_lock_bh(&amp;xas);    // 关底半部版
+</code></pre>
+
+  <div class="callout">
+    <strong>RCU 安全:</strong><br>
+    xa_load 只需要 RCU 读锁（不能睡眠）。<br>
+    写入者通过 call_rcu 释放旧节点，确保所有读者退出后才释放内存。
+  </div>
+</section>
+
+<section id="marks" class="toc-link">
+  <h2><span class="num">06</span> 标记系统</h2>
+
+  <p>每个 XArray 条目有 3 个独立的标记位（XA_MARK_0 ~ XA_MARK_2），存储在内部节点的 <code>tags</code> 位图中。</p>
+
+<pre><code>// 标记是 per-slot 的位图
+// 存在内部节点中：tags[mark][slot_index/64] & (1 << slot_index%64)
+
+// API
+xa_set_mark(&amp;xa, index, xa_mark_t mark);
+xa_clear_mark(&amp;xa, index, xa_mark_t mark);
+xa_get_mark(&amp;xa, index, xa_mark_t mark);
+
+// 遍历已标记条目
+xa_for_each_marked(&amp;xa, index, entry, XA_MARK_0) {
+    // 只遍历设置了 XA_MARK_0 的条目
+}
+</code></pre>
+
+  <p>在 page cache 中的典型用途：</p>
+  <table>
+    <tr><th>标记</th><th>page cache 含义</th></tr>
+    <tr><td><code>XA_MARK_0</code></td><td>PAGECACHE_TAG_DIRTY — 脏页</td></tr>
+    <tr><td><code>XA_MARK_1</code></td><td>PAGECACHE_TAG_WRITEBACK — 写回中</td></tr>
+    <tr><td><code>XA_MARK_2</code></td><td>PAGECACHE_TAG_TOWRITE — 待写回</td></tr>
+  </table>
+</section>
+
+<section id="multi" class="toc-link">
+  <h2><span class="num">07</span> 多索引</h2>
+
+  <p>XArray 支持用一个 entry 覆盖一段连续的索引范围——"多索引条目"，内部通过<strong>兄弟条目（sibling entry）</strong>实现。</p>
+
+<pre><code>// 示例：将 folio（4 页）存入索引 0-3
+xa_store_range(&amp;mapping->i_pages,
+               0, 3, folio, GFP_KERNEL);
+
+// 内部结构：
+// slots[0] = folio_ptr    ← 主条目
+// slots[1] = sibling(1)   ← 兄弟条目指向主条目
+// slots[2] = sibling(2)
+// slots[3] = sibling(3)
+// 兄弟条目编码：低 2 位 = 11，偏移量编码在高位
+
+// xa_load(&xa, 1) 自动解引用兄弟条目 → 返回 folio_ptr
+</code></pre>
+
+  <p>兄弟条目的好处：</p>
+  <ul>
+    <li>查找单条目和查找多条目使用相同的 <code>xa_load</code> 路径</li>
+    <li>不增加树的高度（兄弟条目不占用新节点）</li>
+    <li>写时复制友好（大 folio 映射）</li>
+  </ul>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">08</span> 与 radix tree 对比</h2>
+
+  <table>
+    <tr><th>特性</th><th>radix tree</th><th>xarray</th></tr>
+    <tr><td>API 导出函数</td><td>~30 个</td><td>~10 个核心函数</td></tr>
+    <tr><td>内部锁</td><td>调用者自行管理</td><td>内建 spinlock</td></tr>
+    <tr><td>读路径</td><td>需手动 rcu_read_lock</td><td>xa_load 内部自动处理</td></tr>
+    <tr><td>遍历</td><td><code>radix_tree_for_each</code></td><td><code>xa_for_each</code></td></tr>
+    <tr><td>标记</td><td><code>RADIX_TREE_*_TAG</code></td><td><code>XA_MARK_0/1/2</code></td></tr>
+    <tr><td>多索引</td><td>不支持</td><td>完整支持（xa_store_range）</td></tr>
+    <tr><td>ID 分配</td><td>radix_tree_tag_set 模式</td><td>xa_alloc / xa_alloc_cyclic</td></tr>
+    <tr><td>零条目</td><td>使用特殊标记</td><td>内建 ZERO_ENTRY</td></tr>
+    <tr><td>内存释放</td><td>rcu_barrier 手动</td><td>内建 call_rcu</td></tr>
+    <tr><td>代码量</td><td>约 1800 行</td><td>约 1500 行</td></tr>
+  </table>
+</section>
+
+<section id="usage" class="toc-link">
+  <h2><span class="num">09</span> 内核实战</h2>
+
+  <h3>1. Page Cache — 最大规模的 XArray 使用者</h3>
+<pre><code>// mm/filemap.c
+// address_space.i_pages 是一个 xarray
+struct address_space {
+    struct xarray     i_pages;   // 存储所有 folio
+    // ...
+};
+
+// 读 page cache
+struct folio *filemap_load_folio(struct address_space *mapping,
+                                 pgoff_t index)
+{
+    // 使用简单的 xa_load
+    struct folio *folio = xa_load(&mapping->i_pages, index);
+    return folio;
+}
+
+// 遍历脏页回写
+pgoff_t index;
+struct folio *folio;
+xa_for_each_marked(&mapping->i_pages, index, folio,
+                   PAGECACHE_TAG_DIRTY) {
+    writeback_folio(mapping, folio);
+}
+</code></pre>
+
+  <h3>2. PID 分配 — xa_alloc 示例</h3>
+<pre><code>// kernel/pid.c
+static struct xarray pid_array;
+
+int alloc_pid(struct pid_namespace *ns)
+{
+    struct pid *pid;
+    int nr;
+
+    // xa_alloc 自动找到第一个空闲 ID
+    // 从 RESERVED_PIDS 到 PID_MAX_DEFAULT
+    nr = xa_alloc(&pid_array, &nr, pid,
+                  xa_limit_32b, GFP_KERNEL);
+    // nr 被设为已分配的 ID
+    return nr;
+}
+
+void free_pid(struct pid *pid)
+{
+    xa_erase(&pid_array, pid->nr);  // 删除条目，自动回收 ID
+}
+</code></pre>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">10</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">include/linux/xarray.h</span>        <span class="cmt">全部 API 声明、struct xarray / xa_node 定义</span>
+├── <span class="file">lib/xarray.c</span>                 <span class="cmt">核心实现：xa_load / xa_store / xas_* 所有操作</span>
+├── <span class="file">include/linux/radix-tree.h</span>    <span class="cmt">旧 radix tree 接口（兼容层）</span>
+├── <span class="file">mm/filemap.c</span>                 <span class="cmt">page cache — xarray 最大用户</span>
+├── <span class="file">kernel/pid.c</span>                 <span class="cmt">PID 分配 — xa_alloc 用法示例</span>
+├── <span class="file">fs/fs-writeback.c</span>            <span class="cmt">xa_for_each_marked 遍历脏页</span>
+├── <span class="file">include/trace/events/xarray.h</span> <span class="cmt">xarray 追踪事件</span>
+└── <span class="file">Documentation/core-api/xarray.rst</span>  <span class="cmt">内核文档</span>
+  </pre></div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

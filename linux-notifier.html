@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 Notifier Chain 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核 Notifier Chain 深度解析</h1>
+  <p class="subtitle">内核 Pub-Sub 机制 — 事件通知框架</p>
+  <span class="version">Linux 7.0.12 · kernel/notifier.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">四类通知链</a></li>
+    <li><a href="#api">核心 API</a></li>
+    <li><a href="#return">返回值语义</a></li>
+    <li><a href="#prio">优先级排序</a></li>
+    <li><a href="#usage">内核实战</a></li>
+    <li><a href="#impl">实现原理</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>内核各子系统之间需要相互通知事件：网络设备 up/down、CPU 热插拔、系统重启、内核 panic、OOM 等。如果让每个消息发布者直接耦合所有订阅者，代码将不可维护。</p>
+  <p><strong>Notifier Chain</strong> 是内核自带的发布-订阅（Pub-Sub）框架，约 300 行代码实现了完整的事件通知总线。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">struct notifier_block</div>
+<pre><code>struct notifier_block {
+    notifier_fn_t notifier_call;    // 回调函数
+    struct notifier_block __rcu *next; // 链表
+    int priority;                   // 优先级（高者先执行）
+};</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title">回调函数签名</div>
+<pre><code>typedef int (*notifier_fn_t)(
+    struct notifier_block *nb,
+    unsigned long action,   // 事件类型
+    void *data              // 事件数据
+);</code></pre>
+    </div>
+  </div>
+
+  <p>发布者只需要调用 <code>xxx_notifier_call_chain()</code>，订阅者调用 <code>xxx_notifier_chain_register()</code>，双方通过 <code>action</code> 和 <code>data</code> 交换信息。</p>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 四类通知链</h2>
+
+  <p>根据调用上下文不同，内核提供四种通知链：</p>
+
+  <table>
+    <tr><th>类型</th><th>锁</th><th>调用上下文</th><th>典型场景</th></tr>
+    <tr>
+      <td><code>ATOMIC_NOTIFIER</code></td>
+      <td>spinlock</td>
+      <td>中断 / NMI / 原子上下文</td>
+      <td>panic、die、netlink</td>
+    </tr>
+    <tr>
+      <td><code>BLOCKING_NOTIFIER</code></td>
+      <td>mutex</td>
+      <td>进程上下文（可睡眠）</td>
+      <td>reboot、netdev、module</td>
+    </tr>
+    <tr>
+      <td><code>RAW_NOTIFIER</code></td>
+      <td>无锁</td>
+      <td>任意上下文（调用者自管理）</td>
+      <td>特殊架构需求</td>
+    </tr>
+    <tr>
+      <td><code>SRCU_NOTIFIER</code></td>
+      <td>SRCU</td>
+      <td>进程上下文（读多写极少）</td>
+      <td>最通用，但开销较低</td>
+    </tr>
+  </table>
+
+  <div class="callout">
+    <strong>选择原则:</strong><br>
+    - 回调会在中断中执行 → ATOMIC（不可睡眠）<br>
+    - 回调需要睡眠、读文件、调用内核 API → BLOCKING<br>
+    - 性能敏感且发布极少 → SRCU<br>
+    - 调用者自己处理锁 → RAW
+  </div>
+
+<pre><code>// 链头定义
+struct atomic_notifier_head {
+    spinlock_t lock;
+    struct notifier_block __rcu *head;
+};
+
+struct blocking_notifier_head {
+    struct rw_semaphore rwsem;
+    struct notifier_block __rcu *head;
+};
+
+struct raw_notifier_head {
+    struct notifier_block __rcu *head;
+};
+
+struct srcu_notifier_head {
+    struct srcu_struct srcu;
+    struct mutex mutex;
+    struct notifier_block __rcu *head;
+};</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 核心 API</h2>
+
+  <p>四类通知链的 API 完全对称：</p>
+
+  <table>
+    <tr><th>操作</th><th>ATOMIC</th><th>BLOCKING</th><th>RAW</th><th>SRCU</th></tr>
+    <tr>
+      <td>静态初始化</td>
+      <td colspan="4"><code>ATOMIC_NOTIFIER_HEAD(name)</code> / <code>BLOCKING_NOTIFIER_HEAD(name)</code> …</td>
+    </tr>
+    <tr>
+      <td>注册</td>
+      <td><code>atomic_notifier_chain_register</code></td>
+      <td><code>blocking_notifier_chain_register</code></td>
+      <td><code>raw_notifier_chain_register</code></td>
+      <td><code>srcu_notifier_chain_register</code></td>
+    </tr>
+    <tr>
+      <td>注销</td>
+      <td colspan="4"><code>…_chain_unregister()</code>（对称命名）</td>
+    </tr>
+    <tr>
+      <td>通知</td>
+      <td><code>atomic_notifier_call_chain</code></td>
+      <td><code>blocking_notifier_call_chain</code></td>
+      <td><code>raw_notifier_call_chain</code></td>
+      <td><code>srcu_notifier_call_chain</code></td>
+    </tr>
+  </table>
+
+<pre><code>// 通用通知函数签名
+int atomic_notifier_call_chain(struct atomic_notifier_head *nh,
+    unsigned long action, void *data);
+
+// 返回值：最后一个 NOTIFY_OK / NOTIFY_STOP 的结果
+// 或 NOTIFY_BAD（如果被任何回调拒绝）
+</code></pre>
+
+  <p>帮助函数：</p>
+<pre><code>// 将 errno 编码为通知链返回值
+#define notifier_from_errno(err) \
+    (NOTIFY_STOP_MASK | (NOTIFY_OK - err))
+
+// 从通知链返回值提取 errno
+int notifier_to_errno(int ret)
+{
+    ret &amp;= ~NOTIFY_STOP_MASK;
+    return ret > NOTIFY_OK ? NOTIFY_OK - ret : 0;
+}
+</code></pre>
+</section>
+
+<section id="return" class="toc-link">
+  <h2><span class="num">04</span> 返回值语义</h2>
+
+  <table>
+    <tr><th>返回值</th><th>值</th><th>含义</th></tr>
+    <tr><td><code>NOTIFY_DONE</code></td><td><code>0x0000</code></td><td>不关心，不反对</td></tr>
+    <tr><td><code>NOTIFY_OK</code></td><td><code>0x0001</code></td><td>处理成功，继续传播</td></tr>
+    <tr><td><code>NOTIFY_BAD</code></td><td><code>0x8002</code></td><td>处理失败，停止传播</td></tr>
+    <tr><td><code>NOTIFY_STOP</code></td><td><code>0x8001</code></td><td>停止传播（OK 但不要继续）</td></tr>
+    <tr><td><code>NOTIFY_STOP_MASK</code></td><td><code>0x8000</code></td><td>停止标志位掩码</td></tr>
+  </table>
+
+  <p>传播规则：</p>
+  <ul>
+    <li>回调按 <code>priority</code> 从高到低依次调用</li>
+    <li>如果某个回调返回 <code>NOTIFY_BAD</code> 或 <code>NOTIFY_STOP</code>（含 <code>NOTIFY_STOP_MASK</code>），传播立即停止</li>
+    <li>所有回调返回后，取最后一个值作为整个 call_chain 的返回值</li>
+  </ul>
+
+  <div class="callout">
+    <strong>注意:</strong><br>
+    NOTIFY_BAD 和 NOTIFY_STOP 都设置了 NOTIFY_STOP_MASK 位（0x8000）。<br>
+    区别：NOTIFY_STOP = STOP_MASK | OK，语义为"我处理了但到此为止"；<br>
+    NOTIFY_BAD = STOP_MASK | 0x0002，语义为"我处理失败了"。
+  </div>
+</section>
+
+<section id="prio" class="toc-link">
+  <h2><span class="num">05</span> 优先级排序</h2>
+
+<pre><code>// 回调按 priority 从高到低排序
+// 同一优先级按注册时间保持 FIFO（先注册先执行）
+
+struct notifier_block nb1 = {
+    .notifier_call = my_handler1,
+    .priority = 10,   // 先执行
+};
+struct notifier_block nb2 = {
+    .notifier_call = my_handler2,
+    .priority = 0,    // 后执行
+};
+
+// 注册具有唯一优先级的回调（拒绝同优先级冲突）
+int atomic_notifier_chain_register_unique_prio(
+    struct atomic_notifier_head *nh,
+    struct notifier_block *nb);
+</code></pre>
+
+  <p>优先级典型取值：</p>
+  <ul>
+    <li><code>INT_MAX</code> — 最优先（如 watchdog 监听 panic）</li>
+    <li><code>0</code> — 默认优先级</li>
+    <li><code>INT_MIN</code> — 最后被通知</li>
+  </ul>
+</section>
+
+<section id="usage" class="toc-link">
+  <h2><span class="num">06</span> 内核实战</h2>
+
+  <h3>1. panic_notifier_list — panic 事件</h3>
+<pre><code>// kernel/panic.c
+ATOMIC_NOTIFIER_HEAD(panic_notifier_list);
+
+void panic(const char *fmt, ...)
+{
+    // ... 打印 panic 信息 ...
+    atomic_notifier_call_chain(&panic_notifier_list,
+                               PANIC_EVENT, buf);
+    // ... kdump / 重启 ...
+}
+
+// 注册：在 panic 时执行自己的回调
+static int my_panic_cb(struct notifier_block *nb,
+                       unsigned long action, void *data)
+{
+    pr_emerg("my driver: system is panicking!\n");
+    emergency_save_state();
+    return NOTIFY_DONE;
+}
+static struct notifier_block my_panic_nb = {
+    .notifier_call = my_panic_cb,
+    .priority = INT_MAX,  // 最先执行
+};
+atomic_notifier_chain_register(&panic_notifier_list, &my_panic_nb);
+</code></pre>
+
+  <h3>2. netdev_chain — 网络设备事件</h3>
+<pre><code>// net/core/dev.c
+BLOCKING_NOTIFIER_HEAD(netdev_chain);
+
+// 事件类型
+enum {
+    NETDEV_UP,       // 设备启用
+    NETDEV_DOWN,     // 设备关闭
+    NETDEV_REGISTER, // 设备注册
+    NETDEV_UNREGISTER,
+    NETDEV_CHANGENAME,
+    NETDEV_CHANGEADDR,
+    // ... 30+ 种事件
+};
+
+// 发布
+call_netdevice_notifiers(NETDEV_UP, dev);
+
+// 订阅
+static int my_netdev_cb(struct notifier_block *nb,
+                        unsigned long event, void *data)
+{
+    struct net_device *dev = data;
+    if (event == NETDEV_UP)
+        netdev_info(dev, "my: device came up\n");
+    return NOTIFY_DONE;
+}
+</code></pre>
+
+  <h3>3. reboot_notifier_list — 重启事件</h3>
+<pre><code>// kernel/reboot.c
+BLOCKING_NOTIFIER_HEAD(reboot_notifier_list);
+
+// 注册
+register_reboot_notifier(&my_reboot_nb);
+// 通知链将收到 SYS_RESTART / SYS_HALT / SYS_POWER_OFF
+</code></pre>
+
+  <h3>4. die_chain — 内核 oops</h3>
+<pre><code>// arch/x86/kernel/cpu/mce/core.c 以及
+// arch/x86/kernel/traps.c
+// die() 函数中调用 notify_die()
+// kdb/kgdb 使用 die_chain 捕获异常
+</code></pre>
+</section>
+
+<section id="impl" class="toc-link">
+  <h2><span class="num">07</span> 实现原理</h2>
+
+  <p>notifier_call_chain 是所有四种类型的公共内核：</p>
+
+<pre><code>// kernel/notifier.c — 核心遍历逻辑
+static int notifier_call_chain(
+    struct notifier_block **nl,
+    unsigned long action, void *data,
+    int nr_to_call, int *nr_calls)
+{
+    int ret = NOTIFY_DONE;
+    struct notifier_block *nb, *next_nb;
+
+    nb = rcu_dereference_raw(*nl);
+    while (nb &amp;&amp; nr_to_call) {
+        next_nb = rcu_dereference_raw(nb->next);
+        ret = nb->notifier_call(nb, action, data);
+        if (nr_calls)
+            (*nr_calls)++;
+        if (ret &amp; NOTIFY_STOP_MASK)
+            break;  // 停止传播
+        nb = next_nb;
+        nr_to_call--;
+    }
+    return ret;
+}
+</code></pre>
+
+  <p>四类通知链的差异仅在锁策略：</p>
+
+  <table>
+    <tr><th>类型</th><th>注册/注销加锁</th><th>通知加锁</th><th>同步语义</th></tr>
+    <tr><td>ATOMIC</td><td>spinlock</td><td>rcu_read_lock + spinlock</td><td>通知时允许注册</td></tr>
+    <tr><td>BLOCKING</td><td>rwsem 写锁</td><td>rwsem 读锁</td><td>注册阻塞等待通知完成</td></tr>
+    <tr><td>RAW</td><td>无锁</td><td>无锁</td><td>调用者自管理</td></tr>
+    <tr><td>SRCU</td><td>mutex</td><td>srcu_read_lock</td><td>注销后 synchronize_srcu</td></tr>
+  </table>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">include/linux/notifier.h</span>      <span class="cmt">所有类型定义、API 声明、NOTIFY_* 常量</span>
+├── <span class="file">kernel/notifier.c</span>            <span class="cmt">notifier_call_chain 实现 + 四类链的注册/注销/通知</span>
+├── <span class="file">kernel/panic.c</span>               <span class="cmt">panic_notifier_list 定义及调用</span>
+├── <span class="file">net/core/dev.c</span>               <span class="cmt">netdev_chain / call_netdevice_notifiers</span>
+├── <span class="file">kernel/reboot.c</span>              <span class="cmt">reboot_notifier_list 定义及调用</span>
+├── <span class="file">kernel/cpu.c</span>                 <span class="cmt">cpu_chain / register_cpu_notifier</span>
+├── <span class="file">kernel/module/main.c</span>          <span class="cmt">module_notify_list</span>
+└── <span class="file">include/linux/srcu.h</span>          <span class="cmt">SRCU 基础设施</span>
+  </pre></div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

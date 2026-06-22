@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 sched_ext 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核 sched_ext 深度解析</h1>
+  <p class="subtitle">BPF 可扩展调度器 — 调度器可编程化</p>
+  <span class="version">Linux 7.0.12 · kernel/sched/ext.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构总览</a></li>
+    <li><a href="#ops">struct sched_ext_ops</a></li>
+    <li><a href="#dsq">调度队列 (DSQ)</a></li>
+    <li><a href="#lifecycle">调度生命周期</a></li>
+    <li><a href="#bpf">BPF 集成</a></li>
+    <li><a href="#flags">SCX_OPS 标志</a></li>
+    <li><a href="#examples">示例调度器</a></li>
+    <li><a href="#compare">与 CFS/EEVDF 对比</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p><strong>sched_ext</strong>（SCHED_EXT）是 Linux 内核中的一个可扩展调度类。它允许开发者通过 BPF 程序实现自定义调度策略，而无需编译或重启内核。</p>
+
+  <p>传统上，调度器是内核中最"神圣"的核心模块——修改调度策略需要改内核代码、重新编译、部署新内核。sched_ext 将调度策略变成了可动态加载的 BPF 程序。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">传统调度器</div>
+      <ul>
+        <li>调度策略写死在内核中</li>
+        <li>修改 → 编译内核 → 重启</li>
+        <li>安全 → 内核社区 Code Review</li>
+        <li>每个人只能用同一种策略</li>
+        <li>实验性调度器很难合并</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">sched_ext</div>
+      <ul>
+        <li>调度策略 = BPF 程序</li>
+        <li>修改 → bpftool 加载 → 立即生效</li>
+        <li>安全 → BPF Verifier</li>
+        <li>不同场景可加载不同调度器</li>
+        <li>写一个实验调度器 = 写一个 .bpf.c 文件</li>
+      </ul>
+    </div>
+  </div>
+
+  <p>这是"<strong>机制而非策略</strong>"（mechanism not policy）哲学的极致体现。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构总览</h2>
+
+<pre><code>┌────────────────────────────────────┐
+│ 用户态 (bpftool + skeleton)        │
+│  ├─ scx_simple.bpf.o              │
+│  └─ scx_central.bpf.o             │
+└──────────────┬─────────────────────┘
+               │ BPF 加载 (bpf() syscall)
+               ▼
+┌────────────────────────────────────┐
+│ BPF 程序 (struct sched_ext_ops)    │
+│ select_cpu / enqueue / dequeue     │
+│ dispatch / tick / running           │
+└──────────────┬─────────────────────┘
+               │ struct_ops 回调
+               ▼
+┌────────────────────────────────────┐
+│ 内核 sched_ext 层                  │
+│ kernel/sched/ext.c                 │
+│ ext_sched_class (sched_class 接口) │
+└──────────────┬─────────────────────┘
+               │ sched_class 优先级
+               ▼
+┌────────────────────────────────────┐
+│ CFS / RT / Deadline / ...          │
+│ 传统调度类                          │
+└────────────────────────────────────┘
+</code></pre>
+
+  <p>sched_ext 实现了一个新的 <code>struct sched_class ext_sched_class</code>。它与其他调度类（CFS/EEVDF、RT、Deadline）在同一框架下工作，通过优先级决定谁先被选择。</p>
+
+  <p>当 sched_ext 加载 BPF 调度器后：</p>
+  <ul>
+    <li>所有 <code>SCHED_EXT</code> 策略的任务由 BPF 程序调度</li>
+    <li>BPF 回调决定"哪个任务该在哪个 CPU 上运行多久"</li>
+    <li>内核提供 <code>scx_bpf_*</code> 帮助函数供 BPF 使用</li>
+  </ul>
+</section>
+
+<section id="ops" class="toc-link">
+  <h2><span class="num">03</span> struct sched_ext_ops</h2>
+
+  <p>这是 BPF 调度器的核心接口——开发者实现以下回调来定义完整的调度策略：</p>
+
+<pre><code>struct sched_ext_ops {
+    // 选择 CPU：为任务选择最合适的运行 CPU
+    s32 (*select_cpu)(struct task_struct *p,
+                      s32 prev_cpu, u64 wake_flags);
+
+    // 入队：任务变为可运行时调用
+    void (*enqueue)(struct task_struct *p, u64 enq_flags);
+
+    // 出队：任务不再可运行时调用
+    void (*dequeue)(struct task_struct *p, u64 deq_flags);
+
+    // 派发：CPU 需要选一个任务运行时调用
+    // 通过 scx_bpf_dispatch() 将任务送入指定 DSQ
+    void (*dispatch)(s32 cpu, struct task_struct *prev);
+
+    // 时钟 tick：处理时间片耗尽
+    void (*tick)(struct task_struct *p);
+
+    // 运行开始：任务开始执行 CPU 时调用
+    void (*running)(struct task_struct *p);
+
+    // 运行停止：任务停止执行时调用
+    void (*stopping)(struct task_struct *p,
+                     bool runnable);
+
+    // 初始化/退出：task 生命周期钩子
+    s32 (*init_task)(struct task_struct *p,
+                     struct scx_init_task_args *args);
+    void (*exit_task)(struct task_struct *p);
+
+    // CPU hotplug
+    s32 (*cpu_online)(s32 cpu);
+    s32 (*cpu_offline)(s32 cpu);
+
+    // cgroup
+    void (*cgroup_move)(struct task_struct *p,
+                        struct cgroup *from, struct cgroup *to);
+
+    // 超线程协同调度
+    void (*core_sched)(s32 cpu, struct task_struct *p);
+
+    // 更新空闲状态
+    void (*update_idle)(s32 cpu, bool idle);
+
+    // 标志
+    u64 flags;  // SCX_OPS_* 标志位
+};
+</code></pre>
+
+  <p>6 个核心回调（必须实现或设为空）：<code>select_cpu</code>、<code>enqueue</code>、<code>dequeue</code>、<code>dispatch</code>、<code>tick</code>、<code>running</code>。</p>
+</section>
+
+<section id="dsq" class="toc-link">
+  <h2><span class="num">04</span> 调度队列 (DSQ)</h2>
+
+  <p>DSQ = Dispatch Queue，是 sched_ext 的核心调度概念。任务通过 DSQ 在 CPU 之间流动。</p>
+
+  <table>
+    <tr><th>DSQ 类型</th><th>名称</th><th>说明</th></tr>
+    <tr>
+      <td>本地 DSQ</td>
+      <td><code>SCX_DSQ_LOCAL</code></td>
+      <td>每个 CPU 私有的本地队列。任务只在该 CPU 上执行。</td>
+    </tr>
+    <tr>
+      <td>全局 DSQ</td>
+      <td><code>SCX_DSQ_GLOBAL</code></td>
+      <td>系统级 FIFO 队列。任何空闲 CPU 都能消费。</td>
+    </tr>
+    <tr>
+      <td>自定义 DSQ</td>
+      <td><code>其他 ID</code></td>
+      <td>BPF 调度器创建的专用队列。可以实现分群或优先级。</td>
+    </tr>
+  </table>
+
+<pre><code>// BPF 可调用以下帮助函数
+
+// 将任务派发到指定 DSQ
+void scx_bpf_dispatch(struct task_struct *p,
+    u64 dsq_id, u64 slice, u64 flags);
+// dsq_id: SCX_DSQ_LOCAL / SCX_DSQ_GLOBAL / 自定义 DSQ ID
+// slice: 时间片长度 (ns)
+// flags: SCX_ENQ_*
+
+// 从其他 DSQ 消费任务
+bool scx_bpf_consume(u64 dsq_id);
+// 消费成功 → 任务在当前 CPU 上执行
+
+// 从指定 DSQ 中取一个任务
+struct task_struct *scx_bpf_dispatch_from_dsq(
+    struct scx_dispatch_q *dsq, u32 dsq_id);
+
+// 唤醒一个 CPU 来消费队列
+s32 scx_bpf_kick_cpu(s32 cpu, u64 flags);
+</code></pre>
+
+  <p>典型派发逻辑：</p>
+<pre><code>// dispatch 回调中：CPU 需要选一个任务
+void BPF_STRUCT_OPS(my_dispatch, s32 cpu, struct task_struct *prev)
+{
+    // 优先消费全局队列
+    if (scx_bpf_consume(SCX_DSQ_GLOBAL))
+        return;
+
+    // 或者把当前任务放回本地队列
+    if (prev &amp;&amp; prev->scx.dsq == SCX_DSQ_LOCAL)
+        scx_bpf_dispatch(prev, SCX_DSQ_LOCAL, 0, 0);
+}
+</code></pre>
+</section>
+
+<section id="lifecycle" class="toc-link">
+  <h2><span class="num">05</span> 调度生命周期</h2>
+
+<pre><code>┌─────────────────────────────────────────┐
+│ 任务唤醒                                  │
+│  → select_cpu()  选择目标 CPU             │
+│  → enqueue()     加入调度队列               │
+└────────────────┬────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────┐
+│ CPU 空闲 / tick 触发                      │
+│  → dispatch()   从 DSQ 选出下一个任务      │
+│  → 上下文切换到选定任务                     │
+│  → running()    任务开始运行               │
+└────────────────┬────────────────────────┘
+                 │
+         ┌───────┴───────┐
+         ▼               ▼
+┌─────────────────┐ ┌─────────────────┐
+│ tick 时间片到     │ │ 任务主动睡眠/阻塞 │
+│  → tick()       │ │  → dequeue()    │
+│  → 再次 dispatch│ │  → stopping()    │
+└─────────────────┘ └─────────────────┘
+         │               │
+         └─── 回到 dispatch ──┘
+</code></pre>
+
+  <p>每一步都有对应的 BPF 回调介入：</p>
+  <table>
+    <tr><th>阶段</th><th>回调</th><th>BPF 可做的事</th></tr>
+    <tr><td>唤醒选核</td><td><code>select_cpu</code></td><td>选择最空闲或最合适的 CPU</td></tr>
+    <tr><td>加入队列</td><td><code>enqueue</code></td><td>按策略排入 DSQ（如 FIFO/Priority/VRuntime）</td></tr>
+    <tr><td>选任务</td><td><code>dispatch</code></td><td>从 DSQ 中筛选最适合的任务</td></tr>
+    <tr><td>开始运行</td><td><code>running</code></td><td>统计运行时间，或设置运行环境</td></tr>
+    <tr><td>时间片</td><td><code>tick</code></td><td>检查是否该抢占了</td></tr>
+    <tr><td>出队</td><td><code>dequeue</code></td><td>任务不再可运行，清理状态</td></tr>
+  </table>
+</section>
+
+<section id="bpf" class="toc-link">
+  <h2><span class="num">06</span> BPF 集成</h2>
+
+  <p>sched_ext 使用 BPF <strong>struct_ops</strong> 机制对接 BPF 程序：</p>
+
+<pre><code>// 在 BPF C 代码中定义一个调度器
+#include "scx_common.bpf.h"
+
+// BPF 调度器 = 实现 struct sched_ext_ops
+struct sched_ext_ops my_ops = {
+    .select_cpu    = (void *)my_select_cpu,
+    .enqueue       = (void *)my_enqueue,
+    .dispatch      = (void *)my_dispatch,
+    .tick          = (void *)my_tick,
+    .init_task     = (void *)my_init_task,
+    .flags         = SCX_OPS_KEEP_BUILTIN_IDLE,
+};
+
+// 用 SEC 宏标记为 struct_ops
+SEC(".struct_ops")
+struct sched_ext_ops my_ops;
+</code></pre>
+
+  <p>加载调度器：</p>
+<pre><code># 编译 BPF 调度器
+clang -O2 -g -target bpf -c my_scheduler.bpf.c -o my_scheduler.bpf.o
+
+# 加载运行
+bpftool struct_ops register my_scheduler.bpf.o
+
+# 查看当前调度器
+bpftool struct_ops dump
+
+# 卸载（自动恢复为 CFS）
+bpftool struct_ops unregister my_ops
+</code></pre>
+
+  <p>BPF 程序可调用的帮助函数：</p>
+  <table>
+    <tr><th>帮助函数</th><th>说明</th></tr>
+    <tr><td><code>scx_bpf_dispatch(task, dsq_id, slice, flags)</code></td><td>将任务派发到指定 DSQ</td></tr>
+    <tr><td><code>scx_bpf_consume(dsq_id)</code></td><td>从 DSQ 消费任务到本地 CPU</td></tr>
+    <tr><td><code>scx_bpf_kick_cpu(cpu, flags)</code></td><td>唤醒 CPU 执行调度</td></tr>
+    <tr><td><code>scx_bpf_dsq_nr_queued(dsq_id)</code></td><td>查询 DSQ 中排队的任务数</td></tr>
+    <tr><td><code>scx_bpf_task_running(cpu, task)</code></td><td>检查任务是否在运行</td></tr>
+    <tr><td><code>scx_bpf_cpuperf_cap(cpu)</code></td><td>读取 CPU 性能上限</td></tr>
+  </table>
+</section>
+
+<section id="flags" class="toc-link">
+  <h2><span class="num">07</span> SCX_OPS 标志</h2>
+
+<pre><code>// kernel/sched/ext.h
+enum scx_ops_flags {
+    // 保持内置空闲策略
+    // 不覆盖 CPU 空闲处理，轻量级调度器使用
+    SCX_OPS_KEEP_BUILTIN_IDLE  = 1 &lt;&lt; 0,
+
+    // 启用 QoS 频率调整
+    SCX_OPS_ENABLING_QOS       = 1 &lt;&lt; 1,
+
+    // ops 正在初始化
+    SCX_OPS_ENABLING           = 1 &lt;&lt; 2,
+
+    // ops 正在切换（卸载/加载）
+    SCX_OPS_SWITCHING          = 1 &lt;&lt; 3,
+
+    // ops 已激活
+    SCX_OPS_ENABLED            = 1 &lt;&lt; 4,
+};
+</code></pre>
+
+  <p>开发者应当在 <code>struct sched_ext_ops.flags</code> 中设置 <code>SCX_OPS_KEEP_BUILTIN_IDLE</code> 除非该 BPF 调度器需要完全控制空闲 CPU 选择。</p>
+</section>
+
+<section id="examples" class="toc-link">
+  <h2><span class="num">08</span> 示例调度器</h2>
+
+  <p>内核源码 <code>tools/sched_ext/</code> 目录下包含多个示例调度器：</p>
+
+  <h3>scx_simple — 最简单的 FIFO</h3>
+<pre><code>// tools/sched_ext/scx_simple.bpf.c
+// 功能：全局 FIFO 调度
+// - 所有任务排入全局 DSQ
+// - 任何空闲 CPU 从全局 DSQ 消费
+// - 最简单的 sched_ext BPF 调度器（~100 行）
+//
+// 教学意义：展示 skeleton 框架和最小的 ops 实现
+
+void BPF_STRUCT_OPS(simple_enqueue, struct task_struct *p, u64 enq_flags)
+{
+    // 所有任务进入全局 FIFO 队列
+    scx_bpf_dispatch(p, SCX_DSQ_GLOBAL, SCX_SLICE_DFL, enq_flags);
+}
+</code></pre>
+
+  <h3>scx_central — 集中式调度</h3>
+<pre><code>// tools/sched_ext/scx_central.bpf.c
+// 功能：一个中央 CPU 做调度决策，其他 CPU 只执行
+// - CPU 0 作为调度处理器（不接受普通任务）
+// - 其他 CPU 从 CPU 0 分配到任务
+// - 展示 select_cpu + enqueue + dispatch 的协同
+//
+// 教学意义：展示如何分离调度决策和执行
+</code></pre>
+
+  <h3>scx_pair — 超线程协同</h3>
+<pre><code>// tools/sched_ext/scx_pair.bpf.c
+// 功能：成对调度（hyperthread 友好）
+// - 将物理核的两个逻辑 CPU 组成 pair
+// - 同一 pair 内避免冲突任务同时运行
+// - 展示自定义 DSQ 和跨 CPU 调度
+</code></pre>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">09</span> 与 CFS/EEVDF 对比</h2>
+
+  <table>
+    <tr><th>特性</th><th>CFS / EEVDF</th><th>sched_ext</th></tr>
+    <tr><td>调度策略</td><td>固定在内核中</td><td>BPF 可编程</td></tr>
+    <tr><td>修改成本</td><td>改内核 → 重启</td><td>加载 BPF 程序</td></tr>
+    <tr><td>调试</td><td>printk / ftrace</td><td>bpftool + trace + bpf_printk</td></tr>
+    <tr><td>部署</td><td>发布内核更新</td><td>动态加载/卸载</td></tr>
+    <tr><td>安全性</td><td>内核代码 Review</td><td>BPF Verifier 静态验证</td></tr>
+    <tr><td>性能</td><td>高度优化</td><td>略低于 CFS（BPF 开销）</td></tr>
+    <tr><td>灵活性</td><td>通用场景优化</td><td>可为特定负载定制</td></tr>
+    <tr><td>复杂度</td><td>调度器 ~3000 行</td><td>BPF 调度器 ~100-500 行</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>适用场景:</strong><br>
+    CFS/EEVDF — 通用服务器、桌面、笔记本（默认就好）。<br>
+    sched_ext — HPC（自定义负载感知）、实时（自定义抢占策略）、<br>
+    游戏/媒体（低延迟定制）、调度器研究（快速原型）。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">10</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">kernel/sched/ext.c</span>             <span class="cmt">sched_ext 核心实现</span>
+├── <span class="file">kernel/sched/ext.h</span>             <span class="cmt">struct sched_ext_ops 定义、SCX_OPS_* 标志</span>
+├── <span class="file">include/linux/sched/ext.h</span>      <span class="cmt">task_struct 中 sched_ext 相关字段</span>
+├── <span class="file">kernel/sched/core.c</span>            <span class="cmt">调度器核心，sched_ext 集成点</span>
+├── <span class="file">tools/sched_ext/scx_simple.bpf.c</span>   <span class="cmt">示例：最小 FIFO 调度器</span>
+├── <span class="file">tools/sched_ext/scx_central.bpf.c</span>  <span class="cmt">示例：集中式调度</span>
+├── <span class="file">tools/sched_ext/scx_pair.bpf.c</span>     <span class="cmt">示例：超线程协同</span>
+├── <span class="file">tools/sched_ext/scx_rustland/</span>      <span class="cmt">示例：Rust 写的调度器</span>
+└── <span class="file">Documentation/scheduler/sched-ext.rst</span>  <span class="cmt">内核文档</span>
+  </pre></div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>
