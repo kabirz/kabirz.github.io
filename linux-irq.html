@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核通用中断子系统 (genirq) 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核通用中断子系统 (genirq) 深度解析</h1>
+  <p class="subtitle">中断控制器抽象 — IRQ 生命周期全流程</p>
+  <span class="version">Linux 7.0.12 · kernel/irq/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#irq-desc">IRQ 描述符 (irq_desc)</a></li>
+    <li><a href="#chip">中断控制器 (irq_chip)</a></li>
+    <li><a href="#domain">中断域 (irq_domain)</a></li>
+    <li><a href="#flow">流控处理器</a></li>
+    <li><a href="#request">中断请求流程</a></li>
+    <li><a href="#threaded">线程化中断</a></li>
+    <li><a href="#msi">MSI/MSI-X</a></li>
+    <li><a href="#affinity">中断亲和性</a></li>
+    <li><a href="#numa">NUMA & 热点路径</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+
+  <p>genirq (generic IRQ) 是 Linux 内核的中断子系统框架，从 Linux 2.6 开始替代了旧的 <code>__do_IRQ()</code> 架构。它为所有平台提供了统一的中断管理 API。</p>
+
+  <p>设计目标：</p>
+  <ul>
+    <li><strong>架构无关</strong>：x86、ARM、RISC-V 使用同一套 genirq 框架</li>
+    <li><strong>中断控制器无关</strong>：GIC、APIC、RISC-V PLIC 都通过 <code>irq_chip</code> 抽象</li>
+    <li><strong>流控可配置</strong>：电平触发、边沿触发、简单中断等不同处理流程</li>
+    <li><strong>线程化</strong>：将中断处理转移到实时线程</li>
+  </ul>
+
+  <p>核心架构关系：</p>
+<pre><code>┌─────────────────────────────────────────┐
+│            设备驱动                        │
+│  request_irq() / request_threaded_irq() │
+└────────────────┬────────────────────────┘
+                 │
+┌────────────────▼────────────────────────┐
+│          genirq 核心层                     │
+│  ┌───────────┐  ┌─────────────────┐     │
+│  │ irq_desc  │  │ 流控处理器       │     │
+│  │  (NR_IRQS)│  │ handle_level_irq │     │
+│  └─────┬─────┘  │ handle_edge_irq  │     │
+│        │        │ handle_simple_irq│     │
+│        │        └─────────────────┘     │
+│        │                                 │
+│  ┌─────▼─────┐                           │
+│  │ irq_chip  │  ← 中断控制器抽象           │
+│  │ irq_domain│  ← HW IRQ → Linux IRQ 映射 │
+│  └───────────┘                           │
+└────────────────┬────────────────────────┘
+                 │
+┌────────────────▼────────────────────────┐
+│          硬件中断控制器                     │
+│  GIC-400 / APIC / PLIC / …              │
+└─────────────────────────────────────────┘
+</code></pre>
+</section>
+
+<section id="irq-desc" class="toc-link">
+  <h2><span class="num">02</span> IRQ 描述符 (irq_desc)</h2>
+
+  <p>每个 Linux IRQ 编号对应一个 <code>irq_desc</code>，它是 genirq 的核心数据结构：</p>
+
+<pre><code>// kernel/irq/internals.h
+struct irq_desc {
+    struct irq_common_data   irq_common_data;
+    struct irq_data          irq_data;
+    unsigned int __percpu    *kstat_irqs;   // 每个 CPU 的中断计数
+    irq_flow_handler_t       handle_irq;    // 流控处理器
+    struct irqaction        *action;        // 处理函数链表
+    unsigned int             status_use_accessors;
+    // 屏蔽、锁定、同步相关字段
+    raw_spinlock_t           lock;
+    struct cpumask           *percpu_enabled;
+#ifdef CONFIG_SMP
+    const struct cpumask     *affinity_hint;
+    struct cpumask           *pending_mask;
+#endif
+    // … 更多字段 …
+};
+
+// irq_desc 的查找：
+// 通过 irq_to_desc(irq) 直接索引全局数组
+// 或通过 radix tree（SPARSE_IRQ 模式）
+
+// 实际使用链：
+// 硬件中断 → 进入 do_IRQ()
+//   → 查找 irq_desc
+//   → 调用 desc->handle_irq() (流控处理器)
+//     → 调用 action->handler (设备驱动注册的处理函数)
+</code></pre>
+
+  <p>中断处理函数链表 <code>struct irqaction</code>：</p>
+
+<pre><code>struct irqaction {
+    irq_handler_t           handler;       // 主处理函数
+    unsigned long           flags;         // IRQF_TRIGGER_* / IRQF_SHARED / …
+    const char             *name;
+    void                   *dev_id;        // 设备 ID（共享中断时用于区分）
+    struct irqaction       *next;          // 链表下一个（共享中断）
+    irq_handler_t           thread_fn;     // 线程化处理函数
+    struct task_struct     *thread;        // 中断线程
+    struct irqaction       *secondary;     // 二级处理
+    // …
+};
+</code></pre>
+</section>
+
+<section id="chip" class="toc-link">
+  <h2><span class="num">03</span> 中断控制器 (irq_chip)</h2>
+
+  <p><code>irq_chip</code> 是硬件中断控制器的软件抽象。每个中断控制器（GIC、APIC、PLIC、GPIO 控制器等）都实现这个接口：</p>
+
+<pre><code>// include/linux/irq.h
+struct irq_chip {
+    const char      *name;
+
+    unsigned int    (*irq_startup)(struct irq_data *data);
+    void            (*irq_shutdown)(struct irq_data *data);
+    void            (*irq_enable)(struct irq_data *data);
+    void            (*irq_disable)(struct irq_data *data);
+
+    void            (*irq_ack)(struct irq_data *data);      // 应答
+    void            (*irq_mask)(struct irq_data *data);     // 屏蔽
+    void            (*irq_unmask)(struct irq_data *data);   // 取消屏蔽
+
+    void            (*irq_eoi)(struct irq_data *data);      // End Of Interrupt
+    int             (*irq_set_affinity)(struct irq_data *data,
+                                        const struct cpumask *dest,
+                                        bool force);       // 设置亲和性
+    int             (*irq_set_type)(struct irq_data *data,
+                                    unsigned int flow_type); // 设置触发类型
+    int             (*irq_set_wake)(struct irq_data *data,
+                                    unsigned int on);       // 唤醒源设置
+    // … 更多可选回调 …
+};
+
+// 每个 irq_desc 的 irq_data 指向一个 irq_chip：
+// irq_desc->irq_data.chip → &gic_chip / &lapic_chip / …
+</code></pre>
+
+  <p>实际案例 — ARM GIC-400 的实现：</p>
+
+<pre><code>// drivers/irqchip/irq-gic.c
+static struct irq_chip gic_chip = {
+    .name           = "GIC",
+    .irq_mask       = gic_mask_irq,
+    .irq_unmask     = gic_unmask_irq,
+    .irq_eoi        = gic_eoi_irq,
+    .irq_set_type   = gic_set_type,
+    .irq_set_affinity = gic_set_affinity,
+};
+
+static void gic_mask_irq(struct irq_data *d)
+{
+    // 写 GIC_DIST_ENABLE_CLEAR 寄存器
+    writel_relaxed(BIT(d->hwirq % 32),
+                   gic_dist_base(d) + GIC_DIST_ENABLE_CLEAR +
+                   (d->hwirq / 32) * 4);
+}
+
+static void gic_eoi_irq(struct irq_data *d)
+{
+    // 写 GIC_CPU_EOI 寄存器通知 GIC 中断处理完成
+    writel_relaxed(d->hwirq, gic_cpu_base(d) + GIC_CPU_EOI);
+}
+</code></pre>
+</section>
+
+<section id="domain" class="toc-link">
+  <h2><span class="num">04</span> 中断域 (irq_domain)</h2>
+
+  <p><code>irq_domain</code> 负责将 <strong>硬件中断号 (hwirq)</strong> 映射到 <strong>Linux IRQ 编号 (virq)</strong>。这是设备树时代的关键抽象——硬件中断号是平台相关的，Linux IRQ 编号是软件全局的。</p>
+
+<pre><code>// include/linux/irqdomain.h
+struct irq_domain {
+    const char              *name;
+    const struct irq_domain_ops *ops;
+
+    struct device_node      *of_node;      // 对应的设备树节点
+    struct fwnode_handle    *fwnode;
+
+    irq_hw_number_t          hwirq_max;    // 最大硬件 IRQ 号
+    unsigned int             revmap_direct_max_irq;
+    // 反向映射方式
+    struct radix_tree_root   revmap_tree;  // radix tree 模式
+    struct irq_data        **linear_revmap; // 线性模式
+
+    enum irq_domain_bus_token bus_token;
+    unsigned int             flags;
+
+    struct list_head         link;
+};
+
+// 域操作
+struct irq_domain_ops {
+    int  (*match)(struct irq_domain *d, struct device_node *node,
+                  enum irq_domain_bus_token bus_token);
+    int  (*map)(struct irq_domain *d, unsigned int virq,
+                irq_hw_number_t hw);
+    void (*unmap)(struct irq_domain *d, unsigned int virq);
+    int  (*xlate)(struct irq_domain *d, struct device_node *node,
+                  const u32 *intspec, unsigned int intsize,
+                  unsigned long *out_hwirq, unsigned int *out_type);
+};
+
+// 映射方式：
+// 1. 线性映射（Linear）— 小范围 hwirq 直接索引数组
+// 2. radix tree 映射 — 稀疏 hwirq 空间
+// 3. 不映射 — 直接使用 hwirq 作为 virq
+
+// 设备树中的中断描述：
+// 设备节点:
+//   interrupt-parent = &gic;
+//   interrupts = <GIC_SPI 42 IRQ_TYPE_LEVEL_HIGH>;
+//
+// 映射流程:
+//   of_irq_parse_one() → 解析 intspec
+//   irq_create_of_mapping() →
+//     domain->ops->xlate() → 转换 hwirq
+//     irq_domain_alloc_irqs() → 分配 virq
+//     domain->ops->map() → 建立映射
+</code></pre>
+
+  <p>中断域形成了<strong>层级结构</strong>（级联中断控制器）：</p>
+<pre><code>// 典型 ARM 平台的 irq_domain 层级
+// GIC (root) → GPIO (child) → 外设中断
+
+// 级联中断处理流程：
+// 外设中断 →
+//   GPIO 控制器检测到中断 →
+//   GPIO 的 handle_irq 调用 →
+//     generic_handle_domain_irq(gpio_domain, gpio_hwirq) →
+//       通过 gpio_domain 找到对应的 virq →
+//       调用 virq 的流控处理器（通常为 handle_level_irq）→
+//         调用设备驱动的 handler
+</code></pre>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">05</span> 流控处理器</h2>
+
+  <p>流控处理器 (flow handler) 是 genirq 的核心创新——它将中断控制器的硬件行为与设备驱动的处理逻辑解耦。</p>
+
+  <p>四种标准流控处理器：</p>
+
+<pre><code>// 1. handle_level_irq() — 电平触发
+//    适合：IRQF_TRIGGER_HIGH / LOW
+//    行为：mask → 处理 → unmask
+//    注意：如果处理慢，长时间屏蔽同电平中断
+void handle_level_irq(struct irq_desc *desc)
+{
+    raw_spin_lock_irq(&desc->lock);
+    mask_ack_irq(desc);         // 屏蔽 + 应答
+    if (unlikely(irqd_irq_inprogress(&desc->irq_data)))
+        if (!irq_check_poll(desc))
+            goto out_unlock;
+
+    desc->istate |= IRQS_PENDING;
+    raw_spin_unlock_irq(&desc->lock);
+
+    handle_irq_event(desc);     // 调用处理函数
+
+    raw_spin_lock_irq(&desc->lock);
+    if (!(desc->istate & IRQS_PENDING))
+        unmask_irq(desc);       // 处理完才取消屏蔽
+out_unlock:
+    raw_spin_unlock(&desc->lock);
+}
+
+// 2. handle_edge_irq() — 边沿触发
+//    适合：IRQF_TRIGGER_RISING / FALLING
+//    行为：ack → 处理（不 mask，边沿丢失风险低）
+//    核心：EOI 在 ack 时已发送，期间不会收到同一中断
+void handle_edge_irq(struct irq_desc *desc)
+{
+    raw_spin_lock_irq(&desc->lock);
+    desc->istate &= ~IRQS_PENDING;
+    if (unlikely(irqd_irq_disabled(&desc->irq_data))) {
+        // 如果中断被禁用 → 标记 pending 退出
+        desc->istate |= IRQS_PENDING;
+        goto out_unlock;
+    }
+
+    kstat_incr_irqs_this_cpu(desc);
+    irqd_set(&desc->irq_data, IRQD_IRQ_INPROGRESS);
+    raw_spin_unlock_irq(&desc->lock);
+
+    handle_irq_event(desc);     // 调用处理函数
+
+    raw_spin_lock_irq(&desc->lock);
+    irqd_clear(&desc->irq_data, IRQD_IRQ_INPROGRESS);
+    // 如果处理期间又有新边沿 → 重新触发
+    if (desc->istate & IRQS_PENDING)
+        __irq_startup(desc);
+out_unlock:
+    raw_spin_unlock(&desc->lock);
+}
+
+// 3. handle_simple_irq() — 简单中断
+//    不做任何硬件操作，直接调用处理函数
+
+// 4. handle_fasteoi_irq() — 快速 EOI
+//    适合支持 EOI 的控制器（如 GIC）
+//    行为：直接调用 handler → eoi
+void handle_fasteoi_irq(struct irq_desc *desc)
+{
+    raw_spin_lock_irq(&desc->lock);
+    // 不 mask，不 ack，直接处理
+    if (unlikely(irqd_irq_inprogress(&desc->irq_data)))
+        if (!irq_check_poll(desc))
+            goto out;
+
+    desc->istate &= ~IRQS_PENDING;
+    raw_spin_unlock_irq(&desc->lock);
+
+    handle_irq_event(desc);     // 调用处理函数
+
+    raw_spin_lock_irq(&desc->lock);
+    // eoi 由 irq_chip->irq_eoi() 在 handle_irq_event_percpu 中调用
+out:
+    raw_spin_unlock(&desc->lock);
+}
+</code></pre>
+
+  <table>
+    <tr><th>流控类型</th><th>触发方式</th><th>行为差异</th><th>典型应用</th></tr>
+    <tr><td>handle_level_irq</td><td>电平</td><td>mask → ack → handle → unmask</td><td>GPIO、I2C</td></tr>
+    <tr><td>handle_edge_irq</td><td>边沿</td><td>ack → handle（自动保留新边沿）</td><td>按键、网络中断</td></tr>
+    <tr><td>handle_fasteoi_irq</td><td>电平/边沿</td><td>handle → eoi（最快路径）</td><td>GIC、APIC</td></tr>
+    <tr><td>handle_simple_irq</td><td>任意</td><td>无硬件操作</td><td>虚拟中断、软件中断</td></tr>
+  </table>
+</section>
+
+<section id="request" class="toc-link">
+  <h2><span class="num">06</span> 中断请求流程</h2>
+
+  <p>从驱动调用 <code>request_irq()</code> 到中断最终出现在处理函数中的完整生命周期：</p>
+
+<pre><code>// 驱动入口：
+static int my_probe(struct platform_device *pdev)
+{
+    int irq = platform_get_irq(pdev, 0);
+
+    // 1. 设备树自动映射 → irq 已经是 Linux IRQ 号
+    // 2. 请求中断
+    return request_irq(irq, my_handler,
+                       IRQF_TRIGGER_HIGH, "mydev", dev);
+}
+
+// 内核内部流程：
+// request_irq(irq, handler, flags, name, dev)
+//   → request_threaded_irq(irq, handler, NULL, flags, name, dev)
+//     → __setup_irq(irq, desc, action)
+//        ├─ 1. 检查 irq 是否有效（查找 irq_desc）
+//        ├─ 2. 检查触发类型冲突（共享中断必须类型一致）
+//        ├─ 3. 如果第一次注册：
+//        │     ├─ irq_chip->irq_startup() → 启动中断
+//        │     ├─ irq_chip->irq_set_type() → 设置触发方式
+//        │     └─ irq_chip->irq_unmask() → 取消屏蔽
+//        ├─ 4. 将 action 添加到 desc->action 链表
+//        ├─ 5. 如果中断已 pending → 立即处理
+//        └─ 6. 注册 /proc/irq/N 条目
+
+// 中断到来（硬件）：
+// 1. CPU 异常向量 → 跳转到 irq_handler
+// 2. 读中断控制器 → 获得 hwirq
+// 3. generic_handle_irq(virq)
+//    → desc->handle_irq()  (流控处理器)
+//    → handle_irq_event(desc)
+//      → 遍历 action 链表
+//      → 调用每个 action->handler(irq, dev_id)
+//      → 如果 handler 返回 IRQ_WAKE_THREAD
+//         → wake_up_process(action->thread)
+
+// 释放中断：
+// free_irq(irq, dev_id)
+//   → __free_irq(irq, dev_id)
+//     ├─ 从 action 链表移除
+//     ├─ synchronize_irq() → 等待正在执行的处理完成
+//     ├─ if (最后一个人):
+//     │   ├─ irq_chip->irq_shutdown()
+//     │   └─ 清理 /proc/irq/N
+//     └─ kfree(action)
+</code></pre>
+</section>
+
+<section id="threaded" class="toc-link">
+  <h2><span class="num">07</span> 线程化中断</h2>
+
+  <p>线程化中断是 genirq 的关键特性——将中断处理函数放到内核线程中执行，使中断处理可被调度、可被实时优先级管理。</p>
+
+<pre><code>// 线程化中断的注册方式：
+// request_threaded_irq(irq, handler, thread_fn, flags, name, dev);
+//     handler 在中断上下文中执行（atomic）
+//     如果 handler 返回 IRQ_WAKE_THREAD
+//     → thread_fn 在进程上下文中执行
+
+// 纯线程化中断（handler = NULL）：
+// request_threaded_irq(irq, NULL, my_thread_fn, flags, name, dev);
+//     → 内核自动使用 irq_default_primary_handler()
+//     → 立即唤醒线程
+
+// 中断线程的创建：
+// setup_irq_thread() 中：
+//   1. 创建内核线程：kthread_create(irq_thread, action, ...)
+//   2. 设置线程优先级（可配置）
+//   3. 绑定到中断亲和性 CPU
+
+// 线程的执行：
+static int irq_thread(void *data)
+{
+    struct irqaction *action = data;
+
+    while (!kthread_should_stop()) {
+        // 等待 IRQ 触发
+        set_current_state(TASK_INTERRUPTIBLE);
+        schedule();
+
+        // 被 wakeup
+        // 调用 action->thread_fn(irq, action->dev_id)
+        do {
+            atomic_set(&action->thread_flags, 0);
+            action->thread_fn(action->irq, action->dev_id);
+        } while (atomic_read(&action->thread_flags));
+    }
+    return 0;
+}
+
+// 实时系统中的关键作用：
+// - 中断线程可以被 SCHED_FIFO 调度
+// - 抢占其他进程（包括其他中断线程）
+// - 避免在中断上下文中长时间运行
+// - 可以持有 mutex（中断上下文中不能）
+</code></pre>
+
+  <div class="callout">
+    <strong>线程化中断的最佳实践:</strong><br>
+    主 handler（中断上下文）应该只做最少工作：读取硬件状态、ACK 中断、唤醒线程。<br>
+    实际工作放在 thread_fn（进程上下文）中：可以执行较重的 IO 操作、持有 mutex、调度。<br>
+    网络/块设备的中断通常使用非线程化方式（性能敏感）。
+  </div>
+</section>
+
+<section id="msi" class="toc-link">
+  <h2><span class="num">08</span> MSI/MSI-X</h2>
+
+  <p>MSI (Message Signaled Interrupt) 和 MSI-X 是 PCIe 设备使用的中断机制——通过向特定地址写入数据来触发中断，而不是使用专用中断引脚。</p>
+
+<pre><code>// MSI 的核心数据结构
+struct msi_desc {
+    struct list_head        list;
+    unsigned long           irq;        // Linux IRQ 号
+    unsigned int            nvec_used;  // 使用的中断向量数
+    union {
+        struct {
+            __u32           msg_addr;   // 写入地址
+            __u32           msg_data;   // 写入数据
+        } msi;
+        struct {
+            __u32 __iomem   *mask_base; // MSI-X mask 寄存器
+            // 每个 MSI-X 条目有自己的地址和数据
+        } msix;
+    };
+
+    struct msi_msg          msg;        // 当前消息
+    // …
+};
+
+// MSI 中断注入过程（PCIe 视角）：
+// 1. 设备要将数据写入内存
+// 2. 设备写 PCIe 配置空间指定的地址：
+//    - 地址 = MSI 目标地址（通常 0xFEE00000，LAPIC 地址）
+//    - 数据 = vector number
+// 3. 北桥/IOMMU 检测到对 0xFEE00000 的写入
+// 4. 路由到目标 CPU 的 LAPIC
+// 5. LAPIC 触发中断
+
+// MSI-X 与 MSI 的区别：
+// MSI:  最多 32 个中断，所有中断共用一个地址/数据，用 vector 区分
+// MSI-X: 最多 2048 个中断，每个中断有自己的地址/数据（独立 MMIO 空间）
+// 驱动通常优先使用 MSI-X（更灵活）
+
+// 内核 MSI 启用路径：
+// pci_enable_msix_range()
+//   → msix_capability_init()
+//     → pci_msi_setup_msi_irqs()
+//       → arch_setup_msi_irq()  (平台相关)
+//         → irq_domain_alloc_irqs()
+//           → 分配 virq
+//           → irq_chip->irq_startup()
+//           → 设置 MSI 消息地址和数据
+//         → pci_write_msi_msg() → 写入设备配置空间
+</code></pre>
+</section>
+
+<section id="affinity" class="toc-link">
+  <h2><span class="num">09</span> 中断亲和性</h2>
+
+  <p>中断亲和性 (IRQ affinity) 控制哪个 CPU 处理某个中断。genirq 提供了完整的亲和性管理框架。</p>
+
+<pre><code>// 用户态设置亲和性：
+// echo 2 > /proc/irq/123/smp_affinity
+//      → 写入 cpumask（十六进制）
+// echo 1 > /proc/irq/123/smp_affinity_list
+//      → 写入 CPU 编号列表
+
+// 内核实现路径：
+// irq_affinity_proc_write()
+//   → irq_set_affinity_hint()
+//   → 遍历 irq_desc
+//   → __irq_set_affinity_locked()
+//     ├─ 设置 pending_mask
+//     ├─ 如果是本 CPU 中断 → 立即生效
+//     ├─ 否则标记 IRQS_PENDING
+//     └─ 中断发生时重新分发
+
+// 实际硬件设置：
+// irq_chip->irq_set_affinity(data, mask, force)
+//   例：GIC 的实现
+//   gic_set_affinity(data, mask, force)
+//     → 写 GIC_DIST_TARGET 寄存器
+//     → 设置目标 CPU 位图
+
+// auto-affinity（系统启动时的优化）：
+// 1. 系统在启动时读取 /proc/interrupts 的负载
+// 2. irqbalance 守护进程动态调整亲和性
+// 3. 目标：将中断分散到所有 CPU，平衡负载
+
+// 硬亲和性与软亲和性：
+// 硬亲和性：irq_chip 支持设置的 CPU 亲和性
+// 软亲和性：smp_affinity_hint（建议，驱动可覆盖）
+
+// NUMA 感知的中断分配：
+// irq_set_affinity_notifier() → 注册回调
+// 当 CPU hotplug 或 cpuset 变化时自动调整
+</code></pre>
+</section>
+
+<section id="numa" class="toc-link">
+  <h2><span class="num">10</span> NUMA & 热点路径</h2>
+
+  <p>genirq 在现代系统中的关键优化路径：</p>
+
+<pre><code>// 1. 热点路径 — 中断处理最频繁的代码路径
+// 从 do_IRQ() 到 handler 调用之间只有 ~200 条指令
+
+// x86 上的完整路径：
+do_IRQ(regs)
+  ├─ irq_enter()           // rcu_irq_enter()
+  ├─ generic_handle_irq(irq)
+  │   ├─ desc->handle_irq()
+  │   │    ├─ handle_fasteoi_irq()
+  │   │    │   ├─ handle_irq_event(desc)
+  │   │    │   │   ├─ __handle_irq_event_percpu(desc, ...)
+  │   │    │   │   │   ├─ action->handler(irq, dev_id)
+  │   │    │   │   │   │   // ← 驱动处理函数
+  │   │    │   │   │   └─ if (IRQ_WAKE_THREAD) wakeup
+  │   │    │   │   └─ irq_chip->irq_eoi()
+  │   │    │   └─ ...
+  │   │    └─ ...
+  │   └─ ...
+  └─ irq_exit()
+
+// 2. NUMA 感知的 irq_desc 分配
+// irq_alloc_descs() 中的 NUMA 优化：
+//   desc = kzalloc_node(sizeof(*desc), GFP_KERNEL, node);
+//   每个 irq_desc 分配在对应 CPU 的本地内存节点
+
+// 3. per-CPU 中断（IRQ_PER_CPU）
+// 对中断频率极高的设备（如本地定时器）：
+// - 每个 CPU 有自己的中断号
+// - 无需亲和性设置
+// - 无需跨 CPU 同步
+// - 直接处理，性能最佳
+
+// 4. 中断合并（Interrupt Coalescing）
+// 网络/块设备驱动常用：
+// - 硬件层面：NIC 在固定时间窗口内聚合多个中断
+// - 软件层面：NAPI（网络）合并多个包处理
+// - 效果：减少中断次数，提高吞吐
+</code></pre>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">11</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">kernel/irq/irqdesc.c</span>        <span class="cmt">irq_desc 分配/释放、保留、查找</span>
+├── <span class="file">kernel/irq/chip.c</span>            <span class="cmt">irq_chip 核心：mask/unmask/startup/流控调用</span>
+├── <span class="file">kernel/irq/handle.c</span>           <span class="cmt">generic_handle_irq() / handle_irq_event()</span>
+├── <span class="file">kernel/irq/manage.c</span>           <span class="cmt">request_irq/free_irq/线程化管理</span>
+├── <span class="file">kernel/irq/resend.c</span>           <span class="cmt">中断重新发送（软件重触发）</span>
+├── <span class="file">kernel/irq/spurious.c</span>        <span class="cmt">伪中断检测和处理</span>
+├── <span class="file">kernel/irq/irqdomain.c</span>       <span class="cmt">irq_domain：hwirq → virq 映射</span>
+├── <span class="file">kernel/irq/proc.c</span>            <span class="cmt">/proc/irq/ 接口</span>
+├── <span class="file">kernel/irq/cpuhotplug.c</span>      <span class="cmt">CPU hotplug 时中断迁移</span>
+├── <span class="file">kernel/irq/msi.c</span>              <span class="cmt">MSI/MSI-X 中断管理</span>
+├── <span class="file">kernel/irq/devres.c</span>           <span class="cmt">devm_* 中断资源管理</span>
+├── <span class="file">kernel/irq/internals.h</span>        <span class="cmt">genirq 内部结构：irq_desc、irqaction 定义</span>
+├── <span class="file">include/linux/irq.h</span>           <span class="cmt">irq_chip、irq_data、irqaction 等核心 API</span>
+├── <span class="file">include/linux/irqdomain.h</span>     <span class="cmt">irq_domain、irq_domain_ops</span>
+├── <span class="file">include/linux/interrupt.h</span>     <span class="cmt">request_irq/request_threaded_irq等驱动 API</span>
+├── <span class="file">drivers/irqchip/irq-gic.c</span>    <span class="cmt">ARM GIC 中断控制器实现</span>
+└── <span class="file">drivers/irqchip/irq-gic-v3.c</span> <span class="cmt">ARM GICv3/v4 中断控制器实现</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>include/linux/irq.h</code> 先看核心数据结构。<br>
+    <code>kernel/irq/handle.c</code> 看中断入 口流程。<br>
+    <code>kernel/irq/chip.c</code> 看流控处理器的实现。<br>
+    <code>kernel/irq/manage.c</code> 看 request_irq 的完整流程。<br>
+    <code>kernel/irq/irqdomain.c</code> 看中断域映射机制。<br>
+    <code>drivers/irqchip/irq-gic.c</code> 对照硬件实现理解抽象层。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>
