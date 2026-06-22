@@ -1,0 +1,1270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Windows Windows Forms 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23512bd4'/><stop offset='100%25' stop-color='%237c4dff'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='70' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Windows Windows Forms 深度解析</h1>
+  <p class="subtitle">Windows Forms — .NET 托管的 Win32 封装、设计器驱动的表单开发</p>
+  <span class="version">.NET 9 · System.Windows.Forms.dll</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#architecture">核心架构</a></li>
+    <li><a href="#startup">应用启动</a></li>
+    <li><a href="#forms-controls">窗体与控件</a></li>
+    <li><a href="#layout">布局系统</a></li>
+    <li><a href="#events">事件驱动模型</a></li>
+    <li><a href="#designer">设计器与代码分离</a></li>
+    <li><a href="#databinding">数据绑定</a></li>
+    <li><a href="#gdi">GDI+ 绘图</a></li>
+    <li><a href="#threading">线程模型与异步</a></li>
+    <li><a href="#example">完整示例</a></li>
+    <li><a href="#vs-wpf">对比 WPF</a></li>
+    <li><a href="#files">命名空间索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Windows Forms（WinForms）是微软在 .NET 平台上提供的<strong>托管桌面 GUI 框架</strong>。它以 <code>System.Windows.Forms</code> 命名空间为核心，把 Win32 公共控件库（<code>ComCtl32.dll</code>）与 GDI+ 包装成一组 .NET 类，让 C#/VB.NET 开发者用<strong>设计器拖拽 + 事件处理器</strong>的方式快速构建表单型应用。自 2002 年随 .NET Framework 1.0 发布以来，它一直是企业内部工具、数据库前端、工业上位机领域最高产的桌面方案。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>Win32 薄封装</strong>：每个控件封装一个 HWND，消息驱动忠实映射</li>
+        <li><strong>设计器优先</strong>：VS 拖拽即生成 <code>InitializeComponent</code></li>
+        <li><strong>事件驱动</strong>：标准 <code>EventHandler</code> 委托模式</li>
+        <li><strong>属性即样式</strong>：<code>Text/Font/BackColor</code> 是一等公民</li>
+        <li><strong>稳定向后兼容</strong>：20 年前的程序在 .NET 9 上常可直接运行</li>
+        <li><strong>跨平台尝试</strong>：.NET 7+ 通过 Mono 移植支持 Linux/macOS</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">适用场景</div>
+      <table>
+        <tr><th>场景</th><th>契合度</th></tr>
+        <tr><td>企业内部数据表单</td><td>极佳</td></tr>
+        <tr><td>工业上位机/HMI</td><td>极佳</td></tr>
+        <tr><td>遗留系统改造</td><td>极佳</td></tr>
+        <tr><td>工具类小应用</td><td>好</td></tr>
+        <tr><td>富媒体/复杂动画</td><td>弱（用 WPF）</td></tr>
+        <tr><td>跨平台桌面</td><td>弱（用 Avalonia/MAUI）</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="callout tip">
+    <strong>定位</strong>：WinForms 是<strong>“用最少的代码做出一个能用的 Windows 表单”</strong>的方案。它的设计目标是生产力而非视觉表现力——这与 WPF（声明式 + 矢量渲染）形成鲜明对比。
+  </div>
+</section>
+
+<section id="architecture" class="toc-link">
+  <h2><span class="num">02</span> 核心架构</h2>
+  <p>WinForms 的所有可视元素都派生自 <code>System.Windows.Forms.Control</code>，它封装一个 <strong>HWND</strong>（窗口句柄），并把 Win32 消息循环映射到 .NET 事件。最外层的入口是 <code>System.Windows.Forms.Application</code>，它托管了消息泵（<code>GetMessage/TranslateMessage/DispatchMessage</code>）。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// WinForms 核心继承链（简化）</span>
+<span class="ty">System.Object</span>
+└── <span class="ty">MarshalByRefObject</span>                  <span class="cm">// 跨 AppDomain 边界</span>
+    └── <span class="ty">System.ComponentModel.Component</span>   <span class="cm">// 实现 IComponent，支持站点/容器</span>
+        └── <span class="ty">Control</span>                          <span class="cm">// ★ 所有可视组件基类，封装 HWND</span>
+            ├── <span class="ty">ButtonBase</span>                 <span class="cm">// 按钮族</span>
+            │   ├── <span class="ty">Button / CheckBox / RadioButton</span>
+            │   └── <span class="ty">LinkLabel</span>
+            ├── <span class="ty">TextBoxBase</span>                <span class="cm">// 文本族</span>
+            │   ├── <span class="ty">TextBox / MaskedTextBox</span>
+            │   └── <span class="ty">RichTextBox</span>
+            ├── <span class="ty">ListControl</span>                <span class="cm">// 列表族</span>
+            │   ├── <span class="ty">ComboBox / ListBox</span>
+            │   └── <span class="ty">CheckedListBox</span>
+            ├── <span class="ty">ScrollableControl</span>          <span class="cm">// 可滚动容器</span>
+            │   ├── <span class="ty">Panel / FlowLayoutPanel / TableLayoutPanel</span>
+            │   ├── <span class="ty">GroupBox / TabPage</span>
+            │   └── <span class="ty">ContainerControl</span>     <span class="cm">// 焦点/验证容器</span>
+            │       └── <span class="ty">Form</span>             <span class="cm">// ★ 顶层窗口</span>
+            ├── <span class="ty">Label / PictureBox / ProgressBar</span>
+            ├── <span class="ty">ToolStrip / MenuStrip / StatusStrip</span>
+            ├── <span class="ty">TreeView / ListView / DataGridView</span>
+            └── <span class="ty">DateTimePicker / MonthCalendar / NumericUpDown</span></code></pre>
+  </div>
+
+  <h3>Control 类——一切的基类</h3>
+  <div class="card">
+    <pre><code><span class="kw">public class</span> <span class="ty">Control</span> : <span class="ty">Component</span>, ..., <span class="ty">IDropTarget</span>, <span class="ty">ISynchronizeInvoke</span>
+{
+    <span class="cm">// —— 句柄与创建 ——</span>
+    <span class="kw">public IntPtr</span> Handle { <span class="kw">get</span>; }        <span class="cm">// 按需创建 HWND（懒加载）</span>
+    <span class="kw">public void</span> <span class="fn">CreateControl</span>();          <span class="cm">// 强制创建句柄</span>
+    <span class="kw">protected virtual void</span> <span class="fn">CreateHandle</span>();
+    <span class="kw">protected virtual void</span> <span class="fn">DestroyHandle</span>();
+    <span class="kw">public bool</span> IsHandleCreated { <span class="kw">get</span>; }
+
+    <span class="cm">// —— 常用属性 ——</span>
+    <span class="kw">public virtual string</span> Text { <span class="kw">get</span>; <span class="kw">set</span>; }
+    <span class="kw">public</span> <span class="ty">Font</span> Font { <span class="kw">get</span>; <span class="kw">set</span>; }
+    <span class="kw">public</span> <span class="ty">Color</span> BackColor { <span class="kw">get</span>; <span class="kw">set</span>; }
+    <span class="kw">public bool</span> Enabled { <span class="kw">get</span>; <span class="kw">set</span>; }
+    <span class="kw">public bool</span> Visible { <span class="kw">get</span>; <span class="kw">set</span>; }
+    <span class="kw">public</span> <span class="ty">Rectangle</span> Bounds { <span class="kw">get</span>; <span class="kw">set</span>; }   <span class="cm">// x/y/w/h 一体</span>
+    <span class="kw">public</span> <span class="ty">Control</span>? Parent { <span class="kw">get</span>; <span class="kw">set</span>; }
+    <span class="kw">public</span> <span class="ty">ControlCollection</span> Controls { <span class="kw">get</span>; }   <span class="cm">// 子控件集合</span>
+
+    <span class="cm">// —— 常用方法 ——</span>
+    <span class="kw">public void</span> <span class="fn">Show</span>();
+    <span class="kw">public void</span> <span class="fn">Hide</span>();
+    <span class="kw">public void</span> <span class="fn">Refresh</span>();            <span class="cm">// 立即重绘</span>
+    <span class="kw">public void</span> <span class="fn">Invalidate</span>();       <span class="cm">// 标记失效，异步触发 Paint</span>
+    <span class="kw">public void</span> <span class="fn">Update</span>();           <span class="cm">// 立即处理无效区域的重绘</span>
+    <span class="kw">public void</span> <span class="fn">BringToFront</span>();
+    <span class="kw">public object</span> <span class="fn">Invoke</span>(<span class="ty">Delegate</span> d);   <span class="cm">// ★ 切回 UI 线程</span>
+
+    <span class="cm">// —— 常用事件 ——</span>
+    <span class="kw">public event</span> <span class="ty">EventHandler</span>? Click;
+    <span class="kw">public event</span> <span class="ty">MouseEventHandler</span>? MouseDown;
+    <span class="kw">public event</span> <span class="ty">KeyEventHandler</span>? KeyDown;
+    <span class="kw">public event</span> <span class="ty">PaintEventHandler</span>? Paint;
+    <span class="kw">public event</span> <span class="ty">EventHandler</span>? HandleCreated;
+}</code></pre>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">控件树模型</div>
+      <p>WinForms 是<strong>严格的父子树</strong>：每个 <code>Control</code> 有零或一个 <code>Parent</code>，<code>Controls</code> 集合持有子控件。父控件销毁时子控件自动销毁；父控件移动时子控件坐标在父客户区内计算。</p>
+    </div>
+    <div class="card">
+      <div class="card-title">属性 / 事件 双驱动</div>
+      <p>WinForms 没有命令绑定，所有交互靠<strong>属性赋值</strong>与<strong>事件订阅</strong>。设置 <code>Text</code> 立即触发 <code>SetWindowText</code>；订阅 <code>button.Click += handler</code> 即把委托挂到底层消息处理路径上。</p>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>HWND 即生命</strong>：<code>Control.Handle</code> 是<strong>懒创建</strong>的——首次访问或调用 <code>CreateControl</code> 时才真正调用 <code>CreateWindowEx</code>。在此之前，许多依赖句柄的属性/方法会强制触发创建。批量初始化时用 <code>SuspendLayout()</code> 包住可显著提升启动速度。
+  </div>
+</section>
+
+<section id="startup" class="toc-link">
+  <h2><span class="num">03</span> 应用启动</h2>
+  <p>WinForms 应用的入口是 <code>static void Main()</code>，必须标注 <code>[STAThread]</code>——这是 OLE/COM 公共对话框、剪贴板、拖放子系统的硬性要求。<code>Application.Run</code> 启动消息循环直到主窗体关闭；<code>ApplicationConfiguration.Initialize()</code>（.NET 6+ 的自动生成入口）负责高 DPI、默认字体、应用程序级设置。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">using</span> <span class="ty">System</span>;
+<span class="kw">using</span> <span class="ty">System.Windows.Forms</span>;
+
+<span class="kw">internal static class</span> <span class="ty">Program</span>
+{
+    [<span class="ty">STAThread</span>]
+    <span class="kw">static void</span> <span class="fn">Main</span>()
+    {
+        <span class="cm">// .NET 6+ 由项目模板生成：高 DPI、默认字体 Segoe UI 9pt</span>
+        <span class="ty">ApplicationConfiguration</span>.<span class="fn">Initialize</span>();
+
+        <span class="cm">// 启动消息循环，主窗体关闭时退出</span>
+        <span class="ty">Application</span>.<span class="fn">Run</span>(<span class="kw">new</span> <span class="ty">MainForm</span>());
+    }
+}</code></pre>
+  </div>
+
+  <h3>ApplicationContext：自定义生命周期</h3>
+  <p><code>Application.Run</code> 有一个重载接受 <code>ApplicationContext</code>。当应用<strong>没有主窗体</strong>（如纯托盘程序、单实例守护进程）时，可继承 <code>ApplicationContext</code> 并在合适时机调用 <code>ExitThread</code>。</p>
+  <div class="card">
+    <pre><code><span class="kw">class</span> <span class="ty">TrayContext</span> : <span class="ty">ApplicationContext</span>
+{
+    <span class="kw">private readonly</span> <span class="ty">NotifyIcon</span> _tray;
+
+    <span class="kw">public</span> <span class="fn">TrayContext</span>()
+    {
+        _tray = <span class="kw">new</span> <span class="ty">NotifyIcon</span>
+        {
+            Icon = <span class="kw">new</span> <span class="ty">Icon</span>(<span class="st">"app.ico"</span>),
+            Visible = <span class="kw">true</span>,
+            Text = <span class="st">"后台服务"</span>,
+            ContextMenuStrip = <span class="fn">BuildMenu</span>()
+        };
+    }
+
+    <span class="kw">private</span> <span class="ty">ContextMenuStrip</span> <span class="fn">BuildMenu</span>()
+    {
+        <span class="kw">var</span> menu = <span class="kw">new</span> <span class="ty">ContextMenuStrip</span>();
+        menu.Items.<span class="fn">Add</span>(<span class="st">"退出"</span>, <span class="kw">null</span>, (_, _) =&gt; {
+            _tray.Visible = <span class="kw">false</span>;
+            <span class="ty">Application</span>.<span class="fn">Exit</span>();          <span class="cm">// 触发 ExitThread → 退出循环</span>
+        });
+        <span class="kw">return</span> menu;
+    }
+
+    <span class="kw">protected override void</span> <span class="fn">Dispose</span>(<span class="kw">bool</span> disposing) { <span class="cm">/* 释放 _tray */</span> }
+}
+
+<span class="cm">// Program.Main</span>
+<span class="ty">Application</span>.<span class="fn">Run</span>(<span class="kw">new</span> <span class="ty">TrayContext</span>());</code></pre>
+  </div>
+
+  <h3>Application 关键 API</h3>
+  <table>
+    <tr><th>API</th><th>作用</th></tr>
+    <tr><td><code>Application.Run(Form)</code></td><td>启动消息循环，主窗体关闭即退出</td></tr>
+    <tr><td><code>Application.Run(ApplicationContext)</code></td><td>自定义生命周期，无固定主窗体</td></tr>
+    <tr><td><code>Application.Exit()</code></td><td>优雅退出：发 <code>WM_QUIT</code>，处理完当前消息后退出</td></tr>
+    <tr><td><code>Application.ExitThread()</code></td><td>仅退出当前线程的消息循环</td></tr>
+    <tr><td><code>Application.DoEvents()</code></td><td>抽出当前队列中的消息处理一遍（慎用）</td></tr>
+    <tr><td><code>Application.AddMessageFilter</code></td><td>在分发前拦截消息（实现快捷键/全局过滤）</td></tr>
+    <tr><td><code>Application.SetUnhandledExceptionMode</code></td><td>控制未捕获异常的派发方式</td></tr>
+    <tr><td><code>Application.ThreadException</code></td><td>UI 线程未捕获异常的全局事件</td></tr>
+    <tr><td><code>Application.Idle</code></td><td>消息队列空闲时触发（替代 MFC 的 OnIdle）</td></tr>
+  </table>
+
+  <div class="callout danger">
+    <strong>DoEvents 的陷阱</strong>：<code>Application.DoEvents()</code> 会重入消息循环，可能在不期望的时机触发事件处理器（如按钮再次被点击），造成<strong>重入 bug</strong>。现代代码应使用 <code>async/await</code> 或 <code>Task.Run</code> 替代。
+  </div>
+</section>
+
+<section id="forms-controls" class="toc-link">
+  <h2><span class="num">04</span> 窗体与控件</h2>
+  <p><code>Form</code> 是顶层窗口——它派生自 <code>ContainerControl</code>，自带标题栏、系统菜单、可调边框。一个 WinForms 应用通常由若干 <code>Form</code> 组成：主窗体、设置对话框、关于框、向导页等。</p>
+
+  <h3>Form 关键属性与事件</h3>
+  <table>
+    <tr><th>成员</th><th>取值</th><th>含义</th></tr>
+    <tr><td><code>FormBorderStyle</code></td><td>None/FixedSingle/FixedDialog/Sizable/FixedToolWindow/...</td><td>边框风格（影响是否可拖拽缩放、有无标题栏）</td></tr>
+    <tr><td><code>StartPosition</code></td><td>Manual/CenterScreen/CenterParent/WindowsDefaultLocation</td><td>首次出现的位置</td></tr>
+    <tr><td><code>WindowState</code></td><td>Normal/Minimized/Maximized</td><td>初始窗口状态</td></tr>
+    <tr><td><code>ShowInTaskbar</code></td><td>bool</td><td>是否在任务栏显示按钮</td></tr>
+    <tr><td><code>MinimizeBox / MaximizeBox</code></td><td>bool</td><td>标题栏按钮开关</td></tr>
+    <tr><td><code>ControlBox</code></td><td>bool</td><td>是否显示关闭/最小化/最大化按钮</td></tr>
+    <tr><td><code>KeyPreview</code></td><td>bool</td><td>窗体先于子控件接收按键</td></tr>
+    <tr><td><code>AcceptButton / CancelButton</code></td><td>IButtonControl</td><td>回车/Esc 默认按钮</td></tr>
+    <tr><td><code>Load / FormClosing / FormClosed</code></td><td>event</td><td>加载/关闭中/已关闭</td></tr>
+  </table>
+
+  <h3>标准控件速查</h3>
+  <table>
+    <tr><th>控件</th><th>用途</th></tr>
+    <tr><td><code>Button</code></td><td>命令按钮，<code>Click</code> + <code>DialogResult</code></td></tr>
+    <tr><td><code>Label</code></td><td>不可编辑文本，可加 <code>Mnemonic</code> 跳焦</td></tr>
+    <tr><td><code>LinkLabel</code></td><td>带超链接段的标签</td></tr>
+    <tr><td><code>TextBox</code></td><td>单/多行文本输入，<code>Multiline / MaxLength / PasswordChar</code></td></tr>
+    <tr><td><code>MaskedTextBox</code></td><td>掩码输入（电话、日期格式）</td></tr>
+    <tr><td><code>RichTextBox</code></td><td>RTF/富文本编辑</td></tr>
+    <tr><td><code>CheckBox / RadioButton</code></td><td>复选/单选；单选按 <code>Container</code> 分组</td></tr>
+    <tr><td><code>ComboBox</code></td><td>下拉选择，<code>DropDownStyle</code> 控制可编辑性</td></tr>
+    <tr><td><code>ListBox / CheckedListBox</code></td><td>列表/带勾选列表</td></tr>
+    <tr><td><code>DateTimePicker / MonthCalendar</code></td><td>单日期/日期范围选择</td></tr>
+    <tr><td><code>NumericUpDown / DomainUpDown</code></td><td>数值/字符串步进</td></tr>
+    <tr><td><code>DataGridView</code></td><td>★ 表格控件，强绑定数据源</td></tr>
+    <tr><td><code>TreeView</code></td><td>树形（节点 <code>TreeNode</code>）</td></tr>
+    <tr><td><code>ListView</code></td><td>大图标/小图标/列表/详情四视图</td></tr>
+    <tr><td><code>ProgressBar</code></td><td>进度条（<code>Style</code>: Blocks/Continuous/Marquee）</td></tr>
+    <tr><td><code>TabControl / TabPage</code></td><td>标签页容器</td></tr>
+    <tr><td><code>MenuStrip / ContextMenuStrip</code></td><td>主菜单/右键菜单</td></tr>
+    <tr><td><code>ToolStrip / StatusStrip</code></td><td>工具栏/状态栏</td></tr>
+    <tr><td><code>SplitContainer / TableLayoutPanel / FlowLayoutPanel</code></td><td>布局容器（见下一章）</td></tr>
+    <tr><td><code>NotifyIcon</code></td><td>系统托盘图标</td></tr>
+    <tr><td><code>Timer</code></td><td>UI 线程定时器（非线程池）</td></tr>
+    <tr><td><code>OpenFileDialog / SaveFileDialog / FolderBrowserDialog / ColorDialog / FontDialog</code></td><td>通用对话框</td></tr>
+    <tr><td><code>PrintDocument / PrintPreviewDialog</code></td><td>打印与预览</td></tr>
+  </table>
+
+  <h3>示例：一个简单的录入窗体</h3>
+  <div class="card">
+    <pre><code><span class="kw">public partial class</span> <span class="ty">EditForm</span> : <span class="ty">Form</span>
+{
+    <span class="kw">private readonly</span> <span class="ty">Label</span>      _lblName;
+    <span class="kw">private readonly</span> <span class="ty">TextBox</span>    _txtName;
+    <span class="kw">private readonly</span> <span class="ty">CheckBox</span>   _chkActive;
+    <span class="kw">private readonly</span> <span class="ty">Button</span>     _btnOK;
+    <span class="kw">private readonly</span> <span class="ty">Button</span>     _btnCancel;
+
+    <span class="kw">public string</span> NameValue =&gt; _txtName.Text;
+    <span class="kw">public bool</span>   IsActive =&gt; _chkActive.Checked;
+
+    <span class="kw">public</span> <span class="fn">EditForm</span>()
+    {
+        Text = <span class="st">"编辑用户"</span>;
+        FormBorderStyle = <span class="ty">FormBorderStyle</span>.FixedDialog;
+        StartPosition   = <span class="ty">FormStartPosition</span>.CenterParent;
+        MaximizeBox     = <span class="kw">false</span>;
+        ClientSize      = <span class="kw">new</span> <span class="ty">Size</span>(<span class="num">320</span>, <span class="num">160</span>);
+
+        _lblName = <span class="kw">new</span> <span class="ty">Label</span> { Text = <span class="st">"姓名(&amp;N):"</span>, Location = <span class="kw">new</span> <span class="ty">Point</span>(<span class="num">12</span>, <span class="num">15</span>), AutoSize = <span class="kw">true</span> };
+        _txtName = <span class="kw">new</span> <span class="ty">TextBox</span> { Location = <span class="kw">new</span> <span class="ty">Point</span>(<span class="num">80</span>, <span class="num">12</span>), Width = <span class="num">220</span> };
+        _chkActive = <span class="kw">new</span> <span class="ty">CheckBox</span> { Text = <span class="st">"启用"</span>, Location = <span class="kw">new</span> <span class="ty">Point</span>(<span class="num">80</span>, <span class="num">45</span>), AutoSize = <span class="kw">true</span>, Checked = <span class="kw">true</span> };
+
+        _btnOK = <span class="kw">new</span> <span class="ty">Button</span> { Text = <span class="st">"确定"</span>, DialogResult = <span class="ty">DialogResult</span>.OK, Location = <span class="kw">new</span> <span class="ty">Point</span>(<span class="num">144</span>, <span class="num">108</span>), Size = <span class="kw">new</span> <span class="ty">Size</span>(<span class="num">75</span>, <span class="num">28</span>) };
+        _btnCancel = <span class="kw">new</span> <span class="ty">Button</span> { Text = <span class="st">"取消"</span>, DialogResult = <span class="ty">DialogResult</span>.Cancel, Location = <span class="kw">new</span> <span class="ty">Point</span>(<span class="num">225</span>, <span class="num">108</span>), Size = <span class="kw">new</span> <span class="ty">Size</span>(<span class="num">75</span>, <span class="num">28</span>) };
+
+        AcceptButton = _btnOK;       <span class="cm">// 回车触发 OK</span>
+        CancelButton = _btnCancel;   <span class="cm">// Esc 触发 Cancel</span>
+
+        Controls.<span class="fn">AddRange</span>(<span class="kw">new</span> <span class="ty">Control</span>[] { _lblName, _txtName, _chkActive, _btnOK, _btnCancel });
+
+        _btnOK.<span class="fn">Click</span> += (_, _) =&gt;
+        {
+            <span class="kw">if</span> (<span class="ty">string</span>.<span class="fn">IsNullOrWhiteSpace</span>(_txtName.Text))
+            {
+                <span class="ty">MessageBox</span>.<span class="fn">Show</span>(<span class="kw">this</span>, <span class="st">"姓名不能为空"</span>, <span class="st">"提示"</span>, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                <span class="kw">this</span>.DialogResult = <span class="ty">DialogResult</span>.None;   <span class="cm">// 阻止关闭</span>
+            }
+        };
+    }
+}
+
+<span class="cm">// 调用方</span>
+<span class="kw">using var</span> dlg = <span class="kw">new</span> <span class="ty">EditForm</span>();
+<span class="kw">if</span> (dlg.<span class="fn">ShowDialog</span>(<span class="kw">this</span>) == <span class="ty">DialogResult</span>.OK)
+{
+    <span class="ty">Console</span>.<span class="fn">WriteLine</span>($<span class="st">"name={dlg.NameValue} active={dlg.IsActive}"</span>);
+}</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>模态 vs 非模态</strong>：<code>form.ShowDialog()</code> 阻塞调用直到关闭（自动调用 <code>Dispose</code>），用于对话框；<code>form.Show()</code> 立即返回，生命周期需自行管理（关闭不等于释放，需显式 <code>Dispose</code>）。
+  </div>
+</section>
+
+<section id="layout" class="toc-link">
+  <h2><span class="num">05</span> 布局系统</h2>
+  <p>WinForms 的<strong>默认坐标模型是绝对像素定位</strong>——控件 <code>Location/Size</code> 直接对应客户区像素。这在小屏与单一 DPI 下没问题，但分辨率/DPI 变化时会错乱。布局系统提供两层补偿：<strong>Anchor/Dock</strong>（锚定/停靠，基于父容器）与<strong>布局容器</strong>（<code>TableLayoutPanel</code> / <code>FlowLayoutPanel</code>）。</p>
+
+  <h3>Anchor 与 Dock</h3>
+  <div class="card">
+    <pre><code><span class="cm">// Anchor：到父容器四条边的距离在父调整时保持不变</span>
+<span class="cm">// 默认是 Top|Left，即“贴左上角”</span>
+_txtName.Anchor = <span class="ty">AnchorStyles</span>.Top | <span class="ty">AnchorStyles</span>.Left | <span class="ty">AnchorStyles</span>.Right;
+<span class="cm">// 父宽度变大 → 文本框右侧跟随扩展，左侧固定</span>
+
+<span class="cm">// Dock：整个控件贴向父容器某一边，并占满该方向的剩余空间</span>
+_menu.<span class="fn">Dock</span> = <span class="ty">DockStyle</span>.Top;
+_status.<span class="fn">Dock</span> = <span class="ty">DockStyle</span>.Bottom;
+_grid.<span class="fn">Dock</span> = <span class="ty">DockStyle</span>.Fill;       <span class="cm">// ★ 填满剩余区域</span></code></pre>
+  </div>
+
+  <h3>布局容器对比</h3>
+  <table>
+    <tr><th>容器</th><th>布局规则</th><th>典型用途</th></tr>
+    <tr><td><code>Panel</code></td><td>容器，子控件自由定位</td><td>分组容器、滚动区</td></tr>
+    <tr><td><code>GroupBox</code></td><td>带标题边框的 Panel</td><td>单选按钮分组</td></tr>
+    <tr><td><code>SplitContainer</code></td><td>两个面板中间可拖拽分隔条</td><td>主从视图、资源管理器布局</td></tr>
+    <tr><td><code>TableLayoutPanel</code></td><td>行列网格，按百分比/绝对/自动分配</td><td>表单对齐、响应式行高列宽</td></tr>
+    <tr><td><code>FlowLayoutPanel</code></td><td>子控件按方向流式排列，超出自动换行</td><td>动态项集合、工具条</td></tr>
+    <tr><td><code>TabControl</code></td><td>标签页切换，每页独立容器</td><td>设置面板、分类表单</td></tr>
+  </table>
+
+  <h3>TableLayoutPanel：WinForms 的网格布局利器</h3>
+  <div class="card">
+    <pre><code><span class="kw">var</span> table = <span class="kw">new</span> <span class="ty">TableLayoutPanel</span>
+{
+    Dock = <span class="ty">DockStyle</span>.Fill,
+    ColumnCount = <span class="num">2</span>,
+    RowCount = <span class="num">4</span>,
+};
+table.<span class="fn">ColumnStyles</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">ColumnStyle</span>(<span class="ty">SizeType</span>.Absolute, <span class="num">80</span>));   <span class="cm">// 第 1 列固定 80px</span>
+table.<span class="fn">ColumnStyles</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">ColumnStyle</span>(<span class="ty">SizeType</span>.Percent, <span class="num">100</span>)); <span class="cm">// 第 2 列占剩余</span>
+table.<span class="fn">RowStyles</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">RowStyle</span>(<span class="ty">SizeType</span>.AutoSize));
+table.<span class="fn">RowStyles</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">RowStyle</span>(<span class="ty">SizeType</span>.AutoSize));
+table.<span class="fn">RowStyles</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">RowStyle</span>(<span class="ty">SizeType</span>.Percent, <span class="num">100</span>)); <span class="cm">// 第 3 行吃掉纵向空间</span>
+table.<span class="fn">RowStyles</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">RowStyle</span>(<span class="ty">SizeType</span>.AutoSize));
+
+<span class="cm">// 通过 SetChildIndex + SetColumn/SetRow 定位子控件</span>
+table.Controls.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">Label</span> { Text = <span class="st">"姓名"</span> }, <span class="num">0</span>, <span class="num">0</span>);
+table.Controls.<span class="fn">Add</span>(_txtName, <span class="num">1</span>, <span class="num">0</span>);
+table.Controls.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">Label</span> { Text = <span class="st">"备注"</span> }, <span class="num">0</span>, <span class="num">1</span>);
+table.Controls.<span class="fn">Add</span>(_txtMemo, <span class="num">1</span>, <span class="num">1</span>);
+table.Controls.<span class="fn">Add</span>(_grid, <span class="num">0</span>, <span class="num">2</span>);
+table.<span class="fn">SetColumnSpan</span>(_grid, <span class="num">2</span>);    <span class="cm">// 跨两列</span>
+table.Controls.<span class="fn">Add</span>(_btnPanel, <span class="num">0</span>, <span class="num">3</span>);
+table.<span class="fn">SetColumnSpan</span>(_btnPanel, <span class="num">2</span>);</code></pre>
+  </div>
+
+  <h3>Padding/Margin/AutoSize</h3>
+  <ul>
+    <li><code>Margin</code>：本控件外缘到相邻控件/容器的最小间距（布局容器生效）</li>
+    <li><code>Padding</code>：本控件内边距（容器生效；某些控件如 <code>GroupBox</code> 在设计器中体现）</li>
+    <li><code>AutoSize</code>：为 <code>true</code> 时控件按内容自适应；常配合 <code>AutoSizeMode</code>（GrowOnly / GrowAndShrink）</li>
+  </ul>
+
+  <div class="callout tip">
+    <strong>设计建议</strong>：所有<strong>用户可调整大小的窗体</strong>都应使用 <code>TableLayoutPanel + Dock/Anchor</code>，避免绝对坐标堆砌。绝对坐标只用在<strong>固定尺寸对话框</strong>（<code>FormBorderStyle = FixedDialog</code>）。
+  </div>
+</section>
+
+<section id="events" class="toc-link">
+  <h2><span class="num">06</span> 事件驱动模型</h2>
+  <p>WinForms 的事件基于 .NET <strong>委托（delegate）</strong>与<strong>多播事件</strong>机制。<code>EventHandler</code> 与泛型版 <code>EventHandler&lt;TEventArgs&gt;</code> 是几乎所有 UI 事件的标准签名：<code>(object sender, EventArgs e)</code>。<code>sender</code> 是事件源控件本身，<code>e</code> 携带事件数据。</p>
+
+  <h3>标准事件签名</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 最基础的事件委托</span>
+<span class="kw">public delegate void</span> <span class="ty">EventHandler</span>(<span class="kw">object</span>? sender, <span class="ty">EventArgs</span> e);
+
+<span class="cm">// 泛型版本：e 是 EventArgs 的派生</span>
+<span class="kw">public delegate void</span> <span class="ty">EventHandler</span>&lt;<span class="kw">in</span> <span class="ty">TEventArgs</span>&gt;(<span class="kw">object</span>? sender, <span class="ty">TEventArgs</span> e) <span class="kw">where</span> <span class="ty">TEventArgs</span> : <span class="ty">EventArgs</span>;
+
+<span class="cm">// 鼠标、键盘、取消 事件携带的数据</span>
+<span class="kw">public class</span> <span class="ty">MouseEventArgs</span> : <span class="ty">EventArgs</span> { <span class="kw">public</span> <span class="ty">MouseButtons</span> Button; <span class="kw">public</span> <span class="ty">Point</span> Location; <span class="kw">public int</span> Clicks; <span class="kw">public int</span> Delta; }
+<span class="kw">public class</span> <span class="ty">KeyEventArgs</span>    : <span class="ty">EventArgs</span> { <span class="kw">public</span> <span class="ty">Keys</span> KeyCode; <span class="kw">public bool</span> Alt/Control/Shift; <span class="kw">public bool</span> Handled; <span class="kw">public bool</span> SuppressKeyPress; }
+<span class="kw">public class</span> <span class="ty">CancelEventArgs</span> : <span class="ty">EventArgs</span> { <span class="kw">public bool</span> Cancel; }
+<span class="kw">public class</span> <span class="ty">FormClosingEventArgs</span> : <span class="ty">CancelEventArgs</span> { <span class="kw">public</span> <span class="ty">CloseReason</span> CloseReason; }</code></pre>
+  </div>
+
+  <h3>订阅与取消订阅</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 订阅：+= 把委托加入事件的多播调用列表</span>
+_btnOK.<span class="fn">Click</span> += <span class="ty">BtnOK_Click</span>;
+
+<span class="cm">// 简写：lambda 表达式</span>
+_btnCancel.<span class="fn">Click</span> += (_, _) =&gt; <span class="fn">Close</span>();
+
+<span class="cm">// 取消订阅：必须 -= 同一个委托实例（lambda 不能取消）</span>
+_btnOK.<span class="fn">Click</span> -= <span class="ty">BtnOK_Click</span>;
+
+<span class="kw">private void</span> <span class="fn">BtnOK_Click</span>(<span class="kw">object</span>? sender, <span class="ty">EventArgs</span> e)
+{
+    <span class="kw">var</span> btn = (<span class="ty">Button</span>)sender!;
+    btn.<span class="fn">Enabled</span> = <span class="kw">false</span>;
+    <span class="cm">// ... 业务</span>
+}
+
+<span class="cm">// 泛型事件：携带具体数据</span>
+_form.<span class="fn">FormClosing</span> += (s, e) =&gt;
+{
+    <span class="kw">if</span> (_dirty &amp;&amp; <span class="ty">MessageBox</span>.<span class="fn">Show</span>(<span class="st">"放弃修改?"</span>, <span class="st">""</span>, MessageBoxButtons.YesNo) == DialogResult.No)
+        e.Cancel = <span class="kw">true</span>;     <span class="cm">// 阻止关闭</span>
+};
+
+_grid.<span class="fn">CellDoubleClick</span> += (s, e) =&gt;
+{
+    <span class="kw">var</span> row = ((<span class="ty">DataGridView</span>)s!).Rows[e.RowIndex];
+    <span class="fn">OpenEditor</span>((<span class="ty">Customer</span>)row.DataBoundItem);
+};</code></pre>
+  </div>
+
+  <h3>自定义事件的标准模式</h3>
+  <div class="card">
+    <pre><code><span class="kw">public class</span> <span class="ty">Scanner</span> : <span class="ty">Component</span>
+{
+    <span class="cm">// 1. 声明事件（event 关键字保证外部只能 += / -=，不能直接赋值/调用）</span>
+    <span class="kw">public event</span> <span class="ty">EventHandler</span>&lt;<span class="ty">BarcodeReadEventArgs</span>&gt;? BarcodeRead;
+
+    <span class="cm">// 2. 受保护的虚 OnXxx 方法，子类可重写</span>
+    <span class="kw">protected virtual void</span> <span class="fn">OnBarcodeRead</span>(<span class="ty">BarcodeReadEventArgs</span> e)
+    {
+        <span class="cm">// .NET 4.0+ 推荐写法：先取局部变量，避免并发空引用</span>
+        <span class="ty">BarcodeRead</span>?.<span class="fn">Invoke</span>(<span class="kw">this</span>, e);
+    }
+
+    <span class="cm">// 3. 内部触发</span>
+    <span class="kw">private void</span> <span class="fn">OnDeviceData</span>(<span class="kw">string</span> code)
+    {
+        <span class="fn">OnBarcodeRead</span>(<span class="kw">new</span> <span class="ty">BarcodeReadEventArgs</span>(code));
+    }
+}
+
+<span class="kw">public class</span> <span class="ty">BarcodeReadEventArgs</span> : <span class="ty">EventArgs</span>
+{
+    <span class="kw">public string</span> Barcode { <span class="kw">get</span>; }
+    <span class="kw">public</span> <span class="fn">BarcodeReadEventArgs</span>(<span class="kw">string</span> barcode) =&gt; Barcode = barcode;
+}
+
+<span class="cm">// 使用</span>
+_scanner.BarcodeRead += (s, e) =&gt; _txtCode.Text = e.Barcode;</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>内存泄漏</strong>：长生命周期对象（静态单例、<code>Application.Idle</code>、事件总线）订阅<strong>短生命周期</strong>对象的事件时，必须显式 <code>-=</code>。否则长对象会通过事件委托一直引用短对象，导致 GC 无法回收。
+  </div>
+</section>
+
+<section id="designer" class="toc-link">
+  <h2><span class="num">07</span> 设计器与代码分离</h2>
+  <p>WinForms 设计器是<strong>其生产力的核心来源</strong>。它的实现基于 C# 的 <code>partial class</code>：用户业务代码放在 <code>MainForm.cs</code>，由设计器自动生成、随时可被重写的代码放在 <code>MainForm.Designer.cs</code>。两者在编译期合并成同一个类。</p>
+
+  <h3>一对 partial 文件</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ── MainForm.Designer.cs（设计器自动维护，禁止手改）──</span>
+<span class="kw">namespace</span> <span class="ty">App</span>;
+
+<span class="kw">partial class</span> <span class="ty">MainForm</span>
+{
+    <span class="kw">private</span> <span class="ty">System.ComponentModel.IContainer</span>? components = <span class="kw">null</span>;
+
+    <span class="kw">protected override void</span> <span class="fn">Dispose</span>(<span class="kw">bool</span> disposing)
+    {
+        <span class="kw">if</span> (disposing &amp;&amp; (components != <span class="kw">null</span>))
+            components.<span class="fn">Dispose</span>();
+        <span class="kw">base</span>.<span class="fn">Dispose</span>(disposing);
+    }
+
+    <span class="cm">// ★ 设计器入口：构造函数调用它</span>
+    <span class="kw">private void</span> <span class="fn">InitializeComponent</span>()
+    {
+        <span class="kw">this</span>.components = <span class="kw">new</span> <span class="ty">System.ComponentModel.Container</span>();
+        <span class="kw">this</span>._btnOK = <span class="kw">new</span> <span class="ty">System.Windows.Forms.Button</span>();
+        <span class="kw">this</span>._txtName = <span class="kw">new</span> <span class="ty">System.Windows.Forms.TextBox</span>();
+        <span class="kw">this</span>.<span class="fn">SuspendLayout</span>();                       <span class="cm">// ★ 暂停布局，批量创建</span>
+
+        <span class="cm">// btnOK</span>
+        <span class="kw">this</span>._btnOK.Location = <span class="kw">new</span> <span class="ty">System.Drawing.Point</span>(<span class="num">220</span>, <span class="num">12</span>);
+        <span class="kw">this</span>._btnOK.Name = <span class="st">"_btnOK"</span>;
+        <span class="kw">this</span>._btnOK.Size = <span class="kw">new</span> <span class="ty">System.Drawing.Size</span>(<span class="num">75</span>, <span class="num">28</span>);
+        <span class="kw">this</span>._btnOK.TabIndex = <span class="num">0</span>;
+        <span class="kw">this</span>._btnOK.Text = <span class="st">"确定"</span>;
+        <span class="kw">this</span>._btnOK.<span class="fn">Click</span> += <span class="kw">new</span> <span class="ty">System.EventHandler</span>(<span class="kw">this</span>.<span class="fn">btnOK_Click</span>);
+
+        <span class="cm">// txtName</span>
+        <span class="kw">this</span>._txtName.Location = <span class="kw">new</span> <span class="ty">System.Drawing.Point</span>(<span class="num">12</span>, <span class="num">15</span>);
+        <span class="kw">this</span>._txtName.Name = <span class="st">"_txtName"</span>;
+        <span class="kw">this</span>._txtName.Size = <span class="kw">new</span> <span class="ty">System.Drawing.Size</span>(<span class="num">200</span>, <span class="num">23</span>);
+        <span class="kw">this</span>._txtName.TabIndex = <span class="num">1</span>;
+
+        <span class="cm">// MainForm</span>
+        <span class="kw">this</span>.AutoScaleDimensions = <span class="kw">new</span> <span class="ty">System.Drawing.SizeF</span>(<span class="num">7F</span>, <span class="num">15F</span>);
+        <span class="kw">this</span>.AutoScaleMode = <span class="ty">System.Windows.Forms.AutoScaleMode</span>.Font;
+        <span class="kw">this</span>.ClientSize = <span class="kw">new</span> <span class="ty">System.Drawing.Size</span>(<span class="num">312</span>, <span class="num">53</span>);
+        <span class="kw">this</span>.Controls.<span class="fn">Add</span>(<span class="kw">this</span>._txtName);
+        <span class="kw">this</span>.Controls.<span class="fn">Add</span>(<span class="kw">this</span>._btnOK);
+        <span class="kw">this</span>.Name = <span class="st">"MainForm"</span>;
+        <span class="kw">this</span>.Text = <span class="st">"主窗体"</span>;
+        <span class="kw">this</span>.<span class="fn">ResumeLayout</span>(<span class="kw">false</span>);                 <span class="cm">// ★ 恢复布局</span>
+        <span class="kw">this</span>.<span class="fn">PerformLayout</span>();
+    }
+
+    <span class="kw">private</span> <span class="ty">System.Windows.Forms.Button</span> _btnOK = <span class="kw">null</span>!;
+    <span class="kw">private</span> <span class="ty">System.Windows.Forms.TextBox</span> _txtName = <span class="kw">null</span>!;
+}
+
+<span class="cm">// ── MainForm.cs（业务逻辑，手写）──</span>
+<span class="kw">namespace</span> <span class="ty">App</span>;
+
+<span class="kw">public partial class</span> <span class="ty">MainForm</span> : <span class="ty">Form</span>
+{
+    <span class="kw">public</span> <span class="fn">MainForm</span>()
+    {
+        <span class="fn">InitializeComponent</span>();      <span class="cm">// ★ 必须是构造函数第一条</span>
+        <span class="cm">// 之后写业务初始化</span>
+    }
+
+    <span class="kw">private void</span> <span class="fn">btnOK_Click</span>(<span class="kw">object</span> sender, <span class="ty">EventArgs</span> e)
+    {
+        <span class="ty">MessageBox</span>.<span class="fn">Show</span>($<span class="st">"Hello {_txtName.Text}"</span>);
+    }
+}</code></pre>
+  </div>
+
+  <h3>SuspendLayout / ResumeLayoutManager</h3>
+  <p>批量添加/修改控件时，布局引擎会反复触发——轻则闪烁，重则计算爆 O(n²)。包一层 <code>SuspendLayout()</code>/<code>ResumeLayout()</code> 让布局<strong>延迟到最后统一计算</strong>，既快又稳。设计器自动生成这段代码，手写代码也应养成习惯。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">命名约定</div>
+      <ul>
+        <li>设计器默认 <code>button1</code>、<code>textBox1</code>——<strong>立刻改</strong></li>
+        <li>常见前缀：字段 <code>_btnOK</code>、<code>_txtName</code>、<code>_gridCustomers</code></li>
+        <li>事件处理 <code>btnOK_Click</code>（控件名_事件名）</li>
+        <li>VS 选项可设默认前缀风格</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">.resx 资源</div>
+      <ul>
+        <li><code>MainForm.resx</code> 存本地化字符串、图标、图像</li>
+        <li>多语言：每文化一份 <code>MainForm.en-US.resx</code></li>
+        <li>编译为 satellite assembly，按 <code>Thread.CurrentThread.CurrentUICulture</code> 加载</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout danger">
+    <strong>不要手改 Designer.cs</strong>：下次在设计器里打开窗体并保存，手写的修改会被覆盖。所有业务代码、事件处理放在 <code>MainForm.cs</code>，<code>.Designer.cs</code> 留给设计器独占。
+  </div>
+</section>
+
+<section id="databinding" class="toc-link">
+  <h2><span class="num">08</span> 数据绑定</h2>
+  <p>数据绑定让<strong>控件属性</strong>与<strong>数据源对象</strong>自动同步。WinForms 数据绑定分两类：<strong>简单绑定</strong>（控件单一属性到对象属性）与<strong>复杂绑定</strong>（列表控件绑定整个集合）。<code>BindingSource</code> 是核心中介——它包装数据源、管理当前项位置、提供排序/过滤，几乎总是绑定的<strong>最佳起点</strong>。</p>
+
+  <h3>简单绑定 vs 复杂绑定</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ── 简单绑定：控件.属性 ⇄ 对象.属性 ──</span>
+<span class="kw">public class</span> <span class="ty">Customer</span> : <span class="ty">INotifyPropertyChanged</span>
+{
+    <span class="kw">private string</span> _name = <span class="st">""</span>;
+    <span class="kw">public string</span> Name
+    {
+        <span class="kw">get</span> =&gt; _name;
+        <span class="kw">set</span>
+        {
+            <span class="kw">if</span> (_name != value)
+            {
+                _name = value;
+                <span class="ty">PropertyChanged</span>?.<span class="fn">Invoke</span>(<span class="kw">this</span>, <span class="kw">new</span> <span class="ty">PropertyChangedEventArgs</span>(<span class="kw">nameof</span>(Name)));
+            }
+        }
+    }
+
+    <span class="kw">public event</span> <span class="ty">PropertyChangedEventHandler</span>? PropertyChanged;
+}
+
+<span class="cm">// 把 TextBox.Text 绑定到 customer.Name；双向更新</span>
+_txtName.<span class="fn">DataBindings</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">Binding</span>(<span class="kw">nameof</span>(<span class="ty">TextBox</span>.Text), customer, <span class="kw">nameof</span>(<span class="ty">Customer</span>.Name)));
+
+
+<span class="cm">// ── 复杂绑定：列表控件 DataSource = 集合 ──</span>
+_combo.DisplayMember = <span class="kw">nameof</span>(<span class="ty">Customer</span>.Name);   <span class="cm">// 显示哪个属性</span>
+_combo.ValueMember   = <span class="kw">nameof</span>(<span class="ty">Customer</span>.Id);     <span class="cm">// 实际值（SelectedValue）</span>
+_combo.DataSource    = customers;</code></pre>
+  </div>
+
+  <h3>BindingSource 中介</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ★ 推荐用法：所有绑定都过 BindingSource</span>
+<span class="kw">private readonly</span> <span class="ty">BindingSource</span> _bs = <span class="kw">new</span>();
+<span class="kw">private readonly</span> <span class="ty">BindingList</span>&lt;<span class="ty">Customer</span>&gt; _list;
+
+<span class="kw">public</span> <span class="fn">MainForm</span>(<span class="ty">BindingList</span>&lt;<span class="ty">Customer</span>&gt; list)
+{
+    <span class="fn">InitializeComponent</span>();
+    _list = list;
+
+    <span class="cm">// BindingSource 包住集合</span>
+    _bs.DataSource = _list;
+    _bs.<span class="fn">AllowNew</span> = <span class="kw">true</span>;
+    _bs.<span class="fn">RaiseListChangedEvents</span> = <span class="kw">true</span>;
+
+    <span class="cm">// DataGridView 直接绑 BindingSource</span>
+    _grid.AutoGenerateColumns = <span class="kw">false</span>;
+    _grid.Columns.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">DataGridViewTextBoxColumn</span>
+    {
+        DataPropertyName = <span class="kw">nameof</span>(<span class="ty">Customer</span>.Id),   HeaderText = <span class="st">"#"</span>, Width = <span class="num">40</span>
+    });
+    _grid.Columns.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">DataGridViewTextBoxColumn</span>
+    {
+        DataPropertyName = <span class="kw">nameof</span>(<span class="ty">Customer</span>.Name), HeaderText = <span class="st">"姓名"</span>, Width = <span class="num">160</span>
+    });
+    _grid.Columns.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">DataGridViewCheckBoxColumn</span>
+    {
+        DataPropertyName = <span class="kw">nameof</span>(<span class="ty">Customer</span>.Active), HeaderText = <span class="st">"启用"</span>, Width = <span class="num">50</span>
+    });
+    _grid.DataSource = _bs;
+
+    <span class="cm">// 简单绑定：编辑框跟随当前选中行</span>
+    _txtName.<span class="fn">DataBindings</span>.<span class="fn">Add</span>(<span class="st">"Text"</span>, _bs, <span class="kw">nameof</span>(<span class="ty">Customer</span>.Name), <span class="kw">true</span>, <span class="ty">DataSourceUpdateMode</span>.OnPropertyChanged);
+    _chkActive.<span class="fn">DataBindings</span>.<span class="fn">Add</span>(<span class="st">"Checked"</span>, _bs, <span class="kw">nameof</span>(<span class="ty">Customer</span>.Active));
+
+    <span class="cm">// 当前位置变化</span>
+    _bs.<span class="fn">CurrentChanged</span> += (s, e) =&gt; _lblPos.Text = $<span class="st">"{_bs.Position + 1}/{_bs.Count}"</span>;
+}
+
+<span class="cm">// 增删</span>
+<span class="kw">private void</span> <span class="fn">btnAdd_Click</span>(<span class="kw">object</span> sender, <span class="ty">EventArgs</span> e) =&gt; _bs.<span class="fn">AddNew</span>();
+<span class="kw">private void</span> <span class="fn">btnDelete_Click</span>(<span class="kw">object</span> sender, <span class="ty">EventArgs</span> e) =&gt; _bs.<span class="fn">RemoveCurrent</span>();</code></pre>
+  </div>
+
+  <h3>关键类型</h3>
+  <table>
+    <tr><th>类型</th><th>角色</th></tr>
+    <tr><td><code>Binding</code></td><td>单个控件属性 ⇄ 数据源属性的绑定描述</td></tr>
+    <tr><td><code>Control.DataBindings</code></td><td>控件上所有简单绑定的集合</td></tr>
+    <tr><td><code>BindingSource</code></td><td>数据源中介：当前项、排序、过滤、增删</td></tr>
+    <tr><td><code>BindingList&lt;T&gt;</code></td><td>实现 <code>IBindingList</code> 的可观测集合，增删触发 ListChanged</td></tr>
+    <tr><td><code>INotifyPropertyChanged</code></td><td>属性变化通知接口（业务模型必须实现）</td></tr>
+    <tr><td><code>CurrencyManager</code></td><td>绑定管理器：管理同一数据源的多个绑定的<strong>当前项</strong>位置</td></tr>
+    <tr><td><code>DataSourceUpdateMode</code></td><td>Never / OnValidation / OnPropertyChanged——控件到数据源的回写时机</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>默认 DataSourceUpdateMode 是 OnValidation</strong>——焦点离开控件（触发 Validating/Validated）时才回写。需要即时回写（如搜索框）应改 <code>OnPropertyChanged</code>。
+  </div>
+</section>
+
+<section id="gdi" class="toc-link">
+  <h2><span class="num">09</span> GDI+ 绘图</h2>
+  <p>WinForms 自绘基于 <strong>GDI+</strong>（<code>System.Drawing</code>）。核心是 <code>Graphics</code> 对象——它代表一块绘图表面（窗口客户区、位图、打印页），所有绘图原语（线、矩形、椭圆、文字、图像）都通过它进行。<code>Graphics</code> 与所有绘图对象（<code>Pen</code>/<code>Brush</code>/<code>Font</code>/<code>Bitmap</code>）都实现 <code>IDisposable</code>，必须正确释放。</p>
+
+  <h3>获取 Graphics 的两种方式</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 1. OnPaint 的 e.Graphics（推荐，自动成对，自动失效区裁剪）</span>
+<span class="kw">protected override void</span> <span class="fn">OnPaint</span>(<span class="ty">PaintEventArgs</span> e)
+{
+    <span class="kw">base</span>.<span class="fn">OnPaint</span>(e);
+    <span class="ty">Graphics</span> g = e.Graphics;
+    g.<span class="fn">DrawString</span>(<span class="st">"Hi"</span>, <span class="ty">Control.DefaultFont</span>, <span class="ty">Brushes</span>.Black, <span class="num">10</span>, <span class="num">10</span>);
+}
+
+<span class="cm">// 2. CreateGraphics() ——临时绘制（不推荐，不持久化）</span>
+<span class="cm">// 仅适合实时显示（如选区橡皮筋），重绘后会消失</span>
+<span class="kw">using</span> <span class="ty">Graphics</span> g = _panel.<span class="fn">CreateGraphics</span>();
+g.<span class="fn">DrawRectangle</span>(<span class="ty">Pens</span>.Red, <span class="num">0</span>, <span class="num">0</span>, <span class="num">100</span>, <span class="num">100</span>);</code></pre>
+  </div>
+
+  <h3>绘图原语</h3>
+  <table>
+    <tr><th>方法</th><th>作用</th></tr>
+    <tr><td><code>DrawLine / DrawLines</code></td><td>直线/折线</td></tr>
+    <tr><td><code>DrawRectangle / FillRectangle</code></td><td>矩形描边/填充</td></tr>
+    <tr><td><code>DrawEllipse / FillEllipse</code></td><td>椭圆/圆</td></tr>
+    <tr><td><code>DrawArc / DrawPie / FillPie</code></td><td>弧/扇形</td></tr>
+    <tr><td><code>DrawCurve / DrawBezier</code></td><td>样条曲线/贝塞尔</td></tr>
+    <tr><td><code>DrawPolygon / FillPolygon</code></td><td>多边形</td></tr>
+    <tr><td><code>DrawString</code></td><td>文字（含格式化 StringFormat）</td></tr>
+    <tr><td><code>DrawImage / DrawImageUnscaled</code></td><td>图像</td></tr>
+    <tr><td><code>MeasureString</code></td><td>测量字符串尺寸</td></tr>
+  </table>
+
+  <h3>自绘控件示例：仪表盘</h3>
+  <div class="card">
+    <pre><code><span class="kw">public class</span> <span class="ty">Gauge</span> : <span class="ty">Control</span>
+{
+    <span class="kw">private float</span> _value = <span class="num">50f</span>;
+    <span class="kw">public float</span> Value
+    {
+        <span class="kw">get</span> =&gt; _value;
+        <span class="kw">set</span> { _value = <span class="ty">Math</span>.<span class="fn">Clamp</span>(value, <span class="num">0f</span>, <span class="num">100f</span>); <span class="fn">Invalidate</span>(); }
+    }
+
+    <span class="kw">public</span> <span class="fn">Gauge</span>()
+    {
+        DoubleBuffered = <span class="kw">true</span>;       <span class="cm">// ★ 双缓冲，杜绝闪烁</span>
+        ResizeRedraw   = <span class="kw">true</span>;       <span class="cm">// 尺寸变化即重绘</span>
+        SetStyle(<span class="ty">ControlStyles</span>.AllPaintingInWmPaint | <span class="ty">ControlStyles</span>.UserPaint | <span class="ty">ControlStyles</span>.OptimizedDoubleBuffer, <span class="kw">true</span>);
+    }
+
+    <span class="kw">protected override void</span> <span class="fn">OnPaint</span>(<span class="ty">PaintEventArgs</span> e)
+    {
+        <span class="ty">Graphics</span> g = e.Graphics;
+        g.<span class="fn">SmoothingMode</span> = <span class="ty">System.Drawing.Drawing2D.SmoothingMode</span>.AntiAlias;   <span class="cm">// ★ 抗锯齿</span>
+
+        <span class="kw">var</span> rect = <span class="kw">new</span> <span class="ty">Rectangle</span>(<span class="num">8</span>, <span class="num">8</span>, Width - <span class="num">16</span>, Height - <span class="num">16</span>);
+
+        <span class="cm">// 所有 GDI 资源必须释放 —— 推荐 using 模式</span>
+        <span class="kw">using var</span> bgBrush   = <span class="kw">new</span> <span class="ty">SolidBrush</span>(<span class="ty">Color</span>.FromArgb(<span class="num">245</span>, <span class="num">246</span>, <span class="num">250</span>));
+        <span class="kw">using var</span> valuePen = <span class="kw">new</span> <span class="ty">Pen</span>(<span class="ty">Color</span>.FromArgb(<span class="num">80</span>, <span class="num">130</span>, <span class="num">240</span>), <span class="num">10f</span>);
+        <span class="kw">using var</span> tickPen  = <span class="kw">new</span> <span class="ty">Pen</span>(<span class="ty">Color</span>.FromArgb(<span class="num">180</span>, <span class="num">184</span>, <span class="num">200</span>), <span class="num">2f</span>);
+        <span class="kw">using var</span> font     = <span class="kw">new</span> <span class="ty">Font</span>(<span class="st">"Segoe UI"</span>, <span class="num">16f</span>, <span class="ty">FontStyle</span>.Bold);
+        <span class="kw">using var</span> textBrush = <span class="kw">new</span> <span class="ty">SolidBrush</span>(ForeColor);
+
+        g.<span class="fn">FillEllipse</span>(bgBrush, rect);
+
+        <span class="cm">// 进度弧（从 -90° 顺时针）</span>
+        <span class="kw">float</span> sweep = <span class="num">360f</span> * (_value / <span class="num">100f</span>);
+        g.<span class="fn">DrawArc</span>(valuePen, rect, -<span class="num">90f</span>, sweep);
+
+        <span class="cm">// 刻度</span>
+        <span class="kw">var</span> center = <span class="kw">new</span> <span class="ty">PointF</span>(rect.X + rect.Width / <span class="num">2f</span>, rect.Y + rect.Height / <span class="num">2f</span>);
+        <span class="kw">float</span> rOuter = rect.Width / <span class="num">2f</span>;
+        <span class="kw">float</span> rInner = rOuter - <span class="num">12f</span>;
+        <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt;= <span class="num">10</span>; i++)
+        {
+            <span class="kw">float</span> angle = (<span class="kw">float</span>)((<span class="num">-90</span> + i * <span class="num">36</span>) * <span class="ty">Math</span>.PI / <span class="num">180</span>);
+            <span class="kw">var</span> p1 = <span class="kw">new</span> <span class="ty">PointF</span>(center.X + <span class="ty">Math</span>.<span class="fn">Cos</span>(angle) * rOuter, center.Y + <span class="ty">Math</span>.<span class="fn">Sin</span>(angle) * rOuter);
+            <span class="kw">var</span> p2 = <span class="kw">new</span> <span class="ty">PointF</span>(center.X + <span class="ty">Math</span>.<span class="fn">Cos</span>(angle) * rInner, center.Y + <span class="ty">Math</span>.<span class="fn">Sin</span>(angle) * rInner);
+            g.<span class="fn">DrawLine</span>(tickPen, p1, p2);
+        }
+
+        <span class="cm">// 文字</span>
+        <span class="kw">string</span> label = $<span class="st">"{_value:F0}%"</span>;
+        <span class="kw">var</span> sz = g.<span class="fn">MeasureString</span>(label, font);
+        g.<span class="fn">DrawString</span>(label, font, textBrush, center.X - sz.Width / <span class="num">2f</span>, center.Y - sz.Height / <span class="num">2f</span>);
+    }
+}</code></pre>
+  </div>
+
+  <h3>双缓冲与防闪烁</h3>
+  <ul>
+    <li>窗体/控件 <code>DoubleBuffered = true</code>：先画到内存位图再 BitBlt 到屏幕</li>
+    <li>更细粒度：<code>SetStyle(ControlStyles.OptimizedDoubleBuffer | AllPaintingInWmPaint | UserPaint, true)</code></li>
+    <li>复杂动画：<code>BufferedGraphicsManager.Allocate</code> 显式管理缓冲区</li>
+    <li><code>OnPaintBackground</code> 不擦背景（重写为空）可避免背景与前景分别绘制造成的闪烁</li>
+  </ul>
+
+  <div class="callout warn">
+    <strong>资源生命周期</strong>：GDI 句柄是<strong>系统级稀缺资源</strong>。每个进程约 10000 个上限，<code>Pen</code>/<code>Brush</code>/<code>Font</code>/<code>Bitmap</code> 不释放会快速耗尽。<code>using</code> 或 <code>try/finally Dispose</code> 是底线，<code> Pens.Black</code>/<code> Brushes.White</code>/<code>SystemFonts.DefaultFont</code> 等系统库存对象<strong>不可释放</strong>。
+  </div>
+</section>
+
+<section id="threading" class="toc-link">
+  <h2><span class="num">10</span> 线程模型与异步</h2>
+  <p>WinForms 是<strong>严格的单线程 UI 模型</strong>：所有控件只能在创建它的 UI 线程上访问。<code>[STAThread]</code> 标注主入口；任何后台线程直接读写控件属性，运行时会抛出 <code>InvalidOperationException: Cross-thread operation not valid</code>（.NET Framework 默认检测，.NET Core+ 通过 <code>Control.CheckForIllegalCrossThreadCalls</code>）。</p>
+
+  <div class="callout danger">
+    <strong>铁律</strong>：<strong>后台线程绝不能直接接触控件</strong>。违反会立刻抛异常（运气好）或在随机时刻产生状态损坏、死锁、半绘制（运气差，最难排查）。所有跨线程 UI 更新必须 <code>Invoke</code> 切回 UI 线程。
+  </div>
+
+  <h3>Invoke / BeginInvoke</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ❌ 错误：后台线程直接更新 UI</span>
+<span class="ty">Task</span>.<span class="fn">Run</span>(() =&gt;
+{
+    <span class="ty">Thread</span>.<span class="fn">Sleep</span>(<span class="num">1000</span>);
+    _lblStatus.Text = <span class="st">"完成"</span>;        <span class="cm">// 抛 InvalidOperationException</span>
+});
+
+<span class="cm">// ✅ 正确：用 Invoke 同步切回 UI 线程</span>
+<span class="ty">Task</span>.<span class="fn">Run</span>(() =&gt;
+{
+    <span class="ty">Thread</span>.<span class="fn">Sleep</span>(<span class="num">1000</span>);
+    <span class="kw">if</span> (_lblStatus.<span class="fn">InvokeRequired</span>)           <span class="cm">// 检测当前是否在 UI 线程</span>
+        _lblStatus.<span class="fn">Invoke</span>(() =&gt; _lblStatus.Text = <span class="st">"完成"</span>);
+    <span class="kw">else</span>
+        _lblStatus.Text = <span class="st">"完成"</span>;
+});
+
+<span class="cm">// ✅ 异步投递（不等返回）</span>
+_lblStatus.<span class="fn">BeginInvoke</span>(<span class="kw">new</span> <span class="ty">Action</span>(() =&gt; _lblStatus.Text = <span class="st">"完成"</span>));</code></pre>
+  </div>
+
+  <h3>SynchronizationContext 捕获上下文</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 在 UI 线程捕获上下文（含 UI 线程的同步语义）</span>
+<span class="kw">var</span> ui = <span class="ty">SynchronizationContext</span>.Current!;   <span class="cm">// 必须在 UI 线程调用</span>
+
+<span class="ty">Task</span>.<span class="fn">Run</span>(() =&gt;
+{
+    <span class="cm">// 后台计算</span>
+    <span class="kw">double</span> result = <span class="fn">HeavyCompute</span>();
+
+    <span class="cm">// 用 Post 异步切回 UI 线程</span>
+    ui.<span class="fn">Post</span>(_ =&gt; _lblResult.Text = $<span class="st">"{result:F2}"</span>, <span class="kw">null</span>);
+    <span class="cm">// 用 Send 同步切回（会阻塞直到 UI 线程处理）</span>
+    ui.<span class="fn">Send</span>(_ =&gt; _lblResult.Text = $<span class="st">"{result:F2}"</span>, <span class="kw">null</span>);
+});</code></pre>
+  </div>
+
+  <h3>async/await：现代推荐写法</h3>
+  <div class="card">
+    <pre><code><span class="kw">private async void</span> <span class="fn">btnLoad_Click</span>(<span class="kw">object</span> sender, <span class="ty">EventArgs</span> e)
+{
+    _btnLoad.<span class="fn">Enabled</span> = <span class="kw">false</span>;
+    <span class="kw">try</span>
+    {
+        <span class="cm">// await 自动用 captured SynchronizationContext 切回 UI 线程</span>
+        <span class="kw">var</span> data = <span class="kw">await</span> <span class="fn">LoadDataAsync</span>();
+        _grid.DataSource = data;
+        _lblStatus.Text = $<span class="st">"加载 {data.Count} 条"</span>;
+    }
+    <span class="kw">catch</span> (<span class="ty">Exception</span> ex)
+    {
+        <span class="ty">MessageBox</span>.<span class="fn">Show</span>(<span class="kw">this</span>, ex.Message, <span class="st">"错误"</span>, MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+    <span class="kw">finally</span>
+    {
+        _btnLoad.<span class="fn">Enabled</span> = <span class="kw">true</span>;
+    }
+}
+
+<span class="kw">private async</span> <span class="ty">Task</span>&lt;<span class="ty">List</span>&lt;<span class="ty">Customer</span>&gt;&gt; <span class="fn">LoadDataAsync</span>()
+{
+    <span class="kw">await</span> <span class="ty">Task</span>.<span class="fn">Delay</span>(<span class="num">800</span>);                  <span class="cm">// 模拟 IO</span>
+    <span class="kw">return</span> <span class="kw">await</span> <span class="ty">Task</span>.<span class="fn">Run</span>(() =&gt; <span class="fn">QueryFromDb</span>());
+}
+
+<span class="cm">// 进度反馈：IProgress&lt;T&gt; + Progress&lt;T&gt; 自动切回 UI 线程</span>
+<span class="kw">private async void</span> <span class="fn">btnImport_Click</span>(<span class="kw">object</span> s, <span class="ty">EventArgs</span> e)
+{
+    <span class="ty">IProgress</span>&lt;<span class="kw">int</span>&gt; progress = <span class="kw">new</span> <span class="ty">Progress</span>&lt;<span class="kw">int</span>&gt;(v =&gt; _progress.Value = v);
+    <span class="kw">await</span> <span class="ty">Task</span>.<span class="fn">Run</span>(() =&gt;
+    {
+        <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt;= <span class="num">100</span>; i++)
+        {
+            <span class="ty">Thread</span>.<span class="fn">Sleep</span>(<span class="num">20</span>);
+            progress.<span class="fn">Report</span>(i);          <span class="cm">// Progress&lt;T&gt; 内部用 captured SynchronizationContext 回到 UI 线程</span>
+        }
+    });
+    _progress.Value = <span class="num">0</span>;
+    <span class="ty">MessageBox</span>.<span class="fn">Show</span>(<span class="st">"完成"</span>);
+}</code></pre>
+  </div>
+
+  <h3>BackgroundWorker（遗留 API，仍可用）</h3>
+  <div class="card">
+    <pre><code><span class="kw">var</span> worker = <span class="kw">new</span> <span class="ty">BackgroundWorker</span>
+{
+    WorkerReportsProgress      = <span class="kw">true</span>,
+    WorkerSupportsCancellation = <span class="kw">true</span>,
+};
+
+worker.<span class="fn">DoWork</span> += (s, e) =&gt;                 <span class="cm">// 后台线程</span>
+{
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt;= <span class="num">100</span>; i++)
+    {
+        <span class="kw">if</span> (worker.CancellationPending) { e.Cancel = <span class="kw">true</span>; <span class="kw">return</span>; }
+        <span class="ty">Thread</span>.<span class="fn">Sleep</span>(<span class="num">20</span>);
+        worker.<span class="fn">ReportProgress</span>(i);            <span class="cm">// 自动切回 UI 线程触发 ProgressChanged</span>
+    }
+};
+worker.<span class="fn">ProgressChanged</span> += (s, e) =&gt; _progress.Value = e.ProgressPercentage;
+worker.<span class="fn">RunWorkerCompleted</span> += (s, e) =&gt; <span class="ty">MessageBox</span>.<span class="fn">Show</span>(<span class="st">"完成"</span>);
+
+worker.<span class="fn">RunWorkerAsync</span>();</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>选型</strong>：新代码统一用 <code>async/await + Task</code>，<code>IProgress&lt;T&gt;</code> 做进度，<code>CancellationToken</code> 做取消。<code>BackgroundWorker</code> 仅在维护旧项目时遇到。
+  </div>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">11</span> 完整示例</h2>
+  <p>下面是一个完整可运行的用户管理窗体：基于 <code>BindingList&lt;Customer&gt;</code> + <code>BindingSource</code> + <code>DataGridView</code>，支持增删改查、保存到 JSON 文件、异步加载。体现了控件树、布局、绑定、事件、异步的全部要点。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// ── Model.cs ──</span>
+<span class="kw">using</span> <span class="ty">System.ComponentModel</span>;
+<span class="kw">using</span> <span class="ty">System.Runtime.CompilerServices</span>;
+
+<span class="kw">public class</span> <span class="ty">Customer</span> : <span class="ty">INotifyPropertyChanged</span>, <span class="ty">IEditableObject</span>
+{
+    <span class="kw">public int</span> Id { <span class="kw">get</span>; <span class="kw">set</span>; }
+
+    <span class="kw">private string</span> _name = <span class="st">""</span>;
+    <span class="kw">public string</span> Name
+    {
+        <span class="kw">get</span> =&gt; _name;
+        <span class="kw">set</span> =&gt; <span class="fn">SetField</span>(<span class="kw">ref</span> _name, value);
+    }
+
+    <span class="kw">private bool</span> _active = <span class="kw">true</span>;
+    <span class="kw">public bool</span> Active
+    {
+        <span class="kw">get</span> =&gt; _active;
+        <span class="kw">set</span> =&gt; <span class="fn">SetField</span>(<span class="kw">ref</span> _active, value);
+    }
+
+    <span class="kw">public event</span> <span class="ty">PropertyChangedEventHandler</span>? PropertyChanged;
+
+    <span class="kw">protected bool</span> <span class="fn">SetField</span>&lt;<span class="ty">T</span>&gt;(<span class="kw">ref</span> <span class="ty">T</span> field, <span class="ty">T</span> value, [<span class="ty">CallerMemberName</span>] <span class="kw">string</span>? name = <span class="kw">null</span>)
+    {
+        <span class="kw">if</span> (<span class="ty">EqualityComparer</span>&lt;<span class="ty">T</span>&gt;.<span class="fn">Default</span>.<span class="fn">Equals</span>(field, value)) <span class="kw">return false</span>;
+        field = value;
+        <span class="ty">PropertyChanged</span>?.<span class="fn">Invoke</span>(<span class="kw">this</span>, <span class="kw">new</span> <span class="ty">PropertyChangedEventArgs</span>(name));
+        <span class="kw">return true</span>;
+    }
+
+    <span class="kw">private</span> <span class="ty">Customer</span>? _backup;
+    <span class="kw">public void</span> <span class="fn">BeginEdit</span>() =&gt; _backup = (<span class="ty">Customer</span>)<span class="ty">MemberwiseClone</span>();
+    <span class="kw">public void</span> <span class="fn">CancelEdit</span>() { <span class="kw">if</span> (_backup != <span class="kw">null</span>) { _name = _backup._name; _active = _backup._active; } }
+    <span class="kw">public void</span> <span class="fn">EndEdit</span>() =&gt; _backup = <span class="kw">null</span>;
+}
+
+<span class="cm">// ── CustomerForm.cs ──</span>
+<span class="kw">public partial class</span> <span class="ty">CustomerForm</span> : <span class="ty">Form</span>
+{
+    <span class="kw">private readonly</span> <span class="ty">BindingList</span>&lt;<span class="ty">Customer</span>&gt; _list;
+    <span class="kw">private readonly</span> <span class="ty">BindingSource</span> _bs = <span class="kw">new</span>();
+    <span class="kw">private readonly</span> <span class="ty">DataGridView</span> _grid;
+    <span class="kw">private readonly</span> <span class="ty">TextBox</span> _txtName;
+    <span class="kw">private readonly</span> <span class="ty">CheckBox</span> _chkActive;
+    <span class="kw">private readonly</span> <span class="ty">Button</span> _btnAdd, _btnDelete, _btnSave, _btnReload;
+    <span class="kw">private readonly</span> <span class="ty">StatusStrip</span> _status;
+    <span class="kw">private readonly</span> <span class="ty">ToolStripStatusLabel</span> _lblInfo;
+
+    <span class="kw">public</span> <span class="fn">CustomerForm</span>()
+    {
+        <span class="fn">InitializeComponent</span>();
+
+        <span class="ty">Text</span> = <span class="st">"客户管理"</span>;
+        ClientSize = <span class="kw">new</span> <span class="ty">Size</span>(<span class="num">700</span>, <span class="num">460</span>);
+        StartPosition = <span class="ty">FormStartPosition</span>.CenterScreen;
+
+        _list = <span class="kw">new</span> <span class="ty">BindingList</span>&lt;<span class="ty">Customer</span>&gt;(<span class="kw">new</span> <span class="ty">List</span>&lt;<span class="ty">Customer</span>&gt;());
+
+        <span class="fn">BuildLayout</span>();
+        <span class="fn">WireGrid</span>();
+        <span class="fn">WireBindings</span>();
+        _ = <span class="fn">ReloadAsync</span>();
+    }
+
+    <span class="kw">private void</span> <span class="fn">BuildLayout</span>()
+    {
+        <span class="kw">var</span> topPanel = <span class="kw">new</span> <span class="ty">TableLayoutPanel</span> { Dock = <span class="ty">DockStyle</span>.Fill, ColumnCount = <span class="num">1</span>, RowCount = <span class="num">3</span> };
+        topPanel.<span class="fn">RowStyles</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">RowStyle</span>(<span class="ty">SizeType</span>.Absolute, <span class="num">40</span>));
+        topPanel.<span class="fn">RowStyles</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">RowStyle</span>(<span class="ty">SizeType</span>.Percent, <span class="num">100</span>));
+        topPanel.<span class="fn">RowStyles</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">RowStyle</span>(<span class="ty">SizeType</span>.Absolute, <span class="num">80</span>));
+
+        <span class="kw">var</span> toolbar = <span class="kw">new</span> <span class="ty">FlowLayoutPanel</span> { Dock = <span class="ty">DockStyle</span>.Fill, Padding = <span class="kw">new</span> <span class="ty">Padding</span>(<span class="num">8</span>), WrapContents = <span class="kw">false</span> };
+        _btnAdd    = <span class="kw">new</span> <span class="ty">Button</span> { Text = <span class="st">"新增"</span>, Size = <span class="kw">new</span> <span class="ty">Size</span>(<span class="num">75</span>, <span class="num">28</span>) };
+        _btnDelete = <span class="kw">new</span> <span class="ty">Button</span> { Text = <span class="st">"删除"</span>, Size = <span class="kw">new</span> <span class="ty">Size</span>(<span class="num">75</span>, <span class="num">28</span>) };
+        _btnSave   = <span class="kw">new</span> <span class="ty">Button</span> { Text = <span class="st">"保存"</span>, Size = <span class="kw">new</span> <span class="ty">Size</span>(<span class="num">75</span>, <span class="num">28</span>) };
+        _btnReload = <span class="kw">new</span> <span class="ty">Button</span> { Text = <span class="st">"重载"</span>, Size = <span class="kw">new</span> <span class="ty">Size</span>(<span class="num">75</span>, <span class="num">28</span>) };
+        toolbar.Controls.<span class="fn">AddRange</span>(<span class="kw">new</span> <span class="ty">Control</span>[] { _btnAdd, _btnDelete, _btnSave, _btnReload });
+
+        _grid = <span class="kw">new</span> <span class="ty">DataGridView</span>
+        {
+            Dock = <span class="ty">DockStyle</span>.Fill,
+            AutoGenerateColumns = <span class="kw">false</span>,
+            AllowUserToAddRows = <span class="kw">false</span>,
+            AllowUserToDeleteRows = <span class="kw">false</span>,
+            ReadOnly = <span class="kw">false</span>,
+            SelectionMode = <span class="ty">DataGridViewSelectionMode</span>.FullRowSelect,
+            AutoSizeColumnsMode = <span class="ty">DataGridViewAutoSizeColumnsMode</span>.Fill,
+            RowHeadersWidth = <span class="num">30</span>,
+            BackgroundColor = <span class="ty">Color</span>.White,
+        };
+
+        <span class="kw">var</span> detail = <span class="kw">new</span> <span class="ty">TableLayoutPanel</span> { Dock = <span class="ty">DockStyle</span>.Fill, ColumnCount = <span class="num">4</span>, RowCount = <span class="num">2</span>, Padding = <span class="kw">new</span> <span class="ty">Padding</span>(<span class="num">8</span>) };
+        detail.<span class="fn">ColumnStyles</span>.<span class="fn">AddRange</span>(<span class="kw">new</span>[] { <span class="kw">new</span> <span class="ty">ColumnStyle</span>(<span class="ty">SizeType</span>.Absolute, <span class="num">80</span>), <span class="kw">new</span> <span class="ty">ColumnStyle</span>(<span class="ty">SizeType</span>.Percent, <span class="num">50</span>), <span class="kw">new</span> <span class="ty">ColumnStyle</span>(<span class="ty">SizeType</span>.Absolute, <span class="num">60</span>), <span class="kw">new</span> <span class="ty">ColumnStyle</span>(<span class="ty">SizeType</span>.Percent, <span class="num">50</span>) });
+
+        _txtName   = <span class="kw">new</span> <span class="ty">TextBox</span> { Dock = <span class="ty">DockStyle</span>.Fill, Padding = <span class="kw">new</span> <span class="ty">Padding</span>(<span class="num">0</span>, <span class="num">4</span>, <span class="num">0</span>, <span class="num">0</span>) };
+        _chkActive = <span class="kw">new</span> <span class="ty">CheckBox</span> { Text = <span class="st">"启用"</span>, AutoSize = <span class="kw">true</span> };
+
+        detail.Controls.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">Label</span> { Text = <span class="st">"姓名:"</span>, AutoSize = <span class="kw">true</span>, Anchor = <span class="ty">AnchorStyles</span>.Left, Padding = <span class="kw">new</span> <span class="ty">Padding</span>(<span class="num">0</span>, <span class="num">8</span>, <span class="num">0</span>, <span class="num">0</span>) }, <span class="num">0</span>, <span class="num">0</span>);
+        detail.Controls.<span class="fn">Add</span>(_txtName, <span class="num">1</span>, <span class="num">0</span>);
+        detail.Controls.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">Label</span> { Text = <span class="st">"状态:"</span>, AutoSize = <span class="kw">true</span>, Anchor = <span class="ty">AnchorStyles</span>.Left, Padding = <span class="kw">new</span> <span class="ty">Padding</span>(<span class="num">0</span>, <span class="num">6</span>, <span class="num">0</span>, <span class="num">0</span>) }, <span class="num">2</span>, <span class="num">0</span>);
+        detail.Controls.<span class="fn">Add</span>(_chkActive, <span class="num">3</span>, <span class="num">0</span>);
+
+        _status = <span class="kw">new</span> <span class="ty">StatusStrip</span> { Dock = <span class="ty">DockStyle</span>.Bottom };
+        _lblInfo = <span class="kw">new</span> <span class="ty">ToolStripStatusLabel</span>();
+        _status.Items.<span class="fn">Add</span>(_lblInfo);
+
+        topPanel.Controls.<span class="fn">Add</span>(toolbar, <span class="num">0</span>, <span class="num">0</span>);
+        topPanel.Controls.<span class="fn">Add</span>(_grid, <span class="num">0</span>, <span class="num">1</span>);
+        topPanel.Controls.<span class="fn">Add</span>(detail, <span class="num">0</span>, <span class="num">2</span>);
+        Controls.<span class="fn">Add</span>(topPanel);
+        Controls.<span class="fn">Add</span>(_status);
+
+        <span class="cm">// 主菜单</span>
+        <span class="ty">MenuStrip</span> mainMenu = <span class="kw">new</span> <span class="ty">MenuStrip</span>();
+        <span class="ty">ToolStripMenuItem</span> fileMenu = <span class="kw">new</span>(<span class="st">"文件(&amp;F)"</span>);
+        fileMenu.DropDownItems.<span class="fn">Add</span>(<span class="st">"保存(&amp;S)  Ctrl+S"</span>, <span class="kw">null</span>, (_, _) =&gt; _ = <span class="fn">SaveAsync</span>());
+        fileMenu.DropDownItems.<span class="fn">Add</span>(<span class="st">"-"</span>);
+        fileMenu.DropDownItems.<span class="fn">Add</span>(<span class="st">"退出(&amp;X)"</span>, <span class="kw">null</span>, (_, _) =&gt; <span class="ty">Application</span>.<span class="fn">Exit</span>());
+        mainMenu.Items.<span class="fn">Add</span>(fileMenu);
+        MainMenuStrip = mainMenu;
+        Controls.<span class="fn">Add</span>(mainMenu);
+    }
+
+    <span class="kw">private void</span> <span class="fn">WireGrid</span>()
+    {
+        _grid.Columns.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">DataGridViewTextBoxColumn</span>
+        {
+            DataPropertyName = <span class="kw">nameof</span>(<span class="ty">Customer</span>.Id), HeaderText = <span class="st">"#"</span>, Width = <span class="num">40</span>, ReadOnly = <span class="kw">true</span>
+        });
+        _grid.Columns.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">DataGridViewTextBoxColumn</span>
+        {
+            DataPropertyName = <span class="kw">nameof</span>(<span class="ty">Customer</span>.Name), HeaderText = <span class="st">"姓名"</span>, Width = <span class="num">160</span>
+        });
+        _grid.Columns.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">DataGridViewCheckBoxColumn</span>
+        {
+            DataPropertyName = <span class="kw">nameof</span>(<span class="ty">Customer</span>.Active), HeaderText = <span class="st">"启用"</span>, Width = <span class="num">50</span>
+        });
+    }
+
+    <span class="kw">private void</span> <span class="fn">WireBindings</span>()
+    {
+        _bs.DataSource = _list;
+        _grid.DataSource = _bs;
+        _txtName.<span class="fn">DataBindings</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">Binding</span>(<span class="kw">nameof</span>(<span class="ty">TextBox</span>.Text), _bs, <span class="kw">nameof</span>(<span class="ty">Customer</span>.Name), <span class="kw">true</span>, <span class="ty">DataSourceUpdateMode</span>.OnPropertyChanged));
+        _chkActive.<span class="fn">DataBindings</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">Binding</span>(<span class="kw">nameof</span>(<span class="ty">CheckBox</span>.Checked), _bs, <span class="kw">nameof</span>(<span class="ty">Customer</span>.Active), <span class="kw">true</span>, <span class="ty">DataSourceUpdateMode</span>.OnPropertyChanged));
+        _list.<span class="fn">ListChanged</span> += (_, _) =&gt; <span class="fn">UpdateStatus</span>();
+        _bs.<span class="fn">CurrentChanged</span> += (_, _) =&gt; <span class="fn">UpdateStatus</span>();
+
+        _btnAdd.<span class="fn">Click</span>    += (_, _) =&gt; { _bs.<span class="fn">AddNew</span>(); _txtName.<span class="fn">Focus</span>(); };
+        _btnDelete.<span class="fn">Click</span> += (_, _) =&gt;
+        {
+            <span class="kw">if</span> (_bs.Current <span class="kw">is</span> <span class="ty">Customer</span> c
+                &amp;&amp; <span class="ty">MessageBox</span>.<span class="fn">Show</span>(<span class="kw">this</span>, $<span class="st">"删除 {c.Name}?"</span>, <span class="st">"确认"</span>, MessageBoxButtons.YesNo) == DialogResult.Yes)
+                _bs.<span class="fn">RemoveCurrent</span>();
+        };
+        _btnSave.<span class="fn">Click</span>   += (_, _) =&gt; _ = <span class="fn">SaveAsync</span>();
+        _btnReload.<span class="fn">Click</span> += (_, _) =&gt; _ = <span class="fn">ReloadAsync</span>();
+    }
+
+    <span class="kw">private void</span> <span class="fn">UpdateStatus</span>() =&gt; _lblInfo.Text = $<span class="st">"共 {_list.Count} 条 · 当前 {_bs.Position + 1}"</span>;
+
+    <span class="kw">private async</span> <span class="ty">Task</span> <span class="fn">ReloadAsync</span>()
+    {
+        _lblInfo.Text = <span class="st">"加载中..."</span>;
+        <span class="kw">try</span>
+        {
+            <span class="kw">var</span> data = <span class="kw">await</span> <span class="ty">Task</span>.<span class="fn">Run</span>(() =&gt; <span class="ty">Repository</span>.<span class="fn">LoadAll</span>());
+            _list.<span class="fn">RaiseListChangedEvents</span> = <span class="kw">false</span>;
+            _list.<span class="fn">Clear</span>();
+            <span class="kw">foreach</span> (<span class="kw">var</span> c <span class="kw">in</span> data) _list.<span class="fn">Add</span>(c);
+            _list.<span class="fn">RaiseListChangedEvents</span> = <span class="kw">true</span>;
+            _list.<span class="fn">ResetBindings</span>();
+            <span class="fn">UpdateStatus</span>();
+        }
+        <span class="kw">catch</span> (<span class="ty">Exception</span> ex)
+        {
+            <span class="ty">MessageBox</span>.<span class="fn">Show</span>(<span class="kw">this</span>, ex.Message, <span class="st">"加载失败"</span>);
+        }
+    }
+
+    <span class="kw">private async</span> <span class="ty">Task</span> <span class="fn">SaveAsync</span>()
+    {
+        _lblInfo.Text = <span class="st">"保存中..."</span>;
+        <span class="kw">try</span>
+        {
+            <span class="kw">await</span> <span class="ty">Task</span>.<span class="fn">Run</span>(() =&gt; <span class="ty">Repository</span>.<span class="fn">SaveAll</span>(_list.<span class="fn">ToList</span>()));
+            _lblInfo.Text = <span class="st">"已保存"</span>;
+        }
+        <span class="kw">catch</span> (<span class="ty">Exception</span> ex)
+        {
+            <span class="ty">MessageBox</span>.<span class="fn">Show</span>(<span class="kw">this</span>, ex.Message, <span class="st">"保存失败"</span>);
+            <span class="fn">UpdateStatus</span>();
+        }
+    }
+
+    <span class="kw">protected override bool</span> <span class="fn">ProcessCmdKey</span>(<span class="kw">ref</span> <span class="ty">Message</span> msg, <span class="ty">Keys</span> keyData)
+    {
+        <span class="kw">if</span> (keyData == (<span class="ty">Keys</span>.Control | <span class="ty">Keys</span>.S)) { _ = <span class="fn">SaveAsync</span>(); <span class="kw">return true</span>; }
+        <span class="kw">if</span> (keyData == <span class="ty">Keys</span>.Delete &amp;&amp; _grid.Focused) { _btnDelete.<span class="fn">PerformClick</span>(); <span class="kw">return true</span>; }
+        <span class="kw">return base</span>.<span class="fn">ProcessCmdKey</span>(<span class="kw">ref</span> msg, keyData);
+    }
+}
+
+<span class="cm">// ── Repository.cs（示意，省略 JSON 序列化实现）──</span>
+<span class="kw">public static class</span> <span class="ty">Repository</span>
+{
+    <span class="kw">private const string</span> Path = <span class="st">"customers.json"</span>;
+    <span class="kw">public static</span> <span class="ty">List</span>&lt;<span class="ty">Customer</span>&gt; <span class="fn">LoadAll</span>() { <span class="cm">/* File.ReadAllText + JsonSerializer.Deserialize */</span> <span class="kw">return new</span>(); }
+    <span class="kw">public static void</span> <span class="fn">SaveAll</span>(<span class="ty">List</span>&lt;<span class="ty">Customer</span>&gt; list) { <span class="cm">/* File.WriteAllText + JsonSerializer.Serialize */</span> }
+}
+
+<span class="cm">// ── Program.cs ──</span>
+<span class="kw">internal static class</span> <span class="ty">Program</span>
+{
+    [<span class="ty">STAThread</span>]
+    <span class="kw">static void</span> <span class="fn">Main</span>()
+    {
+        <span class="ty">ApplicationConfiguration</span>.<span class="fn">Initialize</span>();
+        <span class="ty">Application</span>.<span class="fn">Run</span>(<span class="kw">new</span> <span class="ty">CustomerForm</span>());
+    }
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>关键技巧汇总</strong>：<code>BindingList&lt;T&gt;</code> 实现增删通知、<code>IEditableObject</code> 实现 Esc 撤销编辑、<code>ProcessCmdKey</code> 实现快捷键、批量加载时关 <code>RaiseListChangedEvents</code> + <code>ResetBindings</code> 避免逐条事件。
+  </div>
+</section>
+
+<section id="vs-wpf" class="toc-link">
+  <h2><span class="num">12</span> 对比 WPF</h2>
+  <p>WinForms 与 WPF 是 .NET 桌面上的<strong>两大并行框架</strong>。微软官方说法是“两者都长期支持，互不替代”，但技术路线、设计哲学、渲染原理截然不同。</p>
+
+  <table>
+    <tr><th>维度</th><th>WinForms</th><th>WPF</th></tr>
+    <tr><td>渲染引擎</td><td>GDI+（位图、句柄、即时模式）</td><td>DirectX（矢量、保留模式）</td></tr>
+    <tr><td>控件本质</td><td>每个控件一个 HWND</td><td>无窗口，一个 HWND 装整个窗口的合成</td></tr>
+    <tr><td>UI 定义</td><td>代码 + 设计器（partial class）</td><td>XAML（声明式标记）</td></tr>
+    <tr><td>布局</td><td>Anchor/Dock/TableLayoutPanel</td><td>StackPanel/Grid/Canvas/DockPanel（保留模式）</td></tr>
+    <tr><td>数据绑定</td><td>较弱，单向/双向需手写</td><td>极强，命令系统 + 模板 + 多向</td></tr>
+    <tr><td>样式与模板</td><td>几乎没有</td><td>Style/ControlTemplate/DataTemplate</td></tr>
+    <tr><td>矢量/动画/3D</td><td>弱</td><td>强（矢量原生、动画系统、3D 支持）</td></tr>
+    <tr><td>透明/混合</td><td>受限（Need layered window）</td><td>原生支持透明、混合模式</td></tr>
+    <tr><td>设计器</td><td>成熟稳定、所见即所得</td><td>存在但相对复杂</td></tr>
+    <tr><td>学习曲线</td><td>平缓（拖控件即用）</td><td>陡峭（XAML + MVVM + 数据上下文）</td></tr>
+    <tr><td>性能（控件少）</td><td>优</td><td>良好</td></tr>
+    <tr><td>性能（控件极多）</td><td>差（HWND 限制）</td><td>优（虚拟化）</td></tr>
+    <tr><td>跨平台</td><td>实验性（Mono/.NET 7+）</td><td>否（深度绑定 DirectX/Windows）</td></tr>
+    <tr><td>现代化路径</td><td>WinForms → MAUI（不直接）</td><td>WPF → WinUI 3 → WinAppSDK</td></tr>
+  </table>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">选 WinForms 当</div>
+      <ul>
+        <li>表单为主、控件少、数据库前端</li>
+        <li>团队 C# 经验多但 UI 经验少</li>
+        <li>维护大量遗留 .NET Framework 代码</li>
+        <li>对接 Win32/COM/旧组件（OCX）</li>
+        <li>工业上位机、设备控制面板</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">选 WPF 当</div>
+      <ul>
+        <li>需要富媒体（动画、视频、3D）</li>
+        <li>大量自定义控件、复杂主题</li>
+        <li>严格 MVVM、单元测试 UI 逻辑</li>
+        <li>大数据量列表（虚拟化必须）</li>
+        <li>新项目且团队接受 XAML 学习成本</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <strong>选型建议</strong>：内部业务工具、配置界面、上位机选 <strong>WinForms</strong>，5 分钟出原型；面向终端用户、强调视觉、复杂交互选 <strong>WPF</strong>。两者可以同进程共存（<code>ElementHost</code> 把 WPF 控件嵌进 WinForms，<code>WindowsFormsHost</code> 反之）。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">13</span> 命名空间索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">System.Windows.Forms.dll</span>                          <span class="cmt">WinForms 核心</span>
+├── <span class="file">System.Windows.Forms</span>                              <span class="cmt">主命名空间</span>
+│   ├── <span class="file">Application</span>                                   <span class="cmt">消息循环、应用生命周期</span>
+│   ├── <span class="file">Form / FormClosingEventArgs</span>                   <span class="cmt">顶层窗口</span>
+│   ├── <span class="file">Control / Button / TextBox / Label</span>            <span class="cmt">基础控件</span>
+│   ├── <span class="file">CheckBox / RadioButton / ComboBox</span>             <span class="cmt">选择控件</span>
+│   ├── <span class="file">ListBox / CheckedListBox / ListView</span>           <span class="cmt">列表控件</span>
+│   ├── <span class="file">DataGridView / DataGridViewColumn</span>             <span class="cmt">★ 表格</span>
+│   ├── <span class="file">TreeView / TreeNode</span>                          <span class="cmt">树控件</span>
+│   ├── <span class="file">TabControl / TabPage / SplitContainer</span>         <span class="cmt">容器控件</span>
+│   ├── <span class="file">TableLayoutPanel / FlowLayoutPanel / Panel</span>     <span class="cmt">★ 布局容器</span>
+│   ├── <span class="file">MenuStrip / ToolStrip / StatusStrip / ContextMenuStrip</span>  <span class="cmt">菜单工具栏</span>
+│   ├── <span class="file">NotifyIcon / ToolTip</span>                          <span class="cmt">托盘/提示</span>
+│   ├── <span class="file">Timer</span>                                        <span class="cmt">UI 线程定时器</span>
+│   ├── <span class="file">OpenFileDialog / SaveFileDialog / FolderBrowserDialog</span>  <span class="cmt">通用对话框</span>
+│   └── <span class="file">ColorDialog / FontDialog / PrintDialog</span>         <span class="cmt">字体/颜色/打印</span>
+├── <span class="file">System.Windows.Forms.Design</span>                      <span class="cmt">设计期支持</span>
+├── <span class="file">System.Windows.Forms.Integration</span>                 <span class="cmt">★ WPF/WinForms 互操作</span>
+├── <span class="file">System.Windows.Forms.Layout</span>                      <span class="cmt">布局引擎内部</span>
+└── <span class="file">System.Windows.Forms.VisualStyles</span>                <span class="cmt">视觉样式</span>
+
+<span class="dir">System.Drawing.dll (GDI+)</span>                         <span class="cmt">2D 绘图</span>
+├── <span class="file">System.Drawing</span>
+│   ├── <span class="file">Graphics</span>                                     <span class="cmt">★ 绘图表面</span>
+│   ├── <span class="file">Pen / Brush / SolidBrush / TextureBrush</span>       <span class="cmt">绘图对象</span>
+│   ├── <span class="file">Font / FontFamily</span>                            <span class="cmt">字体</span>
+│   ├── <span class="file">Bitmap / Image / Icon</span>                        <span class="cmt">图像</span>
+│   ├── <span class="file">Color / Point / Rectangle / Size</span>              <span class="cmt">基础值类型</span>
+│   └── <span class="file">StringFormat</span>                                 <span class="cmt">文字格式</span>
+└── <span class="file">System.Drawing.Drawing2D</span>                        <span class="cmt">高级 2D（矩阵、路径、渐变）</span>
+
+<span class="dir">System.ComponentModel.dll</span>                        <span class="cmt">组件/绑定模型</span>
+├── <span class="file">Component / Container / IContainer</span>              <span class="cmt">组件基类</span>
+├── <span class="file">INotifyPropertyChanged</span>                         <span class="cmt">★ 属性变化通知</span>
+├── <span class="file">BindingList&lt;T&gt; / IBindingList</span>                  <span class="cmt">★ 可观测集合</span>
+├── <span class="file">TypeConverter / TypeDescriptor</span>                 <span class="cmt">类型描述（设计器/绑定）</span>
+└── <span class="file">BackgroundWorker</span>                               <span class="cmt">遗留异步组件</span>
+
+<span class="dir">System.Windows.Forms.DataVisualization.Charting</span> <span class="cmt">图表（System.Windows.Forms.DataVisualization.dll）</span>
+├── <span class="file">Chart / ChartArea / Series</span>                      <span class="cmt">★ WinForms 图表控件</span>
+└── <span class="file">ChartType 枚举</span>                                 <span class="cmt">柱/折线/饼/雷达...</span>
+
+<span class="dir">System.Drawing.Printing.dll</span>                      <span class="cmt">打印</span>
+└── <span class="file">PrintDocument / PrintPageEventArgs / PrintPreviewDialog</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>System.Windows.Forms.Application</code> 消息循环与生命周期管理的入口，理解 WinForms 程序如何启动与退出。<br>
+    <code>System.Windows.Forms.Control</code> 所有控件的基类，封装 HWND、属性、事件、布局，是 WinForms 的根本。<br>
+    <code>System.Windows.Forms.Form</code> 顶层窗口，模态/非模态对话框与生命周期事件。<br>
+    <code>System.ComponentModel.BindingSource</code> 数据绑定的核心中介，配合 BindingList&lt;T&gt; 实现增删改查的全自动同步。<br>
+    <code>System.Drawing.Graphics</code> GDI+ 绘图表面，所有自绘的入口，配合 Pen/Brush/Font。<br>
+    <code>System.Windows.Forms.TableLayoutPanel</code> 响应式布局的主力容器，行/列百分比分配。<br>
+    微软官方《Windows Forms documentation》与 System.Windows.Forms 源码（github.com/dotnet/winforms）为最权威参考。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 .NET 9 (Windows Forms) · System.Windows.Forms · 生成于 2026-06-22</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Windows UWP 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230063b1'/><stop offset='100%25' stop-color='%230078d4'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='70' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>U</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Windows UWP 深度解析</h1>
+  <p class="subtitle">Universal Windows Platform — WinRT + 沙箱 + MSIX 分发</p>
+  <span class="version">Windows SDK 10.0.22621 · Windows.UI.Xaml</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构与语言投影</a></li>
+    <li><a href="#appmodel">应用模型与生命周期</a></li>
+    <li><a href="#xaml">XAML 控件与布局</a></li>
+    <li><a href="#binding">数据绑定</a></li>
+    <li><a href="#async">异步编程</a></li>
+    <li><a href="#sandbox">沙箱与权限</a></li>
+    <li><a href="#background">后台任务与通知</a></li>
+    <li><a href="#package">打包与分发</a></li>
+    <li><a href="#winui">对比 WinUI 3</a></li>
+    <li><a href="#ns">命名空间 / SDK 索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>UWP（Universal Windows Platform，通用 Windows 平台）是微软在 <strong>Windows 10（2015）</strong> 推出的<strong>统一应用模型</strong>。它基于 <strong>Windows Runtime（WinRT）</strong>这一原生 COM 基底的 API 层，提供一套跨设备（PC、手机、Xbox、HoloLens、IoT）的 API 表面，通过 <strong>Microsoft Store + MSIX</strong> 分发，运行在 <strong>AppContainer 沙箱</strong>中，实现安全隔离与可信安装。应用以 C# / VB / C++ / JavaScript 编写，UI 由 <strong>XAML</strong>（<code>Windows.UI.Xaml</code>）声明与驱动。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>一次开发，多端运行</strong>：同一程序包跑在 PC/手机/Xbox/HoloLens</li>
+        <li><strong>WinRT API 投影</strong>：原生 COM，多语言自然调用</li>
+        <li><strong>沙箱隔离</strong>：AppContainer + Capability 声明权限</li>
+        <li><strong>MSIX 打包</strong>：清单驱动、证书签名、干净卸载</li>
+        <li><strong>Store 分发</strong>：认证、自动更新、企业私域分发</li>
+        <li><strong>自适应 UI</strong>：VisualStateManager + AdaptiveTrigger 断点</li>
+        <li><strong>异步优先</strong>：WinRT 所有 I/O 暴露为 IAsyncOperation</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">适用场景</div>
+      <ul>
+        <li>面向 Microsoft Store 的消费类应用</li>
+        <li>Xbox / HoloLens / Surface Hub 设备应用</li>
+        <li>需要安全沙箱、低权限的企业工具</li>
+        <li>深度集成 Toast/磁贴/Live Tile 通知的应用</li>
+        <li>跨 Windows 设备家族复用代码的 LOB 应用</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout warn">
+    <strong>为何被 WinUI 3 取代</strong>：UWP 的 XAML 栈随<strong>操作系统版本</strong>发布，API 表面受目标版本约束，开发者无法在旧系统上使用新控件；AppContainer 沙箱也限制了 Win32 互操作。微软自 2020 年起把 XAML 剥离成 <strong>WinUI 3</strong>（<code>Microsoft.UI.Xaml</code>），随应用而非系统分发，新项目应优先选用 WinUI 3 / Windows App SDK。
+  </div>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构与语言投影</h2>
+  <p>UWP 的底层是 <strong>Windows Runtime（WinRT）</strong>——一组以 <strong>原生 COM</strong>（<code>IUnknown</code>、注册表元数据、<code>.winmd</code>）为基底的二进制 API，所有 Windows 设备家族共享。各语言通过<strong>语言投影（Language Projection）</strong>把 WinRT 投射为本地惯用法：C# 看到 .NET 风格类型，C++/WinRT 看到 Modern C++ 类，JavaScript 看到Promise。上层 <strong>Windows.UI.Xaml</strong> 提供 XAML 框架，应用运行在 <strong>AppContainer</strong> 进程内。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">┌──────────────────────────────────────────────────────────┐</span>
+<span class="cm">│  你的应用（C# / C++/WinRT / JavaScript / VB）              │</span>
+<span class="cm">│        XAML（Windows.UI.Xaml）+ 业务逻辑                    │</span>
+<span class="cm">├──────────────────────────────────────────────────────────┤</span>
+<span class="cm">│  语言投影：C#/.NET · C++/WinRT · JavaScript · Rust(社区)    │</span>
+<span class="cm">├──────────────────────────────────────────────────────────┤</span>
+<span class="cm">│  Windows Runtime（WinRT，COM 基底 + .winmd 元数据）         │</span>
+<span class="cm">│   Windows.UI · Windows.Storage · Windows.Devices · ...     │</span>
+<span class="cm">├──────────────────────────────────────────────────────────┤</span>
+<span class="cm">│  Win32 / NT 内核 / 驱动 / HAL                               │</span>
+<span class="cm">│  进程隔离：AppContainer 沙箱（低完整性 + Capability）         │</span>
+<span class="cm">└──────────────────────────────────────────────────────────┘</span></code></pre>
+  </div>
+
+  <table>
+    <tr><th>语言投影</th><th>形态</th><th>特点</th></tr>
+    <tr><td><strong>C# / VB.NET</strong></td><td>托管（.NET Native / .NET）</td><td>最常用，<code>await</code> 自动投影 WinRT 异步；XAML 设计器支持最好</td></tr>
+    <tr><td><strong>C++/WinRT</strong></td><td>Modern C++（头文件库）</td><td>微软推荐，零开销投影；投影代码由 <code>cppwinrt.exe</code> 生成</td></tr>
+    <tr><td><strong>C++/CX</strong></td><td>C++ 语言扩展（<code>^</code> 句柄）</td><td><strong>已废弃</strong>，VS 2022 起不再推荐，应迁移到 C++/WinRT</td></tr>
+    <tr><td><strong>JavaScript</strong></td><td>HTML/CSS/JS（已弱化）</td><td>UWP 早期支持，新项目不应再选；已转向 PWA + WebView</td></tr>
+    <tr><td><strong>.NET（C# 6+）</strong></td><td>.NET Native 编译</td><td>发布时 AOT 编译为本地代码，启动快、无 JIT</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>WinRT = COM + 元数据</strong>：每个 WinRT 类型都在 <code>.winmd</code>（ECMA-335 格式）中声明，投影层据此生成本地语言的绑定。无论用哪种语言调用，最终都是 COM <code>vtable</code> 调用，没有跨语言封送的运行时开销。
+  </div>
+</section>
+
+<section id="appmodel" class="toc-link">
+  <h2><span class="num">03</span> 应用模型与生命周期</h2>
+  <p>UWP 应用以 <code>Windows.UI.Xaml.Application</code> 为入口，三层结构 <strong>Window → Frame → Page</strong> 承载 UI。<strong>生命周期状态机</strong>由系统驱动：用户切走或锁屏时进入 <strong>Suspended</strong>，内存压力下被 <strong>Terminated</strong>。开发者需在 <strong>Suspending</strong> 事件中持久化会话状态，在 <strong>OnLaunched</strong> 中检测上次是否被终止并恢复。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">三层 UI 结构</div>
+      <ul>
+        <li><code>Window</code>：顶级窗口，每应用可多窗口</li>
+        <li><code>Frame</code>：导航容器，维护页面栈</li>
+        <li><code>Page</code>：单个 UI 视图，XAML + code-behind</li>
+        <li><code>Frame.Navigate(typeof(DetailPage), param)</code> 入栈</li>
+        <li><code>Frame.GoBack()</code> 出栈</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">生命周期状态机</div>
+      <table>
+        <tr><th>状态</th><th>含义</th></tr>
+        <tr><td>NotRunning</td><td>未启动</td></tr>
+        <tr><td>Running</td><td>前台可见，正常执行</td></tr>
+        <tr><td>Suspended</td><td>用户切走，冻结但驻留内存</td></tr>
+        <tr><td>Terminated</td><td>系统回收内存，需重启重建</td></tr>
+        <tr><td>ClosedByUser</td><td>用户主动关闭（不算 Terminate）</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// App.xaml.cs — 应用入口与启动导航</span>
+<span class="kw">sealed partial class</span> <span class="ty">App</span> : <span class="ty">Application</span>
+{
+    <span class="kw">public</span> <span class="ty">App</span>() {
+        <span class="kw">this</span>.<span class="fn">InitializeComponent</span>();
+        <span class="fn">Suspending</span>          += <span class="fn">OnSuspending</span>;
+        <span class="fn">Resuming</span>           += <span class="fn">OnResuming</span>;
+        <span class="fn">UnhandledException</span> += <span class="fn">OnUnhandled</span>;
+    }
+
+    <span class="cm">// 启动或激活时调用 —— 创建窗口、导航首页</span>
+    <span class="kw">protected override async void</span> <span class="fn">OnLaunched</span>(<span class="ty">LaunchActivatedEventArgs</span> e) {
+        <span class="ty">Frame</span> rootFrame = <span class="ty">Window</span>.<span class="fn">Current</span>.<span class="fn">Content</span> <span class="kw">as</span> <span class="ty">Frame</span>;
+        <span class="kw">if</span> (rootFrame == <span class="kw">null</span>) {
+            rootFrame = <span class="kw">new</span> <span class="ty">Frame</span>();
+            <span class="cm">// 恢复上次会话的导航状态</span>
+            rootFrame.<span class="fn">NavigationFailed</span> += <span class="fn">OnNavigationFailed</span>;
+            <span class="kw">if</span> (e.<span class="fn">PreviousExecutionState</span> == <span class="ty">ApplicationExecutionState</span>.Terminated) {
+                <span class="cm">// 读取 SuspensionManager 保存的导航状态</span>
+                <span class="kw">await</span> <span class="ty">SuspensionManager</span>.<span class="fn">RestoreAsync</span>();
+            }
+            <span class="ty">Window</span>.<span class="fn">Current</span>.<span class="fn">Content</span> = rootFrame;
+        }
+        <span class="kw">if</span> (rootFrame.<span class="fn">Content</span> == <span class="kw">null</span>)
+            rootFrame.<span class="fn">Navigate</span>(<span class="kw">typeof</span>(<span class="ty">MainPage</span>), e.<span class="fn">Arguments</span>);
+        <span class="ty">Window</span>.<span class="fn">Current</span>.<span class="fn">Activate</span>();
+    }
+
+    <span class="cm">// 挂起：保存状态（约 5 秒内必须完成，否则被强制终止）</span>
+    <span class="kw">private async void</span> <span class="fn">OnSuspending</span>(<span class="kw">object</span> s, <span class="ty">SuspendingEventArgs</span> e) {
+        <span class="ty">SuspendingDeferral</span> deferral = e.<span class="fn">SuspendingOperation</span>.<span class="fn">GetDeferral</span>();
+        <span class="kw">await</span> <span class="ty">SuspensionManager</span>.<span class="fn">SaveAsync</span>();      <span class="cm">// 持久化 Frame 栈</span>
+        <span class="kw">await</span> <span class="ty">ApplicationData</span>.<span class="fn">Current</span>.<span class="fn">LocalSettings</span>.<span class="fn">SaveAsync</span>();
+        deferral.<span class="fn">Complete</span>();
+    }
+
+    <span class="kw">private void</span> <span class="fn">OnResuming</span>(<span class="kw">object</span> s, <span class="kw">object</span> e) {
+        <span class="cm">// 从 Suspended 恢复，无需重建（进程仍在）</span>
+    }
+}</code></pre>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">应用数据存储</div>
+      <ul>
+        <li><code>LocalSettings</code>：本地键值，仅本机</li>
+        <li><code>RoamingSettings</code>：跨设备漫游（同账号）</li>
+        <li><code>LocalFolder / RoamingFolder / TemporaryFolder</code></li>
+        <li><code>ApplicationDataContainer</code>：分层设置容器</li>
+        <li>漫游数据有 <strong>100KB</strong> 上限，超出停止同步</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">SuspensionManager</div>
+      <ul>
+        <li>微软模板提供的辅助类</li>
+        <li>序列化 <code>Frame</code> 的页面栈与参数</li>
+        <li>挂起时 <code>SaveAsync</code>，恢复时 <code>RestoreAsync</code></li>
+        <li>保存到 <code>LocalSettings["_SuspensionManager"]</code></li>
+        <li>配合 <code>NavigationCacheMode</code> 重建页面状态</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>挂起时限</strong>：系统发出 Suspending 后给应用 <strong>5 秒</strong> 完成保存（<code>GetDeferral</code> 延长窗口）。超时会被强制 <code>Terminate</code>，用户下次启动看到的是<strong>冷启动</strong>而非恢复。耗时操作应分块或转后台任务。
+  </div>
+</section>
+
+<section id="xaml" class="toc-link">
+  <h2><span class="num">04</span> XAML 控件与布局</h2>
+  <p>UWP 用 XAML 声明 UI，根命名空间是 <strong><code>http://schemas.microsoft.com/winfx/2006/xaml/presentation</code></strong>（即 <code>Windows.UI.Xaml</code>），与 WPF 的 <code>System.Windows</code> 同源但<strong>不完全兼容</strong>——UWP 是 WPF XAML 的精简分支。控件随系统版本演进，配合 <strong>VisualStateManager + AdaptiveTrigger</strong> 实现跨屏宽自适应。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">与 WPF XAML 的异同</div>
+      <table>
+        <tr><th>项</th><th>UWP</th><th>WPF</th></tr>
+        <tr><td>命名空间</td><td><code>Windows.UI.Xaml</code></td><td><code>System.Windows</code></td></tr>
+        <tr><td>分发</td><td>随系统</td><td>随 .NET/应用</td></tr>
+        <tr><td>新控件</td><td><code>NavigationView</code> / <code>CommandBar</code></td><td>传统 <code>Menu</code>/<code>ToolBar</code></td></tr>
+        <tr><td>样式语法</td><td>基本一致</td><td>更丰富的 Triggers</td></tr>
+        <tr><td>编译绑定</td><td><code>x:Bind</code></td><td>仅 <code>{Binding}</code></td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">常用控件</div>
+      <ul>
+        <li><strong>基础</strong>：<code>Button</code> / <code>TextBox</code> / <code>TextBlock</code> / <code>ToggleSwitch</code> / <code>Slider</code></li>
+        <li><strong>容器</strong>：<code>Grid</code> / <code>StackPanel</code> / <code>RelativePanel</code> / <code>Border</code></li>
+        <li><strong>集合</strong>：<code>ListView</code> / <code>GridView</code> / <code>ItemsRepeater</code></li>
+        <li><strong>导航</strong>：<code>Frame</code> / <code>NavigationView</code> / <code>Pivot</code></li>
+        <li><strong>命令</strong>：<code>CommandBar</code> / <code>AppBarButton</code> / <code>SplitView</code></li>
+        <li><strong>现代</strong>：<code>AutoSuggestBox</code> / <code>MapControl</code> / <code>InkCanvas</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>自适应布局：AdaptiveTrigger + VisualStateManager</h3>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- MainPage.xaml: 窄屏单列、宽屏两列 --&gt;</span>
+<span class="kw">&lt;Page</span> <span class="pp">x:Class</span>=<span class="st">"App.MainPage"</span>
+      <span class="pp">xmlns</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml/presentation"</span>
+      <span class="pp">xmlns:x</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml"</span><span class="kw">&gt;</span>
+
+  <span class="kw">&lt;Grid&gt;</span>
+    <span class="kw">&lt;VisualStateManager.VisualStateGroups&gt;</span>
+      <span class="kw">&lt;VisualStateGroup</span> <span class="pp">x:Name</span>=<span class="st">"WidthStates"</span><span class="kw">&gt;</span>
+
+        <span class="cm">&lt;!-- 默认：窄屏，垂直堆叠 --&gt;</span>
+        <span class="kw">&lt;VisualState</span> <span class="pp">x:Name</span>=<span class="st">"NarrowState"</span><span class="kw">&gt;</span>
+          <span class="kw">&lt;VisualState.StateTriggers&gt;</span>
+            <span class="kw">&lt;AdaptiveTrigger</span> <span class="pp">MinWindowWidth</span>=<span class="st">"0"</span> <span class="kw">/&gt;</span>
+          <span class="kw">&lt;/VisualState.StateTriggers&gt;</span>
+          <span class="kw">&lt;VisualState.Setters&gt;</span>
+            <span class="kw">&lt;Setter</span> <span class="pp">Target</span>=<span class="st">"ContentPanel.Orientation"</span> <span class="pp">Value</span>=<span class="st">"Vertical"</span><span class="kw">/&gt;</span>
+            <span class="kw">&lt;Setter</span> <span class="pp">Target</span>=<span class="st">"Detail.Visibility"</span>           <span class="pp">Value</span>=<span class="st">"Collapsed"</span><span class="kw">/&gt;</span>
+          <span class="kw">&lt;/VisualState.Setters&gt;</span>
+        <span class="kw">&lt;/VisualState&gt;</span>
+
+        <span class="cm">&lt;!-- 宽屏：两列布局 --&gt;</span>
+        <span class="kw">&lt;VisualState</span> <span class="pp">x:Name</span>=<span class="st">"WideState"</span><span class="kw">&gt;</span>
+          <span class="kw">&lt;VisualState.StateTriggers&gt;</span>
+            <span class="kw">&lt;AdaptiveTrigger</span> <span class="pp">MinWindowWidth</span>=<span class="st">"720"</span> <span class="kw">/&gt;</span>
+          <span class="kw">&lt;/VisualState.StateTriggers&gt;</span>
+          <span class="kw">&lt;VisualState.Setters&gt;</span>
+            <span class="kw">&lt;Setter</span> <span class="pp">Target</span>=<span class="st">"ContentPanel.Orientation"</span> <span class="pp">Value</span>=<span class="st">"Horizontal"</span><span class="kw">/&gt;</span>
+            <span class="kw">&lt;Setter</span> <span class="pp">Target</span>=<span class="st">"Detail.(Grid.Column)"</span>      <span class="pp">Value</span>=<span class="st">"1"</span><span class="kw">/&gt;</span>
+          <span class="kw">&lt;/VisualState.Setters&gt;</span>
+        <span class="kw">&lt;/VisualState&gt;</span>
+
+      <span class="kw">&lt;/VisualStateGroup&gt;</span>
+    <span class="kw">&lt;/VisualStateManager.VisualStateGroups&gt;</span>
+
+    <span class="kw">&lt;StackPanel</span> <span class="pp">x:Name</span>=<span class="st">"ContentPanel"</span><span class="kw">&gt;</span>
+      <span class="kw">&lt;ListView</span> <span class="pp">x:Name</span>=<span class="st">"MasterList"</span> <span class="pp">Width</span>=<span class="st">"320"</span>
+                <span class="pp">ItemsSource</span>=<span class="st">"{x:Bind ViewModel.Items}"</span><span class="kw">/&gt;</span>
+      <span class="kw">&lt;ContentControl</span> <span class="pp">x:Name</span>=<span class="st">"Detail"</span> <span class="pp">Grid.Column</span>=<span class="st">"1"</span><span class="kw">/&gt;</span>
+    <span class="kw">&lt;/StackPanel&gt;</span>
+  <span class="kw">&lt;/Grid&gt;</span>
+<span class="kw">&lt;/Page&gt;</span></code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>NavigationView</strong> 是 UWP 的现代导航控件（汉堡菜单 + 顶部/左侧模式），自带自适应行为：<strong>展开 / 紧凑 / 最小化</strong>三态随窗口宽度自动切换，<code>PaneDisplayMode</code> 可手动覆盖。新项目应优先用它而非手工拼 <code>SplitView</code>。
+  </div>
+</section>
+
+<section id="binding" class="toc-link">
+  <h2><span class="num">05</span> 数据绑定</h2>
+  <p>UWP 同时支持两套绑定：<strong>{Binding}</strong>（WPF 经典反射绑定，运行时解析 <code>DataContext</code>）与 <strong>{x:Bind}</strong>（编译期绑定，强类型、高性能，UWP 引入并随 WinUI 演进）。<code>x:Bind</code> 把绑定路径映射到 code-behind 的<strong>字段/属性/方法</strong>，编译时类型检查，性能比 <code>{Binding}</code> 高一个数量级。</p>
+
+  <table>
+    <tr><th>维度</th><th>{Binding}（经典）</th><th>{x:Bind}（编译绑定）</th></tr>
+    <tr><td>解析</td><td>运行时反射</td><td>编译期生成代码</td></tr>
+    <tr><td>类型安全</td><td>无（出错运行时才暴露）</td><td>有，编译失败即暴露</td></tr>
+    <tr><td>性能</td><td>基线</td><td>约 10x（无反射）</td></tr>
+    <tr><td>数据源</td><td><code>DataContext</code></td><td>page/usercontrol 自身（this）或其成员</td></tr>
+    <tr><td>函数绑定</td><td>需 <code>IValueConverter</code></td><td>原生支持 <code>{x:Bind FormatName(Item)}</code></td></tr>
+    <tr><td>事件绑定</td><td>不支持</td><td><code>{x:Bind OnClick}</code> 直接绑方法</td></tr>
+    <tr><td>Mode 默认</td><td>OneWay</td><td>OneTime（需显式声明 OneWay/TwoWay）</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">// ViewModel.cs —— INotifyPropertyChanged + ObservableCollection</span>
+<span class="kw">public class</span> <span class="ty">MainViewModel</span> : <span class="ty">INotifyPropertyChanged</span>
+{
+    <span class="kw">private</span> <span class="ty">TodoItem</span> _selected;
+    <span class="kw">public</span> <span class="ty">TodoItem</span> <span class="fn">Selected</span> {
+        <span class="kw">get</span> => _selected;
+        <span class="kw">set</span> { <span class="kw">if</span> (_selected != value) { _selected = value; <span class="fn">OnPropertyChanged</span>(); } }
+    }
+
+    <span class="kw">public</span> <span class="ty">ObservableCollection</span>&lt;<span class="ty">TodoItem</span>&gt; <span class="fn">Items</span> { <span class="kw">get</span>; } = <span class="kw">new</span>();
+
+    <span class="kw">public</span> <span class="ty">string</span> <span class="fn">FormatCount</span>(<span class="ty">int</span> n) => <span class="st">$"{n} 项"</span>;   <span class="cm">// x:Bind 函数绑定可直接调用</span>
+
+    <span class="kw">public event</span> <span class="ty">PropertyChangedEventHandler</span> <span class="fn">PropertyChanged</span>;
+    <span class="kw">protected void</span> <span class="fn">OnPropertyChanged</span>([<span class="ty">CallerMemberName</span>] <span class="ty">string</span> p = <span class="kw">null</span>)
+        => <span class="fn">PropertyChanged</span>?.<span class="fn">Invoke</span>(<span class="kw">this</span>, <span class="kw">new</span> <span class="ty">PropertyChangedEventArgs</span>(p));
+}
+
+<span class="cm">// MainPage.xaml.cs —— x:Bind 默认绑定到 this 上的成员</span>
+<span class="kw">public sealed partial class</span> <span class="ty">MainPage</span> : <span class="ty">Page</span>
+{
+    <span class="kw">public</span> <span class="ty">MainViewModel</span> <span class="fn">ViewModel</span> { <span class="kw">get</span>; } = <span class="kw">new</span> <span class="ty">MainViewModel</span>();
+
+    <span class="kw">public</span> <span class="ty">MainPage</span>() { <span class="fn">InitializeComponent</span>(); <span class="fn">Loaded</span> += <span class="fn">OnLoaded</span>; }
+
+    <span class="kw">private async void</span> <span class="fn">OnLoaded</span>(<span class="kw">object</span> s, <span class="ty">RoutedEventArgs</span> e) {
+        <span class="kw">await</span> <span class="fn">ViewModel</span>.<span class="fn">LoadAsync</span>();
+        <span class="ty">Bindings</span>.<span class="fn">UpdateTarget</span>();   <span class="cm">// x:Bind 默认 OneTime，需手动刷新或用 Mode=OneWay</span>
+    }
+
+    <span class="cm">// x:Bind 事件绑定：直接指向方法（签名须匹配委托）</span>
+    <span class="kw">private void</span> <span class="fn">OnAddClick</span>(<span class="kw">object</span> sender, <span class="ty">RoutedEventArgs</span> e) {
+        <span class="fn">ViewModel</span>.<span class="fn">Items</span>.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">TodoItem</span>());
+    }
+}</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- MainPage.xaml —— x:Bind 绑定到 page 上的成员/方法 --&gt;</span>
+<span class="kw">&lt;Page</span> ...<span class="kw">&gt;</span>
+  <span class="kw">&lt;Grid&gt;</span>
+    <span class="kw">&lt;Grid.RowDefinitions&gt;</span>
+      <span class="kw">&lt;RowDefinition</span> <span class="pp">Height</span>=<span class="st">"Auto"</span><span class="kw">/&gt;</span>
+      <span class="kw">&lt;RowDefinition</span><span class="kw">/&gt;</span>
+    <span class="kw">&lt;/Grid.RowDefinitions&gt;</span>
+
+    <span class="kw">&lt;CommandBar&gt;</span>
+      <span class="kw">&lt;AppBarButton</span> <span class="pp">Icon</span>=<span class="st">"Add"</span> <span class="pp">Label</span>=<span class="st">"添加"</span>
+                   <span class="pp">Click</span>=<span class="st">"{x:Bind OnAddClick}"</span><span class="kw">/&gt;</span>
+    <span class="kw">&lt;/CommandBar&gt;</span>
+
+    <span class="kw">&lt;Grid</span> <span class="pp">Grid.Row</span>=<span class="st">"1"</span><span class="kw">&gt;</span>
+      <span class="kw">&lt;ListView</span> <span class="pp">ItemsSource</span>=<span class="st">"{x:Bind ViewModel.Items, Mode=OneWay}"</span>
+                <span class="pp">SelectedItem</span>=<span class="st">"{x:Bind ViewModel.Selected, Mode=TwoWay}"</span><span class="kw">&gt;</span>
+        <span class="kw">&lt;ListView.ItemTemplate&gt;</span>
+          <span class="kw">&lt;DataTemplate</span> <span class="pp">x:DataType</span>=<span class="st">"local:TodoItem"</span><span class="kw">&gt;</span>
+            <span class="kw">&lt;TextBlock</span> <span class="pp">Text</span>=<span class="st">"{x:Bind Title, Mode=OneWay}"</span><span class="kw">/&gt;</span>
+          <span class="kw">&lt;/DataTemplate&gt;</span>
+        <span class="kw">&lt;/ListView.ItemTemplate&gt;</span>
+      <span class="kw">&lt;/ListView&gt;</span>
+
+      <span class="cm">&lt;!-- x:Bind 函数绑定：直接调用 ViewModel 方法 --&gt;</span>
+      <span class="kw">&lt;TextBlock</span> <span class="pp">Text</span>=<span class="st">"{x:Bind ViewModel.FormatCount(ViewModel.Items.Count), Mode=OneWay}"</span><span class="kw">/&gt;</span>
+    <span class="kw">&lt;/Grid&gt;</span>
+  <span class="kw">&lt;/Grid&gt;</span>
+<span class="kw">&lt;/Page&gt;</span></code></pre>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Binding Mode</div>
+      <ul>
+        <li><code>OneTime</code>：初始化一次（x:Bind 默认）</li>
+        <li><code>OneWay</code>：源 → 目标（{Binding} 默认）</li>
+        <li><code>TwoWay</code>：双向（表单控件常见）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">UpdateSourceTrigger</div>
+      <ul>
+        <li><code>Default</code>：失去焦点时回写</li>
+        <li><code>PropertyChanged</code>：每次输入即回写</li>
+        <li><code>Explicit</code>：手动 <code>Bindings.UpdateSource</code></li>
+        <li>仅 <code>TwoWay</code> 生效</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <strong>ObservableCollection&lt;T&gt;</strong> 实现 <code>INotifyCollectionChanged</code>，<code>Add/Remove/Clear</code> 自动触发 UI 刷新；但<strong>批量</strong>改动会逐条通知，应考虑 <code>ObservableVector&lt;T&gt;</code> 或临时 <code>Suspension</code> 模式减少重绘。
+  </div>
+</section>
+
+<section id="async" class="toc-link">
+  <h2><span class="num">06</span> 异步编程</h2>
+  <p>WinRT 所有可能阻塞的 API 都以<strong>异步接口</strong>暴露：<code>IAsyncOperation&lt;TResult&gt;</code>（有返回值）、<code>IAsyncAction</code>（无返回值）、<code>IAsyncOperationWithProgress&lt;T,P&gt;</code>（带进度）。C# 投影把它们映射为 <code>Task</code> 兼容形式，可用 <code>await</code> 直接消费；C++/WinRT 用 <code>co_await</code> 协程。</p>
+
+  <table>
+    <tr><th>WinRT 接口</th><th>C# 投影</th><th>语义</th></tr>
+    <tr><td><code>IAsyncAction</code></td><td><code>Task</code></td><td>无返回值的异步操作</td></tr>
+    <tr><td><code>IAsyncOperation&lt;T&gt;</code></td><td><code>Task&lt;T&gt;</code></td><td>有返回值的异步操作</td></tr>
+    <tr><td><code>IAsyncActionWithProgress&lt;P&gt;</code></td><td><code>Task</code> + 进度回调</td><td>带进度的 Action</td></tr>
+    <tr><td><code>IAsyncOperationWithProgress&lt;T,P&gt;</code></td><td><code>Task&lt;T&gt;</code> + 进度回调</td><td>带进度的 Operation</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">// 文件读取：StorageFile.OpenAsync → IAsyncOperation&lt;IRandomAccessStream&gt;</span>
+<span class="kw">private async void</span> <span class="fn">OnOpenFileClick</span>(<span class="kw">object</span> sender, <span class="ty">RoutedEventArgs</span> e)
+{
+    <span class="ty">FileOpenPicker</span> picker = <span class="kw">new</span> <span class="ty">FileOpenPicker</span>();
+    picker.<span class="fn">FileTypeFilter</span>.<span class="fn">Add</span>(<span class="st">".txt"</span>);
+
+    <span class="ty">StorageFile</span> file = <span class="kw">await</span> picker.<span class="fn">PickSingleFileAsync</span>();   <span class="cm">// IAsyncOperation&lt;StorageFile&gt;</span>
+    <span class="kw">if</span> (file == <span class="kw">null</span>) <span class="kw">return</span>;
+
+    <span class="ty">CancellationTokenSource</span> cts = <span class="kw">new</span> <span class="ty">CancellationTokenSource</span>();
+    <span class="kw">try</span> {
+        <span class="ty">IRandomAccessStream</span> stream = <span class="kw">await</span> file.<span class="fn">OpenAsync</span>(<span class="ty">FileAccessMode</span>.Read)
+                                                  .<span class="fn">AsTask</span>(cts.<span class="fn">Token</span>);
+
+        <span class="kw">using</span> (<span class="ty">DataReader</span> reader = <span class="kw">new</span> <span class="ty">DataReader</span>(stream.<span class="fn">GetInputStreamAt</span>(<span class="num">0</span>))) {
+            <span class="kw">uint</span> len = (<span class="kw">uint</span>)stream.<span class="fn">Size</span>;
+            <span class="kw">await</span> reader.<span class="fn">LoadAsync</span>(len);              <span class="cm">// 加载到缓冲</span>
+            <span class="ty">StatusText</span>.<span class="fn">Text</span> = reader.<span class="fn">ReadString</span>(len);   <span class="cm">// 切回 UI 线程更新（默认同上下文）</span>
+        }
+    }
+    <span class="kw">catch</span> (<span class="ty">OperationCanceledException</span>) {
+        <span class="ty">StatusText</span>.<span class="fn">Text</span> = <span class="st">"已取消"</span>;
+    }
+    <span class="kw">catch</span> (<span class="ty">Exception</span> ex) {
+        <span class="ty">StatusText</span>.<span class="fn">Text</span> = <span class="st">$"失败: {ex.Message}"</span>;
+    }
+}
+
+<span class="cm">// 自定义异步方法返回 IAsyncOperation（C# 直接返回 Task 即可）</span>
+<span class="kw">public async</span> <span class="ty">Task</span>&lt;<span class="ty">string</span>&gt; <span class="fn">FetchAsync</span>(<span class="ty">CancellationToken</span> ct) {
+    <span class="ty">HttpClient</span> client = <span class="kw">new</span> <span class="ty">HttpClient</span>();
+    <span class="ty">HttpResponseMessage</span> resp = <span class="kw">await</span> client.<span class="fn">GetAsync</span>(<span class="st">"https://api.example.com"</span>, ct);
+    resp.<span class="fn">EnsureSuccessStatusCode</span>();
+    <span class="kw">return await</span> resp.<span class="fn">Content</span>.<span class="fn">ReadAsStringAsync</span>();
+}</code></pre>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">UI 线程上下文</div>
+      <ul>
+        <li>UWP：<code>CoreDispatcher</code>（<code>Window.Current.Dispatcher.RunAsync</code>）</li>
+        <li>WinUI 3：<code>DispatcherQueue</code>（API 名变化）</li>
+        <li><code>await</code> 默认捕获 <code>SynchronizationContext</code>，回到原线程</li>
+        <li>后台线程更新 UI 必须切回，否则异常</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">取消与超时</div>
+      <ul>
+        <li><code>CancellationTokenSource</code> 触发取消</li>
+        <li><code>.AsTask(token)</code> 桥接 WinRT → .NET</li>
+        <li><code>cts.CancelAfter(TimeSpan.FromSeconds(5))</code> 超时</li>
+        <li><code>OperationCanceledException</code> 非错误，不应上报</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>async void 的陷阱</strong>：事件处理器只能用 <code>async void</code>，其他场景一律 <code>async Task</code>。<code>async void</code> 中的异常<strong>无法被 await 捕获</strong>，会直接到 <code>Application.UnhandledException</code>。务必在事件处理器内 <code>try/catch</code>。
+  </div>
+</section>
+
+<section id="sandbox" class="toc-link">
+  <h2><span class="num">07</span> 沙箱与权限</h2>
+  <p>UWP 应用运行在 <strong>AppContainer</strong> 进程内，默认以<strong>低完整性令牌</strong>运行，所有<strong>敏感能力（Capability）必须在 <code>Package.appxmanifest</code> 中静态声明</strong>——用户安装时一次性授权，运行时不再弹窗（少数隐私类除外）。文件系统、网络、设备访问都受此边界约束。</p>
+
+  <table>
+    <tr><th>Capability</th><th>用途</th><th>类别</th></tr>
+    <tr><td><code>internetClient</code></td><td>出站 HTTP/Socket（默认必需）</td><td>常规</td></tr>
+    <tr><td><code>privateNetworkClientServer</code></td><td>访问局域网（家庭/企业网）</td><td>常规</td></tr>
+    <tr><td><code>internetClientServer</code></td><td>入站连接（服务端）</td><td>常规</td></tr>
+    <tr><td><code>removableStorage</code></td><td>访问 U 盘/SD 卡（需文件类型声明）</td><td>常规</td></tr>
+    <tr><td><code>webcam</code> / <code>microphone</code></td><td>摄像头 / 麦克风</td><td>隐私</td></tr>
+    <tr><td><code>location</code></td><td>GPS 定位</td><td>隐私</td></tr>
+    <tr><td><code>contacts</code> / <code>appointments</code></td><td>通讯录 / 日历</td><td>隐私</td></tr>
+    <tr><td><code>enterpriseAuthentication</code></td><td>域账号 SSO</td><td>受限</td></tr>
+    <tr><td><code>broadFileSystemAccess</code></td><td>任意路径文件访问</td><td><strong>受限</strong>（需用户设置开启）</td></tr>
+    <tr><td><code>runFullTrust</code></td><td>以完整 Win32 权限运行（桌面桥）</td><td><strong>受限</strong></td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- Package.appxmanifest —— 声明能力（静态授权） --&gt;</span>
+<span class="kw">&lt;Package</span> ...<span class="kw">&gt;</span>
+  <span class="kw">&lt;Capabilities&gt;</span>
+    <span class="cm">&lt;!-- 常规能力 --&gt;</span>
+    <span class="kw">&lt;Capability</span> <span class="pp">Name</span>=<span class="st">"internetClient"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;Capability</span> <span class="pp">Name</span>=<span class="st">"privateNetworkClientServer"</span> <span class="kw">/&gt;</span>
+
+    <span class="cm">&lt;!-- 设备能力（硬件接口） --&gt;</span>
+    <span class="kw">&lt;DeviceCapability</span> <span class="pp">Name</span>=<span class="st">"webcam"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;DeviceCapability</span> <span class="pp">Name</span>=<span class="st">"microphone"</span> <span class="kw">/&gt;</span>
+
+    <span class="cm">&lt;!-- 受限能力（需特殊账号 / 用户设置开启） --&gt;</span>
+    <span class="kw">&lt;rescap</span>:<span class="kw">Capability</span> <span class="pp">xmlns:rescap</span>=<span class="st">"..."</span>
+                          <span class="pp">Name</span>=<span class="st">"broadFileSystemAccess"</span> <span class="kw">/&gt;</span>
+  <span class="kw">&lt;/Capabilities&gt;</span>
+<span class="kw">&lt;/Package&gt;</span></code></pre>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">文件访问边界</div>
+      <ul>
+        <li><strong>自由访问</strong>：<code>ApplicationData.LocalFolder/RoamingFolder</code>（应用数据目录）</li>
+        <li><strong>Picker 协商</strong>：<code>FileOpenPicker</code> / <code>FolderPicker</code> 用户选</li>
+        <li><strong>FutureAccessList</strong>：Picker 选后保留令牌（最多 1000 项）</li>
+        <li><strong>库访问</strong>：<code>KnownFolders.PicturesLibrary</code> 等需 <code>Capability</code></li>
+        <li><strong>全盘访问</strong>：仅 <code>broadFileSystemAccess</code>（用户设置开启）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">网络与隐私</div>
+      <ul>
+        <li>网络隔离：默认仅出站，无监听</li>
+        <li>隐私 Capability：摄像头/位置/麦克风/通讯录</li>
+        <li>安装时静态声明，运行时<strong>首次使用</strong>弹系统授权</li>
+        <li>用户可在设置中随时撤回</li>
+        <li>访问前应 <code>await Permissions.RequestAsync()</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>沙箱是 UWP 的本质限制</strong>：不能 <code>CreateProcess</code> 启动任意 Win32 程序（需 <code>runFullTrust</code> + 桌面桥扩展），不能写注册表 HKLM，不能注入系统进程。这正是 UWP 被 Win32 用户诟病的原因——也是 WinUI 3 + WinAppSDK 取代它的关键动机之一。
+  </div>
+</section>
+
+<section id="background" class="toc-link">
+  <h2><span class="num">08</span> 后台任务与通知</h2>
+  <p>应用在前台时可直接执行；用户切走进入 Suspended 后，所有代码冻结。要做定时同步、消息推送、Tile 更新，必须注册<strong>后台任务（BackgroundTask）</strong>。系统在触发条件满足时<strong>另起进程</strong>执行 <code>IBackgroundTask.Run</code>，资源严格配额（CPU/网络/电量）。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">后台任务组成</div>
+      <ul>
+        <li><strong>触发器</strong>：<code>TimeTrigger</code> / <code>SystemTrigger</code> / <code>PushTrigger</code> / <code>MaintenanceTrigger</code></li>
+        <li><strong>条件</strong>：<code>InternetAvailable</code> / <code>UserNotPresent</code> / <code>BatteryNotLow</code></li>
+        <li><strong>入口</strong>：实现 <code>IBackgroundTask</code> 的类（独立项目）</li>
+        <li><strong>注册</strong>：<code>BackgroundTaskBuilder.Register</code></li>
+        <li><strong>清单</strong>：声明 <code>&lt;Extension Category="windows.backgroundTasks"&gt;</code></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">通知类型</div>
+      <table>
+        <tr><th>类型</th><th>用途</th></tr>
+        <tr><td>Toast</td><td>弹出横幅通知</td></tr>
+        <tr><td>Tile</td><td>开始菜单磁贴</td></tr>
+        <tr><td>Badge</td><td>磁贴角标数字</td></tr>
+        <tr><td>Raw</td><td>WNS 推送原始数据</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 后台任务入口（运行在独立进程，无 UI）</span>
+<span class="kw">public sealed class</span> <span class="ty">SyncTask</span> : <span class="ty">IBackgroundTask</span>
+{
+    <span class="kw">public async void</span> <span class="fn">Run</span>(<span class="ty">IBackgroundTaskInstance</span> taskInstance) {
+        <span class="ty">BackgroundTaskDeferral</span> deferral = taskInstance.<span class="fn">GetDeferral</span>();
+        <span class="kw">try</span> {
+            taskInstance.<span class="fn">Canceled</span> += (<span class="kw">s</span>, e) => { <span class="cm">/* 取消清理 */</span> };
+            <span class="kw">await</span> <span class="ty">CloudSync</span>.<span class="fn">PullAsync</span>();
+            <span class="fn">ShowToast</span>(<span class="st">"同步完成"</span>);
+        }
+        <span class="kw">finally</span> { deferral.<span class="fn">Complete</span>(); }
+    }
+}
+
+<span class="cm">// 前台注册后台任务</span>
+<span class="kw">public static async void</span> <span class="fn">RegisterSyncTask</span>() {
+    <span class="kw">var</span> status = <span class="kw">await</span> <span class="ty">BackgroundExecutionManager</span>.<span class="fn">RequestAccessAsync</span>();
+    <span class="kw">if</span> (status == <span class="ty">BackgroundAccessStatus</span>.DeniedByUser) <span class="kw">return</span>;
+
+    <span class="ty">BackgroundTaskBuilder</span> builder = <span class="kw">new</span> <span class="ty">BackgroundTaskBuilder</span> {
+        <span class="fn">Name</span> = <span class="st">"SyncTask"</span>,
+        <span class="fn">TaskEntryPoint</span> = <span class="kw">typeof</span>(<span class="ty">SyncTask</span>).<span class="fn">FullName</span>
+    };
+    builder.<span class="fn">SetTrigger</span>(<span class="kw">new</span> <span class="ty">TimeTrigger</span>(<span class="num">15</span>, <span class="kw">false</span>));  <span class="cm">// 每 15 分钟（最小间隔）</span>
+    builder.<span class="fn">AddCondition</span>(<span class="kw">new</span> <span class="ty">SystemCondition</span>(<span class="ty">SystemConditionType</span>.InternetAvailable));
+    <span class="ty">BackgroundTaskRegistration</span> reg = builder.<span class="fn">Register</span>();
+}</code></pre>
+  </div>
+
+  <h3>Toast 通知：自适应 XML 模板</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ToastNotificationManager 加载 XML 模板并弹出</span>
+<span class="kw">public static void</span> <span class="fn">ShowToast</span>(<span class="ty">string</span> message) {
+    <span class="ty">string</span> xml = <span class="st">$@"</span>
+<span class="st">&lt;toast&gt;</span>
+<span class="st">  &lt;visual&gt;</span>
+<span class="st">    &lt;binding template=""ToastGeneric""&gt;</span>
+<span class="st">      &lt;text&gt;我的应用&lt;/text&gt;</span>
+<span class="st">      &lt;text&gt;{message}&lt;/text&gt;</span>
+<span class="st">    &lt;/binding&gt;</span>
+<span class="st">  &lt;/visual&gt;</span>
+<span class="st">  &lt;actions&gt;</span>
+<span class="st">    &lt;action content=""查看"" arguments=""view"" activationType=""foreground""/&gt;</span>
+<span class="st">    &lt;action content=""忽略"" arguments=""dismiss"" activationType=""system""/&gt;</span>
+<span class="st">  &lt;/actions&gt;</span>
+<span class="st">&lt;/toast&gt;"</span>;
+
+    <span class="ty">XmlDocument</span> doc = <span class="kw">new</span> <span class="ty">XmlDocument</span>();
+    doc.<span class="fn">LoadXml</span>(xml);
+
+    <span class="ty">ToastNotification</span> toast = <span class="kw">new</span> <span class="ty">ToastNotification</span>(doc);
+    <span class="ty">ToastNotificationManager</span>.<span class="fn">CreateToastNotifier</span>()
+        .<span class="fn">Show</span>(toast);
+}
+
+<span class="cm">// WNS 推送：服务端调 WNS REST API 推送 channel URI</span>
+<span class="cm">// 客户端：PushNotificationChannel.Current.CreatePushNotificationChannelForApplicationAsync()</span></code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>单进程后台任务</strong>（Windows 10 1709+）允许后台入口直接写在主程序内，省去独立项目，<code>BackgroundTaskBuilder.TaskEntryPoint</code> 留空即可。触发时以<strong>同进程内</strong>组件运行，启动开销更低。
+  </div>
+</section>
+
+<section id="package" class="toc-link">
+  <h2><span class="num">09</span> 打包与分发</h2>
+  <p>UWP 应用以 <strong>MSIX / AppX</strong> 包格式分发，<strong>清单驱动</strong>：<code>Package.appxmanifest</code> 声明应用身份、能力、可视化元素、入口点、扩展等。包<strong>必须用证书签名</strong>才能安装（自签名测试 / Store 证书 / 企业代码签名）。通过 Microsoft Store 提交，经<strong>认证流程</strong>（自动检测恶意代码、API 合规、年龄分级、定价）后上架。</p>
+
+  <table>
+    <tr><th>清单节点</th><th>作用</th></tr>
+    <tr><td><code>Identity</code></td><td>包名 <code>Name</code> + 版本 <code>Version</code> + 发布者</td></tr>
+    <tr><td><code>Properties</code></td><td>显示名、Logo、描述、能力声明</td></tr>
+    <tr><td><code>Dependencies</code></td><td>目标设备家族 + 最低 SDK 版本</td></tr>
+    <tr><td><code>Applications</code></td><td>可执行入口、可视化元素（Logo/磁贴/闪屏）</td></tr>
+    <tr><td><code>Capabilities</code></td><td>权限声明（internet/webcam/broadFileSystemAccess 等）</td></tr>
+    <tr><td><code>Extensions</code></td><td>文件关联、协议激活、后台任务、共享目标等</td></tr>
+    <tr><td><code>VisualElements</code></td><td>磁贴模板、闪屏、前景/背景色</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- Package.appxmanifest —— 关键节点 --&gt;</span>
+<span class="kw">&lt;Package</span>
+  <span class="pp">xmlns</span>=<span class="st">"http://schemas.microsoft.com/appx/manifest/foundation/windows10"</span>
+  <span class="pp">xmlns:mp</span>=<span class="st">"http://schemas.microsoft.com/appx/2014/phone/manifest"</span>
+  <span class="pp">IgnorableNamespaces</span>=<span class="st">"uap mp"</span><span class="kw">&gt;</span>
+
+  <span class="kw">&lt;Identity</span> <span class="pp">Name</span>=<span class="st">"Contoso.MyApp"</span>
+            <span class="pp">Publisher</span>=<span class="st">"CN=Contoso"</span>
+            <span class="pp">Version</span>=<span class="st">"1.0.0.0"</span> <span class="kw">/&gt;</span>
+
+  <span class="kw">&lt;Properties&gt;</span>
+    <span class="kw">&lt;DisplayName&gt;</span>我的应用<span class="kw">&lt;/DisplayName&gt;</span>
+    <span class="kw">&lt;PublisherDisplayName&gt;</span>Contoso<span class="kw">&lt;/PublisherDisplayName&gt;</span>
+    <span class="kw">&lt;Logo&gt;</span>Assets\StoreLogo.png<span class="kw">&lt;/Logo&gt;</span>
+  <span class="kw">&lt;/Properties&gt;</span>
+
+  <span class="kw">&lt;Dependencies&gt;</span>
+    <span class="kw">&lt;TargetDeviceFamily</span> <span class="pp">Name</span>=<span class="st">"Windows.Universal"</span> <span class="pp">MinVersion</span>=<span class="st">"10.0.17763.0"</span>
+                                          <span class="pp">MaxVersionTested</span>=<span class="st">"10.0.22621.0"</span> <span class="kw">/&gt;</span>
+  <span class="kw">&lt;/Dependencies&gt;</span>
+
+  <span class="kw">&lt;Resources&gt;</span>
+    <span class="kw">&lt;Resource</span> <span class="pp">Language</span>=<span class="st">"zh-cn"</span><span class="kw">/&gt;</span>
+    <span class="kw">&lt;Resource</span> <span class="pp">Language</span>=<span class="st">"en-us"</span><span class="kw">/&gt;</span>
+  <span class="kw">&lt;/Resources&gt;</span>
+
+  <span class="kw">&lt;Applications&gt;</span>
+    <span class="kw">&lt;Application</span> <span class="pp">Id</span>=<span class="st">"App"</span> <span class="pp">Executable</span>=<span class="st">"$targetnametoken$.exe"</span> <span class="pp">EntryPoint</span>=<span class="st">"App.App"</span><span class="kw">&gt;</span>
+      <span class="kw">&lt;uap</span>:<span class="kw">VisualElements</span>
+        <span class="pp">DisplayName</span>=<span class="st">"我的应用"</span> <span class="pp">BackgroundColor</span>=<span class="st">"#0078D4"</span>
+        <span class="pp">Square150x150Logo</span>=<span class="st">"Assets\Logo.png"</span>
+        <span class="pp">Square44x44Logo</span>=<span class="st">"Assets\SmallLogo.png"</span>
+        <span class="pp">Description</span>=<span class="st">"我的应用描述"</span><span class="kw">&gt;</span>
+        <span class="kw">&lt;uap</span>:<span class="kw">DefaultTile</span> <span class="pp">Wide310x150Logo</span>=<span class="st">"Assets\WideLogo.png"</span><span class="kw">/&gt;</span>
+        <span class="kw">&lt;uap</span>:<span class="kw">SplashScreen</span> <span class="pp">Image</span>=<span class="st">"Assets\SplashScreen.png"</span> <span class="kw">/&gt;</span>
+      <span class="kw">&lt;/uap</span>:<span class="kw">VisualElements&gt;</span>
+    <span class="kw">&lt;/Application&gt;</span>
+  <span class="kw">&lt;/Applications&gt;</span>
+<span class="kw">&lt;/Package&gt;</span></code></pre>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">打包流程</div>
+      <ul>
+        <li>VS 右键项目 → 打包 → 生成 <code>.msix</code>/<code>.appx</code></li>
+        <li>Release 包需用<strong>有效证书</strong>签名</li>
+        <li>自签名测试：VS 生成本地证书，开发机 sideload</li>
+        <li>Store 上传：<code>.msixupload</code> 包含所有架构</li>
+        <li>应用包捆绑（<code>.msixbundle</code>）合并 x86/x64/ARM64</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Store 提交流程</div>
+      <ul>
+        <li>Partner Center 创建应用，预留名称</li>
+        <li>上传包（自动认证扫描）</li>
+        <li>填写年龄分级、隐私政策、定价</li>
+        <li>认证：技术合规 + 内容合规（约 1-3 天）</li>
+        <li>版本管理：每次上传需递增 <code>Version</code></li>
+        <li>可选 Flight 灰度 / 私域分发</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>版本号约定</strong>：<code>Version</code> 格式为 <code>主.次.修订.构建</code>。Store 拒绝<strong>递减版本</strong>，且每个上传包必须严格<strong>大于</strong>已发布版本。框架依赖包（<code>Framework</code>）与应用包版本独立管理。
+  </div>
+</section>
+
+<section id="winui" class="toc-link">
+  <h2><span class="num">10</span> 对比 WinUI 3</h2>
+  <p>UWP 的核心痛点在于 <strong>XAML 框架绑定操作系统</strong>——新控件要等 Windows 大版本，老系统用户用不上；同时 AppContainer 沙箱让 Win32 互操作困难，开发者大量需求 <code>runFullTrust</code> 绕过。<strong>WinUI 3</strong>（Windows App SDK 的一部分）把 XAML 栈<strong>剥离系统</strong>，作为 NuGet 包随应用分发，<strong>解决版本绑定</strong>，并默认以标准 Win32 进程运行（无沙箱限制）。</p>
+
+  <table>
+    <tr><th>维度</th><th>UWP</th><th>WinUI 3 / WinAppSDK</th></tr>
+    <tr><td>XAML 命名空间</td><td><code>Windows.UI.Xaml</code></td><td><code>Microsoft.UI.Xaml</code></td></tr>
+    <tr><td>XAML 分发</td><td>随系统</td><td>随应用（NuGet）</td></tr>
+    <tr><td>目标版本</td><td>受最低系统约束</td><td>1809+ 全可用最新控件</td></tr>
+    <tr><td>进程模型</td><td>AppContainer 沙箱</td><td>标准 Win32 进程（可选拓宽）</td></tr>
+    <tr><td>Win32 互操作</td><td>受限，需 runFullTrust</td><td>原生支持，任意 Win32 API</td></tr>
+    <tr><td>分发</td><td>仅 Store / MSIX</td><td>MSIX / 解压安装 / 任意</td></tr>
+    <tr><td>调度器</td><td><code>CoreDispatcher</code></td><td><code>DispatcherQueue</code></td></tr>
+    <tr><td>未来路线</td><td><strong>仅维护，不再演进</strong></td><td><strong>微软主推</strong></td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">// UWP 命名空间</span>
+<span class="kw">using</span> <span class="ty">Windows.UI.Xaml</span>;
+<span class="kw">using</span> <span class="ty">Windows.UI.Xaml.Controls</span>;
+<span class="kw">using</span> <span class="ty">Windows.UI.Core</span>;              <span class="cm">// CoreDispatcher</span>
+
+<span class="cm">// WinUI 3 命名空间（迁移：全局替换 Windows.UI → Microsoft.UI）</span>
+<span class="kw">using</span> <span class="ty">Microsoft.UI.Xaml</span>;
+<span class="kw">using</span> <span class="ty">Microsoft.UI.Xaml.Controls</span>;
+<span class="kw">using</span> <span class="ty">Microsoft.UI.Dispatching</span>;     <span class="cm">// DispatcherQueue</span>
+
+<span class="cm">// Dispatcher 调用切换</span>
+<span class="cm">// UWP:</span>
+<span class="kw">await</span> <span class="ty">Window</span>.<span class="fn">Current</span>.<span class="fn">Dispatcher</span>.<span class="fn">RunAsync</span>(<span class="ty">CoreDispatcherPriority</span>.Normal, () => { });
+
+<span class="cm">// WinUI 3:</span>
+<span class="ty">m_window</span>.<span class="fn">DispatcherQueue</span>.<span class="fn">TryEnqueue</span>(<span class="ty">DispatcherQueuePriority</span>.Normal, () => { });</code></pre>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">迁移要点</div>
+      <ul>
+        <li>项目类型：<code>Windows 应用 (C#)</code> WinAppSDK 模板</li>
+        <li>全局替换 <code>Windows.UI</code> → <code>Microsoft.UI</code></li>
+        <li><code>Window.Current</code> → <code>m_window</code> 实例</li>
+        <li><code>CoreDispatcher</code> → <code>DispatcherQueue</code></li>
+        <li><code>ApplicationView</code> 部分能力由 <code>AppWindow</code> 取代</li>
+        <li>沙箱取消后，<code>broadFileSystemAccess</code> 不再需要</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">新项目建议</div>
+      <ul>
+        <li><strong>新项目首选 WinUI 3</strong>（WinAppSDK 1.4+）</li>
+        <li>已有 UWP 可继续维护（仍受支持）</li>
+        <li>增量迁移：先迁 XAML 命名空间</li>
+        <li>WinUI 3 桌面应用 = Win32 + XAML</li>
+        <li>WPF/WinForms 可嵌入 WinUI 3 控件</li>
+        <li>长期看 UWP 进入<strong>维护模式</strong></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout danger">
+    <strong>新项目不要再选 UWP</strong>：微软已明确<strong>不再为 UWP 添加新功能</strong>，新 API 直接进入 WinAppSDK。UWP 仍可维护与提交 Store，但任何长期项目都应从 WinUI 3 / Windows App SDK 起步，避免未来再迁移。仅当目标是 Xbox 紧密集成或 HoloLens 旧设备时才考虑 UWP。
+  </div>
+</section>
+
+<section id="ns" class="toc-link">
+  <h2><span class="num">11</span> 命名空间 / SDK 索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">Windows SDK 10.0.22621 / Windows.WinMD</span>   <span class="cmt">UWP / WinRT 元数据根</span>
+├── <span class="file">Windows.UI.Xaml</span>                    <span class="cmt">XAML 框架核心</span>
+│   ├── <span class="file">Application</span>                   <span class="cmt">应用入口，OnLaunched / 生命周期事件</span>
+│   ├── <span class="file">Window / Frame / Page</span>          <span class="cmt">三层 UI 容器与导航</span>
+│   ├── <span class="file">Controls</span>                      <span class="cmt">Button/TextBox/ListView/CommandBar/NavigationView</span>
+│   ├── <span class="file">Media</span>                        <span class="cmt">Storyboard / Composition / 画刷</span>
+│   ├── <span class="file">Data</span>                         <span class="cmt">Binding / x:Bind / INotifyPropertyChanged</span>
+│   └── <span class="file">Input</span>                         <span class="cmt">Pointer / Keyboard / GestureRecognizer</span>
+├── <span class="file">Windows.Storage</span>                    <span class="cmt">文件与设置</span>
+│   ├── <span class="file">ApplicationData</span>               <span class="cmt">LocalSettings/RoamingSettings/LocalFolder</span>
+│   ├── <span class="file">StorageFile / StorageFolder</span>    <span class="cmt">异步文件操作</span>
+│   └── <span class="file">Pickers</span>                       <span class="cmt">FileOpenPicker / FolderPicker</span>
+├── <span class="file">Windows.Foundation</span>                 <span class="cmt">基础类型</span>
+│   ├── <span class="file">IAsyncOperation&lt;T&gt;</span>           <span class="cmt">异步操作（投影为 Task&lt;T&gt;）</span>
+│   ├── <span class="file">IAsyncAction</span>                  <span class="cmt">无返回值异步</span>
+│   ├── <span class="file">Uri / DateTime / Rect / Point</span>  <span class="cmt">值类型</span>
+│   └── <span class="file">Deferral</span>                      <span class="cmt">异步延迟完成（挂起/事件）</span>
+├── <span class="file">Windows.ApplicationModel</span>           <span class="cmt">应用模型</span>
+│   ├── <span class="file">Background</span>                    <span class="cmt">BackgroundTaskBuilder / IBackgroundTask</span>
+│   ├── <span class="file">Activation</span>                    <span class="cmt">LaunchActivatedEventArgs / 协议激活</span>
+│   ├── <span class="file">Core</span>                         <span class="cmt">CoreApplication / Suspending 事件</span>
+│   └── <span class="file">Resources</span>                     <span class="cmt">ResourceLoader / 本地化</span>
+├── <span class="file">Windows.UI.Notifications</span>           <span class="cmt">通知</span>
+│   ├── <span class="file">ToastNotification / ToastNotifier</span>
+│   ├── <span class="file">TileNotification / TileUpdater</span>
+│   └── <span class="file">BadgeNotification</span>              <span class="cmt">磁贴角标</span>
+├── <span class="file">Windows.Networking.PushNotifications</span>  <span class="cmt">WNS 推送通道</span>
+├── <span class="file">Windows.Security.Authorization</span>     <span class="cmt">AppCapability（运行时权限）</span>
+├── <span class="file">Windows.Devices</span>                    <span class="cmt">设备访问</span>
+│   ├── <span class="file">Enumeration</span>                   <span class="cmt">DeviceInformation / PnP</span>
+│   ├── <span class="file">Bluetooth / WiFi / Sensors</span>     <span class="cmt">硬件接口</span>
+│   └── <span class="file">Geolocation</span>                   <span class="cmt">位置（需 location 能力）</span>
+├── <span class="file">Windows.System</span>                     <span class="cmt">系统服务</span>
+│   ├── <span class="file">Launcher</span>                      <span class="cmt">LaunchUriAsync / 协议激活</span>
+│   └── <span class="file">Profile</span>                       <span class="cmt">AnalyticsVersion / 设备家族</span>
+└── <span class="file">Microsoft.UI.Xaml</span>                  <span class="cmt">WinUI 3 命名空间（迁移目标）</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>Windows.UI.Xaml.Application</code> 应用入口与生命周期事件（OnLaunched / Suspending / Resuming）。<br>
+    <code>Windows.UI.Xaml.Controls.Frame</code> 三层导航容器，配合 Page 维护页面栈。<br>
+    <code>Windows.UI.Xaml.Data</code> {Binding} 与 {x:Bind} 的绑定基础设施。<br>
+    <code>Windows.Storage.ApplicationData</code> 本地/漫游/临时数据存储。<br>
+    <code>Windows.Storage.Pickers</code> 沙箱下的文件访问协商入口。<br>
+    <code>Windows.Foundation.IAsyncOperation&lt;T&gt;</code> WinRT 异步模型，await 投影基础。<br>
+    <code>Windows.ApplicationModel.Background</code> 后台任务注册与触发器。<br>
+    <code>Windows.UI.Notifications</code> Toast / Tile / Badge 通知系统。<br>
+    MSDN《UWP Documentation》《Windows App SDK 迁移指南》为最权威参考。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Windows SDK 10 (UWP / WinRT) · Windows.UI.Xaml · 生成于 2026-06-22</footer>
+<script src="common.js"></script>
+</body>
+</html>

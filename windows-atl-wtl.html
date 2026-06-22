@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Windows ATL/WTL 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%236b3fa0'/><stop offset='100%25' stop-color='%232d1b69'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='70' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>A</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Windows ATL/WTL 深度解析</h1>
+  <p class="subtitle">Active Template Library / Windows Template Library — 轻量 C++ 模板 GUI</p>
+  <span class="version">Visual Studio 2022 · atlbase.h · WTL 10.x</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#atl-base">ATL 基础与 COM</a></li>
+    <li><a href="#atl-window">ATL 窗口支持</a></li>
+    <li><a href="#wtl-app">WTL 应用框架</a></li>
+    <li><a href="#wtl-msgmap">WTL 消息映射宏</a></li>
+    <li><a href="#wtl-ctrls">WTL 控件封装</a></li>
+    <li><a href="#wtl-dialog">WTL 对话框</a></li>
+    <li><a href="#wtl-gdi">WTL GDI 绘图</a></li>
+    <li><a href="#gdiplus">GDI+ 与现代特性</a></li>
+    <li><a href="#example">完整 SDI 示例</a></li>
+    <li><a href="#compare-mfc">对比 MFC</a></li>
+    <li><a href="#files">头文件索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p><strong>ATL（Active Template Library，活动模板库）</strong>是微软提供的轻量级 C++ 模板库，最初专为<strong>编写小型、快速的 COM 组件</strong>而设计。<strong>WTL（Windows Template Library）</strong>则是构建在 ATL 之上的<strong>GUI 扩展</strong>，由微软员工 Nenad Stefanovic 开发并开源，把窗口、控件、对话框、GDI、命令栏等 Win32 GUI 元素以模板方式优雅封装。两者组合后形成的<strong>轻量替代 MFC 方案</strong>在追求小体积、零运行时依赖、高启动性能的桌面项目中长期占据一席之地。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>纯模板</strong>：编译期多态，几乎无虚函数开销</li>
+        <li><strong>零运行时 DLL</strong>：静态链接，分发体积仅 KB 级</li>
+        <li><strong>薄封装</strong>：对象布局常只是一个 <code>HWND</code>/<code>HDC</code></li>
+        <li><strong>消息映射</strong>：CRTP 基类 + 宏表，避免巨型虚函数表</li>
+        <li><strong>COM 友好</strong>：与 ATL COM 服务器无缝集成</li>
+        <li><strong>现代 C++</strong>：支持 C++17/20，可与 STL/智能指针混用</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">适用场景</div>
+      <table>
+        <tr><th>场景</th><th>选择理由</th></tr>
+        <tr><td>COM 服务器 / ActiveX</td><td>ATL 是黄金标准</td></tr>
+        <tr><td>Shell 扩展 / 命名空间</td><td>体积敏感、需快速加载</td></tr>
+        <tr><td>嵌入式 UI / 瘦客户端</td><td>无 CRT 扩展依赖</td></tr>
+        <tr><td>工具型小应用</td><td>单一 exe 即可分发</td></tr>
+        <tr><td>IE/Edge 浏览器助手</td><td>需暴露 COM 接口</td></tr>
+        <tr><td>系统级后台 UI</td><td>避免大体积运行时</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="callout tip">
+    <strong>哲学</strong>：ATL/WTL 的设计准则是"<strong>用编译时间换取运行性能</strong>"。模板把绝大部分分发逻辑推到编译期，运行时几乎只剩 Win32 API 本身的开销。这与 MFC"虚函数+动态创建+运行时类型"的厚重架构形成鲜明对比。
+  </div>
+</section>
+
+<section id="atl-base" class="toc-link">
+  <h2><span class="num">02</span> ATL 基础与 COM</h2>
+  <p>ATL 的根基是 <code>CComObjectRootBase</code> 与线程模型模板 <code>CComObjectRootEx&lt;ThreadModel&gt;</code>。它们为每个 COM 对象提供<strong>引用计数</strong>与<strong>接口映射表</strong>。所有非聚合对象的最终派生类由 <code>CComObject&lt;T&gt;</code> 包装，由它实现 <code>IUnknown</code> 的三个方法。</p>
+  <div class="card">
+    <pre><code><span class="cm">// IMath.h —— 简单 COM 对象</span>
+<span class="pp">#include &lt;atlbase.h&gt;</span>
+<span class="pp">#include &lt;atlcom.h&gt;</span>
+
+<span class="cm">// IDL: [object, uuid(...)] interface IMath : IUnknown { HRESULT Add(...); }</span>
+<span class="kw">class</span> <span class="ty">ATL_NO_VTABLE</span> <span class="ty">CMath</span> :
+    <span class="kw">public</span> <span class="ty">CComObjectRootEx</span>&lt;<span class="ty">CComSingleThreadModel</span>&gt;,  <span class="cm">// 线程模型</span>
+    <span class="kw">public</span> <span class="ty">CComCoClass</span>&lt;<span class="ty">CMath</span>, &amp;<span class="ty">CLSID_Math</span>&gt;,       <span class="cm">// 类工厂</span>
+    <span class="kw">public</span> <span class="ty">IMath</span>                                   <span class="cm">// 业务接口</span>
+{
+<span class="kw">public</span>:
+    <span class="ty">CMath</span>() {}
+
+    <span class="fn">BEGIN_COM_MAP</span>(<span class="ty">CMath</span>)                       <span class="cm">// 接口表：QueryInterface 查它</span>
+        <span class="fn">COM_INTERFACE_ENTRY</span>(<span class="ty">IMath</span>)
+        <span class="fn">COM_INTERFACE_ENTRY</span>(<span class="ty">IUnknown</span>)
+    <span class="fn">END_COM_MAP</span>()
+
+    <span class="cm">// IMath</span>
+    <span class="kw">STDMETHOD</span>(<span class="fn">Add</span>)(<span class="kw">LONG</span> a, <span class="kw">LONG</span> b, <span class="kw">LONG</span>* pResult) <span class="kw">override</span> {
+        <span class="kw">if</span> (!pResult) <span class="kw">return</span> <span class="ty">E_POINTER</span>;
+        *pResult = a + b;
+        <span class="kw">return</span> <span class="ty">S_OK</span>;
+    }
+
+    <span class="fn">DECLARE_REGISTRY_RESOURCEID</span>(<span class="ty">IDR_MATH</span>)     <span class="cm">// 注册表脚本</span>
+};
+
+<span class="ty">OBJECT_ENTRY_AUTO</span>(<span class="ty">CLSID_Math</span>, <span class="ty">CMath</span>)             <span class="cm">// 自动登记到对象映射表</span></code></pre>
+  </div>
+  <h3>服务器模块与 IUnknown</h3>
+  <div class="card">
+    <pre><code><span class="cm">// DLL 服务器入口</span>
+<span class="kw">class</span> <span class="ty">CMathModule</span> : <span class="kw">public</span> <span class="ty">CAtlDllModuleT</span>&lt;<span class="ty">CMathModule</span>&gt; {
+<span class="kw">public</span>:
+    <span class="kw">DECLARE_LIBID</span>(<span class="ty">LIBID_MathLib</span>)
+    <span class="kw">DECLARE_REGISTRY_APPID_RESOURCEID</span>(<span class="ty">IDR_MATH</span>, <span class="st">"{...AppID...}"</span>)
+};
+<span class="ty">CMathModule</span> _AtlModule;                        <span class="cm">// 全局唯一模块对象</span>
+
+<span class="kw">extern</span> <span class="st">"C"</span> <span class="kw">BOOL WINAPI</span> <span class="fn">DllMain</span>(<span class="ty">HINSTANCE</span> h, <span class="kw">DWORD</span> r, <span class="kw">LPVOID</span> lp) {
+    <span class="kw">return</span> _AtlModule.<span class="fn">DllMain</span>(h, r, lp);
+}
+<span class="cm">// EXE 服务器则派生 CAtlExeModuleT，自带命令行 /RegServer、消息循环</span>
+
+<span class="cm">// IUnknown 三方法实现要点（由 CComObject&lt;T&gt; 与 CComObjectRootEx 提供）：</span>
+<span class="cm">//   QueryInterface  →  COM_MAP 表查找 IID，返回接口指针 + AddRef</span>
+<span class="cm">//   AddRef          →  InternalAddRef()（线程模型决定原子/非原子）</span>
+<span class="cm">//   Release         →  InternalRelease()，归零时 delete this</span></code></pre>
+  </div>
+  <div class="callout warn">
+    <strong>线程模型选择</strong>：<code>CComSingleThreadModel</code> 用于非线程安全的对象（最快），<code>CComMultiThreadModel</code> 提供原子引用计数（COM 标准要求）。进程内多用 <code>CComObjectThreadModel</code> 自动适配，按 <code>_ATL_FREE_THREADED</code> 宏切换。
+  </div>
+</section>
+
+<section id="atl-window" class="toc-link">
+  <h2><span class="num">03</span> ATL 窗口支持</h2>
+  <p>ATL 提供<strong>最小化的窗口封装</strong>。<code>CWindow</code> 直接包装一个 <code>HWND</code>（成员 <code>m_hWnd</code>），重载 <code>operator HWND()</code> 实现到句柄的隐式转换——这意味着任何 Win32 API 都能直接接受 <code>CWindow</code> 对象。<code>CWindowImpl&lt;T&gt;</code> 用 <strong>CRTP（奇异递归模板）</strong>让派生类把 WndProc 路由到自己的消息映射表。</p>
+  <div class="card">
+    <pre><code><span class="pp">#include &lt;atlbase.h&gt;</span>
+<span class="pp">#include &lt;atlwin.h&gt;</span>
+
+<span class="cm">// CWindow：薄到只有 m_hWnd 一个成员</span>
+<span class="kw">class</span> <span class="ty">CWindow</span> {
+<span class="kw">public</span>:
+    <span class="ty">HWND</span> m_hWnd;
+    <span class="kw">operator</span> <span class="ty">HWND</span>()<span class="kw"> const</span> { <span class="kw">return</span> m_hWnd; }
+    <span class="kw">BOOL</span> <span class="fn">Create</span>(<span class="ty">LPCTSTR</span> cls, <span class="ty">HWND</span> parent, <span class="ty">RECT</span>* rc = <span class="kw">NULL</span>);
+    <span class="kw">void</span> <span class="fn">ShowWindow</span>(<span class="kw">int</span> cmd) { ::<span class="fn">ShowWindow</span>(m_hWnd, cmd); }
+    <span class="cm">// ... 几百个对 Win32 API 的转发，全部非虚 ...</span>
+};
+
+<span class="cm">// CWindowImpl：CRTP + 消息映射</span>
+<span class="kw">class</span> <span class="ty">CMyWindow</span> : <span class="kw">public</span> <span class="ty">CWindowImpl</span>&lt;<span class="ty">CMyWindow</span>&gt; {
+<span class="kw">public</span>:
+    <span class="fn">DECLARE_WND_CLASS</span>(_T(<span class="st">"MyWndClass"</span>))     <span class="cm">// 注册窗口类（含类名、光标、背景）</span>
+
+    <span class="fn">BEGIN_MSG_MAP</span>(<span class="ty">CMyWindow</span>)
+        <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_CREATE</span>,  <span class="fn">OnCreate</span>)
+        <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_PAINT</span>,   <span class="fn">OnPaint</span>)
+        <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_DESTROY</span>, <span class="fn">OnDestroy</span>)
+    <span class="fn">END_MSG_MAP</span>()
+
+    <span class="ty">LRESULT</span> <span class="fn">OnCreate</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp; bHandled) {
+        bHandled = <span class="ty">FALSE</span>;                    <span class="cm">// 让 DefWindowProc 继续处理</span>
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+    <span class="ty">LRESULT</span> <span class="fn">OnPaint</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp; bHandled) {
+        <span class="ty">CPaintDC</span> dc(m_hWnd);
+        dc.<span class="fn">TextOut</span>(<span class="num">10</span>, <span class="num">10</span>, _T(<span class="st">"Hello ATL"</span>));
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+    <span class="ty">LRESULT</span> <span class="fn">OnDestroy</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp;) {
+        <span class="fn">PostQuitMessage</span>(<span class="num">0</span>);
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+};
+
+<span class="kw">int WINAPI</span> <span class="fn">wWinMain</span>(<span class="ty">HINSTANCE</span> hInst, <span class="ty">HINSTANCE</span>, <span class="ty">PWSTR</span>, <span class="kw">int</span>) {
+    <span class="ty">CMyWindow</span> wnd;
+    wnd.<span class="fn">Create</span>(<span class="kw">NULL</span>, <span class="ty">CWindow</span>::<span class="fn">rcDefault</span>, _T(<span class="st">"Demo"</span>));
+    wnd.<span class="fn">ShowWindow</span>(<span class="ty">SW_SHOWNORMAL</span>);
+
+    <span class="ty">MSG</span> msg;
+    <span class="kw">while</span> (<span class="fn">GetMessage</span>(&amp;msg, <span class="kw">NULL</span>, <span class="num">0</span>, <span class="num">0</span>)) {
+        <span class="fn">TranslateMessage</span>(&amp;msg);
+        <span class="fn">DispatchMessage</span>(&amp;msg);
+    }
+    <span class="kw">return</span> (<span class="kw">int</span>)msg.wParam;
+}</code></pre>
+  </div>
+  <div class="callout tip">
+    <strong>CRTP 优势</strong>：<code>CWindowImpl&lt;CMyWindow&gt;</code> 在编译期就知道派生类的具体类型，静态 WndProc 可以直接调用 <code>CMyWindow::ProcessWindowMessage</code>，无需虚函数表查找。第四个参数 <code>BOOL&amp; bHandled</code> 设为 <code>FALSE</code> 表示"我处理过了但仍让 DefWindowProc 兜底"，灵活控制消息流向。
+  </div>
+</section>
+
+<section id="wtl-app" class="toc-link">
+  <h2><span class="num">04</span> WTL 应用框架</h2>
+  <p>WTL 在 ATL 之上扩展出完整的 GUI 框架。<code>CAppModule</code>（继承自 <code>CMessageModule</code>）管理全局消息循环，<code>CFrameWindowImpl</code> 提供带菜单/工具栏/状态栏的框架窗口，<code>CMessageLoop</code> 抽象出可被多线程共享的消息泵。<code>CUpdateUI</code> 实现菜单/工具栏命令的<strong>状态自动更新</strong>（启用、选中、复选）。</p>
+  <div class="card">
+    <pre><code><span class="pp">#include &lt;atlbase.h&gt;</span>
+<span class="pp">#include &lt;atlapp.h&gt;</span>          <span class="cm">// CAppModule / CMessageLoop</span>
+<span class="pp">#include &lt;atlframe.h&gt;</span>        <span class="cm">// CFrameWindowImpl</span>
+<span class="pp">#include &lt;atlctrls.h&gt;</span>        <span class="cm">// 控件封装</span>
+
+<span class="ty">CAppModule</span> _Module;                           <span class="cm">// 全局应用对象</span>
+
+<span class="kw">class</span> <span class="ty">CMainFrame</span> : <span class="kw">public</span> <span class="ty">CFrameWindowImpl</span>&lt;<span class="ty">CMainFrame</span>&gt;,
+                     <span class="kw">public</span> <span class="ty">CUpdateUI</span>&lt;<span class="ty">CMainFrame</span>&gt;,
+                     <span class="kw">public</span> <span class="ty">CMessageFilter</span>,
+                     <span class="kw">public</span> <span class="ty">CIdleHandler</span>
+{
+<span class="kw">public</span>:
+    <span class="fn">DECLARE_FRAME_WND_CLASS</span>(<span class="kw">NULL</span>, <span class="ty">IDR_MAINFRAME</span>)   <span class="cm">// 关联资源 ID</span>
+
+    <span class="kw">virtual BOOL</span> <span class="fn">PreTranslateMessage</span>(<span class="ty">MSG</span>* pMsg) {
+        <span class="kw">if</span> (<span class="ty">CFrameWindowImpl</span>::<span class="fn">PreTranslateMessage</span>(pMsg))
+            <span class="kw">return TRUE</span>;
+        <span class="kw">return FALSE</span>;
+    }
+    <span class="kw">virtual BOOL</span> <span class="fn">OnIdle</span>() {
+        <span class="fn">UIUpdateToolBar</span>();              <span class="cm">// 空闲时刷新工具栏状态</span>
+        <span class="kw">return FALSE</span>;
+    }
+
+    <span class="fn">BEGIN_MSG_MAP</span>(<span class="ty">CMainFrame</span>)
+        <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_CREATE</span>, <span class="fn">OnCreate</span>)
+        <span class="fn">COMMAND_ID_HANDLER</span>(<span class="ty">ID_FILE_EXIT</span>, <span class="fn">OnFileExit</span>)
+        <span class="fn">CHAIN_MSG_MAP</span>(<span class="ty">CUpdateUI</span>&lt;<span class="ty">CMainFrame</span>&gt;)   <span class="cm">// 转发到 UI 更新映射</span>
+        <span class="fn">CHAIN_MSG_MAP</span>(<span class="ty">CFrameWindowImpl</span>&lt;<span class="ty">CMainFrame</span>&gt;)
+    <span class="fn">END_MSG_MAP</span>()
+
+    <span class="ty">BEGIN_UPDATE_UI_MAP</span>(<span class="ty">CMainFrame</span>)            <span class="cm">// 命令 UI 更新表</span>
+        <span class="fn">UPDATE_ELEMENT</span>(<span class="ty">ID_VIEW_STATUSBAR</span>, <span class="ty">UPDUI_MENUPOPUP</span>)
+    <span class="fn">END_UPDATE_UI_MAP</span>()
+};
+
+<span class="kw">int WINAPI</span> <span class="fn">wWinMain</span>(<span class="ty">HINSTANCE</span> hInst, <span class="ty">HINSTANCE</span>, <span class="ty">PWSTR</span>, <span class="kw">int</span> nShow) {
+    _Module.<span class="fn">Init</span>(<span class="kw">NULL</span>, hInst);                  <span class="cm">// 初始化模块（含公共控件）</span>
+
+    <span class="ty">CMessageLoop</span> theLoop;
+    _Module.<span class="fn">AddMessageLoop</span>(&amp;theLoop);          <span class="cm">// 注册主线程消息循环</span>
+
+    <span class="ty">CMainFrame</span> wndMain;
+    <span class="kw">if</span> (wndMain.<span class="fn">CreateEx</span>() == <span class="kw">NULL</span>) {
+        _Module.<span class="fn">Term</span>();
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+    wndMain.<span class="fn">ShowWindow</span>(nShow);
+    wndMain.<span class="fn">UpdateWindow</span>();
+
+    <span class="kw">int</span> nRet = theLoop.<span class="fn">Run</span>();                  <span class="cm">// 进入消息循环</span>
+    _Module.<span class="fn">RemoveMessageLoop</span>();
+    _Module.<span class="fn">Term</span>();
+    <span class="kw">return</span> nRet;
+}</code></pre>
+  </div>
+  <div class="callout tip">
+    <strong>多消息循环设计</strong>：<code>CAppModule</code> 用线程局部存储为<strong>每个 UI 线程</strong>维护独立的 <code>CMessageLoop</code>。这意味着 WTL 天然支持多线程 GUI——只需在新线程里 <code>AddMessageLoop</code>，即可拥有自己的消息泵、PreTranslate 链、OnIdle 链。
+  </div>
+</section>
+
+<section id="wtl-msgmap" class="toc-link">
+  <h2><span class="num">05</span> WTL 消息映射宏</h2>
+  <p>WTL 继承 ATL 的消息映射机制并扩展出更精细的宏。每条映射项是一个<strong>静态表项</strong>，由 <code>ProcessWindowMessage</code> 在运行时线性扫描匹配。设 <code>bHandled=FALSE</code> 可让消息继续向后查找。</p>
+  <table>
+    <tr><th>宏</th><th>用途</th><th>典型场景</th></tr>
+    <tr><td><code>MESSAGE_HANDLER</code></td><td>处理原始窗口消息</td><td>WM_CREATE / WM_PAINT</td></tr>
+    <tr><td><code>COMMAND_HANDLER</code></td><td>按 (id, code) 处理 WM_COMMAND</td><td>按钮 BN_CLICKED</td></tr>
+    <tr><td><code>COMMAND_ID_HANDLER</code></td><td>按 id 处理（忽略 code）</td><td>菜单项</td></tr>
+    <tr><td><code>COMMAND_RANGE_HANDLER</code></td><td>处理一段连续 id 范围</td><td>动态生成的工具栏按钮</td></tr>
+    <tr><td><code>NOTIFY_HANDLER</code></td><td>按 (id, code) 处理 WM_NOTIFY</td><td>LVN_ITEMCHANGED</td></tr>
+    <tr><td><code>NOTIFY_CODE_HANDLER</code></td><td>按通知码处理（任意控件）</td><td>统一处理 NM_RCLICK</td></tr>
+    <tr><td><code>CHAIN_MSG_MAP</code></td><td>整链转发到基类/成员</td><td>复用基类处理</td></tr>
+    <tr><td><code>CHAIN_MSG_MAP_MEMBER</code></td><td>转发到成员对象</td><td>组合式窗口</td></tr>
+    <tr><td><code>DEFAULT_REFLECTION_HANDLER</code></td><td>反射未处理消息给子控件</td><td>自绘按钮</td></tr>
+    <tr><td><code>FORWARD_NOTIFICATIONS</code></td><td>把 WM_NOTIFY 转发给父窗口</td><td>子控件包装类</td></tr>
+  </table>
+  <div class="card">
+    <pre><code><span class="fn">BEGIN_MSG_MAP</span>(<span class="ty">CMyView</span>)
+    <span class="cm">// 窗口消息</span>
+    <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_SIZE</span>,    <span class="fn">OnSize</span>)
+    <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_ERASEBKGND</span>, <span class="fn">OnEraseBkgnd</span>)
+    <span class="cm">// 命令：菜单 + 按钮</span>
+    <span class="fn">COMMAND_ID_HANDLER</span>(<span class="ty">ID_FILE_NEW</span>,    <span class="fn">OnFileNew</span>)
+    <span class="fn">COMMAND_ID_HANDLER</span>(<span class="ty">ID_FILE_OPEN</span>,   <span class="fn">OnFileOpen</span>)
+    <span class="fn">COMMAND_RANGE_HANDLER</span>(<span class="ty">ID_VIEW_0</span>, <span class="ty">ID_VIEW_9</span>, <span class="fn">OnView</span>)
+    <span class="cm">// 控件通知（来自 ListView m_list）</span>
+    <span class="fn">NOTIFY_HANDLER</span>(<span class="ty">IDC_LIST</span>, <span class="ty">LVN_ITEMCHANGED</span>, <span class="fn">OnListItemChanged</span>)
+    <span class="fn">NOTIFY_CODE_HANDLER</span>(<span class="ty">NM_RCLICK</span>, <span class="fn">OnAnyControlRClick</span>)
+    <span class="cm">// 反射：把未处理消息回送给发件人（自绘控件必需）</span>
+    <span class="fn">DEFAULT_REFLECTION_HANDLER</span>()
+    <span class="cm">// 链式：本类未匹配则交基类</span>
+    <span class="fn">CHAIN_MSG_MAP</span>(<span class="ty">CFrameWindowImpl</span>&lt;<span class="ty">CMyView</span>&gt;)
+<span class="fn">END_MSG_MAP</span>()</code></pre>
+  </div>
+  <div class="callout warn">
+    <strong>反射机制</strong>：传统 Win32 中，子控件的通知（WM_NOTIFY/WM_COMMAND）只送给父窗口。WTL 的 <code>DEFAULT_REFLECTION_HANDLER</code> 把这些消息"反射"回子控件本身——让自绘按钮的逻辑封装在按钮类内，而不是污染父窗口。这是把 Win32 转向 OO 设计的关键技巧。
+  </div>
+</section>
+
+<section id="wtl-ctrls" class="toc-link">
+  <h2><span class="num">06</span> WTL 控件封装</h2>
+  <p>WTL 把 Win32 标准控件、公共控件、Shell 控件全部封装为薄模板类。所有控件类都派生自 <code>CWindow</code>（继承其 <code>HWND</code> 转换），并添加控件特有的方法。<code>CCommandBarCtrl</code> 是 WTL 标志性控件——它把<strong>菜单和工具栏合并</strong>为一个 CE 风格的命令栏，常见于 Windows Mobile/嵌入式。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">标准控件类</div>
+      <table>
+        <tr><th>类</th><th>封装控件</th></tr>
+        <tr><td><code>CButton</code></td><td>Button</td></tr>
+        <tr><td><code>CEdit</code></td><td>Edit / RichEdit</td></tr>
+        <tr><td><code>CListBox</code></td><td>ListBox</td></tr>
+        <tr><td><code>CComboBox</code></td><td>ComboBox</td></tr>
+        <tr><td><code>CScrollBar</code></td><td>ScrollBar</td></tr>
+        <tr><td><code>CStatic</code></td><td>Static</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">公共控件类</div>
+      <table>
+        <tr><th>类</th><th>封装控件</th></tr>
+        <tr><td><code>CListViewCtrl</code></td><td>ListView</td></tr>
+        <tr><td><code>CTreeViewCtrl</code></td><td>TreeView</td></tr>
+        <tr><td><code>CHeaderCtrl</code></td><td>Header</td></tr>
+        <tr><td><code>CTabCtrl</code></td><td>Tab</td></tr>
+        <tr><td><code>CProgressBarCtrl</code></td><td>ProgressBar</td></tr>
+        <tr><td><code>CToolBarCtrl</code> / <code>CReBarCtrl</code> / <code>CStatusBarCtrl</code></td><td>工具栏/Rebar/状态栏</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <pre><code><span class="cm">// 创建工具栏 + 状态栏 + 列表视图（框架窗口 OnCreate 中）</span>
+<span class="ty">LRESULT</span> <span class="ty">CMainFrame</span>::<span class="fn">OnCreate</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp;) {
+    <span class="fn">CreateSimpleToolBar</span>(<span class="ty">IDR_MAINFRAME</span>);          <span class="cm">// 从资源建工具栏</span>
+    <span class="fn">CreateSimpleStatusBar</span>();                       <span class="cm">// 默认状态栏</span>
+
+    <span class="cm">// 列表视图：Report 模式，三列</span>
+    <span class="ty">CRect</span> rc; <span class="fn">GetClientRect</span>(&amp;rc);
+    m_list.<span class="fn">Create</span>(m_hWnd, rc, <span class="kw">NULL</span>,
+        <span class="ty">WS_CHILD</span> | <span class="ty">WS_VISIBLE</span> | <span class="ty">LVS_REPORT</span> | <span class="ty">LVS_SINGLESEL</span>,
+        <span class="ty">WS_EX_CLIENTEDGE</span>, <span class="ty">IDC_LIST</span>);
+    m_list.<span class="fn">SetExtendedListViewStyle</span>(<span class="ty">LVS_EX_FULLROWSELECT</span> | <span class="ty">LVS_EX_GRIDLINES</span>);
+
+    m_list.<span class="fn">InsertColumn</span>(<span class="num">0</span>, _T(<span class="st">"名称"</span>), <span class="ty">LVCFMT_LEFT</span>, <span class="num">160</span>);
+    m_list.<span class="fn">InsertColumn</span>(<span class="num">1</span>, _T(<span class="st">"大小"</span>), <span class="ty">LVCFMT_RIGHT</span>, <span class="num">80</span>);
+    m_list.<span class="fn">InsertColumn</span>(<span class="num">2</span>, _T(<span class="st">"修改时间"</span>), <span class="ty">LVCFMT_LEFT</span>, <span class="num">140</span>);
+
+    <span class="cm">// 子类化已有控件：把资源中的 IDOK 包装为 CButton 派生类</span>
+    m_btnOk.<span class="fn">SubclassWindow</span>(<span class="fn">GetDlgItem</span>(<span class="ty">IDOK</span>));
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+  </div>
+  <div class="callout tip">
+    <strong>子类化（Subclassing）</strong>：WTL 通过 <code>CWindowImpl::SubclassWindow(HWND)</code> 把现有窗口的 WndProc 替换为派生类的 <code>ProcessWindowMessage</code>，是给对话框资源中的控件"加 OO 行为"的标准手段。派生类需用 <code>DECLARE_WND_SUPERCLASS</code> 或直接继承相应控件基类。
+  </div>
+</section>
+
+<section id="wtl-dialog" class="toc-link">
+  <h2><span class="num">07</span> WTL 对话框</h2>
+  <p>WTL 对话框由 <code>CDialogImpl&lt;T&gt;</code> 模板提供，每个派生类需声明一个 <code>enum { IDD = IDD_XXX }</code> 关联对话框资源。<code>CSimpleDialog</code> 是无消息映射的最简包装（一行代码弹消息框式对话框）。数据交换通过 <code>CWinDataExchange</code> 模板与 <code>DDX_*</code>/<code>DDV_*</code> 宏实现，API 与 MFC 高度一致但体积小得多。</p>
+  <div class="card">
+    <pre><code><span class="kw">class</span> <span class="ty">CSettingsDlg</span> :
+    <span class="kw">public</span> <span class="ty">CDialogImpl</span>&lt;<span class="ty">CSettingsDlg</span>&gt;,
+    <span class="kw">public</span> <span class="ty">CWinDataExchange</span>&lt;<span class="ty">CSettingsDlg</span>&gt;
+{
+<span class="kw">public</span>:
+    <span class="kw">enum</span> { <span class="ty">IDD</span> = <span class="ty">IDD_SETTINGS</span> };
+
+    <span class="ty">CString</span>    m_name;
+    <span class="kw">int</span>        m_port;
+    <span class="ty">CButton</span>    m_ok;             <span class="cm">// 控件包装（DDX_CONTROL 绑定）</span>
+
+    <span class="kw">BEGIN_DDX_MAP</span>(<span class="ty">CSettingsDlg</span>)
+        <span class="fn">DDX_TEXT</span>(<span class="ty">IDC_NAME</span>, m_name)
+        <span class="fn">DDX_INT</span>(<span class="ty">IDC_PORT</span>, m_port)
+        <span class="fn">DDX_CONTROL</span>(<span class="ty">IDOK</span>, m_ok)
+        <span class="fn">DDV_MAXCHAR</span>(m_name, <span class="num">32</span>)
+        <span class="fn">DDV_MINMAX_INT</span>(m_port, <span class="num">1</span>, <span class="num">65535</span>)
+    <span class="fn">END_DDX_MAP</span>()
+
+    <span class="fn">BEGIN_MSG_MAP</span>(<span class="ty">CSettingsDlg</span>)
+        <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_INITDIALOG</span>, <span class="fn">OnInitDialog</span>)
+        <span class="fn">COMMAND_ID_HANDLER</span>(<span class="ty">IDOK</span>, <span class="fn">OnOK</span>)
+        <span class="fn">COMMAND_ID_HANDLER</span>(<span class="ty">IDCANCEL</span>, <span class="fn">OnCancel</span>)
+    <span class="fn">END_MSG_MAP</span>()
+
+    <span class="ty">LRESULT</span> <span class="fn">OnInitDialog</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp;) {
+        <span class="fn">DoDataExchange</span>(<span class="ty">FALSE</span>);          <span class="cm">// 成员 → 控件（FALSE=写入界面）</span>
+        <span class="kw">return</span> <span class="ty">TRUE</span>;                  <span class="cm">// 设默认焦点为 IDC_NAME</span>
+    }
+    <span class="ty">LRESULT</span> <span class="fn">OnOK</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp; bHandled) {
+        <span class="kw">if</span> (<span class="fn">DoDataExchange</span>(<span class="ty">TRUE</span>)) {      <span class="cm">// 控件 → 成员 + 校验</span>
+            <span class="fn">EndDialog</span>(<span class="ty">IDOK</span>);            <span class="cm">// 关闭模态对话框</span>
+        }
+        bHandled = <span class="ty">TRUE</span>;
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+};
+
+<span class="cm">// 使用：</span>
+<span class="ty">CSettingsDlg</span> dlg;
+<span class="kw">if</span> (dlg.<span class="fn">DoModal</span>() == <span class="ty">IDOK</span>) {
+    <span class="cm">// dlg.m_name / dlg.m_port 已是用户输入</span>
+}
+
+<span class="cm">// 非模态：Create(hwndParent) 而非 DoModal</span>
+<span class="cm">// 简单对话框（仅需要 IDOK/IDCANCEL）：CSimpleDialog&lt;IDD_ABOUT&gt;().DoModal();</span></code></pre>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">DDX 方向</div>
+      <ul>
+        <li><code>DoDataExchange(FALSE)</code>：成员→控件</li>
+        <li><code>DoDataExchange(TRUE)</code>：控件→成员+校验</li>
+        <li>失败返回 FALSE，已设焦点</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">常用 DDX/DDV 宏</div>
+      <table>
+        <tr><th>宏</th><th>用途</th></tr>
+        <tr><td><code>DDX_TEXT</code></td><td>控件↔CString</td></tr>
+        <tr><td><code>DDX_INT</code> / <code>DDX_UINT</code></td><td>整数</td></tr>
+        <tr><td><code>DDX_CHECK</code></td><td>CheckBox 状态</td></tr>
+        <tr><td><code>DDX_CONTROL</code></td><td>绑定控件对象</td></tr>
+        <tr><td><code>DDV_MAXCHAR</code> / <code>DDV_MINMAX_INT</code></td><td>长度/范围校验</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="wtl-gdi" class="toc-link">
+  <h2><span class="num">08</span> WTL GDI 绘图</h2>
+  <p>WTL 的 GDI 封装与 MFC 概念相似但更精简。<code>CDC</code> 包装 <code>HDC</code>，<code>CGdiObject</code> 是 GDI 对象基类，<code>CPen</code>/<code>CBrush</code>/<code>CFont</code>/<code>CBitmap</code>/<code>CRegion</code> 派生自它。所有这些类都是<strong>栈对象</strong>，析构时自动 <code>DeleteObject</code>。<code>CClientDC</code>、<code>CWindowDC</code>、<code>CPaintDC</code> 是作用域守卫——构造时获取 DC，析构时释放。</p>
+  <div class="card">
+    <pre><code><span class="cm">// 视图窗口的 OnPaint 绘制</span>
+<span class="ty">LRESULT</span> <span class="ty">CMyView</span>::<span class="fn">OnPaint</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp; bHandled) {
+    <span class="ty">CPaintDC</span> dc(m_hWnd);                    <span class="cm">// 构造=BeginPaint，析构=EndPaint</span>
+
+    <span class="cm">// 1. 创建 GDI 对象（栈对象）</span>
+    <span class="ty">CPen</span>   pen(<span class="ty">PS_SOLID</span>, <span class="num">2</span>, <span class="ty">RGB</span>(<span class="num">220</span>,<span class="num">60</span>,<span class="num">60</span>));
+    <span class="ty">CBrush</span> brush(<span class="ty">RGB</span>(<span class="num">80</span>,<span class="num">160</span>,<span class="num">240</span>));
+    <span class="ty">CFont</span> font;
+    font.<span class="fn">CreatePointFont</span>(<span class="num">140</span>, _T(<span class="st">"Segoe UI"</span>));
+
+    <span class="cm">// 2. 选入 DC，保存旧对象</span>
+    <span class="ty">HPEN</span>   oldPen   = dc.<span class="fn">SelectPen</span>(pen);
+    <span class="ty">HBRUSH</span> oldBrush = dc.<span class="fn">SelectBrush</span>(brush);
+    <span class="ty">HFONT</span> oldFont  = dc.<span class="fn">SelectFont</span>(font);
+
+    <span class="cm">// 3. 绘图（CDC 直接转发 Win32 API）</span>
+    dc.<span class="fn">SetBkMode</span>(<span class="ty">TRANSPARENT</span>);
+    dc.<span class="fn">Rectangle</span>(<span class="num">20</span>, <span class="num">20</span>, <span class="num">220</span>, <span class="num">120</span>);
+    dc.<span class="fn">MoveTo</span>(<span class="num">20</span>, <span class="num">20</span>);
+    dc.<span class="fn">LineTo</span>(<span class="num">220</span>, <span class="num">120</span>);
+    dc.<span class="fn">TextOut</span>(<span class="num">30</span>, <span class="num">40</span>, _T(<span class="st">"WTL GDI Demo"</span>));
+
+    <span class="cm">// 4. 恢复旧对象（必须！）</span>
+    dc.<span class="fn">SelectPen</span>(oldPen);
+    dc.<span class="fn">SelectBrush</span>(oldBrush);
+    dc.<span class="fn">SelectFont</span>(oldFont);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cm">// 作用域 DC 守卫</span>
+<span class="kw">void</span> <span class="ty">CMyView</span>::<span class="fn">DrawCross</span>(<span class="ty">HWND</span> hwnd) {
+    <span class="ty">CClientDC</span> dc(hwnd);                   <span class="cm">// 客户区 DC，析构时 ReleaseDC</span>
+    <span class="ty">CRect</span> rc; <span class="ty">CWindow</span>(hwnd).<span class="fn">GetClientRect</span>(&amp;rc);
+    dc.<span class="fn">MoveTo</span>(rc.left,  rc.top);     dc.<span class="fn">LineTo</span>(rc.right, rc.bottom);
+    dc.<span class="fn">MoveTo</span>(rc.right, rc.top);     dc.<span class="fn">LineTo</span>(rc.left,  rc.bottom);
+}</code></pre>
+  </div>
+  <div class="callout warn">
+    <strong>资源卫生</strong>：WTL 的 <code>CPen</code> 等栈对象在析构时调用 <code>DeleteObject</code>，但如果此时它仍被 DC 选中，删除会失败并造成<strong>句柄泄漏</strong>。务必遵守"选入→保存旧→绘制→恢复旧→（让新对象析构）"的顺序。<code>SelectPen</code>/<code>SelectBrush</code> 等类型安全版本比 MFC 的 <code>SelectObject</code> 更难出错。
+  </div>
+</section>
+
+<section id="gdiplus" class="toc-link">
+  <h2><span class="num">09</span> GDI+ 与现代特性</h2>
+  <p>WTL 10 与 GDI+ 完全兼容——只需在 <code>stdafx.h</code> 包含 <code>&lt;gdiplus.h&gt;</code> 并链接 <code>gdiplus.lib</code>，即可在 WTL 窗口中混合使用 GDI 与 GDI+。<strong>UxTheme</strong> API 让控件呈现 Windows 视觉主题（Aero、Fluent）。WTL 也积极跟进 C++ 标准：C++11 的 <code>override</code>/<code>final</code>、C++14 的 <code>make_unique</code>、C++17 的 <code>string_view</code>、C++20 的 <code>concepts</code> 均可无缝集成。</p>
+  <div class="card">
+    <pre><code><span class="pp">#include &lt;atlbase.h&gt;</span>
+<span class="pp">#include &lt;gdiplus.h&gt;</span>
+<span class="pp">#pragma comment(lib, "gdiplus.lib")</span>
+<span class="kw">using namespace</span> <span class="ty">Gdiplus</span>;
+
+<span class="kw">struct</span> <span class="ty">GdiplusInit</span> {
+    <span class="ty">ULONG_PTR</span> token;
+    <span class="ty">GdiplusInit</span>() { <span class="ty">GdiplusStartupInput</span> si; <span class="fn">GdiplusStartup</span>(&amp;token, &amp;si, <span class="kw">NULL</span>); }
+    ~<span class="ty">GdiplusInit</span>() { <span class="fn">GdiplusShutdown</span>(token); }
+};
+
+<span class="ty">LRESULT</span> <span class="ty">CMyView</span>::<span class="fn">OnPaint</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp;) {
+    <span class="ty">CPaintDC</span> dc(m_hWnd);
+    <span class="ty">Graphics</span> gfx(dc);                       <span class="cm">// GDI+ 图形对象包装 HDC</span>
+    gfx.<span class="fn">SetSmoothingMode</span>(<span class="ty">SmoothingModeAntiAlias</span>);
+
+    <span class="ty">LinearGradientBrush</span> brush(
+        <span class="ty">Rect</span>(<span class="num">10</span>,<span class="num">10</span>,<span class="num">300</span>,<span class="num">80</span>),
+        <span class="ty">Color</span>(<span class="num">255</span>,<span class="num">107</span>,<span class="num">63</span>,<span class="num">160</span>),                 <span class="cm">// WTL 紫色</span>
+        <span class="ty">Color</span>(<span class="num">255</span>,<span class="num">45</span>,<span class="num">27</span>,<span class="num">105</span>),
+        <span class="ty">LinearGradientModeForwardDiagonal</span>);
+    gfx.<span class="fn">FillRectangle</span>(&amp;brush, <span class="num">10</span>, <span class="num">10</span>, <span class="num">300</span>, <span class="num">80</span>);
+
+    <span class="ty">SolidBrush</span> textBrush(<span class="ty">Color</span>(<span class="num">255</span>,<span class="num">255</span>,<span class="num">255</span>,<span class="num">255</span>));
+    <span class="ty">Font</span> font(L<span class="st">"Segoe UI"</span>, <span class="num">16</span>);
+    gfx.<span class="fn">DrawString</span>(L<span class="st">"GDI+ in WTL"</span>, -<span class="num">1</span>, &amp;font, <span class="ty">PointF</span>(<span class="num">20</span>,<span class="num">25</span>), &amp;textBrush);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cm">// UxTheme：让自绘控件跟随系统主题</span>
+<span class="ty">HTHEME</span> hTheme = <span class="fn">OpenThemeData</span>(m_hWnd, L<span class="st">"BUTTON"</span>);
+<span class="fn">DrawThemeBackground</span>(hTheme, dc, <span class="ty">BP_PUSHBUTTON</span>, <span class="ty">PBS_NORMAL</span>, &amp;rc, <span class="kw">NULL</span>);
+<span class="fn">CloseThemeData</span>(hTheme);</code></pre>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">C++ 标准兼容</div>
+      <ul>
+        <li>WTL 10 全源码 C++14 起步</li>
+        <li>可用 <code>std::unique_ptr&lt;CFont&gt;</code> 管理 GDI</li>
+        <li><code>constexpr</code> 计算布局常量</li>
+        <li><code>std::string_view</code> 替代 <code>LPCTSTR</code></li>
+        <li>可与 STL 容器、<code>std::thread</code> 共存</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">获取方式</div>
+      <ul>
+        <li>SourceForge <code>wtl</code> 项目（最新 10.0.10320）</li>
+        <li>VS 扩展 "WTL Application Wizard"</li>
+        <li>vcpkg: <code>vcpkg install wtl</code></li>
+        <li>只需复制 <code>WTL/Include</code> 到工程 include 路径</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">10</span> 完整 SDI 示例</h2>
+  <p>下面是一个最小可运行的 WTL SDI 应用骨架：应用对象 + 主框架 + 自定义视图 + 消息映射 + 菜单命令 + GDI 绘图。它体现了 WTL 各组件如何协作——典型工程结构如此，省略资源文件（.rc）。</p>
+  <div class="card">
+    <pre><code><span class="cm">// stdafx.h</span>
+<span class="pp">#pragma once</span>
+<span class="pp">#include &lt;atlbase.h&gt;</span>
+<span class="pp">#include &lt;atlstr.h&gt;</span>          <span class="cm">// CString</span>
+<span class="pp">#include &lt;atlapp.h&gt;</span>          <span class="cm">// CAppModule</span>
+<span class="pp">#include &lt;atlwin.h&gt;</span>          <span class="cm">// CWindowImpl</span>
+<span class="pp">#include &lt;atlframe.h&gt;</span>        <span class="cm">// CFrameWindowImpl</span>
+<span class="pp">#include &lt;atlctrls.h&gt;</span>        <span class="cm">// 控件</span>
+<span class="pp">#include &lt;atlgdi.h&gt;</span>          <span class="cm">// GDI</span>
+<span class="pp">#include &lt;atlmisc.h&gt;</span>         <span class="cm">// CRect / CString</span>
+<span class="kw">extern</span> <span class="ty">CAppModule</span> _Module;
+
+<span class="cm">// ─── MainFrm.h ───</span>
+<span class="kw">class</span> <span class="ty">CMyView</span> : <span class="kw">public</span> <span class="ty">CWindowImpl</span>&lt;<span class="ty">CMyView</span>&gt; {
+<span class="kw">public</span>:
+    <span class="fn">DECLARE_WND_CLASS</span>(<span class="kw">NULL</span>)
+    <span class="ty">CString</span> m_text;
+    <span class="fn">BEGIN_MSG_MAP</span>(<span class="ty">CMyView</span>)
+        <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_PAINT</span>,   <span class="fn">OnPaint</span>)
+        <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_LBUTTONDOWN</span>, <span class="fn">OnLButton</span>)
+    <span class="fn">END_MSG_MAP</span>()
+    <span class="ty">LRESULT</span> <span class="fn">OnPaint</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp;) {
+        <span class="ty">CPaintDC</span> dc(m_hWnd);
+        dc.<span class="fn">SetBkMode</span>(<span class="ty">TRANSPARENT</span>);
+        dc.<span class="fn">TextOut</span>(<span class="num">20</span>, <span class="num">20</span>, m_text);
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+    <span class="ty">LRESULT</span> <span class="fn">OnLButton</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span> lp, <span class="ty">BOOL</span>&amp;) {
+        <span class="ty">POINT</span> pt = { <span class="ty">GET_X_LPARAM</span>(lp), <span class="ty">GET_Y_LPARAM</span>(lp) };
+        m_text.<span class="fn">Format</span>(_T(<span class="st">"Click @ (%d, %d)"</span>), pt.x, pt.y);
+        <span class="fn">Invalidate</span>();
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+};
+
+<span class="kw">class</span> <span class="ty">CMainFrame</span> : <span class="kw">public</span> <span class="ty">CFrameWindowImpl</span>&lt;<span class="ty">CMainFrame</span>&gt;,
+                     <span class="kw">public</span> <span class="ty">CUpdateUI</span>&lt;<span class="ty">CMainFrame</span>&gt;,
+                     <span class="kw">public</span> <span class="ty">CMessageFilter</span> {
+<span class="kw">public</span>:
+    <span class="fn">DECLARE_FRAME_WND_CLASS</span>(<span class="kw">NULL</span>, <span class="ty">IDR_MAINFRAME</span>)
+    <span class="ty">CMyView</span> m_view;
+
+    <span class="kw">virtual BOOL</span> <span class="fn">PreTranslateMessage</span>(<span class="ty">MSG</span>* pMsg) <span class="kw">override</span> {
+        <span class="kw">if</span> (m_view.<span class="fn">IsWindow</span>() &amp;&amp; m_view.<span class="fn">PreTranslateMessage</span>(pMsg))
+            <span class="kw">return TRUE</span>;
+        <span class="kw">return</span> <span class="ty">CFrameWindowImpl</span>::<span class="fn">PreTranslateMessage</span>(pMsg);
+    }
+
+    <span class="fn">BEGIN_MSG_MAP</span>(<span class="ty">CMainFrame</span>)
+        <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_CREATE</span>,      <span class="fn">OnCreate</span>)
+        <span class="fn">COMMAND_ID_HANDLER</span>(<span class="ty">ID_FILE_EXIT</span>,  <span class="fn">OnFileExit</span>)
+        <span class="fn">COMMAND_ID_HANDLER</span>(<span class="ty">ID_APP_ABOUT</span>, <span class="fn">OnAbout</span>)
+        <span class="fn">CHAIN_MSG_MAP</span>(<span class="ty">CUpdateUI</span>&lt;<span class="ty">CMainFrame</span>&gt;)
+        <span class="fn">CHAIN_MSG_MAP</span>(<span class="ty">CFrameWindowImpl</span>&lt;<span class="ty">CMainFrame</span>&gt;)
+    <span class="fn">END_MSG_MAP</span>()
+
+    <span class="ty">LRESULT</span> <span class="fn">OnCreate</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp; bHandled) {
+        m_hWndClient = m_view.<span class="fn">Create</span>(m_hWnd, rcDefault, <span class="kw">NULL</span>,
+            <span class="ty">WS_CHILD</span> | <span class="ty">WS_VISIBLE</span> | <span class="ty">SS_NOTIFY</span>);
+        m_view.m_text = _T(<span class="st">"Hello WTL!"</span>);
+        bHandled = <span class="ty">FALSE</span>;                          <span class="cm">// 让框架继续默认创建</span>
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+    <span class="ty">LRESULT</span> <span class="fn">OnFileExit</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp;) {
+        <span class="fn">PostMessage</span>(<span class="ty">WM_CLOSE</span>);
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+    <span class="ty">LRESULT</span> <span class="fn">OnAbout</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp;) {
+        <span class="ty">CSimpleDialog</span>&lt;<span class="ty">IDD_ABOUT</span>&gt; dlg;
+        dlg.<span class="fn">DoModal</span>();
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+};
+
+<span class="cm">// ─── app.cpp ───</span>
+<span class="ty">CAppModule</span> _Module;
+
+<span class="kw">int WINAPI</span> <span class="fn">wWinMain</span>(<span class="ty">HINSTANCE</span> hInst, <span class="ty">HINSTANCE</span>, <span class="ty">PWSTR</span>, <span class="kw">int</span> nShow) {
+    <span class="fn">AtlInitCommonControls</span>(<span class="ty">ICC_BAR_CLASSES</span> | <span class="ty">ICC_LISTVIEW_CLASSES</span>);
+    _Module.<span class="fn">Init</span>(<span class="kw">NULL</span>, hInst);
+
+    <span class="ty">CMessageLoop</span> theLoop;
+    _Module.<span class="fn">AddMessageLoop</span>(&amp;theLoop);
+
+    <span class="ty">CMainFrame</span> wndMain;
+    <span class="kw">if</span> (wndMain.<span class="fn">CreateEx</span>() == <span class="kw">NULL</span>) {
+        _Module.<span class="fn">Term</span>();
+        <span class="kw">return</span> <span class="num">0</span>;
+    }
+    wndMain.<span class="fn">ShowWindow</span>(nShow);
+    wndMain.<span class="fn">UpdateWindow</span>();
+
+    <span class="kw">int</span> nRet = theLoop.<span class="fn">Run</span>();
+    _Module.<span class="fn">RemoveMessageLoop</span>();
+    _Module.<span class="fn">Term</span>();
+    <span class="kw">return</span> nRet;
+}</code></pre>
+  </div>
+</section>
+
+<section id="compare-mfc" class="toc-link">
+  <h2><span class="num">11</span> 对比 MFC</h2>
+  <p>ATL/WTL 与 MFC 都封装 Win32，但设计哲学截然不同。下表从运行时依赖、体积、性能、开发体验、控件库、适用场景等维度全面对比。这决定了<strong>为何轻量型项目仍偏爱 WTL</strong>——尤其是在 Shell 扩展、嵌入式、需要原生控件外观的小工具中。</p>
+  <table>
+    <tr><th>维度</th><th>ATL/WTL</th><th>MFC</th></tr>
+    <tr><td>运行时 DLL</td><td>无（静态/动态 CRT 即可）</td><td>需 mfc140u.dll（可静态但体积大）</td></tr>
+    <tr><td>分发体积</td><td>典型 100~500 KB</td><td>1~5 MB（含 MFC 运行时）</td></tr>
+    <tr><td>虚函数开销</td><td>几乎为零（模板多态）</td><td>大量虚函数（CObject/CWnd 层次）</td></tr>
+    <tr><td>启动速度</td><td>极快（无全局对象初始化）</td><td>有 theApp + 模块初始化</td></tr>
+    <tr><td>消息映射</td><td>静态表 + CRTP</td><td>静态表 + CWnd::WindowProc</td></tr>
+    <tr><td>开发效率</td><td>需手写更多样板</td><td>向导生成、类最多、文档最全</td></tr>
+    <tr><td>VS 向导</td><td>需安装 WTL Wizard 插件</td><td>VS 内置成熟向导</td></tr>
+    <tr><td>控件库</td><td>原生 Win32 + 自绘需自己写</td><td>含 CListCtrl/CTreeView 等丰富封装</td></tr>
+    <tr><td>Doc/View</td><td>无（需手工组织）</td><td>框架内建 Doc/View/Template</td></tr>
+    <tr><td>序列化</td><td>无（用 STL/JSON）</td><td>CArchive 强大但专有</td></tr>
+    <tr><td>COM 支持</td><td><strong>顶级</strong>（ATL 即为 COM 而生）</td><td>有但不如 ATL 精致</td></tr>
+    <tr><td>许可证</td><td>WTL 是开源（MS-PL/CPL）</td><td>VS 商业授权</td></tr>
+    <tr><td>跨版本</td><td>纯头文件，VS 2008~2022 通吃</td><td>绑定 VS 版本的 DLL</td></tr>
+  </table>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">选 WTL 当</div>
+      <ul>
+        <li>分发体积、启动性能是硬指标</li>
+        <li>需要同时做 COM 服务器 + UI</li>
+        <li>Shell 扩展、IE/BHO、命名空间扩展</li>
+        <li>嵌入式 Windows、瘦客户端</li>
+        <li>团队愿接受更"裸"的 API</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">选 MFC 当</div>
+      <ul>
+        <li>维护大量 MFC 遗留代码</li>
+        <li>重度依赖 Doc/View、Ribbon、文档模板</li>
+        <li>需要 CArchive 二进制序列化生态</li>
+        <li>用 VS 向导快速产出复杂界面</li>
+        <li>商业控件（BCGSoft等）只支持 MFC</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout tip">
+    <strong>性能数据</strong>：在同等"空白 SDI 应用"基准下，WTL 编译产物通常比 MFC 小一个数量级（几百 KB vs 几 MB），冷启动延迟低 30%~50%。这是因为 MFC 在 CRT 启动阶段要构造大量全局对象（进程内对象映射、资源句柄表等），而 WTL 几乎为零开销。
+  </div>
+  <div class="callout danger">
+    <strong>陷阱</strong>：WTL 是<strong>社区维护</strong>项目（虽源自微软员工），微软官方不再为其背书或更新文档。新手遇到问题更多依赖 SourceForge 论坛、CodeProject 文章、经典书籍《ATL Internals》。商业项目评估时需把"文档稀缺、生态较小"计入风险。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">12</span> 头文件索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">VC/Tools/MSVC/.../atlmfc/include/  (ATL)</span>   <span class="cmt">VS 内置 ATL 头文件</span>
+├── <span class="file">atlbase.h</span>            <span class="cmt">CComPtr / CComBSTR / CRegKey / 模块全局</span>
+├── <span class="file">atlcom.h</span>             <span class="cmt">CComObjectRoot / CComCoClass / COM_MAP / 类工厂</span>
+├── <span class="file">atlwin.h</span>             <span class="cmt">CWindow / CWindowImpl / 消息映射基础</span>
+├── <span class="file">atlstr.h</span>             <span class="cmt">CStringA / CStringW / CStringT（与 MFC 兼容）</span>
+├── <span class="file">atlcoll.h</span>            <span class="cmt">CAtlArray / CAtlList / CAtlMap（无 CObject 依赖）</span>
+├── <span class="file">atltime.h</span>            <span class="cmt">CTime / CTimeSpan</span>
+├── <span class="file">atlconv.h</span>            <span class="cmt">CW2A / CA2W 等字符串转换助手</span>
+└── <span class="file">atluser.h</span>            <span class="cmt">CWindow / 菜单 / 系统对象封装</span>
+
+<span class="dir">WTL/Include/  (第三方)</span>   <span class="cmt">WTL 库头文件（需自行下载安装）</span>
+├── <span class="file">atlapp.h</span>             <span class="cmt">CAppModule / CMessageLoop / 全局 _Module</span>
+├── <span class="file">atlframe.h</span>          <span class="cmt">CFrameWindowImpl / CMDIWindow / CSplitterWindow</span>
+├── <span class="file">atlctrls.h</span>          <span class="cmt">CButton / CEdit / CListViewCtrl 等所有控件</span>
+├── <span class="file">atlctrlx.h</span>          <span class="cmt">CBitmapButton / CHyperLink / CWaitCursor 等扩展控件</span>
+├── <span class="file">atldlgs.h</span>           <span class="cmt">CDialogImpl / CPropertySheet / CFileDialog 封装</span>
+├── <span class="file">atlgdi.h</span>            <span class="cmt">CDC / CPen / CBrush / CFont / CPaintDC 等 GDI</span>
+├── <span class="file">atlmisc.h</span>           <span class="cmt">CRect / CPoint / CSize / CString 工具</span>
+├── <span class="file">atlres.h</span>            <span class="cmt">资源 ID（与 .rc 协作）</span>
+├── <span class="file">atlresce.h</span>          <span class="cmt">Windows CE 专用资源</span>
+├── <span class="file">atltheme.h</span>          <span class="cmt">CTheme / UxTheme 主题 API 封装</span>
+├── <span class="file">atlddx.h</span>            <span class="cmt">CWinDataExchange / DDX/DDV 宏</span>
+├── <span class="file">atlcrack.h</span>          <span class="cmt">消息参数 crack 宏（GET_X_LPARAM 等）</span>
+└── <span class="file">atluser.h</span>           <span class="cmt">窗口/菜单/光标等系统对象</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>atlbase.h</code> CComPtr 智能指针与 CRegKey 注册表助手，是 ATL 项目最常包含的入口。<br>
+    <code>atlcom.h</code> COM 对象核心：CComObjectRootEx 线程模型、COM_MAP 接口表、CComCoClass 类工厂。<br>
+    <code>atlwin.h</code> 窗口封装根基：CWindow 薄包装 + CWindowImpl CRTP 模板。<br>
+    <code>atlapp.h</code> WTL 应用对象 CAppModule 与 CMessageLoop，所有 WTL 程序的起点。<br>
+    <code>atlframe.h</code> CFrameWindowImpl 框架窗口，含工具栏/状态栏/Rebar 的脚手架。<br>
+    <code>atlctrls.h</code> 所有 Win32 控件的薄封装，是日常开发引用最频繁的头文件。<br>
+    <code>atlgdi.h</code> GDI 对象与作用域 DC 守卫，绘图必备。<br>
+    推荐书籍：《ATL Internals》(Rector & Sells) 与 CodeProject WTL 系列文章。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 ATL 14.x / WTL 10.x (Visual Studio 2022) · 生成于 2026-06-22</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dioxus 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%237c3aed'/><stop offset='100%25' stop-color='%23a855f7'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='70' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Dioxus 深度解析</h1>
+  <p class="subtitle">Dioxus — Rust 编写的 React 风格声明式跨平台 UI 框架</p>
+  <span class="version">Dioxus 0.6 · dioxus crate · Rust 1.75+</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#architecture">架构与渲染管线</a></li>
+    <li><a href="#rsx">RSX 宏</a></li>
+    <li><a href="#components">组件模型</a></li>
+    <li><a href="#hooks">Hooks 模式</a></li>
+    <li><a href="#signals">Signals 响应式</a></li>
+    <li><a href="#state">状态与上下文</a></li>
+    <li><a href="#events">事件处理</a></li>
+    <li><a href="#async">异步与资源</a></li>
+    <li><a href="#router">路由</a></li>
+    <li><a href="#platforms">多平台渲染</a></li>
+    <li><a href="#example">完整示例</a></li>
+    <li><a href="#ecosystem">生态与对比</a></li>
+    <li><a href="#crates">crate 索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Dioxus 是一个用 <strong>Rust</strong> 编写的<strong>声明式、React 风格的 UI 框架</strong>。开发者用 <code>RSX</code> 宏（类 JSX 语法）描述界面，通过 <strong>Hooks</strong> 与 <strong>Signals</strong> 管理状态，<strong>同一份代码</strong>可编译到 Web、桌面、移动端、终端、服务端等多个渲染目标。它由 Jonathan Kelley 主导开发，是 Rust 生态中最接近“React for Rust”的方案。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>RSX 宏</strong>：类 JSX 的类型安全声明式 UI</li>
+        <li><strong>组件/Hooks</strong>：函数组件 + Hooks，React 开发者零门槛</li>
+        <li><strong>Signals</strong>：细粒度响应式（0.5+），告别 diff 状态传递</li>
+        <li><strong>多平台</strong>：Web/Desktop/Mobile/TUI/SSR 一套代码</li>
+        <li><strong>编译期检查</strong>：Rust 类型系统保证 props/事件签名正确</li>
+        <li><strong>WASM 优先</strong>：Web 端编译为 WebAssembly</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">渲染目标一览</div>
+      <table>
+        <tr><th>平台</th><th>后端</th><th>产物</th></tr>
+        <tr><td>Web</td><td>WASM + DOM</td><td>.wasm + JS 胶水</td></tr>
+        <tr><td>Desktop</td><td>系统 WebView</td><td>跨平台桌面应用</td></tr>
+        <tr><td>Mobile</td><td>原生渲染</td><td>iOS/Android（实验）</td></tr>
+        <tr><td>TUI</td><td>终端</td><td>命令行界面</td></tr>
+        <tr><td>SSR</td><td>服务端</td><td>预渲染 HTML</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="architecture" class="toc-link">
+  <h2><span class="num">02</span> 架构与渲染管线</h2>
+  <p>Dioxus 的核心思想是<strong>渲染器无关</strong>：上层是统一的组件/状态/RSX 抽象，下层通过 <strong>Renderer</strong> 适配不同平台。状态变化经响应式系统追踪，生成 <strong>VirtualDOM</strong> 差异（或细粒度订阅），再提交给渲染器更新真实 UI。</p>
+  <div class="card">
+    <pre><code><span class="cm">// 分层架构（简化）</span>
+<span class="cm">┌─────────────────────────────────────────┐</span>
+<span class="cm">│  你的代码：组件 + RSX + Hooks/Signals   │</span>  <span class="cm">← 应用层（平台无关）</span>
+<span class="cm">├─────────────────────────────────────────┤</span>
+<span class="cm">│  Dioxus 核心：VirtualDOM + 响应式调度    │</span>  <span class="cm">← 框架层</span>
+<span class="cm">├─────────────────────────────────────────┤</span>
+<span class="cm">│  Renderer 适配层（DomRenderer/          │</span>
+<span class="cm">│    WebView/终端/...）                    │</span>  <span class="cm">← 平台层</span>
+<span class="cm">├─────────────────────────────────────────┤</span>
+<span class="cm">│  平台：浏览器 DOM / 系统 WebView / 终端  │</span>
+<span class="cm">└─────────────────────────────────────────┘</span>
+
+<span class="cm">// 渲染流程</span>
+状态变更（Signal.write / set_state）
+  → 响应式系统标记受影响组件为脏
+  → 调度器在下一帧重新渲染脏组件（rsx! 重建 VNode）
+  → Diff 生成 EditList（最小变更）
+  → Renderer 提交到真实 UI（DOM patch / WebView / ...）</code></pre>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">两种状态范式</div>
+      <table>
+        <tr><th>范式</th><th>粒度</th><th>更新方式</th></tr>
+        <tr><td>VirtualDOM（0.4 时代）</td><td>组件级</td><td>整体 re-render + diff</td></tr>
+        <tr><td>Signals（0.5+）</td><td>细粒度</td><td>仅重算依赖该信号的值</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">入口函数 launch</div>
+      <p>0.5+ 统一用 <code>launch(App)</code> 启动：<code>cargo</code> 根据 feature 自动选择目标（web/desktop），无需手写平台入口。</p>
+    </div>
+  </div>
+</section>
+
+<section id="rsx" class="toc-link">
+  <h2><span class="num">03</span> RSX 宏</h2>
+  <p><code>rsx!</code> 是 Dioxus 的核心宏，把类 JSX 的语法在编译期转换为 <code>VNode</code>（虚拟节点）树。它<strong>类型安全</strong>——属性名、事件签名错误在编译期就会报错，而非运行时。</p>
+  <div class="card">
+    <pre><code><span class="kw">use</span> dioxus::prelude::*;
+
+<span class="kw">fn</span> <span class="fn">main</span>() {
+    <span class="fn">launch</span>(<span class="fn">App</span>);
+}
+
+<span class="kw">fn</span> <span class="fn">App</span>() -> <span class="ty">Element</span> {
+    <span class="kw">let</span> name = <span class="st">"Dioxus"</span>;
+    <span class="fn">rsx</span>! {
+        <span class="kw">div</span> { <span class="fn">class</span>: <span class="st">"card"</span>,
+            <span class="kw">h1</span> { <span class="st">"Hello, {name}!"</span> }            <span class="cm">// 字符串插值</span>
+            <span class="kw">p</span> { <span class="st">"声明式 UI in Rust"</span> }
+        }
+    }
+}</code></pre>
+  </div>
+
+  <h3>RSX 语法要素</h3>
+  <div class="card">
+    <pre><code><span class="fn">rsx</span>! {
+    <span class="cm">// 1. 元素 + 属性（属性名: 值,）</span>
+    <span class="kw">a</span> { <span class="fn">href</span>: <span class="st">"https://dioxuslabs.com"</span>, <span class="st">"官网"</span> }
+
+    <span class="cm">// 2. 条件渲染（if 表达式）</span>
+    <span class="kw">if</span> show_detail {
+        <span class="kw">section</span> { <span class="st">"详情..."</span> }
+    }
+
+    <span class="cm">// 3. 列表渲染（for 循环）</span>
+    <span class="kw">ul</span> {
+        <span class="kw">for</span> item <span class="kw">in</span> items {
+            <span class="kw">li</span> { <span class="st">"{item}"</span> }
+        }
+    }
+
+    <span class="cm">// 4. 子组件（大括号传 props 与 children）</span>
+    <span class="fn">Card</span> { <span class="fn">title</span>: <span class="st">"标题"</span>,
+        <span class="st">"这是 children"</span>
+    }
+
+    <span class="cm">// 5. 事件（on* 属性，闭包）</span>
+    <span class="kw">button</span> { <span class="fn">onclick</span>: <span class="kw">move</span> |_| do_something(), <span class="st">"点击"</span> }
+
+    <span class="cm">// 6. 动态片段 / 裸表达式</span>
+    { computed_value }
+}</code></pre>
+  </div>
+  <div class="callout tip">
+    <strong>字符串插值</strong>：<code>"{var}"</code> 在 RSX 字符串内自动插值，底层生成 <code>format_args!</code>。任意 <code>Display</code> 类型可直接插入。复杂逻辑建议先在组件体内算好变量，RSX 只负责渲染。
+  </div>
+  <div class="callout warn">
+    <strong>与 JSX 的差异</strong>：RSX 用<strong>大括号块</strong>而非尖括号（<code>div { ... }</code> 而非 <code>&lt;div&gt;...&lt;/div&gt;</code>）；属性用 <code>key: value,</code> 键值对；没有 <code>className</code>，统一用 <code>class</code>。
+  </div>
+</section>
+
+<section id="components" class="toc-link">
+  <h2><span class="num">04</span> 组件模型</h2>
+  <p>Dioxus 组件是<strong>返回 <code>Element</code>（即 <code>Option&lt;VNode&gt;</code>）的普通函数</strong>。用 <code>#[component]</code> 宏标注后，框架为其生成可被 RSX 调用的组件包装。<strong>Props</strong> 是一个派生了 <code>Props</code> 的结构体。</p>
+  <div class="card">
+    <pre><code><span class="cm">// 1. 定义 Props 结构体</span>
+<span class="pp">#[derive(Props, Clone, PartialEq)]</span>
+<span class="kw">struct</span> <span class="ty">CardProps</span> {
+    title: <span class="ty">String</span>,
+    #[props(default)]
+    color: <span class="ty">String</span>,             <span class="cm">// 带默认值的可选 prop</span>
+    children: <span class="ty">Element</span>,          <span class="cm">// 接收 RSX 子内容</span>
+}
+
+<span class="cm">// 2. 组件函数：首参为 Props，返回 Element</span>
+<span class="pp">#[component]</span>
+<span class="kw">fn</span> <span class="fn">Card</span>(props: <span class="ty">CardProps</span>) -> <span class="ty">Element</span> {
+    <span class="fn">rsx</span>! {
+        <span class="kw">div</span> { <span class="fn">class</span>: <span class="st">"card"</span>, <span class="fn">style</span>: <span class="st">"color: {props.color}"</span>,
+            <span class="kw">h2</span> { <span class="st">"{props.title}"</span> }
+            { props.children }       <span class="cm">// 渲染 children</span>
+        }
+    }
+}
+
+<span class="cm">// 3. 使用（children 写在组件块内）</span>
+<span class="kw">fn</span> <span class="fn">App</span>() -> <span class="ty">Element</span> {
+    <span class="fn">rsx</span>! {
+        <span class="fn">Card</span> { <span class="fn">title</span>: <span class="st">"欢迎"</span>, <span class="fn">color</span>: <span class="st">"blue"</span>,
+            <span class="st">"这是卡片正文内容"</span>
+        }
+    }
+}</code></pre>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">组件规则</div>
+      <ul>
+        <li><strong>纯函数</strong>：相同 props → 相同输出（除副作用 Hook）</li>
+        <li><strong>首字母大写</strong>：组件名用 PascalCase 区分元素</li>
+        <li><strong>Props 不可变</strong>：通过新 props 触发重渲染</li>
+        <li><strong>可嵌套</strong>：组件组合构建复杂 UI</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Props 特性</div>
+      <table>
+        <tr><th>特性</th><th>说明</th></tr>
+        <tr><td><code>#[props(default)]</code></td><td>可选 prop 默认值</td></tr>
+        <tr><td><code>#[props(into)]</code></td><td>自动类型转换（&str→String）</td></tr>
+        <tr><td><code>children: Element</code></td><td>接收子节点</td></tr>
+        <tr><td><code>Clone, PartialEq</code></td><td>props 记忆化比较</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="hooks" class="toc-link">
+  <h2><span class="num">05</span> Hooks 模式</h2>
+  <p>Hooks 让<strong>函数组件拥有状态与副作用</strong>。Dioxus 的 Hooks 与 React 几乎同名同义，但有 Rust 的所有权与生命周期保障。Hooks 必须在组件顶层、按固定顺序调用（同 React 规则）。</p>
+  <div class="card">
+    <pre><code><span class="kw">fn</span> <span class="fn">Counter</span>() -> <span class="ty">Element</span> {
+    <span class="cm">// use_signal：响应式可变状态（0.5+ 推荐）</span>
+    <span class="kw">let</span> <span class="kw">mut</span> count = <span class="fn">use_signal</span>(|| <span class="num">0</span>);
+
+    <span class="cm">// use_hook：一次性初始化（返回任意值，常用于桥接外部库）</span>
+    <span class="kw">let</span> handle = <span class="fn">use_hook</span>(|| <span class="fn">create_external_handle</span>());
+
+    <span class="cm">// use_effect：状态变化后的副作用（订阅/日志）</span>
+    <span class="fn">use_effect</span>(<span class="kw">move</span> || {
+        <span class="fn">println</span>!(<span class="st">"count 变为 {}"</span>, count());
+    });
+
+    <span class="fn">rsx</span>! {
+        <span class="kw">button</span> { <span class="fn">onclick</span>: <span class="kw">move</span> |_| count += <span class="num">1</span>, <span class="st">"点击 {count}"</span> }
+    }
+}</code></pre>
+  </div>
+  <table>
+    <tr><th>Hook</th><th>用途</th><th>返回</th></tr>
+    <tr><td><code>use_signal</code></td><td>响应式可变状态</td><td><code>Signal&lt;T&gt;</code></td></tr>
+    <tr><td><code>use_resource</code></td><td>异步任务（Future）</td><td><code>Resource&lt;T&gt;</code></td></tr>
+    <tr><td><code>use_effect</code></td><td>副作用（依赖 Signal 变化）</td><td><code>()</code></td></tr>
+    <tr><td><code>use_memo</code></td><td>记忆化派生值</td><td><code>Memo&lt;T&gt;</code></td></tr>
+    <tr><td><code>use_context</code></td><td>读取上下文注入</td><td><code>T</code></td></tr>
+    <tr><td><code>use_hook</code></td><td>一次性初始化</td><td><code>T</code></td></tr>
+    <tr><td><code>use_callback</code></td><td>稳定回调（不随渲染重建）</td><td>闭包</td></tr>
+  </table>
+  <div class="callout danger">
+    <strong>Hooks 规则</strong>：<strong>只能在组件/其他 Hook 内调用</strong>，且必须<strong>按固定顺序、无条件</strong>调用——不能放在 <code>if</code>/<code>for</code>/<code>closure</code> 内。违反会导致状态错位（同 React）。需要条件化时，把分支放在 Hook 闭包内部。
+  </div>
+</section>
+
+<section id="signals" class="toc-link">
+  <h2><span class="num">06</span> Signals 响应式</h2>
+  <p><strong>Signals 是 Dioxus 0.5 引入的革命性特性</strong>，灵感来自 SolidJS 的细粒度响应式。它取代了旧的 <code>use_state</code> + props 逐层传递的模式：状态直接<strong>原地可变</strong>，读取处自动建立订阅，修改时<strong>只重算依赖该信号的部分</strong>，无需组件整体 diff。</p>
+  <div class="card">
+    <pre><code><span class="kw">fn</span> <span class="fn">App</span>() -> <span class="ty">Element</span> {
+    <span class="kw">let</span> <span class="kw">mut</span> count = <span class="fn">use_signal</span>(|| <span class="num">0</span>);
+
+    <span class="fn">rsx</span>! {
+        <span class="kw">button</span> { <span class="fn">onclick</span>: <span class="kw">move</span> |_| count += <span class="num">1</span>, <span class="st">"+"</span> }
+        <span class="kw">button</span> { <span class="fn">onclick</span>: <span class="kw">move</span> |_| count -= <span class="num">1</span>, <span class="st">"-"</span> }
+        <span class="fn">Display</span> {}      <span class="cm">// 子组件无需 props 也能读到最新值</span>
+    }
+}
+
+<span class="kw">fn</span> <span class="fn">Display</span>() -> <span class="ty">Element</span> {
+    <span class="cm">// 直接读取全局/上层 Signal —— 自动订阅</span>
+    <span class="kw">let</span> count = <span class="fn">use_signal</span>(|| <span class="num">0</span>);   <span class="cm">// 演示：实际用 Context 共享同一 Signal</span>
+    <span class="fn">rsx</span>! { <span class="kw">p</span> { <span class="st">"count = {count}"</span> } }
+}</code></pre>
+  </div>
+  <h3>读写与运算符</h3>
+  <div class="card">
+    <pre><code><span class="kw">let</span> <span class="kw">mut</span> n = <span class="fn">use_signal</span>(|| <span class="num">10</span>);
+
+n.<span class="fn">read</span>();               <span class="cm">// 读：建立订阅，返回引用</span>
+n();                    <span class="cm">// 读的简写（Signal 实现 Fn）</span>
+n.<span class="fn">write</span>();              <span class="cm">// 写：返回可变引用，自动通知</span>
+n.<span class="fn">set</span>(<span class="num">5</span>);               <span class="cm">// 整体赋值</span>
+n += <span class="num">1</span>;                 <span class="cm">// 运算符重载（+= -= *= ...）</span>
+
+<span class="cm">// 派生信号：仅当 count 变化时重算</span>
+<span class="kw">let</span> doubled = <span class="fn">use_memo</span>(<span class="kw">move</span> || count() * <span class="num">2</span>);</code></pre>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Signals vs use_state</div>
+      <table>
+        <tr><th>维度</th><th>use_state（旧）</th><th>Signal（新）</th></tr>
+        <tr><td>更新粒度</td><td>组件整体</td><td>细粒度订阅</td></tr>
+        <tr><td>状态传递</td><td>逐层 props/callback</td><td>原地共享</td></tr>
+        <tr><td>性能</td><td>diff 成本随树增长</td><td>仅重算依赖</td></tr>
+        <tr><td>心智</td><td>不可变 + 重渲染</td><td>可变 + 响应式</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">细粒度响应式</div>
+      <ul>
+        <li>读取即订阅（<code>read()</code>/<code>()</code>）</li>
+        <li>写入即通知所有订阅者</li>
+        <li><code>Memo</code> 缓存派生计算</li>
+        <li>无需手动管理依赖数组</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout tip">
+    <strong>核心价值</strong>：Signals 让状态可以“原地修改、自动追踪”，配合 RSX 字符串插值 <code>"{count}"</code>，几乎消除了状态提升与回调钻取的样板代码。这是 Dioxus 区别于早期版本、对标 SolidJS/Leptos 的关键能力。
+  </div>
+</section>
+
+<section id="state" class="toc-link">
+  <h2><span class="num">07</span> 状态与上下文</h2>
+  <p>跨组件共享状态用<strong>Context（依赖注入）</strong>。父组件 <code>use_context_provider</code> 注入，任意后代 <code>use_context</code> 取用——无需逐层 props 传递。配合 Signal 即构成全局响应式状态。</p>
+  <div class="card">
+    <pre><code><span class="kw">use</span> dioxus::prelude::*;
+
+<span class="cm">// 用 Copy 类型作为 Context 键（通常用 Signal 包装的共享状态）</span>
+<span class="pp">#[derive(Clone, Copy)]</span>
+<span class="kw">struct</span> <span class="ty">AppState</span> { count: <span class="ty">Signal</span>&lt;<span class="ty">i32</span>&gt; }
+
+<span class="kw">fn</span> <span class="fn">App</span>() -> <span class="ty">Element</span> {
+    <span class="cm">// 顶层注入：use_context_provider 创建并下发</span>
+    <span class="fn">use_context_provider</span>(|| <span class="ty">AppState</span> {
+        count: <span class="fn">use_signal</span>(|| <span class="num">0</span>),
+    });
+
+    <span class="fn">rsx</span>! { <span class="fn">Child</span> {} }
+}
+
+<span class="kw">fn</span> <span class="fn">Child</span>() -> <span class="ty">Element</span> {
+    <span class="cm">// 任意后代读取同一份状态</span>
+    <span class="kw">let</span> state = <span class="fn">use_context</span>::&lt;<span class="ty">AppState</span>&gt;();
+    <span class="fn">rsx</span>! {
+        <span class="kw">button</span> { <span class="fn">onclick</span>: <span class="kw">move</span> |_| state.count += <span class="num">1</span>, <span class="st">"{state.count}"</span> }
+    }
+}</code></pre>
+  </div>
+  <div class="callout warn">
+    <strong>全局状态</strong>：需要在根组件之外访问（如事件循环、定时器）时，可用 <code>Signal::global()</code> 注册全局信号——但<strong>优先用 Context</strong>，保持可测试性与组件作用域。
+  </div>
+</section>
+
+<section id="events" class="toc-link">
+  <h2><span class="num">08</span> 事件处理</h2>
+  <p>事件用 <code>on*</code> 属性绑定闭包。Dioxus 统一抽象了各平台事件（DOM/原生），提供类型安全的事件对象 <code>Event&lt;T&gt;</code>。</p>
+  <div class="card">
+    <pre><code><span class="kw">fn</span> <span class="fn">Form</span>() -> <span class="ty">Element</span> {
+    <span class="kw">let</span> <span class="kw">mut</span> text = <span class="fn">use_signal</span>(|| <span class="ty">String</span>::<span class="fn">new</span>());
+
+    <span class="fn">rsx</span>! {
+        <span class="kw">input</span> {
+            <span class="fn">value</span>: <span class="st">"{text}"</span>,
+            <span class="fn">oninput</span>: <span class="kw">move</span> |e: <span class="ty">Event</span>&lt;<span class="ty">InputData</span>&gt;| {
+                <span class="cm">// e.data().value() 拿到输入值</span>
+                text.<span class="fn">set</span>(e.<span class="fn">data</span>().<span class="fn">value</span>());
+            }
+        }
+        <span class="kw">button</span> {
+            <span class="fn">onclick</span>: <span class="kw">move</span> |e: <span class="ty">Event</span>&lt;<span class="ty">MouseData</span>&gt;| {
+                <span class="cm">// 阻止默认行为（如表单提交）</span>
+                e.<span class="fn">prevent_default</span>();
+                <span class="fn">println</span>!(<span class="st">"点击于 {}"</span>, e.<span class="fn">data</span>().<span class="fn">client_coordinates</span>());
+            },
+            <span class="st">"提交"</span>
+        }
+    }
+}</code></pre>
+  </div>
+  <table>
+    <tr><th>事件属性</th><th>类型</th><th>典型用途</th></tr>
+    <tr><td><code>onclick</code></td><td><code>MouseData</code></td><td>点击</td></tr>
+    <tr><td><code>oninput</code></td><td><code>InputData</code></td><td>输入框实时值</td></tr>
+    <tr><td><code>onkeydown</code></td><td><code>KeyboardData</code></td><td>按键（含 code/key）</td></tr>
+    <tr><td><code>onsubmit</code></td><td><code>FormData</code></td><td>表单提交</td></tr>
+    <tr><td><code>onmounted</code></td><td><code>MountedData</code></td><td>元素挂载（拿 DOM 句柄）</td></tr>
+  </table>
+  <div class="callout tip">
+    <strong>事件冒泡</strong>：事件默认冒泡，<code>e.stop_propagation()</code> 阻止向上传递。平台差异由 <code>Event&lt;T&gt;</code> 抹平——同一份事件代码在 Web/Desktop 行为一致。
+  </div>
+</section>
+
+<section id="async" class="toc-link">
+  <h2><span class="num">09</span> 异步与资源</h2>
+  <p><code>use_resource</code> 把一个 <code>Future</code> 绑定到组件生命周期，返回 <code>Resource&lt;T&gt;</code>。它会在依赖的 Signal 变化时自动重启，配合 <code>Suspense</code> 处理加载态——这是 Dioxus 处理网络请求、异步计算的标准方式。</p>
+  <div class="card">
+    <pre><code><span class="kw">fn</span> <span class="fn">UserList</span>() -> <span class="ty">Element</span> {
+    <span class="kw">let</span> <span class="kw">mut</span> query = <span class="fn">use_signal</span>(|| <span class="ty">String</span>::<span class="fn">new</span>());
+
+    <span class="cm">// query 变化时自动重新执行（闭包内读取了 query）</span>
+    <span class="kw">let</span> users = <span class="fn">use_resource</span>(<span class="kw">move</span> <span class="kw">async</span> <span class="kw">move</span> {
+        <span class="kw">if</span> query().<span class="fn">is_empty</span>() { <span class="kw">return</span> <span class="ty">Vec</span>::<span class="fn">new</span>(); }
+        <span class="fn">fetch_users</span>(&amp;query()).<span class="kw">await</span>.<span class="fn">unwrap_or_default</span>()
+    });
+
+    <span class="fn">rsx</span>! {
+        <span class="kw">input</span> { <span class="fn">value</span>: <span class="st">"{query}"</span>, <span class="fn">oninput</span>: <span class="kw">move</span> |e| query.<span class="fn">set</span>(e.<span class="fn">data</span>().<span class="fn">value</span>()) }
+
+        <span class="cm">// Suspense：等待异步就绪前显示 fallback</span>
+        <span class="fn">SuspenseBoundary</span> {
+            fallback: |_| <span class="fn">rsx</span>!{ <span class="kw">p</span>{<span class="st">"加载中..."</span>} },
+            <span class="kw">match</span> &amp;*users.<span class="fn">read_unchecked</span>() {
+                <span class="ty">None</span> => <span class="fn">rsx</span>!{ <span class="kw">p</span>{<span class="st">"等待中"</span>} },
+                <span class="ty">Some</span>(list) => <span class="fn">rsx</span>!{
+                    <span class="kw">for</span> u <span class="kw">in</span> list { <span class="kw">div</span> { <span class="st">"{u.name}"</span> } }
+                }
+            }
+        }
+    }
+}</code></pre>
+  </div>
+  <table>
+    <tr><th>能力</th><th>说明</th></tr>
+    <tr><td>自动依赖追踪</td><td>闭包内读取的 Signal 变化即重启</td></tr>
+    <tr><td><code>Resource::read</code></td><td>读取最新值（阻塞渲染直到就绪）</td></tr>
+    <tr><td><code>SuspenseBoundary</code></td><td>声明式加载态/错误态边界</td></tr>
+    <tr><td><code>use_future</code></td><td>无返回值的副作用 Future</td></tr>
+  </table>
+  <div class="callout warn">
+    <strong>WASM 限制</strong>：Web 目标是单线程 WASM，<code>.await</code> 走异步运行时；阻塞调用会卡死 UI。网络请求用 <code>reqwest</code> + async，切勿在渲染路径做同步 IO。
+  </div>
+</section>
+
+<section id="router" class="toc-link">
+  <h2><span class="num">10</span> 路由</h2>
+  <p><code>dioxus-router</code> 提供类型安全的声明式路由。用 <code>#[derive(Routable)]</code> 定义一个 <strong>路由枚举</strong>，每个变体对应一个路径与组件——编译器保证所有路由都有归属，避免运行时 404。</p>
+  <div class="card">
+    <pre><code><span class="kw">use</span> dioxus::prelude::*;
+<span class="kw">use</span> dioxus_router::prelude::*;
+
+<span class="cm">// 1. 路由枚举：变体 = 路由</span>
+<span class="pp">#[derive(Routable, Clone, PartialEq)]</span>
+<span class="pp">#[rustfmt::skip]</span>
+<span class="kw">enum</span> <span class="ty">Route</span> {
+    <span class="pp">#[route("/")]</span>
+    <span class="ty">Home</span> {},
+    <span class="pp">#[route("/user/:id")]</span>
+    <span class="ty">User</span> { id: <span class="ty">u64</span> },        <span class="cm">// 动态参数自动解析</span>
+    <span class="pp">#[route("/404")]</span>
+    <span class="ty">NotFound</span> {},
+}
+
+<span class="cm">// 2. 每个变体对应一个同名组件</span>
+<span class="pp">#[component]</span>
+<span class="kw">fn</span> <span class="fn">User</span>(id: <span class="ty">u64</span>) -> <span class="ty">Element</span> {
+    <span class="fn">rsx</span>! { <span class="kw">h1</span>{<span class="st">"用户 #{id}"</span>} }
+}
+
+<span class="cm">// 3. Router 组件挂载，Outlet 渲染匹配的子路由</span>
+<span class="kw">fn</span> <span class="fn">App</span>() -> <span class="ty">Element</span> {
+    <span class="fn">rsx</span>! {
+        <span class="fn">Router</span>&lt;<span class="ty">Route</span>&gt; {}
+        <span class="cm">// 内部自动用 Outlet 渲染当前 Route 对应组件</span>
+    }
+}
+
+<span class="cm">// 4. 导航：类型安全的链接与跳转</span>
+<span class="kw">let</span> navigator = <span class="fn">navigator</span>();
+navigator.<span class="fn">push</span>(<span class="ty">Route</span>::<span class="ty">User</span> { id: <span class="num">42</span> });
+
+<span class="fn">rsx</span>! { <span class="fn">Link</span> { <span class="fn">to</span>: <span class="ty">Route</span>::<span class="ty">Home</span> {}, <span class="st">"首页"</span> } }</code></pre>
+  </div>
+  <div class="callout tip">
+    <strong>类型安全</strong>：路由参数（如 <code>:id</code>）由 derive 宏解析为枚举字段，类型错误（传字符串到 <code>u64</code>）编译期即失败。导航也是 <code>Route::User{id:42}</code> 而非裸字符串。
+  </div>
+</section>
+
+<section id="platforms" class="toc-link">
+  <h2><span class="num">11</span> 多平台渲染</h2>
+  <p>同一份组件/状态代码，通过 <code>cargo</code> 的 feature flag 切换渲染目标。各平台能力略有差异，但核心 API 一致。</p>
+  <table>
+    <tr><th>目标</th><th>Feature</th><th>渲染后端</th><th>特性</th></tr>
+    <tr><td>Web</td><td><code>web</code></td><td>WASM → DOM</td><td>快、小，部署静态托管</td></tr>
+    <tr><td>Desktop</td><td><code>desktop</code></td><td>系统 WebView</td><td>跨 Win/macOS/Linux，体积小</td></tr>
+    <tr><td>Mobile</td><td><code>mobile</code></td><td>原生渲染</td><td>iOS/Android（实验阶段）</td></tr>
+    <tr><td>TUI</td><td><code>tui</code></td><td>终端 cells</td><td>命令行富 UI</td></tr>
+    <tr><td>SSR</td><td><code>ssr</code></td><td>服务端</td><td>预渲染 HTML / 全栈</td></tr>
+  </table>
+  <div class="card">
+    <pre><code><span class="cm">// Cargo.toml：用 feature 选择目标</span>
+<span class="pp">[dependencies]</span>
+dioxus = { version = <span class="st">"0.6"</span>, features = [<span class="st">"web"</span>] }   <span class="cm">// 改 "desktop" 即桌面应用</span>
+
+<span class="cm">// main.rs 完全不变：launch 自动适配目标</span>
+<span class="kw">fn</span> <span class="fn">main</span>() { <span class="fn">launch</span>(<span class="fn">App</span>); }
+
+<span class="cm">// 平台特定代码：用 cfg 区分</span>
+<span class="pp">#[cfg(feature = <span class="st">"desktop"</span>)]</span>
+<span class="kw">fn</span> <span class="fn">title</span>() -> <span class="ty">String</span> { <span class="ty">dioxus::desktop::window</span>().<span class="fn">title</span>() }</code></pre>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Web 目标</div>
+      <ul>
+        <li>编译为 WASM，JS 仅做胶水</li>
+        <li><code>dx serve</code> 热重载开发</li>
+        <li><code>dx build --release</code> 产出 dist/</li>
+        <li>体积优化：tree-shaking + wasm-opt</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Desktop 目标</div>
+      <ul>
+        <li>复用系统 WebView（无捆绑 Chromium）</li>
+        <li>原生菜单、托盘、窗口控制</li>
+        <li>文件系统、IPC 等能力开放</li>
+        <li>跨三平台单二进制</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">12</span> 完整示例</h2>
+  <p>下面是一个可运行的多功能 To-Do 应用：响应式状态 + 条件/列表渲染 + 路由 + 持久化副作用，体现 Dioxus 各能力协作。</p>
+  <div class="card">
+    <pre><code><span class="kw">use</span> dioxus::prelude::*;
+<span class="kw">use</span> dioxus_router::prelude::*;
+
+<span class="pp">#[derive(Clone, PartialEq)]</span>
+<span class="kw">struct</span> <span class="ty">Todo</span> { id: <span class="ty">u32</span>, text: <span class="ty">String</span>, done: <span class="ty">bool</span> }
+
+<span class="kw">fn</span> <span class="fn">main</span>() { <span class="fn">launch</span>(<span class="fn">App</span>); }
+
+<span class="kw">fn</span> <span class="fn">App</span>() -> <span class="ty">Element</span> {
+    <span class="kw">let</span> <span class="kw">mut</span> todos = <span class="fn">use_signal</span>(|| <span class="ty">Vec</span>::&lt;<span class="ty">Todo</span>&gt;::<span class="fn">new</span>());
+    <span class="kw">let</span> <span class="kw">mut</span> input = <span class="fn">use_signal</span>(|| <span class="ty">String</span>::<span class="fn">new</span>());
+
+    <span class="cm">// 副作用：todos 变化时打印（演示 use_effect + Signal 联动）</span>
+    <span class="fn">use_effect</span>(<span class="kw">move</span> || {
+        <span class="fn">println</span>!(<span class="st">"当前 {} 项待办"</span>, todos.<span class="fn">read</span>().<span class="fn">len</span>());
+    });
+
+    <span class="fn">rsx</span>! {
+        <span class="kw">h1</span> { <span class="st">"Dioxus Todo"</span> }
+        <span class="kw">div</span> {
+            <span class="kw">input</span> {
+                <span class="fn">value</span>: <span class="st">"{input}"</span>,
+                <span class="fn">oninput</span>: <span class="kw">move</span> |e| input.<span class="fn">set</span>(e.<span class="fn">data</span>().<span class="fn">value</span>()),
+                <span class="fn">onkeydown</span>: <span class="kw">move</span> |e| <span class="kw">if</span> e.<span class="fn">data</span>().<span class="fn">code</span>() == <span class="ty">Code</span>::<span class="ty">Enter</span> {
+                    <span class="kw">if</span> !input().<span class="fn">is_empty</span>() {
+                        todos.<span class="fn">write</span>().<span class="fn">push</span>(<span class="ty">Todo</span> {
+                            id: todos.<span class="fn">read</span>().<span class="fn">len</span>() <span class="kw">as</span> <span class="ty">u32</span>,
+                            text: input.<span class="fn">take</span>(),
+                            done: <span class="kw">false</span>,
+                        });
+                    }
+                },
+            }
+        }
+        <span class="kw">ul</span> {
+            <span class="kw">for</span> todo <span class="kw">in</span> todos().<span class="fn">iter</span>() {
+                <span class="fn">TodoItem</span> { <span class="fn">key</span>: <span class="st">"{todo.id}"</span>, id: todo.id }
+            }
+        }
+        <span class="kw">p</span> { <span class="st">"剩余 {todos.iter().filter(|t| !t.done).count()} 项"</span> }
+    }
+}
+
+<span class="pp">#[component]</span>
+<span class="kw">fn</span> <span class="fn">TodoItem</span>(id: <span class="ty">u32</span>) -> <span class="ty">Element</span> {
+    <span class="kw">let</span> <span class="kw">mut</span> todos = <span class="fn">use_signal</span>::&lt;<span class="ty">Vec</span>&lt;<span class="ty">Todo</span>&gt;&gt;(|| <span class="fn">default</span>());
+    <span class="kw">let</span> todo = todos.<span class="fn">read</span>().<span class="fn">iter</span>().<span class="fn">find</span>(|t| t.id == id).<span class="fn">cloned</span>();
+    <span class="fn">rsx</span>! {
+        <span class="kw">if</span> <span class="kw">let</span> <span class="ty">Some</span>(t) = todo {
+            <span class="kw">li</span> {
+                <span class="fn">onclick</span>: <span class="kw">move</span> |_| {
+                    <span class="kw">let</span> <span class="kw">mut</span> w = todos.<span class="fn">write</span>();
+                    <span class="kw">if</span> <span class="kw">let</span> <span class="ty">Some</span>(t) = w.<span class="fn">iter_mut</span>().<span class="fn">find</span>(|x| x.id == id) { t.done = !t.done; }
+                },
+                <span class="fn">style</span>: <span class="st">"text-decoration: {if t.done {'line-through'} else {'none'}}"</span>,
+                <span class="st">"{t.text}"</span>
+            }
+        }
+    }
+}</code></pre>
+  </div>
+  <div class="callout tip">
+    <strong>要点</strong>：单一 <code>todos</code> Signal 是状态真相源；输入框、列表项、计数都从它派生。点击切换 <code>done</code> 后，<strong>仅依赖该字段的 UI 重算</strong>——这是 Signals 细粒度响应式的直接收益。
+  </div>
+</section>
+
+<section id="ecosystem" class="toc-link">
+  <h2><span class="num">13</span> 生态与对比</h2>
+  <p>Rust 生态有多个 GUI/UI 框架，定位各异。Dioxus 以<strong>“React 心智 + 多平台 + WASM 优先”</strong>为差异化优势。</p>
+  <table>
+    <tr><th>框架</th><th>范式</th><th>渲染目标</th><th>定位</th></tr>
+    <tr><td><strong>Dioxus</strong></td><td>RSX + Hooks/Signals</td><td>Web/Desktop/Mobile/TUI</td><td>多平台 React 风格</td></tr>
+    <tr><td>Leptos</td><td>RSX + 细粒度响应式</td><td>Web/SSR</td><td>Web 优先，极致响应式</td></tr>
+    <tr><td>Yew</td><td>html! 宏 + Component trait</td><td>Web</td><td>Web 专精（Elm/React 风）</td></tr>
+    <tr><td>Tauri</td><td>Web 前端 + Rust 后端</td><td>Desktop/Mobile</td><td>用任意前端，Rust 做后端</td></tr>
+    <tr><td>Slint</td><td>自有 DSL + Rust</td><td>Desktop/Mobile/嵌入式</td><td>声明式 DSL，嵌入式友好</td></tr>
+    <tr><td>egui</td><td>即时模式（immediate）</td><td>Native/egui 渲染</td><td>工具/调试 UI，简单快</td></tr>
+    <tr><td>Iced</td><td>Elm 架构（Model/Msg）</td><td>Native（wgpu）</td><td>纯原生 GPU 渲染</td></tr>
+  </table>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Dioxus 的优势</div>
+      <ul>
+        <li>React 开发者迁移成本最低</li>
+        <li>一套代码覆盖最多平台</li>
+        <li>Signals 兼顾性能与简洁</li>
+        <li>编译期类型安全（路由/props/事件）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">何时选 Dioxus</div>
+      <ul>
+        <li>团队熟悉 React，想用 Rust</li>
+        <li>需要 Web + 桌面同源</li>
+        <li>追求 WASM 体积与性能</li>
+        <li>需要类型安全的大规模 UI</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout warn">
+    <strong>权衡</strong>：Dioxus Desktop 复用系统 WebView（依赖宿主环境），与 Iced/Slint 的原生 GPU 渲染相比，复杂自绘场景控制力较弱；Mobile 目标仍在成熟中。游戏/重度图形应考虑 wgpu 直绘或 egui。
+  </div>
+</section>
+
+<section id="crates" class="toc-link">
+  <h2><span class="num">14</span> crate 索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">dioxus 工作区（github.com/DioxusLabs/dioxus）</span>
+├── <span class="file">dioxus</span>                  <span class="cmt">统一入口 crate（含 prelude、launch）</span>
+├── <span class="file">dioxus-core</span>            <span class="cmt">核心：VirtualDOM、组件、调度</span>
+├── <span class="file">dioxus-signals</span>         <span class="cmt">Signal/Memo 细粒度响应式</span>
+├── <span class="file">dioxus-hooks</span>           <span class="cmt">use_signal/use_resource/use_effect 等</span>
+├── <span class="file">dioxus-web</span>             <span class="cmt">WASM → DOM 渲染器</span>
+├── <span class="file">dioxus-desktop</span>         <span class="cmt">系统 WebView 桌面渲染器</span>
+├── <span class="file">dioxus-mobile</span>          <span class="cmt">iOS/Android 原生渲染（实验）</span>
+├── <span class="file">dioxus-tui</span>             <span class="cmt">终端 UI 渲染器</span>
+├── <span class="file">dioxus-ssr</span>             <span class="cmt">服务端渲染</span>
+├── <span class="file">dioxus-router</span>          <span class="cmt">类型安全路由（Routable derive）</span>
+├── <span class="file">dioxus-html</span>            <span class="cmt">HTML 元素/属性/事件定义</span>
+└── <span class="file">dioxus-liveview</span>        <span class="cmt">服务端实时视图（WebSocket）</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>dioxus</code>（统一 crate）<code>prelude</code> 导出绝大多数 API，是开发起点。<br>
+    <code>dioxus-signals</code>（Signal/Memo）是 0.5+ 响应式核心，理解它即理解现代 Dioxus。<br>
+    <code>dioxus-router</code>（<code>Routable</code> derive）提供类型安全声明式路由。<br>
+    <code>dioxus-web</code> / <code>dioxus-desktop</code> 按目标平台 feature 选择，配合 <code>dx</code> CLI（<code>dx serve</code>/<code>dx build</code>）开发构建。<br>
+    官方文档 <code>dioxuslabs.com/learn</code> 与 <code>github.com/DioxusLabs/dioxus</code> 示例库为最佳实践来源。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Dioxus 0.6 (Rust) · dioxus / dioxus-router · 生成于 2026-06-22</footer>
+<script src="common.js"></script>
+</body>
+</html>

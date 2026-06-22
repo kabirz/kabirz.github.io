@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Windows MFC 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230078d4'/><stop offset='100%25' stop-color='%235c2d91'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='70' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>M</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Windows MFC 深度解析</h1>
+  <p class="subtitle">Microsoft Foundation Classes — 封装 Win32 API 的 C++ 应用框架</p>
+  <span class="version">Visual Studio 2022 · afxwin.h · MFC 14.4x</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#history">历史与定位</a></li>
+    <li><a href="#hierarchy">类层次架构</a></li>
+    <li><a href="#startup">程序启动与消息泵</a></li>
+    <li><a href="#message-map">消息映射机制</a></li>
+    <li><a href="#docview">文档/视图架构</a></li>
+    <li><a href="#rtti">运行时类型与动态创建</a></li>
+    <li><a href="#serialize">序列化</a></li>
+    <li><a href="#dialog">对话框与 DDX/DDV</a></li>
+    <li><a href="#gdi">GDI 绘图</a></li>
+    <li><a href="#collections">字符串与集合类</a></li>
+    <li><a href="#example">完整 SDI 示例</a></li>
+    <li><a href="#modern">现代开发与对比</a></li>
+    <li><a href="#files">头文件索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>MFC（Microsoft Foundation Classes，微软基础类库）是微软提供的<strong>面向 Win32/Win64 API 的 C++ 类库封装</strong>。它将过程式的 Windows SDK 编程（窗口注册、消息循环、WndProc 回调、GDI 句柄）包装成一套以 <code>CObject</code> 为根的类层次，让开发者用 C++ 面向对象的方式构建桌面应用。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>API 封装</strong>：句柄（HWND/HDC/HGDIOBJ）被包装成 C++ 对象</li>
+        <li><strong>消息映射</strong>：用宏表替代 WndProc 的 switch/case</li>
+        <li><strong>Doc/View 架构</strong>：数据与表现分离的标准脚手架</li>
+        <li><strong>运行时类型</strong>：自研的 CRuntimeClass 早于标准 C++ RTTI</li>
+        <li><strong>序列化</strong>：CArchive 二进制对象持久化</li>
+        <li><strong>集合类</strong>：CString / CArray / CList / CMap 模板</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">MFC 做了什么</div>
+      <table>
+        <tr><th>Win32 概念</th><th>MFC 封装</th></tr>
+        <tr><td><code>WinMain</code></td><td><code>CWinApp::InitInstance</code></tr>
+        <tr><td>消息循环 <code>GetMessage/DispatchMessage</code></td><td><code>CWinThread::Run</code></tr>
+        <tr><td><code>WNDPROC</code> 回调</td><td>消息映射 + 成员函数</tr>
+        <tr><td><code>HWND</code></td><td><code>CWnd</code></tr>
+        <tr><td><code>HDC</code></td><td><code>CDC</code></tr>
+        <tr><td><code>RegisterClass + CreateWindow</code></td><td><code>CWnd::Create / CreateEx</code></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="history" class="toc-link">
+  <h2><span class="num">02</span> 历史与定位</h2>
+  <p>MFC 于 <strong>1992 年随 Microsoft C/C++ 7.0</strong> 推出，是 Windows 桌面开发的事实标准之一，至今仍随 Visual Studio 分发（VS 2022 内置 MFC 14.4x）。虽然新项目已普遍转向 Qt、WinUI/WPF 或 .NET，但 MFC 在<strong>工业控制、金融终端、CAD/EDA、企业遗留系统</strong>中存量巨大。</p>
+  <table>
+    <tr><th>时期</th><th>版本</th><th>里程碑</th></tr>
+    <tr><td>1992</td><td>MFC 1.0</td><td>首次发布，封装 Win16/Win32</td></tr>
+    <tr><td>1993</td><td>MFC 2.x</td><td>引入 Doc/View 架构</td></tr>
+    <tr><td>1995</td><td>MFC 4.0</td><td>全面转向 Win32，支持控件</td></tr>
+    <tr><td>1998</td><td>MFC 6.0</td><td>VS 6 经典版本，遗留代码主力</td></tr>
+    <tr><td>2008+</td><td>MFC 9.0 ~ 14.x</td><td>加入 Ribbon、BCGP 商业控件整合</td></tr>
+    <tr><td>2022</td><td>MFC 14.4x</td><td>VS 2022，支持 /std:c++20、ARM64</td></tr>
+  </table>
+  <div class="callout tip">
+    <strong>定位</strong>：MFC 是<strong>薄封装</strong>——它并不隐藏 Win32，而是让你以 OO 方式调用同样的 API。理解 MFC 的前提是理解 Win32 消息驱动模型。
+  </div>
+</section>
+
+<section id="hierarchy" class="toc-link">
+  <h2><span class="num">03</span> 类层次架构</h2>
+  <p>MFC 所有类（极少数工具类除外）派生自 <code>CObject</code>，它提供序列化、运行时类型、诊断Dump 三大基础能力。其下最重要的分支是 <code>CCmdTarget</code>——所有能接收命令/消息的对象的基类。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// MFC 核心继承链（简化）</span>
+<span class="ty">CObject</span>                         <span class="cm">// 根：序列化 + RTTI + 诊断</span>
+├── <span class="ty">CCmdTarget</span>                  <span class="cm">// 接收消息/命令的基类</span>
+│   ├── <span class="ty">CWinThread</span>            <span class="cm">// 线程抽象（含消息循环）</span>
+│   │   └── <span class="ty">CWinApp</span>          <span class="cm">// 应用程序对象（全局唯一 theApp）</span>
+│   ├── <span class="ty">CWnd</span>                  <span class="cm">// 所有窗口的基类，封装 HWND</span>
+│   │   ├── <span class="ty">CFrameWnd</span>        <span class="cm">// 框架窗口（SDI 主窗口）</span>
+│   │   ├── <span class="ty">CMDIFrameWnd</span>     <span class="cm">// MDI 主框架</span>
+│   │   ├── <span class="ty">CMDIChildWnd</span>     <span class="cm">// MDI 子框架</span>
+│   │   ├── <span class="ty">CView</span>            <span class="cm">// 视图（数据展示）</span>
+│   │   ├── <span class="ty">CDialog</span>          <span class="cm">// 对话框</span>
+│   │   └── <span class="ty">CButton / CEdit / ...</span>  <span class="cm">// 标准控件包装</span>
+│   ├── <span class="ty">CDocument</span>             <span class="cm">// 文档（数据载体）</span>
+│   └── <span class="ty">CDocTemplate</span>          <span class="cm">// 文档模板（粘合 Doc/View/Frame）</span>
+├── <span class="ty">CDC</span>                         <span class="cm">// 设备上下文，封装 HDC</span>
+├── <span class="ty">CGdiObject</span>                   <span class="cm">// GDI 对象基类</span>
+│   ├── <span class="ty">CPen / CBrush / CFont</span>
+│   └── <span class="ty">CBitmap / CPalette / CRgn</span>
+├── <span class="ty">CStringT / CArray / CList / CMap</span>  <span class="cm">// 数据/集合（也派生自 CObject）</span>
+└── <span class="ty">CArchive / CFile</span>             <span class="cm">// 持久化</span></code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>关键约定</strong>：MFC 窗口对象是<strong>永久对象</strong>（<code>C++ CWnd 对象</code>）与<strong>临时对象</strong>（<code>HWND</code>）的绑定。<code>FromHandle(HWND)</code> 在找不到永久映射时会创建临时包装，在空闲时由框架回收——<strong>不要长期保存临时指针</strong>。
+  </div>
+</section>
+
+<section id="startup" class="toc-link">
+  <h2><span class="num">04</span> 程序启动与消息泵</h2>
+  <p>MFC 程序的入口不是 <code>WinMain</code>，而是<strong>全局应用对象 <code>theApp</code> 的构造</strong>。链接器把 MFC 提供的 <code>WinMain</code> 接入 CRT 启动流程，它调用 <code>AfxWinMain</code>，进而驱动应用对象的三个生命周期方法。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// app.h — 声明唯一的应用对象</span>
+<span class="kw">class</span> <span class="ty">CMyApp</span> : <span class="kw">public</span> <span class="ty">CWinApp</span> {
+<span class="kw">public</span>:
+    <span class="kw">virtual BOOL</span> <span class="fn">InitInstance</span>();   <span class="cm">// 初始化：建窗口、显示</span>
+    <span class="kw">virtual int</span>  <span class="fn">ExitInstance</span>();   <span class="cm">// 清理</span>
+};
+
+<span class="cm">// app.cpp — 实例化全局 theApp（每个进程唯一）</span>
+<span class="ty">CMyApp</span> theApp;
+
+<span class="kw">BOOL</span> <span class="ty">CMyApp</span>::<span class="fn">InitInstance</span>()
+{
+    <span class="fn">CWinApp</span>::<span class="fn">InitInstance</span>();              <span class="cm">// 基类：注册公共控件等</span>
+
+    <span class="ty">CMainFrame</span>* pFrame = <span class="kw">new</span> <span class="ty">CMainFrame</span>;
+    <span class="fn">m_pMainWnd</span> = pFrame;                  <span class="cm">// 记住主窗口</span>
+    pFrame-><span class="fn">Create</span>(<span class="kw">NULL</span>, <span class="st">"My MFC App"</span>);
+    pFrame-><span class="fn">ShowWindow</span>(<span class="fn">m_nCmdShow</span>);
+    pFrame-><span class="fn">UpdateWindow</span>();
+    <span class="kw">return TRUE</span>;                          <span class="cm">// 返回 TRUE 才进入消息循环</span>
+}</code></pre>
+  </div>
+
+  <h3>启动到退出的完整流程</h3>
+  <div class="card">
+    <pre><code><span class="cm">// MFC 提供的入口（隐藏在库中，无需手写）</span>
+<span class="kw">int WINAPI</span> <span class="fn">WinMain</span>(...) {
+    <span class="cm">// 1. theApp 全局对象已在 main 之前构造（CRT 初始化阶段）</span>
+    <span class="ty">CWinThread</span>* pThread = <span class="fn">AfxGetThread</span>();
+    <span class="ty">CWinApp</span>*     pApp    = <span class="fn">AfxGetApp</span>();
+
+    <span class="cm">// 2. AfxWinInit：挂接到当前实例、命令行</span>
+    <span class="cm">// 3. InitApplication：进程级初始化（注册文档模板等）</span>
+    <span class="cm">// 4. InitInstance：本实例初始化（你重写的那个）</span>
+    pApp-><span class="fn">InitInstance</span>();
+
+    <span class="cm">// 5. Run：消息泵 —— GetMessage/TranslateMessage/DispatchMessage</span>
+    <span class="kw">return</span> pThread-><span class="fn">Run</span>();        <span class="cm">// 直到 WM_QUIT 才返回</span>
+}
+
+<span class="cm">// CWinThread::Run 的核心（简化）</span>
+<span class="kw">int</span> <span class="ty">CWinThread</span>::<span class="fn">Run</span>()
+{
+    <span class="kw">for</span> (;;) {
+        <span class="kw">while</span> (!<span class="fn">PeekMessage</span>(&msg, ...)) {  <span class="cm">// 队列空</span>
+            <span class="fn">OnIdle</span>(0);                     <span class="cm">// 空闲处理：删临时对象</span>
+            <span class="kw">if</span> (!<span class="fn">PeekMessage</span>(...)) <span class="kw">break</span>;
+        }
+        <span class="fn">GetMessage</span>(&msg, ...);
+        <span class="kw">if</span> (!<span class="fn">PreTranslateMessage</span>(&msg)) {  <span class="cm">// 预翻译（快捷键、对话框）</span>
+            <span class="fn">TranslateMessage</span>(&msg);
+            <span class="fn">DispatchMessage</span>(&msg);        <span class="cm">// → WndProc → 消息映射</span>
+        }
+    }
+    <span class="kw">return</span> <span class="fn">ExitInstance</span>();
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>设计要点</strong>：<code>InitInstance</code> 返回 <code>FALSE</code> 会立即终止程序（不进入 <code>Run</code>），常用于许可证检查失败时优雅退出。<code>OnIdle</code> 是低优先级后台任务的钩子，MFC 利用它清理临时句柄映射。
+  </div>
+</section>
+
+<section id="message-map" class="toc-link">
+  <h2><span class="num">05</span> 消息映射机制</h2>
+  <p>Win32 把所有事件（鼠标、键盘、定时器、命令）以<strong>消息（MSG）</strong>形式投递到 <code>WndProc</code>。MFC 用<strong>消息映射宏</strong>把每条消息绑定到一个成员函数，替代原始 <code>switch(LOWORD(wParam))</code> 的巨型回调。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// MyView.h</span>
+<span class="kw">class</span> <span class="ty">CMyView</span> : <span class="kw">public</span> <span class="ty">CView</span> {
+    <span class="fn">DECLARE_DYNCREATE</span>(<span class="ty">CMyView</span>)      <span class="cm">// 动态创建（Doc/View 必需）</span>
+<span class="kw">protected</span>:
+    <span class="cm">// 消息处理函数声明（无 afx_msg 也行，约定写法）</span>
+    <span class="kw">afx_msg void</span> <span class="fn">OnLButtonDown</span>(<span class="ty">UINT</span>, <span class="ty">CPoint</span>);
+    <span class="kw">afx_msg void</span> <span class="fn">OnPaint</span>();
+    <span class="kw">afx_msg void</span> <span class="fn">OnEditCopy</span>();          <span class="cm">// 命令（菜单/按钮 ID）</span>
+    <span class="kw">afx_msg void</span> <span class="fn">OnUpdateEditCopy</span>(<span class="ty">CCmdUI</span>*);  <span class="cm">// 命令 UI 更新</span>
+    <span class="fn">DECLARE_MESSAGE_MAP</span>()
+};
+
+<span class="cm">// MyView.cpp —— 消息映射表</span>
+<span class="fn">BEGIN_MESSAGE_MAP</span>(<span class="ty">CMyView</span>, <span class="ty">CView</span>)
+    <span class="fn">ON_WM_LBUTTONDOWN</span>()                    <span class="cm">// 窗口消息</span>
+    <span class="fn">ON_WM_PAINT</span>()
+    <span class="fn">ON_COMMAND</span>(<span class="ty">ID_EDIT_COPY</span>, &amp;<span class="ty">CMyView</span>::OnEditCopy)        <span class="cm">// 命令</span>
+    <span class="fn">ON_UPDATE_COMMAND_UI</span>(<span class="ty">ID_EDIT_COPY</span>, &amp;<span class="ty">CMyView</span>::OnUpdateEditCopy)
+    <span class="fn">ON_COMMAND_RANGE</span>(<span class="ty">ID_TOOL_FIRST</span>, <span class="ty">ID_TOOL_LAST</span>, OnTool) <span class="cm">// 范围</span>
+    <span class="fn">ON_MESSAGE</span>(<span class="ty">WM_MY_CUSTOM</span>, OnCustom)            <span class="cm">// 自定义/注册消息</span>
+<span class="fn">END_MESSAGE_MAP</span>()
+
+<span class="kw">void</span> <span class="ty">CMyView</span>::<span class="fn">OnLButtonDown</span>(<span class="ty">UINT</span> nFlags, <span class="ty">CPoint</span> pt) {
+    <span class="fn">Invalidate</span>();                          <span class="cm">// 触发重绘 → OnPaint</span>
+    <span class="ty">CView</span>::<span class="fn">OnLButtonDown</span>(nFlags, pt);     <span class="cm">// 链式调用基类</span>
+}</code></pre>
+  </div>
+
+  <h3>消息映射的运行时结构</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 宏展开后的核心数据结构</span>
+<span class="kw">struct</span> <span class="ty">AFX_MSGMAP_ENTRY</span> {
+    <span class="ty">UINT</span>      nMessage;    <span class="cm">// 消息号，如 WM_LBUTTONDOWN</span>
+    <span class="ty">UINT</span>      nCode;       <span class="cm">// 通知码（控件通知用）</span>
+    <span class="ty">UINT</span>      nID;         <span class="cm">// 控件/命令 ID</span>
+    <span class="ty">UINT</span>      nLastID;     <span class="cm">// 范围映射的末尾 ID</span>
+    <span class="ty">UINT_PTR</span>  nSig;        <span class="cm">// 签名（参数/返回类型编码）</span>
+    <span class="ty">AFX_PMSG</span>  pfn;         <span class="cm">// 成员函数指针</span>
+};
+
+<span class="kw">struct</span> <span class="ty">AFX_MSGMAP</span> {
+    <span class="kw">const</span> <span class="ty">AFX_MSGMAP</span>* (<span class="ty">PASCAL</span>* pfnGetBaseMap)();  <span class="cm">// 父类映射</span>
+    <span class="kw">const</span> <span class="ty">AFX_MSGMAP_ENTRY</span>* lpEntries;          <span class="cm">// 本类映射表</span>
+};
+
+<span class="cm">// 查找过程：WindowProc → OnWndMsg → 遍历链上的表逐项匹配</span>
+<span class="cm">// 命令消息还经过命令路由（见下一章），不只是本窗口</span></code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>三对宏必须成对</strong>：<code>DECLARE_MESSAGE_MAP</code>（头文件）与 <code>BEGIN_MESSAGE_MAP/END_MESSAGE_MAP</code>（源文件）。漏写任意一个会链接失败（<code>unresolved external "GetThisMessageMap"</code>）。
+  </div>
+</section>
+
+<section id="docview" class="toc-link">
+  <h2><span class="num">06</span> 文档/视图架构</h2>
+  <p>Doc/View（Document/View）是 MFC 的<strong>旗舰架构</strong>，强制把应用拆成三层：<strong>文档（数据）</strong>、<strong>视图（展示）</strong>、<strong>框架窗口（容器）</strong>，由<strong>文档模板</strong>把它们粘合。它实现了数据与界面的分离，天然支持同一份数据的多种视图、文件打开/保存、MRU 列表。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">SDI vs MDI</div>
+      <table>
+        <tr><th>类型</th><th>模板类</th><th>特点</th></tr>
+        <tr><td>SDI</td><td><code>CSingleDocTemplate</code></td><td>单文档单视图，如记事本</td></tr>
+        <tr><td>MDI</td><td><code>CMultiDocTemplate</code></td><td>多文档多子窗口，如 Office</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">三件套职责</div>
+      <ul>
+        <li><code>CDocument</code>：存数据、序列化</li>
+        <li><code>CView</code>：从文档取数据渲染</li>
+        <li><code>CFrameWnd</code>：装视图、菜单、工具栏</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 在 CWinApp::InitInstance 中注册文档模板</span>
+<span class="ty">CSingleDocTemplate</span>* pDocTemplate = <span class="kw">new</span> <span class="ty">CSingleDocTemplate</span>(
+    <span class="ty">IDR_MAINFRAME</span>,                        <span class="cm">// 资源 ID（菜单/图标/字符串）</span>
+    <span class="fn">RUNTIME_CLASS</span>(<span class="ty">CMyDoc</span>),               <span class="cm">// 文档类（动态创建）</span>
+    <span class="fn">RUNTIME_CLASS</span>(<span class="ty">CMainFrame</span>),          <span class="cm">// 框架类</span>
+    <span class="fn">RUNTIME_CLASS</span>(<span class="ty">CMyView</span>));            <span class="cm">// 视图类</span>
+<span class="fn">AddDocTemplate</span>(pDocTemplate);
+
+<span class="cm">// 处理命令行：打开文件或建空文档</span>
+<span class="ty">CCommandLineInfo</span> cmdInfo;
+<span class="fn">ParseCommandLine</span>(cmdInfo);
+<span class="kw">if</span> (!<span class="fn">ProcessShellCommand</span>(cmdInfo)) <span class="kw">return FALSE</span>;</code></pre>
+  </div>
+
+  <h3>文档 ↔ 视图 协作</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 数据改变后，文档通知所有关联视图刷新</span>
+<span class="kw">void</span> <span class="ty">CMyDoc</span>::<span class="fn">ModifyData</span>(...) {
+    <span class="cm">// ... 修改 m_data ...</span>
+    <span class="fn">SetModifiedFlag</span>();          <span class="cm">// 标记“未保存”，标题出现 *</span>
+    <span class="fn">UpdateAllViews</span>(<span class="kw">NULL</span>);       <span class="cm">// 触发每个视图的 OnUpdate</span>
+}
+
+<span class="cm">// 视图从文档读数据并重绘</span>
+<span class="kw">void</span> <span class="ty">CMyView</span>::<span class="fn">OnDraw</span>(<span class="ty">CDC</span>* pDC) {
+    <span class="ty">CMyDoc</span>* pDoc = <span class="fn">GetDocument</span>();
+    <span class="cm">// 用 pDoc 的数据绘制 ...</span>
+}
+
+<span class="cm">// 序列化：文件打开/保存由框架自动调用</span>
+<span class="kw">void</span> <span class="ty">CMyDoc</span>::<span class="fn">Serialize</span>(<span class="ty">CArchive</span>&amp; ar) {
+    <span class="kw">if</span> (ar.<span class="fn">IsStoring</span>()) ar &lt;&lt; m_data;
+    <span class="kw">else</span>                ar &gt;&gt; m_data;
+}</code></pre>
+  </div>
+
+  <h3>命令路由（Command Routing）</h3>
+  <p>菜单/工具栏点击产生 <code>WM_COMMAND</code>，MFC 沿<strong>固定链</strong>逐级查找处理者，第一个匹配的就处理：</p>
+  <div class="card">
+    <pre><code><span class="cm">// 视图 → 文档 → 文档模板 → 框架 → 应用</span>
+<span class="cm">// 每一级的 OnCmdMsg 依次询问本对象及其子对象</span>
+
+<span class="cm">// MDI 中框架链略复杂：</span>
+活动视图 → 其文档 → 文档模板 → MDI 子框架 → MDI 主框架 → 应用</code></pre>
+  </div>
+  <div class="callout tip">
+    <strong>路由的价值</strong>：同一个“保存”命令（<code>ID_FILE_SAVE</code>）可以放在主框架菜单，却由<strong>当前文档</strong>响应——无需手写“找到活动文档再调用”的胶水代码。
+  </div>
+</section>
+
+<section id="rtti" class="toc-link">
+  <h2><span class="num">07</span> 运行时类型与动态创建</h2>
+  <p>MFC 在标准 C++ 还没有 RTTI 的年代，就自研了一套<strong>运行时类型信息系统（CRuntimeClass）</strong>。它支撑了 Doc/View 的动态创建、序列化时的类匹配、安全类型转换。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 三套宏（按能力递增）</span>
+<span class="fn">DECLARE_DYNAMIC</span> / <span class="fn">IMPLEMENT_DYNAMIC</span>           <span class="cm">// 仅类型信息</span>
+<span class="fn">DECLARE_DYNCREATE</span> / <span class="fn">IMPLEMENT_DYNCREATE</span>     <span class="cm">// + 无参默认构造（动态创建）</span>
+<span class="fn">DECLARE_SERIAL</span> / <span class="fn">IMPLEMENT_SERIAL</span>          <span class="cm">// + 序列化支持</span>
+
+<span class="cm">// 使用示例</span>
+<span class="cm">// .h</span>
+<span class="kw">class</span> <span class="ty">CMyDoc</span> : <span class="kw">public</span> <span class="ty">CDocument</span> {
+    <span class="fn">DECLARE_DYNCREATE</span>(<span class="ty">CMyDoc</span>)   <span class="cm">// Doc/View 必须可动态创建</span>
+    ...
+};
+<span class="cm">// .cpp</span>
+<span class="fn">IMPLEMENT_DYNCREATE</span>(<span class="ty">CMyDoc</span>, <span class="ty">CDocument</span>)
+
+<span class="cm">// 运行时查询</span>
+<span class="ty">CRuntimeClass</span>* pClass = <span class="fn">RUNTIME_CLASS</span>(<span class="ty">CMyDoc</span>);
+<span class="kw">if</span> (pObj-><span class="fn">IsKindOf</span>(<span class="fn">RUNTIME_CLASS</span>(<span class="ty">CMyDoc</span>))) {  <span class="cm">// 等价于 dynamic_cast 检查</span>
+    <span class="ty">CMyDoc</span>* pDoc = <span class="fn">DYNAMIC_DOWNCAST</span>(<span class="ty">CMyDoc</span>, pObj);
+}
+
+<span class="cm">// 动态创建：知道类名字符串就能 new（序列化恢复对象的核心）</span>
+<span class="ty">CObject</span>* pObj = pClass-><span class="fn">CreateObject</span>();</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>前置条件</strong>：<code>IMPLEMENT_DYNCREATE</code> 的类必须有<strong>无参默认构造函数</strong>（框架用它创建对象）。<code>DECLARE_SERIAL</code> 的类还要求 <code>Serialize</code> 实现，且 <code>IMPLEMENT_SERIAL</code> 需要第三参数 schema 版本号。
+  </div>
+</section>
+
+<section id="serialize" class="toc-link">
+  <h2><span class="num">08</span> 序列化</h2>
+  <p>MFC 的 <code>CArchive</code> 提供类型安全的二进制持久化，配合 <code>CObject::Serialize</code> 实现对象图（含指针、嵌套、集合）的存取。框架在“文件→打开/保存”时自动构造 <code>CArchive</code> 并调用文档的 <code>Serialize</code>。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">void</span> <span class="ty">CMyDoc</span>::<span class="fn">Serialize</span>(<span class="ty">CArchive</span>&amp; ar)
+{
+    <span class="ty">CDocument</span>::<span class="fn">Serialize</span>(ar);          <span class="cm">// 基类先做（MFC 内部状态）</span>
+    <span class="kw">if</span> (ar.<span class="fn">IsStoring</span>()) {
+        ar &lt;&lt; m_name &lt;&lt; m_count;        <span class="cm">// CString、int 等内置重载</span>
+        m_objects.<span class="fn">Serialize</span>(ar);    <span class="cm">// 集合类自带 Serialize</span>
+    } <span class="kw">else</span> {
+        ar &gt;&gt; m_name &gt;&gt; m_count;
+        m_objects.<span class="fn">Serialize</span>(ar);    <span class="cm">// 反序列化时按类型动态重建</span>
+    }
+}
+
+<span class="cm">// 派生 CObject 的自定义类：用 DECLARE_SERIAL + 重载 &lt;&lt; / &gt;&gt;</span>
+<span class="kw">class</span> <span class="ty">CShape</span> : <span class="kw">public</span> <span class="ty">CObject</span> {
+    <span class="fn">DECLARE_SERIAL</span>(<span class="ty">CShape</span>)
+<span class="kw">public</span>:
+    <span class="ty">CShape</span>() = <span class="kw">default</span>;             <span class="cm">// 无参构造（动态创建必需）</span>
+    <span class="kw">virtual void</span> <span class="fn">Serialize</span>(<span class="ty">CArchive</span>&amp; ar);
+};
+<span class="ty">CArchive</span>&amp; <span class="kw">operator</span>&lt;&lt;(<span class="ty">CArchive</span>&amp; ar, <span class="kw">const</span> <span class="ty">CShape</span>&amp; s) { ... }
+<span class="ty">CArchive</span>&amp; <span class="kw">operator</span>&gt;&gt;(<span class="ty">CArchive</span>&amp; ar, <span class="ty">CShape</span>*&amp; p) {
+    p = <span class="kw">static_cast</span>&lt;<span class="ty">CShape</span>*&gt;(ar.<span class="fn">ReadObject</span>(<span class="fn">RUNTIME_CLASS</span>(<span class="ty">CShape</span>)));
+    <span class="kw">return</span> ar;                        <span class="cm">// 写入时记录类名，读取时动态创建</span>
+}</code></pre>
+  </div>
+  <div class="callout tip">
+    <strong>Schema 版本</strong>：<code>IMPLEMENT_SERIAL(CShape, CObject, 1)</code> 的第三参数是 schema 版本号。结构变更时应递增并处理旧版本数据，框架会校验避免读到不兼容的格式。
+  </div>
+</section>
+
+<section id="dialog" class="toc-link">
+  <h2><span class="num">09</span> 对话框与 DDX/DDV</h2>
+  <p><code>CDialog</code> 封装对话框资源（.rc 中的 <code>DIALOG</code> 模板）。MFC 的两大支柱技术让对话框开发极其简洁：<strong>DDX</strong>（Dialog Data eXchange，数据交换）与 <strong>DDV</strong>（Dialog Data Validation，数据校验）。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// MyDlg.h</span>
+<span class="kw">class</span> <span class="ty">CMyDlg</span> : <span class="kw">public</span> <span class="ty">CDialogEx</span> {
+    <span class="fn">DECLARE_DYNAMIC</span>(<span class="ty">CMyDlg</span>)
+<span class="kw">public</span>:
+    <span class="kw">enum</span> { <span class="ty">IDD</span> = <span class="ty">IDD_MY_DIALOG</span> };       <span class="cm">// 关联对话框资源 ID</span>
+    <span class="ty">CString</span>  m_name;                     <span class="cm">// 控件数据成员</span>
+    <span class="ty">int</span>      m_age;
+<span class="kw">protected</span>:
+    <span class="kw">virtual void</span> <span class="fn">DoDataExchange</span>(<span class="ty">CDataExchange</span>* pDX);  <span class="cm">// DDX/DDV 核心</span>
+    <span class="kw">afx_msg void</span> <span class="fn">OnBnClickedOk</span>();
+    <span class="fn">DECLARE_MESSAGE_MAP</span>()
+};
+
+<span class="cm">// MyDlg.cpp</span>
+<span class="kw">void</span> <span class="ty">CMyDlg</span>::<span class="fn">DoDataExchange</span>(<span class="ty">CDataExchange</span>* pDX)
+{
+    <span class="ty">CDialogEx</span>::<span class="fn">DoDataExchange</span>(pDX);
+    <span class="fn">DDX_Text</span>(pDX, <span class="ty">IDC_NAME</span>, m_name);             <span class="cm">// 控件 ⇄ 成员</span>
+    <span class="fn">DDX_Text</span>(pDX, <span class="ty">IDC_AGE</span>,  m_age);
+    <span class="fn">DDV_MaxChars</span>(pDX, m_name, <span class="num">32</span>);                <span class="cm">// 字符长度校验</span>
+    <span class="fn">DDV_MinMaxInt</span>(pDX, m_age, <span class="num">0</span>, <span class="num">150</span>);            <span class="cm">// 范围校验</span>
+    <span class="fn">DDX_Control</span>(pDX, <span class="ty">IDC_LIST</span>, m_list);          <span class="cm">// 绑定控件对象</span>
+}
+
+<span class="kw">void</span> <span class="ty">CMyDlg</span>::<span class="fn">OnBnClickedOk</span>() {
+    <span class="fn">UpdateData</span>(<span class="kw">TRUE</span>);     <span class="cm">// 控件 → 成员（DDV 失败自动弹错并返回）</span>
+    <span class="kw">if</span> (m_name.<span class="fn">IsEmpty</span>()) { <span class="fn">AfxMessageBox</span>(<span class="st">"姓名不能为空"</span>); <span class="kw">return</span>; }
+    <span class="fn">EndDialog</span>(<span class="ty">IDOK</span>);      <span class="cm">// 关闭模态对话框</span>
+}</code></pre>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">模态 vs 非模态</div>
+      <table>
+        <tr><th>特性</th><th>模态 DoModal</th><th>非模态 Create</th></tr>
+        <tr><td>阻塞</td><td>是</td><td>否</td></tr>
+        <tr><td>生命周期</td><td>栈对象</td><td>堆对象/new</td></tr>
+        <tr><td>关闭</td><td>EndDialog</td><td>DestroyWindow</td></tr>
+        <tr><td>OnOK 默认</td><td>UpdateData+EndDialog</td><td>需禁用</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">UpdateData 方向</div>
+      <ul>
+        <li><code>UpdateData(TRUE)</code>：控件 → 成员</li>
+        <li><code>UpdateData(FALSE)</code>：成员 → 控件</li>
+        <li>框架在 <code>OnInitDialog</code> 末尾自动调 FALSE</li>
+        <li>OnOK 默认自动调 TRUE</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="gdi" class="toc-link">
+  <h2><span class="num">10</span> GDI 绘图</h2>
+  <p>所有绘制都通过<strong>设备上下文（DC）</strong>，<code>CDC</code> 封装 <code>HDC</code>。<code>CGdiObject</code> 派生类（笔、刷、字体、位图）封装 GDI 句柄。绘制只在 <code>WM_PAINT</code>（<code>OnPaint</code>/<code>OnDraw</code>）中进行——框架已用 <code>CPaintDC</code> 框定了无效区域。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">void</span> <span class="ty">CMyView</span>::<span class="fn">OnDraw</span>(<span class="ty">CDC</span>* pDC)
+{
+    <span class="cm">// 1. 创建/选入 GDI 对象（栈对象，自动析构释放句柄）</span>
+    <span class="ty">CPen</span> pen(<span class="ty">PS_SOLID</span>, <span class="num">2</span>, <span class="ty">RGB</span>(<span class="num">255</span>, <span class="num">0</span>, <span class="num">0</span>));
+    <span class="ty">CBrush</span> brush(<span class="ty">RGB</span>(<span class="num">0</span>, <span class="num">200</span>, <span class="num">0</span>));
+
+    <span class="cm">// 2. 选入 DC，保存旧对象</span>
+    <span class="ty">CGdiObject</span>* pOldPen   = pDC-><span class="fn">SelectObject</span>(&amp;pen);
+    <span class="ty">CGdiObject</span>* pOldBrush = pDC-><span class="fn">SelectObject</span>(&amp;brush);
+
+    <span class="cm">// 3. 绘图</span>
+    pDC-><span class="fn">Rectangle</span>(<span class="num">10</span>, <span class="num">10</span>, <span class="num">200</span>, <span class="num">120</span>);
+    pDC-><span class="fn">MoveTo</span>(<span class="num">10</span>, <span class="num">10</span>);
+    pDC-><span class="fn">LineTo</span>(<span class="num">200</span>, <span class="num">120</span>);
+
+    <span class="ty">CFont</span> font;
+    font.<span class="fn">CreatePointFont</span>(<span class="num">140</span>, <span class="st">"Segoe UI"</span>);
+    <span class="kw">auto</span>* pOldFont = pDC-><span class="fn">SelectObject</span>(&amp;font);
+    pDC-><span class="fn">SetBkMode</span>(<span class="ty">TRANSPARENT</span>);
+    pDC-><span class="fn">TextOut</span>(<span class="num">20</span>, <span class="num">30</span>, <span class="st">"Hello MFC"</span>);
+
+    <span class="cm">// 4. 恢复旧对象（必须！否则资源泄漏/绘制异常）</span>
+    pDC-><span class="fn">SelectObject</span>(pOldPen);
+    pDC-><span class="fn">SelectObject</span>(pOldBrush);
+    pDC-><span class="fn">SelectObject</span>(pOldFont);
+}
+
+<span class="cm">// 自定义窗口的非 OnDraw 绘制：</span>
+<span class="kw">void</span> <span class="ty">CMyWnd</span>::<span class="fn">OnPaint</span>() {
+    <span class="ty">CPaintDC</span> dc(<span class="kw">this</span>);     <span class="cm">// 构造即 BeginPaint，析构即 EndPaint</span>
+    dc.<span class="fn">FillSolidRect</span>(rc, <span class="ty">RGB</span>(<span class="num">255</span>,<span class="num">255</span>,<span class="num">255</span>));
+}</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>黄金法则</strong>：选入新 GDI 对象前<strong>保存旧对象</strong>，绘制结束<strong>恢复旧对象</strong>再让新对象析构。GDI 对象在仍被 DC 选中时无法真正释放，会触发“资源泄漏+DeleteObject 失败”。
+  </div>
+</section>
+
+<section id="collections" class="toc-link">
+  <h2><span class="num">11</span> 字符串与集合类</h2>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">CString</div>
+      <ul>
+        <li>Unicode/ANSI 自适应（<code>_T()</code> 宏）</li>
+        <li>支持 <code>Format</code>（类 printf）、<code>LoadString</code>（资源）</li>
+        <li>引用计数写时复制（COW），传值廉价</li>
+        <li>可直接用 <code>+</code> 拼接、与 LPCTSTR 隐式转换</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">模板集合</div>
+      <table>
+        <tr><th>类</th><th>语义</th></tr>
+        <tr><td><code>CArray&lt;T,T&gt;</code></td><td>动态数组</td></tr>
+        <tr><td><code>CList&lt;T,T&gt;</code></td><td>双向链表</td></tr>
+        <tr><td><code>CMap&lt;K,K,V,V&gt;</code></td><td>哈希映射</td></tr>
+        <tr><td><code>CTypedPtrArray</code></td><td>类型安全指针数组</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <pre><code><span class="ty">CString</span> s;
+s = <span class="st">"Hello"</span>;
+s.<span class="fn">Format</span>(_T(<span class="st">"Value = %d"</span>), <span class="num">42</span>);
+<span class="ty">CStringW</span> w = s;                          <span class="cm">// 与 std::wstring 互转方便</span>
+
+<span class="ty">CArray</span>&lt;<span class="ty">CPoint</span>, <span class="ty">CPoint</span>&gt; pts;
+pts.<span class="fn">Add</span>(<span class="ty">CPoint</span>(<span class="num">0</span>,<span class="num">0</span>));
+<span class="kw">for</span> (<span class="ty">INT_PTR</span> i = <span class="num">0</span>; i &lt; pts.<span class="fn">GetCount</span>(); ++i) { <span class="cm">/* pts[i] */</span> }
+
+<span class="ty">CMap</span>&lt;<span class="ty">CString</span>, <span class="ty">LPCTSTR</span>, <span class="ty">int</span>, <span class="ty">int</span>&gt; dict;
+dict[<span class="st">"key"</span>] = <span class="num">1</span>;
+
+<span class="cm">// 现代项目可改用 STL；CString/CArchive 与 STL 混用时注意类型适配</span></code></pre>
+  </div>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">12</span> 完整 SDI 示例骨架</h2>
+  <p>下面是一个最小可运行的 SDI（单文档）应用骨架，体现 MFC 各组件如何协作。用 VS“MFC 应用程序向导”生成的工程与此结构一致。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// ── MainFrm.h : 框架窗口 ──</span>
+<span class="kw">class</span> <span class="ty">CMainFrame</span> : <span class="kw">public</span> <span class="ty">CFrameWnd</span> {
+    <span class="fn">DECLARE_DYNCREATE</span>(<span class="ty">CMainFrame</span>)
+<span class="kw">public</span>:
+    <span class="kw">virtual</span> <span class="ty">CMainFrame</span>* <span class="fn">GetThisFrame</span>();
+<span class="kw">protected</span>:
+    <span class="kw">afx_msg int</span>  <span class="fn">OnCreate</span>(<span class="ty">LPCREATESTRUCT</span>);
+    <span class="kw">afx_msg void</span> <span class="fn">OnFileOpen</span>();
+    <span class="fn">DECLARE_MESSAGE_MAP</span>()
+};
+
+<span class="cm">// ── MyDoc.h : 文档（数据） ──</span>
+<span class="kw">class</span> <span class="ty">CMyDoc</span> : <span class="kw">public</span> <span class="ty">CDocument</span> {
+    <span class="fn">DECLARE_DYNCREATE</span>(<span class="ty">CMyDoc</span>)
+<span class="kw">public</span>:
+    <span class="ty">CString</span> m_text;                       <span class="cm">// 业务数据</span>
+    <span class="kw">virtual void</span> <span class="fn">Serialize</span>(<span class="ty">CArchive</span>&amp; ar) <span class="kw">override</span>;
+};
+
+<span class="cm">// ── MyView.h : 视图（展示 + 输入） ──</span>
+<span class="kw">class</span> <span class="ty">CMyView</span> : <span class="kw">public</span> <span class="ty">CEditView</span> {          <span class="cm">// CEditView 已集成编辑能力</span>
+    <span class="fn">DECLARE_DYNCREATE</span>(<span class="ty">CMyView</span>)
+<span class="kw">public</span>:
+    <span class="ty">CMyDoc</span>* <span class="fn">GetDocument</span>()<span class="kw"> const</span>;
+    <span class="kw">virtual void</span> <span class="fn">OnDraw</span>(<span class="ty">CDC</span>* pDC) <span class="kw">override</span>;
+<span class="kw">protected</span>:
+    <span class="kw">afx_msg void</span> <span class="fn">OnEditCopy</span>();
+    <span class="kw">afx_msg void</span> <span class="fn">OnUpdateEditCopy</span>(<span class="ty">CCmdUI</span>* pCmdUI);
+    <span class="fn">DECLARE_MESSAGE_MAP</span>()
+};
+
+<span class="cm">// ── MyView.cpp : 命令处理 + UI 更新 ──</span>
+<span class="fn">BEGIN_MESSAGE_MAP</span>(<span class="ty">CMyView</span>, <span class="ty">CEditView</span>)
+    <span class="fn">ON_COMMAND</span>(<span class="ty">ID_EDIT_COPY</span>, &amp;<span class="ty">CMyView</span>::OnEditCopy)
+    <span class="fn">ON_UPDATE_COMMAND_UI</span>(<span class="ty">ID_EDIT_COPY</span>, &amp;<span class="ty">CMyView</span>::OnUpdateEditCopy)
+<span class="fn">END_MESSAGE_MAP</span>()
+
+<span class="kw">void</span> <span class="ty">CMyView</span>::<span class="fn">OnUpdateEditCopy</span>(<span class="ty">CCmdUI</span>* pCmdUI) {
+    <span class="cm">// 根据是否有选中文本，启用/禁用菜单项</span>
+    <span class="ty">CString</span> sel; <span class="fn">GetSelectedText</span>(sel);
+    pCmdUI-><span class="fn">Enable</span>(!sel.<span class="fn">IsEmpty</span>());
+}
+
+<span class="cm">// ── app.cpp : 应用对象 ──</span>
+<span class="ty">CMyApp</span> theApp;                             <span class="cm">// 唯一全局实例</span>
+
+<span class="kw">BOOL</span> <span class="ty">CMyApp</span>::<span class="fn">InitInstance</span>() {
+    <span class="fn">CWinApp</span>::<span class="fn">InitInstance</span>();
+    <span class="fn">EnableTaskbarInteraction</span>(<span class="kw">FALSE</span>);
+    <span class="fn">SetRegistryKey</span>(_T(<span class="st">"MyCompany"</span>));    <span class="cm">// 配置存注册表而非 INI</span>
+
+    <span class="ty">CSingleDocTemplate</span>* pT = <span class="kw">new</span> <span class="ty">CSingleDocTemplate</span>(
+        <span class="ty">IDR_MAINFRAME</span>, <span class="fn">RUNTIME_CLASS</span>(<span class="ty">CMyDoc</span>),
+        <span class="fn">RUNTIME_CLASS</span>(<span class="ty">CMainFrame</span>), <span class="fn">RUNTIME_CLASS</span>(<span class="ty">CMyView</span>));
+    <span class="fn">AddDocTemplate</span>(pT);
+
+    <span class="ty">CCommandLineInfo</span> cmd; <span class="fn">ParseCommandLine</span>(cmd);
+    <span class="kw">if</span> (!<span class="fn">ProcessShellCommand</span>(cmd)) <span class="kw">return FALSE</span>;
+    <span class="fn">m_pMainWnd</span>-><span class="fn">ShowWindow</span>(<span class="fn">m_nCmdShow</span>);
+    <span class="fn">m_pMainWnd</span>-><span class="fn">UpdateWindow</span>();
+    <span class="kw">return TRUE</span>;                          <span class="cm">// 进入消息循环</span>
+}</code></pre>
+  </div>
+</section>
+
+<section id="modern" class="toc-link">
+  <h2><span class="num">13</span> 现代开发与对比</h2>
+  <p>MFC 仍受支持但<strong>不再演进核心架构</strong>。新项目通常选择更现代的技术栈，但 MFC 在维护遗留系统、嵌入原生 Win32 能力、对性能/体积敏感的场景中依然常见。</p>
+  <table>
+    <tr><th>框架</th><th>语言</th><th>渲染</th><th>定位</th><th>vs MFC</th></tr>
+    <tr><td>MFC</td><td>C++</td><td>Win32/GDI</td><td>经典桌面</td><td>—</td></tr>
+    <tr><td>Qt</td><td>C++</td><td>自绘</td><td>跨平台</td><td>跨平台、现代 API，但非原生控件</td></tr>
+    <tr><td>WinForms</td><td>C#</td><td>Win32/GDI</td><td>托管桌面</td><td>.NET 生态、生产力高</td></tr>
+    <tr><td>WPF</td><td>C#/XAML</td><td>DirectX</td><td>富客户端</td><td>矢量、数据绑定、现代 UI</td></tr>
+    <tr><td>WinUI 3 / WinAppSDK</td><td>C++/C#</td><td>DirectX</td><td>现代 Windows</td><td>微软主推的下一代原生</td></tr>
+  </table>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">何时仍用 MFC</div>
+      <ul>
+        <li>维护数百万行遗留代码</li>
+        <li>深度调用 Win32 / COM / 驱动</li>
+        <li>工业、医疗、金融领域存量系统</li>
+        <li>需要原生控件外观与零运行时依赖</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">现代化技巧</div>
+      <ul>
+        <li>启用 <code>/std:c++17/20</code>，混用 STL/智能指针</li>
+        <li>用 <code>CString</code> ↔ <code>std::wstring</code> 互转</li>
+        <li>替换裸指针为 <code>std::unique_ptr</code> 管理 GDI 对象</li>
+        <li>VS 向导生成 Ribbon / 现代主题</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout danger">
+    <strong>陷阱</strong>：MFC 是<strong>单线程公寓（STA）</strong>模型——所有 UI 操作必须在主线程。后台线程要更新 UI 必须通过 <code>PostMessage</code>（自定义消息）切回主线程，直接跨线程操作窗口对象会导致断言失败或死锁。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">14</span> 头文件索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">VC/Tools/MSVC/.../atlmfc/include/</span>   <span class="cmt">MFC 头文件根目录</span>
+├── <span class="file">afx.h</span>                <span class="cmt">核心：CObject / CRuntimeClass / 集合类</span>
+├── <span class="file">afxwin.h</span>             <span class="cmt">主包含：CWinApp / CWnd / CFrameWnd / CDialog</span>
+├── <span class="file">afxext.h</span>             <span class="cmt">扩展：CFormView / 控制栏 / 自定义控件</span>
+├── <span class="file">afxdlgs.h</span>            <span class="cmt">通用对话框：CFileDialog / CColorDialog</span>
+├── <span class="file">afxcmn.h</span>             <span class="cmt">公共控件：CListCtrl / CTreeCtrl / CProgressCtrl</span>
+├── <span class="file">afxdocob.h</span>           <span class="cmt">Doc/View：CDocument / CDocTemplate</span>
+├── <span class="file">afxole.h</span>             <span class="cmt">OLE / COM / 自动化支持</span>
+├── <span class="file">afxdb.h</span>              <span class="cmt">ODBC 数据库类（CDatabase / CRecordset）</span>
+├── <span class="file">afxsock.h</span>            <span class="cmt">Windows Sockets（CSocket / CAsyncSocket）</span>
+├── <span class="file">afxtempl.h</span>           <span class="cmt">模板集合：CArray / CList / CMap</span>
+└── <span class="file">afxcview.h</span>           <span class="cmt">视图：CEditView / CListView / CTreeView</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>afxwin.h</code> 应用与窗口框架的统一入口，含 CWinApp / CWnd。<br>
+    <code>afx.h</code> CObject 基类与 CRuntimeClass 运行时类型系统。<br>
+    <code>afxdocob.h</code> Doc/View 架构核心 CDocument / CDocTemplate。<br>
+    <code>afxtempl.h</code> CArray / CList / CMap 模板集合实现。<br>
+    <code>afxcmn.h / afxdlgs.h</code> 公共控件与通用对话框封装。<br>
+    MSDN《MFC Desktop Applications》为最权威的 API 参考。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 MFC 14.4x (Visual Studio 2022) · 封装 Win32 API · 生成于 2026-06-22</footer>
+<script src="common.js"></script>
+</body>
+</html>

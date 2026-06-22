@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Windows WinUI 3 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230078d4'/><stop offset='100%25' stop-color='%2300bcf2'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='70' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>I</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Windows WinUI 3 深度解析</h1>
+  <p class="subtitle">WinUI 3 / Windows App SDK — 剥离系统的现代 XAML，微软当前主推</p>
+  <span class="version">Windows App SDK 1.6 · Microsoft.UI.Xaml</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#architecture">架构</a></li>
+    <li><a href="#app-model">应用模型</a></li>
+    <li><a href="#controls">XAML 控件与布局</a></li>
+    <li><a href="#binding">数据绑定</a></li>
+    <li><a href="#appearance">现代外观与材质</a></li>
+    <li><a href="#interop">互操作</a></li>
+    <li><a href="#deploy">打包与部署</a></li>
+    <li><a href="#migration">迁移指南</a></li>
+    <li><a href="#example">完整示例</a></li>
+    <li><a href="#namespaces">命名空间索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p><strong>WinUI 3</strong>（Windows UI Library 3）是微软新一代 Windows 原生 UI 框架，它把原本绑定在 Windows 系统中的 UWP XAML 框架<strong>剥离出来</strong>，作为 <strong>Windows App SDK</strong>（前身 Project Reunion）的一部分随应用一起分发。它统一了 Win32 桌面应用与 UWP 的开发体验，是微软当前主推的 Windows 客户端 UI 技术栈。</p>
+  <p>Windows App SDK 的核心使命是<strong>解耦</strong>：让开发者不再受限于目标 Windows 版本——只要应用携带了 Windows App SDK 运行时，就能在 Windows 10 1809 及以上版本获得一致的现代 API 与控件，而不必等待系统更新。WinUI 3 则是这个 SDK 中负责 XAML UI 层的那一块。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>系统解耦</strong>：XAML 不再随 OS 更新，由 NuGet 包分发</li>
+        <li><strong>完整 Win32 能力</strong>：桌面应用无沙箱，可调用任意 API</li>
+        <li><strong>现代控件</strong>：Mica/Acrylic、InfoBar、NavigationView 等</li>
+        <li><strong>高性能绑定</strong>：<code>{x:Bind}</code> 编译时绑定</li>
+        <li><strong>双语言一等公民</strong>：C# 与 C++/WinRT 均原生支持</li>
+        <li><strong>多部署模式</strong>：MSIX 打包 / 未打包 / 自包含</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">适用场景</div>
+      <table>
+        <tr><th>场景</th><th>适用度</th></tr>
+        <tr><td>新建 Windows 原生桌面应用</td><td>强烈推荐</td></tr>
+        <tr><td>UWP 应用现代化</td><td>首选迁移目标</td></tr>
+        <tr><td>需要 Win32 + 现代 UI 混合</td><td>极佳</td></tr>
+        <tr><td>WPF 应用升级界面</td><td>可考虑（XAML 差异较大）</td></tr>
+        <tr><td>跨平台需求</td><td>不适用（仅 Windows）</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="callout tip">
+    <strong>一句话定位</strong>：WinUI 3 是「<strong>能调用一切 Win32 API 的 UWP XAML</strong>」——它既保留了 UWP 现代控件与设计语言，又解除了 UWP 沙箱的一切限制。
+  </div>
+</section>
+
+<section id="architecture" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+  <p>理解 WinUI 3 必须先理解它「从哪里来」。Windows 10 时代的 UWP 应用使用 <code>Windows.UI.Xaml</code> 命名空间——这套 XAML 引擎编译进 Windows 系统本身（<code>Windows.UI.Xaml.dll</code>），只能通过系统更新演进。WinUI 3 把整套 XAML 引擎、控件、合成（Composition）层从系统中抽取出来，重命名为 <code>Microsoft.UI.Xaml</code>，作为 NuGet 包随应用分发。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">新旧命名空间对比</div>
+      <table>
+        <tr><th>UWP（旧）</th><th>WinUI 3（新）</th></tr>
+        <tr><td><code>Windows.UI.Xaml</code></td><td><code>Microsoft.UI.Xaml</code></td></tr>
+        <tr><td><code>Windows.UI.Xaml.Controls</code></td><td><code>Microsoft.UI.Xaml.Controls</code></td></tr>
+        <tr><td><code>Windows.UI.Xaml.Data</code></td><td><code>Microsoft.UI.Xaml.Data</code></td></tr>
+        <tr><td><code>Windows.UI.Composition</code></td><td><code>Microsoft.UI.Composition</code></td></tr>
+        <tr><td><code>Windows.UI.Xaml.Media</code></td><td><code>Microsoft.UI.Xaml.Media</code></td></tr>
+        <tr><td>随 OS 更新</td><td>随 App 的 NuGet 包</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">核心组件</div>
+      <ul>
+        <li><strong>XAML 引擎</strong>：解析、布局、渲染（DirectX/Direct2D）</li>
+        <li><strong>控件库</strong>：Button/ListView/NavigationView 等</li>
+        <li><strong>Composition</strong>：可视化层、动画、效果</li>
+        <li><strong>语言投影</strong>：C# 投影 / C++/WinRT</li>
+        <li><strong>WinAppSDK 运行时</strong>：引导、应用生命周期、窗口</li>
+        <li><strong>WinRT 类型系统</strong>：底层 COM 互操作基础</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>应用模型对比</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ── UWP 应用（沙箱，受限） ──</span>
+<span class="cm">// 在 AppContainer 中运行，无法直接调用大量 Win32 API</span>
+<span class="cm">// 只能通过 UWP API 子集 + 受限能力声明</span>
+<span class="kw">sealed partial class</span> <span class="ty">App</span> : <span class="ty">Windows.UI.Xaml.Application</span> { }
+
+<span class="cm">// ── WinUI 3 桌面应用（无沙箱） ──</span>
+<span class="cm">// 普通 Win32 进程，拥有全部 Win32/COM/.NET 能力</span>
+<span class="cm">// 同时享受完整的现代 XAML UI</span>
+<span class="kw">public partial class</span> <span class="ty">App</span> : <span class="ty">Microsoft.UI.Xaml.Application</span> { }</code></pre>
+  </div>
+
+  <h3>C++/WinRT 与 C# 投影</h3>
+  <p>WinUI 3 的底层是<strong>WinRT 类型系统</strong>（同 UWP）。微软提供两种「语言投影」（不是绑定，是代码生成的一等公民接口）：</p>
+  <table>
+    <tr><th>语言</th><th>投影</th><th>特点</th></tr>
+    <tr><td>C# / .NET</td><td>C# WinRT 投影（CsWinRT）</td><td>开发效率高，自然异步语法，主流选择</td></tr>
+    <tr><td>C++</td><td>C++/WinRT（头文件投影）</td><td>零运行时开销，原生性能，可深入系统</td></tr>
+    <tr><td>Rust</td><td>windows-rs（社区）</td><td>实验性，非官方一等支持</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <strong>关键事实</strong>：WinUI 3 的「桌面应用」（Desktop app）模型就是<strong>普通 Win32 EXE</strong>——它没有 AppContainer 沙箱，可以调用 <code>CreateFile</code>、<code>RegCreateKey</code>、原生 COM、P/Invoke 任意 Win32 API，同时也保留了 UWP 风格的 XAML UI。这是它相对于 UWP 的<strong>决定性自由</strong>。
+  </div>
+</section>
+
+<section id="app-model" class="toc-link">
+  <h2><span class="num">03</span> 应用模型</h2>
+  <p>WinUI 3 应用的入口是 <code>App</code> 类，它继承自 <code>Microsoft.UI.Xaml.Application</code>。<code>Application</code> 派生类负责应用级资源、启动行为、未处理异常。顶级窗口由 <code>Microsoft.UI.Xaml.Window</code> 表示——它比 UWP 的 <code>Window</code> 更强，原生支持多窗口、自定义标题栏、系统菜单等。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// App.xaml.cs —— 应用入口</span>
+<span class="kw">public partial class</span> <span class="ty">App</span> : <span class="ty">Application</span>
+{
+    <span class="kw">private</span> <span class="ty">MainWindow</span>? m_window;
+
+    <span class="kw">protected override void</span> <span class="fn">OnLaunched</span>(<span class="ty">LaunchActivatedEventArgs</span> args)
+    {
+        <span class="cm">// 创建主窗口并显示。Window 是顶级容器</span>
+        m_window = <span class="kw">new</span> <span class="ty">MainWindow</span>();
+        m_window.<span class="fn">Activate</span>();          <span class="cm">// 激活（不是 Show）</span>
+    }
+}
+
+<span class="cm">// App.xaml —— 应用级资源与 XAML 入口</span>
+<span class="cm">&lt;!-- &lt;Application root.&gt; --&gt;</span>
+&lt;<span class="kw">Application</span>
+    x:<span class="pp">Class</span>=<span class="st">"MyApp.App"</span>
+    <span class="kw">xmlns</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml/presentation"</span>
+    <span class="kw">xmlns:x</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml"</span>&gt;
+    &lt;<span class="kw">Application.Resources</span>&gt;
+        &lt;<span class="kw">ResourceDictionary</span>&gt;
+            &lt;<span class="kw">x:String</span> x:<span class="pp">Key</span>=<span class="st">"AppName"</span>&gt;My App&lt;/<span class="kw">x:String</span>&gt;
+        &lt;/<span class="kw">ResourceDictionary</span>&gt;
+    &lt;/<span class="kw">Application.Resources</span>&gt;
+&lt;/<span class="kw">Application</span>&gt;</code></pre>
+  </div>
+
+  <h3>Window 与 AppWindow</h3>
+  <p>WinUI 3 提供两个<strong>协同</strong>的窗口抽象：<code>Microsoft.UI.Xaml.Window</code>（XAML 树宿主）与 <code>Microsoft.UI.Windowing.AppWindow</code>（WinAppSDK 提供的原生窗口控制器）。二者通过 <code>WindowNative</code> 桥接，覆盖从 UI 内容到窗口外壳的所有需求。</p>
+  <table>
+    <tr><th>抽象</th><th>来源</th><th>职责</th></tr>
+    <tr><td><code>Microsoft.UI.Xaml.Window</code></td><td>WinUI 3</td><td>XAML 内容树宿主，<code>Content</code> 属性</td></tr>
+    <tr><td><code>Microsoft.UI.Windowing.AppWindow</code></td><td>WinAppSDK</td><td>标题栏、尺寸、系统菜单、呈现器</td></tr>
+    <tr><td><code>WinRT.Interop.WindowNative</code></td><td>互操作</td><td>取底层 <code>HWND</code>，调用 Win32 API</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">// MainWindow.xaml.cs —— 桌面窗口 + Mica 背景</span>
+<span class="kw">public sealed partial class</span> <span class="ty">MainWindow</span> : <span class="ty">Window</span>
+{
+    <span class="kw">public</span> <span class="ty">MainWindow</span>()
+    {
+        <span class="fn">InitializeComponent</span>();
+
+        <span class="cm">// 1. 拿到 AppWindow（WinAppSDK 的窗口控制器）</span>
+        <span class="ty">var</span> hwnd = <span class="ty">WinRT.Interop.WindowNative</span>.<span class="fn">GetWindowHandle</span>(<span class="kw">this</span>);
+        <span class="ty">var</span> windowId = <span class="ty">Win32Interop</span>.<span class="fn">GetWindowIdFromWindow</span>(hwnd);
+        <span class="ty">AppWindow</span> appWindow = <span class="ty">AppWindow</span>.<span class="fn">GetFromWindowId</span>(windowId);
+
+        <span class="cm">// 2. 自定义标题栏（延伸内容区到标题栏）</span>
+        <span class="ty">var</span> titleBar = appWindow.<span class="fn">TitleBar</span>;
+        titleBar.<span class="fn">ExtendsContentIntoTitleBar</span> = <span class="kw">true</span>;
+
+        <span class="cm">// 3. 启用 Mica 云母背景材质</span>
+        <span class="ty">SystemBackdrop</span> = <span class="kw">new</span> <span class="ty">MicaBackdrop</span>();
+    }
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>持有窗口引用</strong>：<code>OnLaunched</code> 中必须把 <code>Window</code> 存到字段（如 <code>m_window</code>），否则局部变量离开作用域后窗口对象可能被 GC 回收——表现是窗口「凭空消失」。这是 WinUI 3 初学者最常见的坑之一。
+  </div>
+</section>
+
+<section id="controls" class="toc-link">
+  <h2><span class="num">04</span> XAML 控件与布局</h2>
+  <p>WinUI 3 的控件库与 UWP 同源（毕竟从 UWP XAML 剥离而来），命名空间从 <code>Windows.UI.Xaml.Controls</code> 改为 <code>Microsoft.UI.Xaml.Controls</code>。控件语义、属性、事件几乎一一对应，但 WinUI 3 还<strong>独占</strong>了一批更新的控件与 API（如 <code>InfoBar</code>、<code>PipsPager</code>、<code>ScrollView</code> 新版）。</p>
+
+  <h3>常用控件速览</h3>
+  <table>
+    <tr><th>控件</th><th>用途</th><th>说明</th></tr>
+    <tr><td><code>Button</code> / <code>ToggleButton</code></td><td>按钮</td><td>命令式，配合 <code>Command</code></td></tr>
+    <tr><td><code>TextBox</code> / <code>TextBlock</code></td><td>文本输入/显示</td><td>支持富文本 <code>RichEditBox</code></td></tr>
+    <tr><td><code>ListView</code> / <code>GridView</code></td><td>列表/网格</td><td>虚拟化，大数据量友好</td></tr>
+    <tr><td><code>ContentDialog</code></td><td>模态对话框</td><td>主窗口遮罩，返回 <code>ContentDialogResult</code></td></tr>
+    <tr><td><code>NavigationView</code></td><td>导航菜单</td><td>汉堡菜单 + 面包屑</td></tr>
+    <tr><td><code>CommandBar</code> / <code>AppBarButton</code></td><td>命令栏</td><td>顶部/底部工具栏</td></tr>
+    <tr><td><code>InfoBar</code></td><td>信息条</td><td>WinUI 3 新增，分级别提示</td></tr>
+    <tr><td><code>NumberBox</code> / <code>Slider</code></td><td>数值输入</td><td>验证、步进</td></tr>
+    <tr><td><code>CalendarDatePicker</code></td><td>日期选择</td><td>本地化日历</td></tr>
+    <tr><td><code>MediaPlayerElement</code></td><td>媒体播放</td><td>封装 MediaPlayer</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">// ContentDialog —— 模态对话框（XAML + 代码）</span>
+&lt;<span class="kw">ContentDialog</span> x:<span class="pp">Name</span>=<span class="st">"DeleteDialog"</span>
+            <span class="kw">Title</span>=<span class="st">"确认删除"</span>
+            <span class="kw">PrimaryButtonText</span>=<span class="st">"删除"</span>
+            <span class="kw">CloseButtonText</span>=<span class="st">"取消"</span>
+            <span class="kw">DefaultButton</span>=<span class="st">"Close"</span>&gt;
+    &lt;<span class="kw">StackPanel</span>&gt;
+        &lt;<span class="kw">TextBlock</span> <span class="kw">Text</span>=<span class="st">"此操作不可撤销，确定删除该文件？"</span> /&gt;
+    &lt;/<span class="kw">StackPanel</span>&gt;
+&lt;/<span class="kw">ContentDialog</span>&gt;
+
+<span class="cm">// 代码侧显示并处理结果（异步）</span>
+<span class="ty">ContentDialogResult</span> result = <span class="kw">await</span> DeleteDialog.<span class="fn">ShowAsync</span>();
+<span class="kw">if</span> (result == <span class="ty">ContentDialogResult.Primary</span>) {
+    <span class="fn">PerformDelete</span>();
+}</code></pre>
+  </div>
+
+  <h3>布局容器</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心布局面板</div>
+      <ul>
+        <li><code>Grid</code>：行列网格（最常用）</li>
+        <li><code>StackPanel</code>：横向/纵向堆叠</li>
+        <li><code>RelativePanel</code>：相对定位</li>
+        <li><code>Canvas</code>：绝对坐标</li>
+        <li><code>WrapGrid</code>/<code>ItemsWrapGrid</code>：列表虚拟化</li>
+        <li><code>ScrollViewer</code>：滚动容器</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">与 WPF/UWP 的差异</div>
+      <ul>
+        <li>API 与 UWP 几乎一致（仅命名空间）</li>
+        <li>与 WPF 差异较大：无 <code>Margin</code> 三元简写、布局属性略不同</li>
+        <li>控件默认遵循 Fluent 设计语言</li>
+        <li>主题资源用 <code>ThemeResource</code> 而非 <code>DynamicResource</code></li>
+        <li>样式用 <code>{StaticResource}</code> 或 <code>{ThemeResource}</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// NavigationView —— 现代导航</span>
+&lt;<span class="kw">NavigationView</span> <span class="kw">SelectionChanged</span>=<span class="st">"Nav_OnSelectionChanged"</span>&gt;
+    &lt;<span class="kw">NavigationView.MenuItems</span>&gt;
+        &lt;<span class="kw">NavigationViewItem</span> <span class="kw">Icon</span>=<span class="st">"Home"</span> <span class="kw">Tag</span>=<span class="st">"home"</span> <span class="kw">Content</span>=<span class="st">"首页"</span> /&gt;
+        &lt;<span class="kw">NavigationViewItem</span> <span class="kw">Icon</span>=<span class="st">"Setting"</span> <span class="kw">Tag</span>=<span class="st">"settings"</span> <span class="kw">Content</span>=<span class="st">"设置"</span> /&gt;
+    &lt;/<span class="kw">NavigationView.MenuItems</span>&gt;
+
+    &lt;<span class="kw">Frame</span> x:<span class="pp">Name</span>=<span class="st">"ContentFrame"</span> /&gt;
+&lt;/<span class="kw">NavigationView</span>&gt;
+
+<span class="cm">// 后台代码：根据 Tag 导航</span>
+<span class="kw">private void</span> <span class="fn">Nav_OnSelectionChanged</span>(<span class="kw">object</span> sender, <span class="ty">NavigationViewSelectionChangedEventArgs</span> e)
+{
+    <span class="kw">if</span> (e.<span class="fn">SelectedItemContainer</span> <span class="kw">is</span> <span class="ty">NavigationViewItem</span> item)
+    {
+        <span class="ty">Type</span>? page = item.<span class="fn">Tag</span>.<span class="kw">ToString</span>() <span class="kw">switch</span> {
+            <span class="st">"home"</span>     =&gt; <span class="kw">typeof</span>(<span class="ty">HomePage</span>),
+            <span class="st">"settings"</span> =&gt; <span class="kw">typeof</span>(<span class="ty">SettingsPage</span>),
+            _ =&gt; <span class="kw">null</span>
+        };
+        <span class="kw">if</span> (page != <span class="kw">null</span>) ContentFrame.<span class="fn">Navigate</span>(page);
+    }
+}</code></pre>
+  </div>
+</section>
+
+<section id="binding" class="toc-link">
+  <h2><span class="num">05</span> 数据绑定</h2>
+  <p>WinUI 3 的数据绑定是它的<strong>杀手锏</strong>之一。除了经典的 <code>{Binding}</code>（运行时反射，与 WPF/UWP 一致），它独有 <code>{x:Bind}</code>——<strong>编译时绑定</strong>，由 XAML 编译器生成强类型的绑定代码，性能比反射绑定高一个数量级，且能在编译期检测类型错误。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">{x:Bind} 编译绑定</div>
+      <ul>
+        <li>编译时生成代码，无运行时反射</li>
+        <li>强类型，编译期类型检查</li>
+        <li>支持函数/方法绑定（直接绑到方法）</li>
+        <li>支持事件绑定（事件 → 方法）</li>
+        <li>默认 Mode=OneTime（性能优先）</li>
+        <li>大数据列表性能最佳</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">{Binding} 经典绑定</div>
+      <ul>
+        <li>运行时反射，灵活但慢</li>
+        <li>依赖 <code>DataContext</code>（隐式数据上下文）</li>
+        <li>支持 <code>RelativeSource</code>（找祖先/模板父）</li>
+        <li>跨视图模型、动态数据场景</li>
+        <li>与 WPF/UWP 习惯一致</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 数据源：实现 INotifyPropertyChanged</span>
+<span class="kw">public class</span> <span class="ty">UserViewModel</span> : <span class="ty">INotifyPropertyChanged</span>
+{
+    <span class="kw">private string</span> _name = <span class="st">""</span>;
+    <span class="kw">public string</span> Name
+    {
+        <span class="kw">get</span> =&gt; _name;
+        <span class="kw">set</span> { <span class="kw">if</span> (_name != value) { _name = value; <span class="fn">OnPropertyChanged</span>(); } }
+    }
+
+    <span class="kw">public event</span> <span class="ty">PropertyChangedEventHandler</span>? PropertyChanged;
+    <span class="kw">protected void</span> <span class="fn">OnPropertyChanged</span>([<span class="ty">CallerMemberName</span>] <span class="kw">string</span>? p = <span class="kw">null</span>)
+        =&gt; PropertyChanged?.<span class="fn">Invoke</span>(<span class="kw">this</span>, <span class="kw">new</span> <span class="ty">PropertyChangedEventArgs</span>(p));
+}
+
+<span class="cm">// —— XAML：{x:Bind} 与 {Binding} 对比 ——</span>
+&lt;<span class="kw">Page</span> x:<span class="pp">Class</span>=<span class="st">"MyApp.UserPage"</span> /&gt;
+    &lt;<span class="kw">Grid</span>&gt;
+        &lt;<span class="cm">&lt;!-- x:Bind：编译期强类型，绑定到页面的属性 --&gt;</span>
+        &lt;<span class="kw">TextBlock</span> <span class="kw">Text</span>=<span class="st">"{x:Bind CurrentUser.Name, Mode=OneWay}"</span> /&gt;
+
+        &lt;<span class="cm">&lt;!-- x:Bind 函数绑定：直接调用方法 --&gt;</span>
+        &lt;<span class="kw">TextBlock</span> <span class="kw">Text</span>=<span class="st">"{x:Bind FormatName(CurrentUser.Name), Mode=OneWay}"</span> /&gt;
+
+        &lt;<span class="cm">&lt;!-- x:Bind 事件绑定：把按钮点击直接绑到方法 --&gt;</span>
+        &lt;<span class="kw">Button</span> <span class="kw">Content</span>=<span class="st">"保存"</span> <span class="kw">Click</span>=<span class="st">"{x:Bind SaveUser}"</span> /&gt;
+
+        &lt;<span class="cm">&lt;!-- Binding：运行时反射，依赖 DataContext --&gt;</span>
+        &lt;<span class="kw">TextBox</span> <span class="kw">Text</span>=<span class="st">"{Binding Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"</span> /&gt;
+    &lt;/<span class="kw">Grid</span>&gt;
+&lt;/<span class="kw">Page</span>&gt;
+
+<span class="cm">// 页面代码隐藏：x:Bind 暴露的属性必须是 public 字段或属性</span>
+<span class="kw">public sealed partial class</span> <span class="ty">UserPage</span> : <span class="ty">Page</span>
+{
+    <span class="kw">public</span> <span class="ty">UserViewModel</span> CurrentUser { <span class="kw">get</span>; } = <span class="kw">new</span>();
+
+    <span class="kw">public</span> <span class="ty">UserPage</span>() { <span class="fn">InitializeComponent</span>(); }
+
+    <span class="kw">public string</span> <span class="fn">FormatName</span>(<span class="kw">string</span> n) =&gt; <span class="st">$"用户：{n}"</span>;
+
+    <span class="kw">public void</span> <span class="fn">SaveUser</span>() { <span class="cm">/* 保存逻辑 */</span> }
+}</code></pre>
+  </div>
+
+  <h3>大数据列表：x:Phase 分阶段渲染</h3>
+  <p>对于超大列表（成千上万项），WinUI 3 提供 <code>x:Phase</code>——XAML 编译器分阶段渲染每个数据模板，先渲染 <code>Phase 0</code>（最关键字段），滚动空闲时再补渲染后续 Phase，保证滚动帧率。</p>
+  <div class="card">
+    <pre><code>&lt;<span class="kw">ListView</span> <span class="kw">ItemsSource</span>=<span class="st">"{x:Bind LargeItems}"</span>&gt;
+    &lt;<span class="kw">ListView.ItemTemplate</span>&gt;
+        &lt;<span class="kw">DataTemplate</span> x:<span class="pp">DataType</span>=<span class="st">"local:Item"</span>&gt;
+            &lt;<span class="kw">StackPanel</span>&gt;
+                <span class="cm">&lt;!-- Phase 0：最先渲染，保证滚动可见 --&gt;</span>
+                &lt;<span class="kw">TextBlock</span> <span class="kw">Text</span>=<span class="st">"{x:Bind Title}"</span> /&gt;
+                <span class="cm">&lt;!-- Phase 1：滚动空闲时补 --&gt;</span>
+                &lt;<span class="kw">TextBlock</span> <span class="kw">Text</span>=<span class="st">"{x:Bind Subtitle}"</span> x:<span class="pp">Phase</span>=<span class="st">"1"</span> /&gt;
+                <span class="cm">&lt;!-- Phase 2：再延迟一档 --&gt;</span>
+                &lt;<span class="kw">Image</span> <span class="kw">Source</span>=<span class="st">"{x:Bind Thumbnail}"</span> x:<span class="pp">Phase</span>=<span class="st">"2"</span> /&gt;
+            &lt;/<span class="kw">StackPanel</span>&gt;
+        &lt;/<span class="kw">DataTemplate</span>&gt;
+    &lt;/<span class="kw">ListView.ItemTemplate</span>&gt;
+&lt;/<span class="kw">ListView</span>&gt;</code></pre>
+  </div>
+
+  <h3>ObservableCollection 与 IValueConverter</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ObservableCollection：列表变化自动通知 UI</span>
+<span class="kw">public</span> <span class="ty">ObservableCollection</span>&lt;<span class="ty">Item</span>&gt; Items { <span class="kw">get</span>; } = <span class="kw">new</span>();
+Items.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">Item</span>());      <span class="cm">// UI 自动刷新</span>
+
+<span class="cm">// IValueConverter：值转换器（绑定时转换类型）</span>
+<span class="kw">public class</span> <span class="ty">BoolToVisibilityConverter</span> : <span class="ty">IValueConverter</span>
+{
+    <span class="kw">public object</span> <span class="fn">Convert</span>(<span class="kw">object</span> v, <span class="ty">Type</span> t, <span class="kw">object</span> p, <span class="kw">string</span> l)
+        =&gt; (<span class="kw">bool</span>)v ? <span class="ty">Visibility.Visible</span> : <span class="ty">Visibility.Collapsed</span>;
+
+    <span class="kw">public object</span> <span class="fn">ConvertBack</span>(<span class="kw">object</span> v, <span class="ty">Type</span> t, <span class="kw">object</span> p, <span class="kw">string</span> l)
+        =&gt; <span class="kw">throw new</span> <span class="ty">NotImplementedException</span>();
+}
+
+&lt;<span class="kw">Page.Resources</span>&gt;
+    &lt;<span class="kw">local:BoolToVisibilityConverter</span> x:<span class="pp">Key</span>=<span class="st">"BoolToVis"</span> /&gt;
+&lt;/<span class="kw">Page.Resources</span>&gt;
+&lt;<span class="kw">Button</span> <span class="kw">Visibility</span>=<span class="st">"{x:Bind IsAdmin, Converter={StaticResource BoolToVis}}"</span> /&gt;</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>x:Bind 默认 OneTime</strong>：与 <code>{Binding}</code> 默认 OneWay 不同，<code>{x:Bind}</code> 默认是 <strong>OneTime</strong>（一次性绑定，不监听变化）。需要双向或单向更新必须显式写 <code>Mode=OneWay</code> 或 <code>Mode=TwoWay</code>，否则数据变了 UI 不更新。
+  </div>
+</section>
+
+<section id="appearance" class="toc-link">
+  <h2><span class="num">06</span> 现代外观与材质</h2>
+  <p>WinUI 3 把 Windows 11 的 <strong>Fluent Design</strong> 设计语言作为默认外观。两大招牌材质是 <strong>Mica</strong>（云母）与 <strong>Acrylic</strong>（亚克力），它们通过 Composition API 与系统桌面背景实时混合，呈现半透明的现代质感。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Mica 云母背景</div>
+      <ul>
+        <li>主窗口背景，与桌面壁纸混合</li>
+        <li>不透明但有色调，节省 GPU</li>
+        <li>窗口失去焦点时变暗</li>
+        <li>仅窗口本身可用，非浮层</li>
+        <li><code>SystemBackdrop = new MicaBackdrop()</code></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Acrylic 亚克力材质</div>
+      <ul>
+        <li>半透明模糊，背后内容虚化</li>
+        <li>用于浮层（Flyout、菜单、命令栏）</li>
+        <li>性能开销大于 Mica</li>
+        <li>支持自定义着色与不透明度</li>
+        <li><code>AcrylicBrush</code> 资源</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// Mica 窗口背景（C# 代码，最简方式）</span>
+<span class="kw">public</span> <span class="ty">MainWindow</span>()
+{
+    <span class="fn">InitializeComponent</span>();
+    <span class="ty">SystemBackdrop</span> = <span class="kw">new</span> <span class="ty">MicaBackdrop</span> {
+        <span class="ty">Kind</span> = <span class="ty">MicaKind.BaseAlt</span>     <span class="cm">// 三档：Base / BaseAlt / Dim</span>
+    };
+}
+
+<span class="cm">// Acrylic 背景（XAML 资源 + 引用）</span>
+&lt;<span class="kw">Window</span>.Resources&gt;
+    &lt;<span class="kw">AcrylicBrush</span> x:<span class="pp">Key</span>=<span class="st">"CustomAcrylic"</span>
+                  <span class="kw">TintColor</span>=<span class="st">"#1F1F1F"</span>
+                  <span class="kw">TintOpacity</span>=<span class="st">0.7"</span>
+                  <span class="kw">BackgroundSource</span>=<span class="st">"HostBackdrop"</span> /&gt;
+&lt;/<span class="kw">Window</span>.Resources&gt;
+
+&lt;<span class="kw">Border</span> <span class="kw">Background</span>=<span class="st">"{StaticResource CustomAcrylic}"</span>
+        <span class="kw">CornerRadius</span>=<span class="st">"8"</span> /&gt;</code></pre>
+  </div>
+
+  <h3>主题跟随系统</h3>
+  <p>WinUI 3 内置亮/暗主题切换，通过 <code>RequestedTheme</code> 控制。配合 <code>ThemeResource</code>，所有控件自动响应主题变化。建议让应用跟随系统主题，使用 <code>UISettings</code> 监听系统颜色变化。</p>
+  <div class="card">
+    <pre><code><span class="cm">// 根元素指定主题（Application.Resources 或 root）</span>
+&lt;<span class="kw">Application</span>.Resources&gt;
+    &lt;<span class="kw">ResourceDictionary</span>&gt;
+        &lt;<span class="kw">ResourceDictionary</span>.ThemeDictionaries&gt;
+            &lt;<span class="kw">ResourceDictionary</span> x:<span class="pp">Key</span>=<span class="st">"Light"</span>&gt;
+                &lt;<span class="kw">Color</span> x:<span class="pp">Key</span>=<span class="st">"MyBg"</span>&gt;#FFFFFFFF&lt;/<span class="kw">Color</span>&gt;
+            &lt;/<span class="kw">ResourceDictionary</span>&gt;
+            &lt;<span class="kw">ResourceDictionary</span> x:<span class="pp">Key</span>=<span class="st">"Dark"</span>&gt;
+                &lt;<span class="kw">Color</span> x:<span class="pp">Key</span>=<span class="st">"MyBg"</span>&gt;#FF1F1F1F&lt;/<span class="kw">Color</span>&gt;
+            &lt;/<span class="kw">ResourceDictionary</span>&gt;
+        &lt;/<span class="kw">ResourceDictionary</span>.ThemeDictionaries&gt;
+    &lt;/<span class="kw">ResourceDictionary</span>&gt;
+&lt;/<span class="kw">Application</span>.Resources&gt;
+
+<span class="cm">// 引用时用 ThemeResource（主题切换自动更新）</span>
+&lt;<span class="kw">Grid</span> <span class="kw">Background</span>=<span class="st">"{ThemeResource MyBg}"</span> /&gt;</code></pre>
+  </div>
+
+  <h3>自定义标题栏</h3>
+  <p>WinUI 3 允许把内容区延伸到标题栏区域，画上自己的标题栏控件。配合 <code>SetTitleBar</code> 注册某个元素为「可拖拽区域」，系统按钮（最小化/关闭）依然由系统绘制保证行为正确。</p>
+  <div class="card">
+    <pre><code>&lt;<span class="kw">Grid</span>&gt;
+    &lt;<span class="kw">Grid</span>.RowDefinitions&gt;
+        &lt;<span class="kw">RowDefinition</span> <span class="kw">Height</span>=<span class="st">"32"</span> /&gt;   <span class="cm">&lt;!-- 标题栏区域 --&gt;</span>
+        &lt;<span class="kw">RowDefinition</span> <span class="kw">Height</span>=<span class="st">"*"</span> /&gt;     <span class="cm">&lt;!-- 主内容 --&gt;</span>
+    &lt;/<span class="kw">Grid</span>.RowDefinitions&gt;
+
+    &lt;<span class="kw">Grid</span> x:<span class="pp">Name</span>=<span class="st">"AppTitleBar"</span> <span class="kw">Height</span>=<span class="st">"32"</span>&gt;
+        &lt;<span class="kw">TextBlock</span> <span class="kw">Text</span>=<span class="st">"My App"</span> <span class="kw">VerticalAlignment</span>=<span class="st">"Center"</span>
+                   <span class="kw">Margin</span>=<span class="st">"16,0,0,0"</span> /&gt;
+    &lt;/<span class="kw">Grid</span>&gt;
+&lt;/<span class="kw">Grid</span>&gt;
+
+<span class="cm">// 代码：注册自定义标题栏 + 启用延伸</span>
+<span class="ty">AppWindow</span>.TitleBar.<span class="fn">ExtendsContentIntoTitleBar</span> = <span class="kw">true</span>;
+<span class="fn">SetTitleBar</span>(AppTitleBar);          <span class="cm">// 注册为可拖拽区域</span></code></pre>
+  </div>
+
+  <h3>ConnectedAnimation 连接动画</h3>
+  <p>页面跳转时把元素从源位置「连贯地」动画到目标位置，是 Fluent 设计的招牌效果。WinUI 3 通过 <code>ConnectedAnimationService</code> 实现。</p>
+  <div class="card">
+    <pre><code><span class="cm">// 源页面：准备动画</span>
+<span class="ty">ConnectedAnimationService</span>.<span class="fn">GetForCurrentView</span>()
+    .<span class="fn">PrepareToAnimate</span>(<span class="st">"itemImage"</span>, sourceImage);
+
+<span class="cm">// 目标页面：播放动画（连贯过渡）</span>
+<span class="ty">var</span> anim = <span class="ty">ConnectedAnimationService</span>.<span class="fn">GetForCurrentView</span>()
+              .<span class="fn">GetAnimation</span>(<span class="st">"itemImage"</span>);
+<span class="kw">await</span> targetImage.<span class="fn">TryStartConnectedAnimationAsync</span>(anim);</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>Reveal 高亮</strong>：鼠标悬停时 ListView 项边缘出现的高亮光效，是 Fluent 设计的另一招牌，WinUI 3 内置支持，无需额外代码。
+  </div>
+</section>
+
+<section id="interop" class="toc-link">
+  <h2><span class="num">07</span> 互操作</h2>
+  <p>互操作是 WinUI 3 桌面应用的<strong>灵魂</strong>。由于运行在普通 Win32 进程中（非 AppContainer），它能调用<strong>一切</strong> Win32/COM/.NET API。同时微软提供了完整的桥接层，让 WinUI 3 XAML 能与 WPF/WinForms/MFC 等老技术混合使用。</p>
+
+  <table>
+    <tr><th>场景</th><th>API</th><th>说明</th></tr>
+    <tr><td>取底层 HWND</td><td><code>WindowNative.GetWindowHandle</code></td><td>WinUI 窗口转 HWND</td></tr>
+    <tr><td>调用 Win32 API</td><td>P/Invoke (<code>DllImport</code>)</td><td>无限制，原生能力</td></tr>
+    <tr><td>调用 COM 组件</td><td>[ComImport] / CsWinRT</td><td>Office、Shell、DXGI 等</td></tr>
+    <tr><td>Win32 → XAML</td><td>XAML Islands</td><td>在 MFC/WinForms/Win32 中嵌入 XAML</td></tr>
+    <tr><td>WPF/WinForms 混用</td><td>ElementCompositionPreview</td><td>Composition 互操作</td></tr>
+    <tr><td>跨进程通信</td><td>WinRT + COM</td><td>WinRT Broker、AppService</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">// 取 WinUI 3 窗口的 HWND，调用任意 Win32 API</span>
+<span class="kw">using</span> <span class="ty">System.Runtime.InteropServices</span>;
+
+<span class="kw">public sealed partial class</span> <span class="ty">MainWindow</span> : <span class="ty">Window</span>
+{
+    [<span class="ty">DllImport</span>(<span class="st">"user32.dll"</span>)]
+    <span class="kw">private static extern bool</span> <span class="fn">SetForegroundWindow</span>(<span class="ty">IntPtr</span> hWnd);
+
+    <span class="kw">public</span> <span class="ty">MainWindow</span>()
+    {
+        <span class="fn">InitializeComponent</span>();
+
+        <span class="ty">IntPtr</span> hwnd = <span class="ty">WinRT.Interop.WindowNative</span>.<span class="fn">GetWindowHandle</span>(<span class="kw">this</span>);
+        <span class="fn">SetForegroundWindow</span>(hwnd);    <span class="cm">// 调用经典 Win32 API</span>
+    }
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>这是关键自由</strong>：UWP 沙箱应用调用 <code>SetForegroundWindow</code>、<code>CreateFile</code> 写任意路径、读注册表 HKLM、加载任意 DLL——这些要么被禁要么受限。<strong>WinUI 3 桌面应用全部畅通</strong>，这就是它「桌面」身份的全部意义。
+  </div>
+
+  <h3>XAML Islands（反向场景）</h3>
+  <p>除了「WinUI 3 应用调用 Win32」，还有一种反向场景：<strong>已有 Win32/MFC/WinForms/WPF 应用</strong>想在自己的窗口里嵌入一块 WinUI XAML 控件——这就是 <strong>XAML Islands</strong>。它用 <code>WindowsXamlManager</code> + <code>DesktopWindowXamlSource</code> 把 XAML 内容树托管到任意 HWND。</p>
+  <div class="card">
+    <pre><code><span class="cm">// 在 WPF/WinForms/MFC 中承载 WinUI XAML（伪代码，C#）</span>
+<span class="kw">var</span> xamlSource = <span class="kw">new</span> <span class="ty">DesktopWindowXamlSource</span>();
+xamlSource.<span class="fn">Initialize</span>(hostHwnd);           <span class="cm">// 宿主窗口 HWND</span>
+
+<span class="cm">// 把 XAML 控件填进去</span>
+xamlSource.<span class="fn">Content</span> = <span class="kw">new</span> <span class="ty">MyWinUIUserControl</span>();</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>选型建议</strong>：新项目优先「WinUI 3 桌面应用」；只有当巨型遗留 WPF/MFC 项目只想局部现代化、不想重写外壳时，才用 XAML Islands 嵌入。
+  </div>
+</section>
+
+<section id="deploy" class="toc-link">
+  <h2><span class="num">08</span> 打包与部署</h2>
+  <p>WinUI 3 桌面应用支持<strong>两种部署模式</strong>：MSIX 打包（推荐，现代部署）与未打包（Unpackaged，传统 EXE）。两种模式都能用全部 Win32 能力，区别在于安装方式、生命周期管理、自动更新支持。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">MSIX 打包（Packaged）</div>
+      <ul>
+        <li>现代 Windows 安装格式</li>
+        <li>干净安装/卸载（系统跟踪文件）</li>
+        <li>支持 App Installer 自动更新</li>
+        <li>可发布到 Microsoft Store</li>
+        <li>声明式能力（<code>Package.appxmanifest</code>）</li>
+        <li>支持 MSIX 单包或架构包</li>
+        <li>需 Windows App SDK 框架包</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">未打包（Unpackaged）</div>
+      <ul>
+        <li>普通 EXE + DLL，绿色部署</li>
+        <li>无需 MSIX，老系统友好</li>
+        <li>必须用 <strong>bootstrap</strong> 初始化 WinAppSDK</li>
+        <li>无自动更新，需自行实现</li>
+        <li>不能上 Store</li>
+        <li>调试简单，单文件发布容易</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 未打包应用：必须调用 bootstrap 初始化 Windows App SDK 运行时</span>
+<span class="kw">using</span> <span class="ty">Microsoft.Windows.ApplicationModel.WindowsAppRuntime</span>;
+
+<span class="kw">public static class</span> <span class="ty">Program</span>
+{
+    [<span class="ty">STAThread</span>]
+    <span class="kw">public static void</span> <span class="fn">Main</span>(<span class="kw">string</span>[] args)
+    {
+        <span class="cm">// 1. 引导：定位并加载 Windows App SDK 运行时</span>
+        <span class="ty">Bootstrap</span>.<span class="fn">Initialize</span>(<span class="num">0x00010006</span>);   <span class="cm">// 版本号 1.6</span>
+
+        <span class="cm">// 2. 启动 WinUI 应用</span>
+        <span class="ty">WinRT.ComWrappersSupport</span>.<span class="fn">InitializeComWrappers</span>();
+        <span class="ty">Application</span>.<span class="fn">Start</span>(p =&gt; {
+            <span class="kw">var</span> context = <span class="kw">new</span> <span class="ty">DispatchContext</span>();
+            context.<span class="fn">Run</span>(() =&gt; <span class="kw">new</span> <span class="ty">App</span>());
+        });
+    }
+}
+
+<span class="cm">// MSIX 打包应用：无需 bootstrap，由系统自动加载框架包</span>
+<span class="cm">// Package.appxmanifest 声明应用标识、能力、入口</span></code></pre>
+  </div>
+
+  <table>
+    <tr><th>特性</th><th>Packaged (MSIX)</th><th>Unpackaged</th></tr>
+    <tr><td>安装方式</td><td>MSIX 安装包</td><td>EXE + DLL 拷贝</td></tr>
+    <tr><td>初始化</td><td>系统自动</td><td>Bootstrap.Initialize</td></tr>
+    <tr><td>Microsoft Store</td><td>支持</td><td>不支持</td></tr>
+    <tr><td>自动更新</td><td>App Installer (.appinstaller)</td><td>需自行实现</td></tr>
+    <tr><td>权限/能力</td><td>manifest 声明</td><td>当前用户权限</td></tr>
+    <tr><td>文件清理</td><td>系统跟踪，干净卸载</td><td>需自行管理</td></tr>
+    <tr><td>最低系统</td><td>Win10 1809+</td><td>Win10 1809+</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>框架依赖</strong>：两种模式都依赖 Windows App SDK 运行时。打包应用通过 MSIX 框架包引用（用户装一次，多应用共享）；未打包应用可以把运行时 DLL 部署到应用目录（自包含，体积更大但单文件可分发），或要求用户预先安装 Windows App SDK 运行时。
+  </div>
+
+  <h3>App Installer 自动更新</h3>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- MyApp.appinstaller：声明更新源 --&gt;</span>
+&lt;<span class="kw">AppInstaller</span> <span class="kw">Uri</span>=<span class="st">"https://myapp.com/MyApp.appinstaller"</span>
+              <span class="kw">Version</span>=<span class="st">"1.0.0.0"</span>&gt;
+    &lt;<span class="kw">MainBundle</span> <span class="kw">Name</span>=<span class="st">"MyApp"</span> <span class="kw">Version</span>=<span class="st">"1.0.0.0"</span>
+                <span class="kw">Uri</span>=<span class="st">"https://myapp.com/MyApp.msix"</span> /&gt;
+    &lt;<span class="kw">UpdateSettings</span>&gt;
+        &lt;<span class="kw">OnLaunch</span> <span class="kw">HoursBetweenUpdateChecks</span>=<span class="st">"24"</span> /&gt;
+        &lt;<span class="kw">AutomaticBackgroundTask</span> /&gt;
+    &lt;/<span class="kw">UpdateSettings</span>&gt;
+&lt;/<span class="kw">AppInstaller</span>&gt;</code></pre>
+  </div>
+</section>
+
+<section id="migration" class="toc-link">
+  <h2><span class="num">09</span> 迁移指南</h2>
+  <p>从已有项目迁到 WinUI 3 的难度因来源而异：UWP 迁移相对容易（概念一致、API 改名），WPF 迁移较难（XAML 差异大、需重写）。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">从 UWP 迁移</div>
+      <ul>
+        <li>命名空间 <code>Windows.UI.Xaml</code> → <code>Microsoft.UI.Xaml</code></li>
+        <li>移除 AppContainer 沙箱（变普通 Win32）</li>
+        <li>清单改 <code>Package.appxmanifest</code></li>
+        <li>部分 UWP 专属 API 需适配（如 FileOpenPicker）</li>
+        <li>用 <strong>.NET Upgrade Assistant</strong> 工具半自动迁移</li>
+        <li>多数 XAML/控件代码可机械替换</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">从 WPF 迁移</div>
+      <ul>
+        <li>概念相近（XAML + 数据绑定）</li>
+        <li>但 API 实质不同，<strong>需重写 XAML</strong></li>
+        <li><code>Window</code>/<code>Button</code> 等同名但命名空间不同</li>
+        <li>绑定默认行为差异（OneTime vs OneWay）</li>
+        <li>无 <code>Margin</code> 三元简写</li>
+        <li>主题资源用 <code>ThemeResource</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <table>
+    <tr><th>来源</th><th>迁移成本</th><th>建议时机</th></tr>
+    <tr><td>UWP</td><td>低（机械替换为主）</td><td>立即迁，微软已停止 UWP 演进</td></tr>
+    <tr><td>WPF</td><td>高（XAML 重写）</td><td>仅在新项目或大版本重构时</td></tr>
+    <tr><td>WinForms</td><td>极高（范式不同）</td><td>不推荐，可考虑 XAML Islands 渐进</td></tr>
+    <tr><td>MFC/Win32</td><td>极高</td><td>新模块用 XAML Islands 嵌入</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">// UWP 文件选择器（沙箱专用，需适配）</span>
+<span class="kw">var</span> picker = <span class="kw">new</span> <span class="ty">FileOpenPicker</span>();
+<span class="cm">// UWP：picker.PickSingleFileAsync(); 直接调用</span>
+
+<span class="cm">// WinUI 3 桌面：必须指定关联的 HWND（无沙箱的副作用）</span>
+<span class="ty">IntPtr</span> hwnd = <span class="ty">WinRT.Interop.WindowNative</span>.<span class="fn">GetWindowHandle</span>(<span class="kw">this</span>);
+<span class="ty">WinRT.Interop.InitializeWithWindow.Initialize</span>(picker, hwnd);
+<span class="kw">var</span> file = <span class="kw">await</span> picker.<span class="fn">PickSingleFileAsync</span>();</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>UWP 迁移注意</strong>：UWP 的部分 API（如 <code>FileOpenPicker</code>、<code>DataPackage</code>）在 WinUI 3 桌面模型下需要<strong>显式传入 HWND</strong>——因为桌面应用没有 UWP 的「应用视图」概念。这类 API 不适配会抛 <code>InvalidCastException</code> 或 <code>COMException</code>。
+  </div>
+
+  <div class="callout danger">
+    <strong>UWP 的未来</strong>：微软已明确不再为 UWP 添加新特性，推荐所有 UWP 项目迁移到 WinUI 3 / Windows App SDK。新建项目应直接选 WinUI 3，存量 UWP 应尽早规划迁移。
+  </div>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">10</span> 完整示例</h2>
+  <p>下面是一个最小可运行的 WinUI 3 桌面应用骨架：Mica 背景、<code>{x:Bind}</code> 数据绑定、<code>ContentDialog</code> 确认对话框。展示各组件如何协作。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// ── App.xaml.cs ── 应用入口</span>
+<span class="kw">public partial class</span> <span class="ty">App</span> : <span class="ty">Application</span>
+{
+    <span class="kw">private</span> <span class="ty">MainWindow</span>? m_window;
+
+    <span class="kw">protected override void</span> <span class="fn">OnLaunched</span>(<span class="ty">LaunchActivatedEventArgs</span> args)
+    {
+        m_window = <span class="kw">new</span> <span class="ty">MainWindow</span>();   <span class="cm">// 必须持有引用，防 GC</span>
+        m_window.<span class="fn">Activate</span>();
+    }
+}
+
+<span class="cm">// ── ViewModels/MainViewModel.cs ── 数据 + 命令</span>
+<span class="kw">public class</span> <span class="ty">MainViewModel</span> : <span class="ty">INotifyPropertyChanged</span>
+{
+    <span class="kw">private string</span> _name = <span class="st">"World"</span>;
+    <span class="kw">public string</span> Name
+    {
+        <span class="kw">get</span> =&gt; _name;
+        <span class="kw">set</span> { <span class="kw">if</span> (_name != value) { _name = value; <span class="fn">OnPropertyChanged</span>(); } }
+    }
+
+    <span class="kw">public</span> <span class="ty">IAsyncCommand</span> GreetCommand { <span class="kw">get</span>; }
+
+    <span class="kw">public</span> <span class="ty">MainViewModel</span>()
+    {
+        GreetCommand = <span class="kw">new</span> <span class="ty">RelayCommand</span>(<span class="kw">async</span> () =&gt; {
+            <span class="kw">var</span> dlg = <span class="kw">new</span> <span class="ty">ContentDialog</span> {
+                <span class="ty">XamlRoot</span> = <span class="ty">App</span>.<span class="fn">MainWindow</span>!.Content.XamlRoot,
+                <span class="ty">Title</span> = <span class="st">"问候"</span>,
+                <span class="ty">Content</span> = <span class="st">$"你好，{Name}！"</span>,
+                <span class="ty">CloseButtonText</span> = <span class="st">"确定"</span>
+            };
+            <span class="kw">await</span> dlg.<span class="fn">ShowAsync</span>();
+        });
+    }
+
+    <span class="kw">public event</span> <span class="ty">PropertyChangedEventHandler</span>? PropertyChanged;
+    <span class="kw">private void</span> <span class="fn">OnPropertyChanged</span>([<span class="ty">CallerMemberName</span>] <span class="kw">string</span>? p = <span class="kw">null</span>)
+        =&gt; PropertyChanged?.<span class="fn">Invoke</span>(<span class="kw">this</span>, <span class="kw">new</span> <span class="ty">PropertyChangedEventArgs</span>(p));
+}</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- ── MainWindow.xaml ── Mica 背景 + x:Bind ──</span>
+&lt;<span class="kw">Window</span>
+    x:<span class="pp">Class</span>=<span class="st">"MyApp.MainWindow"</span>
+    <span class="kw">xmlns</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml/presentation"</span>
+    <span class="kw">xmlns:x</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml"</span>
+    <span class="kw">xmlns:vm</span>=<span class="st">"using:MyApp.ViewModels"</span>&gt;
+
+    &lt;<span class="kw">Grid</span>&gt;
+        &lt;<span class="kw">StackPanel</span> <span class="kw">VerticalAlignment</span>=<span class="st">"Center"</span>
+                    <span class="kw">HorizontalAlignment</span>=<span class="st">"Center"</span>
+                    <span class="kw">Spacing</span>=<span class="st">"16"</span>
+                    <span class="kw">Padding</span>=<span class="st">"48"</span>&gt;
+
+            &lt;<span class="kw">TextBlock</span> <span class="kw">Text</span>=<span class="st">"WinUI 3 示例"</span>
+                       <span class="kw">FontSize</span>=<span class="st">"32"</span> <span class="kw">FontWeight</span>=<span class="st">"Bold"</span> /&gt;
+
+            <span class="cm">&lt;!-- x:Bind 双向绑定到 ViewModel.Name --&gt;</span>
+            &lt;<span class="kw">TextBox</span> <span class="kw">Header</span>=<span class="st">"你的名字"</span>
+                     <span class="kw">Text</span>=<span class="st">"{x:Bind ViewModel.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"</span>
+                     <span class="kw">MinWidth</span>=<span class="st">"240"</span> /&gt;
+
+            <span class="cm">&lt;!-- x:Bind 事件绑定到命令（通过方法包装） --&gt;</span>
+            &lt;<span class="kw">Button</span> <span class="kw">Content</span>=<span class="st">"打招呼"</span>
+                    <span class="kw">Click</span>=<span class="st">"{x:Bind GreetClick}"</span>
+                    <span class="kw">HorizontalAlignment</span>=<span class="st">"Center"</span>
+                    <span class="kw">Style</span>=<span class="st">"{StaticResource AccentButtonStyle}"</span> /&gt;
+        &lt;/<span class="kw">StackPanel</span>&gt;
+    &lt;/<span class="kw">Grid</span>&gt;
+&lt;/<span class="kw">Window</span>&gt;</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// ── MainWindow.xaml.cs ── 代码隐藏</span>
+<span class="kw">public sealed partial class</span> <span class="ty">MainWindow</span> : <span class="ty">Window</span>
+{
+    <span class="kw">public</span> <span class="ty">MainViewModel</span> ViewModel { <span class="kw">get</span>; } = <span class="kw">new</span>();
+
+    <span class="kw">public</span> <span class="ty">MainWindow</span>()
+    {
+        <span class="fn">InitializeComponent</span>();
+        <span class="ty">SystemBackdrop</span> = <span class="kw">new</span> <span class="ty">MicaBackdrop</span>();   <span class="cm">// Mica 云母背景</span>
+        <span class="ty">Title</span> = <span class="st">"My WinUI App"</span>;
+    }
+
+    <span class="kw">public async void</span> <span class="fn">GreetClick</span>()
+    {
+        <span class="kw">await</span> ViewModel.GreetCommand.<span class="fn">ExecuteAsync</span>();
+    }
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>运行要点</strong>：新建项目时选「<strong>Packaged (WinUI 3 in Desktop)</strong>」模板会自动配置好 <code>Package.appxmanifest</code>、Windows App SDK 引用、<code>App.xaml</code>。直接按 F5 即可启动调试。生产部署再决定 MSIX 还是未打包。
+  </div>
+</section>
+
+<section id="namespaces" class="toc-link">
+  <h2><span class="num">11</span> 命名空间 / NuGet 包索引</h2>
+  <p>WinUI 3 与 Windows App SDK 的 API 分散在多个命名空间。下面列出最常用的命名空间与其承载的 API 类别。</p>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">Microsoft.UI.Xaml.*</span>                       <span class="cmt">WinUI 3 核心</span>
+├── <span class="file">Microsoft.UI.Xaml</span>                       <span class="cmt">Application / Window / UIElement / FrameworkElement</span>
+├── <span class="file">Microsoft.UI.Xaml.Controls</span>             <span class="cmt">Button / ListView / NavigationView / ContentDialog / InfoBar</span>
+├── <span class="file">Microsoft.UI.Xaml.Data</span>                  <span class="cmt">x:Bind 生成代码 / INotifyPropertyChanged / IValueConverter</span>
+├── <span class="file">Microsoft.UI.Xaml.Media</span>                 <span class="cmt">MicaBackdrop / AcrylicBrush / SolidColorBrush / 动画</span>
+├── <span class="file">Microsoft.UI.Xaml.Input</span>                 <span class="cmt">键盘 / 鼠标 / 触摸输入 / 命令 ICommand</span>
+├── <span class="file">Microsoft.UI.Xaml.Markup</span>                <span class="cmt">XAML 加载 / XmlnsDefinition</span>
+└── <span class="file">Microsoft.UI.Xaml.Hosting</span>               <span class="cmt">XAML Islands：DesktopWindowXamlSource / WindowsXamlManager</span>
+
+<span class="dir">Microsoft.UI.* (非 XAML)</span>                   <span class="cmt">WinAppSDK 提供的原生 API</span>
+├── <span class="file">Microsoft.UI.Composition</span>                <span class="cmt">可视化层 / 动画 / 效果（Composition API）</span>
+├── <span class="file">Microsoft.UI.Windowing</span>                  <span class="cmt">AppWindow / 标题栏 / 系统菜单 / DisplayArea</span>
+├── <span class="file">Microsoft.UI.Dispatching</span>                <span class="cmt">DispatcherQueue（线程切换）</span>
+└── <span class="file">Microsoft.UI.Input</span>                      <span class="cmt">InputPointerSource / 输入路由</span>
+
+<span class="dir">Microsoft.Windows.* (Windows App SDK)</span>     <span class="cmt">WinAppSDK 非视觉层</span>
+├── <span class="file">Microsoft.Windows.AppLifecycle</span>          <span class="cmt">AppInstance / ActivateArguments / 单实例</span>
+├── <span class="file">Microsoft.Windows.ApplicationModel</span>      <span class="cmt">Package / AppInstaller / BackgroundTask</span>
+├── <span class="file">Microsoft.Windows.AppNotifications</span>     <span class="cmt">Toast / 应用通知</span>
+├── <span class="file">Microsoft.Windows.PushNotifications</span>    <span class="cmt">原始 / 推送通知</span>
+├── <span class="file">Microsoft.Windows.Management.Deployment</span><span class="cmt">MSIX 部署 / 注册</span>
+├── <span class="file">Microsoft.Windows.ApplicationModel.WindowsAppRuntime</span> <span class="cmt">Bootstrap (未打包应用)</span>
+└── <span class="file">Microsoft.Windows.System.Power</span>          <span class="cmt">电源状态</span>
+
+<span class="dir">WinRT.Interop.*</span>                            <span class="cmt">互操作（HWND / IUnknown / InitializeWithWindow）</span>
+├── <span class="file">WinRT.Interop.WindowNative</span>              <span class="cmt">GetWindowHandle(Window) → IntPtr</span>
+├── <span class="file">WinRT.Interop.InitializeWithWindow</span>     <span class="cmt">为桌面 Picker 等绑定 HWND</span>
+└── <span class="file">Microsoft.UI.Win32Interop</span>               <span class="cmt">HWND → WindowId 等</span>
+
+<span class="dir">NuGet 包</span>
+└── <span class="file">Microsoft.WindowsAppSDK</span>                 <span class="cmt">主包：WinUI 3 + WinAppSDK 全部 API（1.6+）</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>Microsoft.WindowsAppSDK</code>（NuGet）一切 API 的入口包，项目引用它即获得 WinUI 3 + WinAppSDK。<br>
+    <code>Microsoft.UI.Xaml.Application / Window</code> 应用与窗口框架根，定义生命周期与顶级容器。<br>
+    <code>Microsoft.UI.Xaml.Controls</code> 所有 XAML 控件（Button / ListView / NavigationView / ContentDialog / InfoBar）。<br>
+    <code>Microsoft.UI.Xaml.Data</code> x:Bind 编译绑定与 INotifyPropertyChanged / IValueConverter。<br>
+    <code>Microsoft.UI.Windowing.AppWindow</code> 窗口外壳控制（标题栏 / 尺寸 / 系统菜单），独立于 XAML Window。<br>
+    <code>Microsoft.Windows.AppLifecycle</code> 应用实例管理 / 激活参数 / 单实例化。<br>
+    <code>Microsoft.Windows.ApplicationModel.WindowsAppRuntime.Bootstrap</code> 未打包应用初始化 WinAppSDK 的关键。<br>
+    微软 Learn《Windows App SDK》文档与 GitHub <code>microsoft/WindowsAppSDK</code>、<code>microsoft/microsoft-ui-xaml</code> 仓库为权威参考。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Windows App SDK 1.6 (WinUI 3) · Microsoft.UI.Xaml · 生成于 2026-06-22</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Windows WPF 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230099bc'/><stop offset='100%25' stop-color='%235c2d91'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='70' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Windows WPF 深度解析</h1>
+  <p class="subtitle">Windows Presentation Foundation — XAML + DirectX 渲染 + 数据绑定 + MVVM</p>
+  <span class="version">.NET 9 · PresentationFramework.dll</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#architecture">架构与渲染管线</a></li>
+    <li><a href="#xaml">XAML 标记语言</a></li>
+    <li><a href="#controls">控件模型</a></li>
+    <li><a href="#layout">布局系统</a></li>
+    <li><a href="#dp">依赖属性系统</a></li>
+    <li><a href="#binding">数据绑定</a></li>
+    <li><a href="#routing">路由事件与命令</a></li>
+    <li><a href="#style">样式与模板</a></li>
+    <li><a href="#mvvm">MVVM 模式</a></li>
+    <li><a href="#graphics">绘图与动画</a></li>
+    <li><a href="#example">完整 MVVM 示例</a></li>
+    <li><a href="#modern">对比 WinForms/WinUI</a></li>
+    <li><a href="#files">命名空间索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>WPF（Windows Presentation Foundation，曾经代号 Avalon）是微软在 <strong>.NET Framework 3.0（2006）</strong>推出的<strong>新一代桌面 UI 框架</strong>，彻底取代了基于 User32/GDI 的 WinForms 范式。它以 <strong>XAML 声明式标记</strong>描述界面、用 <strong>DirectX 9（milcore）保留模式</strong>渲染矢量图形、并通过<strong>依赖属性系统</strong>提供原生数据绑定与变更通知，是 .NET 桌面富客户端开发的里程碑。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>矢量与保留模式</strong>：基于 DirectX，控件缩放无锯齿，UI 维护一棵视觉树</li>
+        <li><strong>声明式 XAML</strong>：界面与逻辑分离，工具（Blend/VS 设计器）友好</li>
+        <li><strong>数据绑定</strong>：双向/单向/一次，DataContext 继承，INotifyPropertyChanged</li>
+        <li><strong>依赖属性</strong>：值的优先级系统、变更回调、动画与样式共同驱动</li>
+        <li><strong>路由事件</strong>：冒泡/隧道机制，控件组合复用</li>
+        <li><strong>外观与逻辑分离</strong>：ControlTemplate / DataTemplate 完全重写外观</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">适用场景</div>
+      <table>
+        <tr><th>场景</th><th>选择理由</th></tr>
+        <tr><td>企业级 LOB 应用</td><td>MVVM + 强绑定，工程化好</td></tr>
+        <tr><td>富媒体/动画界面</td><td>Storyboard、3D、Effect</td></tr>
+        <tr><td>跨分辨率自适应</td><td>矢量、Viewbox、流式布局</td></tr>
+        <tr><td>设计-开发协作</td><td>XAML 让设计师直接产出</td></tr>
+        <tr><td>主题/皮肤系统</td><td>ResourceDictionary 动态切换</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h3>WPF vs WinForms</h3>
+  <table>
+    <tr><th>维度</th><th>WinForms</th><th>WPF</th></tr>
+    <tr><td>渲染底层</td><td>User32 + GDI/GDI+（即时模式）</td><td>DirectX（保留模式，milcore）</td></tr>
+    <tr><td>界面描述</td><td>C# 代码 / 设计器拖拽</td><td>XAML 声明式标记</td></tr>
+    <tr><td>布局</td><td>绝对坐标为主（Anchor/Dock）</td><td>流式布局面板（Grid/StackPanel）</td></tr>
+    <tr><td>数据绑定</td><td>简陋（BindingSource）</td><td>一等公民，DataContext 链式继承</td></tr>
+    <tr><td>外观定制</td><td>OnPaint 自绘 / OwnerDraw</td><td>ControlTemplate / Style 完全替换</td></tr>
+    <tr><td>图形</td><td>位图为主，GDI 绘制</td><td>矢量 Shape/Geometry，硬件加速</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>设计哲学</strong>：WPF 把界面看作<strong>一棵对象树 + 一组绑定关系</strong>，而不是一串句柄和绘制命令。这种“声明式 + 数据驱动 + 模板化”的范式深刻影响了后来的 Silverlight、WinRT XAML、WinUI 与跨平台 Xamarin/MAUI。
+  </div>
+</section>
+
+<section id="architecture" class="toc-link">
+  <h2><span class="num">02</span> 架构与渲染管线</h2>
+  <p>WPF 的核心由<strong>托管层（managed）</strong>与<strong>非托管层（milcore）</strong>组成。<code>milcore.dll</code> 用 C++ 编写，封装 DirectX 9，负责合成、纹理、动画时间线；托管程序集在其之上提供 Dispatcher、Visual、输入、布局、控件、数据绑定等高层 API。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// WPF 托管程序集（按抽象层级从下到上）</span>
+<span class="ty">PresentationCore</span>          <span class="cm">// Visual / Dispatcher / Input / Geometry（底层）</span>
+<span class="ty">PresentationFramework</span>     <span class="cm">// Window / Control / Panel / Style / Binding（高层）</span>
+<span class="ty">System.Xaml</span>               <span class="cm">// XAML 解析器、标记扩展、类型映射</span>
+<span class="ty">WindowsBase</span>               <span class="cm">// DependencyProperty / DispatcherObject / 集合</span>
+
+<span class="cm">// 非托管层</span>
+<span class="ty">milcore.dll</span>               <span class="cm">// 直接调用 DirectX 9，合成与渲染</span>
+<span class="ty">wpfgfx</span> / <span class="ty">d3d9</span>             <span class="cm">// 图形设备封装、纹理、着色器</span></code></pre>
+  </div>
+
+  <h3>Dispatcher：UI 线程调度器</h3>
+  <p>所有 UI 对象派生自 <code>DispatcherObject</code>，<strong>归属于创建它的 Dispatcher（即 UI 线程）</strong>。跨线程访问 UI 会抛 <code>InvalidOperationException</code>。后台线程通过 <code>Dispatcher.Invoke/BeginInvoke</code> 切回。</p>
+  <div class="card">
+    <pre><code><span class="cm">// 后台线程更新 UI</span>
+<span class="kw">private async void</span> <span class="fn">OnLoad</span>(<span class="ty">object</span> s, <span class="ty">RoutedEventArgs</span> e)
+{
+    <span class="ty">string</span> data = <span class="kw">await Task</span>.<span class="fn">Run</span>(() => <span class="fn">DownloadHeavy</span>());
+    <span class="cm">// 此时回到 UI 线程，await 的 SynchronizationContext 自动切回</span>
+    <span class="fn">ResultText</span>.Text = data;
+
+    <span class="cm">// 手动切线程的等价写法</span>
+    <span class="kw">await</span> <span class="fn">Application</span>.<span class="fn">Current</span>.Dispatcher.<span class="fn">InvokeAsync</span>(() => {
+        <span class="fn">ResultText</span>.Text = <span class="st">"done"</span>;
+    });
+}</code></pre>
+  </div>
+
+  <h3>可视化树（Visual Tree）与逻辑树（Logical Tree）</h3>
+  <p>WPF 维护<strong>两棵树</strong>。<strong>逻辑树</strong>对应 XAML 中直接书写的元素层次，用于属性继承、资源查找、事件路由；<strong>可视化树</strong>是逻辑树的<strong>渲染展开</strong>，把每个控件的 ControlTemplate 内部细节也展开为 Visual 节点，是 milcore 真正绘制的对象图。</p>
+  <div class="card">
+    <pre><code><span class="cm">// XAML（逻辑树视角）</span>
+<span class="kw">&lt;Window</span><span class="fn"> x:Name</span>=<span class="st">"Root"</span><span class="kw">&gt;</span>
+  <span class="kw">&lt;Button</span><span class="fn"> Content</span>=<span class="st">"OK"</span> <span class="kw">/&gt;</span>
+<span class="kw">&lt;/Window&gt;</span>
+
+<span class="cm">// 逻辑树（简化）：两个节点</span>
+<span class="ty">Window</span>
+  └── <span class="ty">Button</span> (Content=<span class="st">"OK"</span>)
+
+<span class="cm">// 可视化树（Button 的默认 ControlTemplate 展开）</span>
+<span class="ty">Window</span>
+  └── <span class="ty">Border</span>                          <span class="cm">// ChromeBorder</span>
+      └── <span class="ty">AdornerDecorator</span>
+          └── <span class="ty">ContentPresenter</span>            <span class="cm">// Window 的内容承载</span>
+              └── <span class="ty">Button</span>
+                  └── <span class="ty">ButtonChrome</span>           <span class="cm">// 默认主题模板</span>
+                      └── <span class="ty">ContentPresenter</span>
+                          └── <span class="ty">TextBlock</span>      <span class="cm">// "OK" 文本</span></code></pre>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">逻辑树用途</div>
+      <ul>
+        <li>资源查找（StaticResource 向上冒泡）</li>
+        <li>属性继承（DataContext、FontFamily）</li>
+        <li>路由事件的真实传播路径</li>
+        <li><code>LogicalTreeHelper</code> API</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">可视化树用途</div>
+      <ul>
+        <li>milcore 实际渲染的节点</li>
+        <li>命中测试（HitTest）</li>
+        <li>变换、剪裁、透明度作用域</li>
+        <li><code>VisualTreeHelper</code> API</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <strong>线程模型</strong>：WPF 中除 <code>Freezable</code> 派生类（如 <code>Pen</code>、<code>Geometry</code>、<code>BitmapImage</code>）冻结后可跨线程共享外，<strong>所有 UI 对象都线程亲和</strong>。后台线程构造的 <code>BitmapImage</code> 必须 <code>Freeze()</code> 后才能传给 UI 线程，否则仍是线程亲和。
+  </div>
+
+  <h3>渲染管线（保留模式）</h3>
+  <p>WinForms 是<strong>即时模式</strong>：每次 <code>OnPaint</code> 都由应用主动重绘。WPF 是<strong>保留模式</strong>：你修改 Visual 树上的属性，<code>milcore</code> 在<strong>合成线程（Composition Thread）</strong>和 UI 线程配合下，以 60fps 持续重新合成画面，应用代码无需处理 WM_PAINT。</p>
+  <div class="card">
+    <pre><code><span class="cm">// UI 线程：执行托管代码、布局、动画时间线</span>
+<span class="cm">// 合成线程：从 Visual 树合成最终帧、提交 DirectX 纹理</span>
+<span class="cm">// 渲染线程：Direct3D 提交 GPU</span>
+
+<span class="cm">// 数据流：</span>
+应用代码改 DP 属性
+   → 触发 PropertyChanged / InvalidateMeasure / InvalidateVisual
+   → UI 线程下一拍执行 Measure/Arrange/Render
+   → 生成 DrawingContext 指令序列，提交到合成线程
+   → 合成线程把多个 Visual 节点合成最终场景
+   → DirectX 9 / GPU 渲染到屏幕</code></pre>
+  </div>
+</section>
+
+<section id="xaml" class="toc-link">
+  <h2><span class="num">03</span> XAML 标记语言</h2>
+  <p>XAML（eXtensible Application Markup Language）是一种<strong>声明式 XML 方言</strong>，用于描述对象图。XAML 元素映射到 .NET 类型，属性映射到 .NET 属性或附加属性，每个 XAML 文件都有对应的 <strong>code-behind</strong> 分部类（partial class）承载逻辑。</p>
+
+  <h3>基本结构与命名空间</h3>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- MainWindow.xaml --&gt;</span>
+<span class="kw">&lt;Window</span><span class="fn"> x:Class</span>=<span class="st">"MyApp.MainWindow"</span>
+        <span class="fn">xmlns</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml/presentation"</span>
+        <span class="fn">xmlns:x</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml"</span>
+        <span class="fn">Title</span>=<span class="st">"Demo"</span> <span class="fn">Height</span>=<span class="st">"300"</span> <span class="fn">Width</span>=<span class="st">"400"</span><span class="kw">&gt;</span>
+    <span class="kw">&lt;Grid&gt;</span>
+        <span class="kw">&lt;Button</span><span class="fn"> Content</span>=<span class="st">"Click Me"</span>
+                <span class="fn">Click</span>=<span class="st">"OnButtonClick"</span>
+                <span class="fn">Margin</span>=<span class="st">"10"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;/Grid&gt;</span>
+<span class="kw">&lt;/Window&gt;</span></code></pre>
+  </div>
+  <p>两个核心命名空间：</p>
+  <ul>
+    <li><code>xmlns</code>（默认）：WPF 控件命名空间，映射到 <code>System.Windows.Controls</code> 等多个 CLR 命名空间的合集。</li>
+    <li><code>xmlns:x</code>：XAML 语言命名空间，提供 <code>x:Class</code>、<code>x:Key</code>、<code>x:Name</code>、<code>x:Static</code>、<code>x:Type</code>、<code>x:Null</code> 等语言级关键字。</li>
+  </ul>
+
+  <h3>属性元素与内容属性</h3>
+  <p>复杂属性用<strong>属性元素语法</strong>（<code>Type.Property</code>）；元素的内联子节点由 <code>ContentPropertyAttribute</code> 决定（如 <code>Window.Content</code>、<code>Panel.Children</code>、<code>Border.Child</code>），无需显式写出。</p>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- 属性元素语法：给 Button.Background 设渐变画刷 --&gt;</span>
+<span class="kw">&lt;Button</span><span class="fn"> Content</span>=<span class="st">"Gradient"</span><span class="kw">&gt;</span>
+    <span class="kw">&lt;Button.Background&gt;</span>
+        <span class="kw">&lt;LinearGradientBrush</span><span class="fn"> StartPoint</span>=<span class="st">"0,0"</span> <span class="fn">EndPoint</span>=<span class="st">"1,1"</span><span class="kw">&gt;</span>
+            <span class="kw">&lt;GradientStop</span><span class="fn"> Color</span>=<span class="st">"Yellow"</span> <span class="fn">Offset</span>=<span class="st">"0"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;GradientStop</span><span class="fn"> Color</span>=<span class="st">"Red"</span> <span class="fn">Offset</span>=<span class="st">"1"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;/LinearGradientBrush&gt;</span>
+    <span class="kw">&lt;/Button.Background&gt;</span>
+<span class="kw">&lt;/Button&gt;</span>
+
+<span class="cm">&lt;!-- ContentProperty：Grid 的内联 Children 省略 --&gt;</span>
+<span class="kw">&lt;Grid&gt;</span>
+    <span class="kw">&lt;TextBlock</span><span class="fn"> Text</span>=<span class="st">"Hello"</span> <span class="kw">/&gt;</span>   <span class="cm">&lt;!-- 等价于 Grid.Children --&gt;</span>
+<span class="kw">&lt;/Grid&gt;</span></code></pre>
+  </div>
+
+  <h3>标记扩展（Markup Extensions）</h3>
+  <p>用大括号 <code>{...}</code> 在属性字符串中触发<strong>运行时求值</strong>。WPF 内置常用的标记扩展：</p>
+  <table>
+    <tr><th>扩展</th><th>用途</th><th>示例</th></tr>
+    <tr><td><code>{Binding}</code></td><td>声明数据绑定</td><td><code>Text="{Binding Name}"</code></td></tr>
+    <tr><td><code>{StaticResource}</code></td><td>编译期查找资源</td><td><code>Background="{StaticResource Accent}"</code></td></tr>
+    <tr><td><code>{DynamicResource}</code></td><td>运行时查找，随主题变化</td><td><code>Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"</code></td></tr>
+    <tr><td><code>{x:Static}</code></td><td>引用静态属性/字段</td><td><code>Text="{x:Static local:Constants.AppName}"</code></td></tr>
+    <tr><td><code>{x:Type}</code></td><td>引用类型（用于 Style.TargetType）</td><td><code>DataType="{x:Type vm:Item}"</code></td></tr>
+    <tr><td><code>{x:Null}</code></td><td>null 值</td><td><code>Foreground="{x:Null}"</code></td></tr>
+    <tr><td><code>{RelativeSource}</code></td><td>相对绑定源</td><td><code>{Binding ..., RelativeSource={RelativeSource FindAncestor, AncestorType=Window}}</code></td></tr>
+  </table>
+
+  <h3>code-behind 与 x:Class</h3>
+  <div class="card">
+    <pre><code><span class="cm">// MainWindow.xaml.cs —— partial 类与 XAML 编译产物合并</span>
+<span class="kw">namespace</span> <span class="ty">MyApp</span>;
+
+<span class="kw">public partial class</span> <span class="ty">MainWindow</span> : <span class="ty">Window</span>
+{
+    <span class="kw">public</span> <span class="ty">MainWindow</span>() {
+        <span class="fn">InitializeComponent</span>();   <span class="cm">// 由 XAML 编译器生成的 g.i.cs 提供</span>
+    }
+
+    <span class="kw">private void</span> <span class="fn">OnButtonClick</span>(<span class="ty">object</span> sender, <span class="ty">RoutedEventArgs</span> e) {
+        <span class="fn">MessageBox</span>.<span class="fn">Show</span>(<span class="st">"Hi!"</span>);
+    }
+}</code></pre>
+  </div>
+  <div class="callout tip">
+    <strong>BAML</strong>：XAML 在编译时被解析并压缩为 <strong>BAML（Binary Application Markup Language）</strong>，嵌入到程序集资源中。运行时由 <code>Application.LoadComponent</code> 反序列化、构造对象图。这就是为什么改 XAML 后可视化设计器能即时反映——它走的是同一条 BAML 加载路径。
+  </div>
+</section>
+
+<section id="controls" class="toc-link">
+  <h2><span class="num">04</span> 控件模型</h2>
+  <p>WPF 控件层次的核心是<strong>“内容模型”</strong>：大多数控件的 <code>Content</code> 或 <code>Items</code> 属性可以接受<strong>任意对象</strong>，由 DataTemplate 决定如何呈现。这让 WPF 控件比 WinForms“控件 = 外观 + 数据”的耦合松得多。</p>
+
+  <div class="card">
+    <pre><code><span class="ty">DispatcherObject</span>
+└── <span class="ty">Visual</span>
+    └── <span class="ty">UIElement</span>                  <span class="cm">// 布局、输入、路由事件</span>
+        └── <span class="ty">FrameworkElement</span>      <span class="cm">// Width/Height/Style/DataContext/Binding</span>
+            ├── <span class="ty">Control</span>            <span class="cm">// 控件基类（Template/Foreground）</span>
+            │   ├── <span class="ty">ContentControl</span>     <span class="cm">// 单一内容（Button/Label/Window）</span>
+            │   │   ├── <span class="ty">ButtonBase</span>
+            │   │   │   ├── <span class="ty">Button / ToggleButton / RepeatButton</span>
+            │   │   │   └── <span class="ty">CheckBox / RadioButton</span>
+            │   │   ├── <span class="ty">HeaderedContentControl</span>  <span class="cm">// GroupBox / Expander / HeaderedContent</span>
+            │   │   └── <span class="ty">UserControl</span>              <span class="cm">// 自定义组合控件</span>
+            │   ├── <span class="ty">ItemsControl</span>       <span class="cm">// 列表基类（无选择）</span>
+            │   │   ├── <span class="ty">Selector</span>          <span class="cm">// + 选择</span>
+            │   │   │   ├── <span class="ty">ListBox / ComboBox / ListView</span>
+            │   │   │   ├── <span class="ty">TabControl</span>
+            │   │   │   └── <span class="ty">TreeView</span>       <span class="cm">// 间接派生</span>
+            │   │   ├── <span class="ty">Menu / ContextMenu</span>
+            │   │   ├── <span class="ty">StatusBar</span>
+            │   │   └── <span class="ty">DataGrid</span>          <span class="cm">// 表格</span>
+            │   ├── <span class="ty">TextBlock / TextBox / RichTextBox</span>
+            │   ├── <span class="ty">RangeBase</span>          <span class="cm">// ProgressBar / Slider / ScrollBar</span>
+            │   ├── <span class="ty">Decorator</span>          <span class="cm">// Border / Viewbox / ScrollViewer</span>
+            │   └── <span class="ty">Panel</span>              <span class="cm">// 布局面板（见 05 章）</span>
+            ├── <span class="ty">Page</span>                <span class="cm">// 导航式页面</span>
+            ├── <span class="ty">TextElement</span>         <span class="cm">// FlowDocument 文档流</span>
+            └── <span class="ty">Shape</span>               <span class="cm">// Ellipse/Rectangle/Path（见 11 章）</span></code></pre>
+  </div>
+
+  <h3>ContentControl：内容模型</h3>
+  <p><code>ContentControl</code> 的 <code>Content</code> 属性类型是 <code>object</code>——可以是字符串、UIElement、或任意业务对象。如果是 UIElement，直接渲染；否则通过 <code>ContentTemplate</code>（DataTemplate）转换。</p>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- 内容是字符串 --&gt;</span>
+<span class="kw">&lt;Button</span><span class="fn"> Content</span>=<span class="st">"Save"</span> <span class="kw">/&gt;</span>
+
+<span class="cm">&lt;!-- 内容是 UIElement（任意复杂） --&gt;</span>
+<span class="kw">&lt;Button&gt;</span>
+    <span class="kw">&lt;StackPanel</span><span class="fn"> Orientation</span>=<span class="st">"Horizontal"</span><span class="kw">&gt;</span>
+        <span class="kw">&lt;Image</span><span class="fn"> Source</span>=<span class="st">"save.png"</span> <span class="fn">Width</span>=<span class="st">"16"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;TextBlock</span><span class="fn"> Text</span>=<span class="st">"Save"</span> <span class="fn">Margin</span>=<span class="st">"4,0,0,0"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;/StackPanel&gt;</span>
+<span class="kw">&lt;/Button&gt;</span>
+
+<span class="cm">&lt;!-- 内容是业务对象（由 DataTemplate 渲染） --&gt;</span>
+<span class="kw">&lt;ContentControl</span><span class="fn"> Content</span>=<span class="st">"{Binding SelectedUser}"</span> <span class="kw">/&gt;</span></code></pre>
+  </div>
+
+  <h3>ItemsControl：列表模型</h3>
+  <p><code>ItemsControl</code> 的 <code>ItemsSource</code> 接收 <code>IEnumerable</code>，对每个数据项用 <code>ItemTemplate</code>（DataTemplate）生成 UI 容器，由 <code>ItemsPanel</code> 决定容器布局。</p>
+  <div class="card">
+    <pre><code><span class="kw">&lt;ItemsControl</span><span class="fn"> ItemsSource</span>=<span class="st">"{Binding Users}"</span><span class="kw">&gt;</span>
+    <span class="kw">&lt;ItemsControl.ItemsPanel&gt;</span>
+        <span class="kw">&lt;ItemsPanelTemplate&gt;</span>
+            <span class="kw">&lt;StackPanel</span><span class="fn"> Orientation</span>=<span class="st">"Vertical"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;/ItemsPanelTemplate&gt;</span>
+    <span class="kw">&lt;/ItemsControl.ItemsPanel&gt;</span>
+    <span class="kw">&lt;ItemsControl.ItemTemplate&gt;</span>
+        <span class="kw">&lt;DataTemplate&gt;</span>
+            <span class="kw">&lt;Border</span><span class="fn"> Padding</span>=<span class="st">"8"</span><span class="kw">&gt;</span>
+                <span class="kw">&lt;TextBlock</span><span class="fn"> Text</span>=<span class="st">"{Binding Name}"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;/Border&gt;</span>
+        <span class="kw">&lt;/DataTemplate&gt;</span>
+    <span class="kw">&lt;/ItemsControl.ItemTemplate&gt;</span>
+<span class="kw">&lt;/ItemsControl&gt;</span></code></pre>
+  </div>
+
+  <h3>ControlTemplate vs DataTemplate</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">ControlTemplate</div>
+      <p>定义<strong>控件本身的视觉外观</strong>。把 Button 变成圆形、把 ProgressBar 变成进度条样式。通过 <code>TemplateBinding</code> 把模板内的属性桥接到控件本身的属性。</p>
+    </div>
+    <div class="card">
+      <div class="card-title">DataTemplate</div>
+      <p>定义<strong>数据对象如何呈现为 UI</strong>。一个 <code>User</code> 业务对象绑定到 ContentControl 时，由 DataTemplate 决定显示成卡片、行还是图标。是 MVVM 数据驱动的关键。</p>
+    </div>
+  </div>
+  <div class="callout tip">
+    <strong>关键区别</strong>：ControlTemplate 描述“控件长什么样”（与数据无关），DataTemplate 描述“数据长什么样”。这两者解耦让 WPF 的视觉定制能力远超 WinForms。
+  </div>
+</section>
+
+<section id="layout" class="toc-link">
+  <h2><span class="num">05</span> 布局系统</h2>
+  <p>WPF 不使用绝对坐标，而是<strong>嵌套面板</strong>。每个 <code>Panel</code> 派生类实现自己的布局算法，<strong>两阶段</strong>：先 <code>Measure</code>（询问每个子元素想要多大），再 <code>Arrange</code>（按父面板规则放置子元素）。这让 UI 自然适应不同分辨率、字体大小、DPI。</p>
+
+  <h3>核心面板对比</h3>
+  <table>
+    <tr><th>面板</th><th>排列方式</th><th>典型用途</th></tr>
+    <tr><td><code>StackPanel</code></td><td>单行/单列堆叠</td><td>简单表单、按钮组</td></tr>
+    <tr><td><code>WrapPanel</code></td><td>流式自动换行</td><td>标签云、图标墙</td></tr>
+    <tr><td><code>DockPanel</code></td><td>停靠（Top/Bottom/Left/Right/Fill）</td><td>主窗口结构（菜单顶、状态栏底、内容填充）</td></tr>
+    <tr><td><code>Grid</code></td><td>二维行列网格（最强大）</td><td>表单、复杂界面</td></tr>
+    <tr><td><code>UniformGrid</code></td><td>等大格子网格</td><td>棋盘、按键</td></tr>
+    <tr><td><code>Canvas</code></td><td>绝对坐标</td><td>图表、拖拽画板</td></tr>
+    <tr><td><code>VirtualizingStackPanel</code></td><td>栈式 + 视口虚拟化</td><td>ListBox/ListView 默认 ItemsPanel</td></tr>
+  </table>
+
+  <h3>Grid：最强大的面板</h3>
+  <p>Grid 用 <code>&lt;RowDefinition&gt;</code> / <code>&lt;ColumnDefinition&gt;</code> 声明行列，<code>Width</code> 支持<strong>三种单位</strong>：</p>
+  <ul>
+    <li><code>Auto</code>：按内容自动撑开</li>
+    <li><code>*</code>（比例）：占用剩余空间，<code>2*</code> 是 <code>*</code> 的两倍</li>
+    <li>固定数值（如 <code>100</code>，单位为 device-independent pixel = 1/96 英寸）</li>
+  </ul>
+  <div class="card">
+    <pre><code><span class="kw">&lt;Grid&gt;</span>
+    <span class="kw">&lt;Grid.ColumnDefinitions&gt;</span>
+        <span class="kw">&lt;ColumnDefinition</span><span class="fn"> Width</span>=<span class="st">"Auto"</span> <span class="kw">/&gt;</span>      <span class="cm">&lt;!-- 标签列，按内容 --&gt;</span>
+        <span class="kw">&lt;ColumnDefinition</span><span class="fn"> Width</span>=<span class="st">"*"</span>  <span class="kw">/&gt;</span>      <span class="cm">&lt;!-- 输入框列，填充 --&gt;</span>
+    <span class="kw">&lt;/Grid.ColumnDefinitions&gt;</span>
+    <span class="kw">&lt;Grid.RowDefinitions&gt;</span>
+        <span class="kw">&lt;RowDefinition</span><span class="fn"> Height</span>=<span class="st">"Auto"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;RowDefinition</span><span class="fn"> Height</span>=<span class="st">"Auto"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;RowDefinition</span><span class="fn"> Height</span>=<span class="st">"*"</span>    <span class="kw">/&gt;</span>   <span class="cm">&lt;!-- 占满剩余 --&gt;</span>
+    <span class="kw">&lt;/Grid.RowDefinitions&gt;</span>
+
+    <span class="kw">&lt;TextBlock</span><span class="fn"> Grid.Row</span>=<span class="st">"0"</span> <span class="fn">Grid.Column</span>=<span class="st">"0"</span><span class="fn"> Text</span>=<span class="st">"Name:"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;TextBox</span><span class="fn">   Grid.Row</span>=<span class="st">"0"</span> <span class="fn">Grid.Column</span>=<span class="st">"1"</span> <span class="fn">Margin</span>=<span class="st">"4"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;TextBlock</span><span class="fn"> Grid.Row</span>=<span class="st">"1"</span> <span class="fn">Grid.Column</span>=<span class="st">"0"</span><span class="fn"> Text</span>=<span class="st">"Email:"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;TextBox</span><span class="fn">   Grid.Row</span>=<span class="st">"1"</span> <span class="fn">Grid.Column</span>=<span class="st">"1"</span> <span class="fn">Margin</span>=<span class="st">"4"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;Button</span><span class="fn"> Grid.Row</span>=<span class="st">"2"</span> <span class="fn">Grid.Column</span>=<span class="st">"1"</span>
+            <span class="fn"> Content</span>=<span class="st">"OK"</span> <span class="fn">HorizontalAlignment</span>=<span class="st">"Right"</span> <span class="kw">/&gt;</span>
+<span class="kw">&lt;/Grid&gt;</span></code></pre>
+  </div>
+  <p>这里的 <code>Grid.Row</code> / <code>Grid.Column</code> 是<strong>附加属性</strong>——由 <code>Grid</code> 定义，但附加到子元素身上（见 06 章）。</p>
+
+  <h3>两阶段布局</h3>
+  <div class="card">
+    <pre><code><span class="cm">// UIElement 提供的虚拟方法（简化）</span>
+<span class="kw">protected abstract</span> <span class="ty">Size</span> <span class="fn">MeasureCore</span>(<span class="ty">Size</span> availableSize);
+<span class="kw">protected abstract</span> <span class="ty">Rect</span> <span class="fn">ArrangeCore</span>(<span class="ty">Rect</span> finalRect);
+
+<span class="cm">// Panel 子类重写 MeasureOverride / ArrangeOverride</span>
+<span class="kw">protected override</span> <span class="ty">Size</span> <span class="fn">MeasureOverride</span>(<span class="ty">Size</span> available) {
+    <span class="ty">Size</span> desired = <span class="kw">new</span>(<span class="num">0</span>, <span class="num">0</span>);
+    <span class="kw">foreach</span> (<span class="ty">UIElement</span> child <span class="kw">in</span> InternalChildren) {
+        child.<span class="fn">Measure</span>(available);          <span class="cm">// 问子元素想要多大</span>
+        desired = <span class="fn">Union</span>(desired, child.DesiredSize);
+    }
+    <span class="kw">return</span> desired;
+}
+
+<span class="kw">protected override</span> <span class="ty">Size</span> <span class="fn">ArrangeOverride</span>(<span class="ty">Size</span> finalSize) {
+    <span class="ty">double</span> y = <span class="num">0</span>;
+    <span class="kw">foreach</span> (<span class="ty">UIElement</span> child <span class="kw">in</span> InternalChildren) {
+        <span class="ty">double</span> h = child.DesiredSize.Height;
+        child.<span class="fn">Arrange</span>(<span class="kw">new</span> <span class="ty">Rect</span>(<span class="num">0</span>, y, finalSize.Width, h));  <span class="cm">// 真正放置</span>
+        y += h;
+    }
+    <span class="kw">return</span> finalSize;
+}</code></pre>
+  </div>
+
+  <h3>虚拟化（Virtualization）</h3>
+  <p><code>VirtualizingStackPanel</code>（ListBox/ListView/DataGrid 的默认 ItemsPanel）只为<strong>可见范围内的项</strong>生成容器，滚动时回收复用。结合 <code>VirtualizingPanel.VirtualizationMode="Recycling"</code>，可流畅处理 10 万级数据。</p>
+  <div class="callout warn">
+    <strong>性能陷阱</strong>：把 <code>ItemsControl</code> 直接放在 <code>ScrollViewer</code> 内会破坏虚拟化——ScrollViewer 给 ItemsControl “无限大”的可用尺寸，导致所有项都被实例化。需要虚拟化时务必用 <code>ListBox</code> 等内置 VirtualizingStackPanel 的控件，且不要外层包 ScrollViewer。
+  </div>
+</section>
+
+<section id="dp" class="toc-link">
+  <h2><span class="num">06</span> 依赖属性系统</h2>
+  <p><strong>依赖属性（DependencyProperty, DP）</strong>是 WPF 的灵魂。普通 CLR 属性只是字段包装，而 DP 是一个<strong>集中注册的、带优先级表的属性系统</strong>，原生支持样式、动画、绑定、继承、变更通知。WPF 中几乎所有 <code>FrameworkElement</code> 的属性都是 DP。</p>
+
+  <h3>注册与包装</h3>
+  <div class="card">
+    <pre><code><span class="kw">public class</span> <span class="ty">FancyButton</span> : <span class="ty">Button</span>
+{
+    <span class="cm">// 1. 注册：名称、类型、宿主类、默认元数据（默认值 + 变更回调）</span>
+    <span class="kw">public static readonly</span> <span class="ty">DependencyProperty</span> CornerRadiusProperty =
+        <span class="ty">DependencyProperty</span>.<span class="fn">Register</span>(
+            <span class="kw">nameof</span>(CornerRadius),         <span class="cm">// 属性名（必须唯一）</span>
+            <span class="kw">typeof</span>(<span class="ty">CornerRadius</span>),    <span class="cm">// 属性类型</span>
+            <span class="kw">typeof</span>(<span class="ty">FancyButton</span>),    <span class="cm">// 宿主类型</span>
+            <span class="kw">new</span> <span class="ty">PropertyMetadata</span>(
+                <span class="kw">default</span>(<span class="ty">CornerRadius</span>),    <span class="cm">// 默认值</span>
+                <span class="fn">OnCornerRadiusChanged</span>));     <span class="cm">// 变更回调（静态）</span>
+
+    <span class="cm">// 2. CLR 包装：调用 GetValue/SetValue</span>
+    <span class="kw">public</span> <span class="ty">CornerRadius</span> CornerRadius {
+        <span class="kw">get</span> => (<span class="ty">CornerRadius</span>)<span class="fn">GetValue</span>(CornerRadiusProperty);
+        <span class="kw">set</span> => <span class="fn">SetValue</span>(CornerRadiusProperty, value);
+    }
+
+    <span class="cm">// 3. 变更回调（实例 → 静态桥接）</span>
+    <span class="kw">private static void</span> <span class="fn">OnCornerRadiusChanged</span>(
+        <span class="ty">DependencyObject</span> d, <span class="ty">DependencyPropertyChangedEventArgs</span> e) {
+        <span class="kw">var</span> btn = (<span class="ty">FancyButton</span>)d;
+        btn.<span class="fn">InvalidateVisual</span>();     <span class="cm">// 触发重绘</span>
+    }
+}</code></pre>
+  </div>
+
+  <h3>值优先级</h3>
+  <p>DP 的“当前值”不是单一来源，而是<strong>从多个源按优先级取最高者</strong>。完整的优先级从高到低：</p>
+  <table>
+    <tr><th>优先级</th><th>来源</th><th>说明</th></tr>
+    <tr><td>1（最高）</td><td>CoerceValue 回调</td><td>强制修正</td></tr>
+    <tr><td>2</td><td>动画</td><td>Active Animation</td></tr>
+    <tr><td>3</td><td>本地值（Local Value）</td><td>XAML/代码直接赋值或绑定</td></tr>
+    <tr><td>4</td><td>Style 中的 Trigger</td><td>Style.Triggers / DataTrigger</td></tr>
+    <tr><td>5</td><td>模板触发器</td><td>ControlTemplate.Triggers</td></tr>
+    <tr><td>6</td><td>Style Setter</td><td>显式样式</td></tr>
+    <tr><td>7</td><td>Theme Style</td><td>主题默认样式</td></tr>
+    <tr><td>8</td><td>继承（Inheritance）</td><td>从父元素继承（DataContext/FontFamily）</td></tr>
+    <tr><td>9（最低）</td><td>默认值</td><td>PropertyMetadata 的 default</td></tr>
+  </table>
+  <div class="callout warn">
+    <strong>陷阱</strong>：一旦给属性赋了<strong>本地值</strong>（如 <code>btn.Width = 100</code>），它会<strong>压住</strong>同优先级及以下的 Style/Trigger/动画。要让动画或 Trigger 重新生效，必须调用 <code>btn.ClearValue(WidthProperty)</code> 清除本地值。这是 WPF 调试中“为什么样式没生效”的常见根因。
+  </div>
+
+  <h3>附加属性（Attached Property）</h3>
+  <p>附加属性是一种特殊的 DP，<strong>由一个类型注册，但附加到另一个类型的实例上</strong>。最典型的是 <code>Grid.Row</code> / <code>Canvas.Left</code> / <code>DockPanel.Dock</code>——父面板把坐标信息“贴”在子元素身上。</p>
+  <div class="card">
+    <pre><code><span class="cm">// Canvas 注册的附加属性：Canvas.Left / Canvas.Top</span>
+<span class="kw">public static readonly</span> <span class="ty">DependencyProperty</span> LeftProperty =
+    <span class="ty">DependencyProperty</span>.<span class="fn">RegisterAttached</span>(
+        <span class="st">"Left"</span>, <span class="kw">typeof</span>(<span class="ty">double</span>), <span class="kw">typeof</span>(<span class="ty">Canvas</span>),
+        <span class="kw">new</span> <span class="ty">FrameworkPropertyMetadata</span>(<span class="num">0.0</span>,
+            <span class="ty">FrameworkPropertyOptions</span>.AffectsParentArrange));
+
+<span class="cm">// 提供静态 Get/Set 访问器（XAML 编译器查找的就是这两个）</span>
+<span class="kw">public static void</span> <span class="fn">SetLeft</span>(<span class="ty">UIElement</span> e, <span class="ty">double</span> v) => e.<span class="fn">SetValue</span>(LeftProperty, v);
+<span class="kw">public static double</span> <span class="fn">GetLeft</span>(<span class="ty">UIElement</span> e) => (<span class="ty">double</span>)e.<span class="fn">GetValue</span>(LeftProperty);
+
+<span class="cm">// XAML：Canvas.Left 写在子元素上，但由 Canvas 读取</span>
+<span class="cm">&lt;!-- &lt;Ellipse Canvas.Left="50" Canvas.Top="20" /&gt; --&gt;</span></code></pre>
+  </div>
+
+  <h3>只读依赖属性</h3>
+  <p>像 <code>IsMouseOver</code>、<code>IsKeyboardFocusWithin</code> 这类<strong>由框架维护</strong>的属性用 <code>RegisterReadOnly</code> 注册，返回 <code>DependencyPropertyKey</code>，对外只暴露 <code>DependencyProperty</code>。</p>
+  <div class="callout tip">
+    <strong>DP 是 WPF 的基石</strong>：Style、Trigger、Animation、Binding、Property Value Inheritance、Validation——六大特性<strong>全部构建在 DP 之上</strong>。没有 DP 就没有 WPF 的声明式编程模型。理解 DP 优先级表，是排查“为什么样式/动画/绑定没生效”的第一步。
+  </div>
+</section>
+
+<section id="binding" class="toc-link">
+  <h2><span class="num">07</span> 数据绑定</h2>
+  <p>数据绑定是 WPF 的一等公民。一条 <code>Binding</code> 把<strong>源属性</strong>（source）与<strong>目标属性</strong>（target，必须是 DP）连起来，自动同步。绑定的源可以是任意对象，<strong>只要实现 <code>INotifyPropertyChanged</code></strong>，变更就能自动传播。</p>
+
+  <h3>Binding 表达式与 DataContext</h3>
+  <p><code>DataContext</code> 是 <code>FrameworkElement</code> 的<strong>可继承</strong>属性——子元素不显式指定 Source 时，会沿逻辑树向上找到最近的非 null DataContext。这是 MVVM 的核心机制：在 Window 上设一次 ViewModel，所有子控件都能绑定。</p>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- DataContext 继承：根窗口设一次 --&gt;</span>
+<span class="kw">&lt;Window.DataContext&gt;</span>
+    <span class="kw">&lt;local:MainViewModel</span> <span class="kw">/&gt;</span>
+<span class="kw">&lt;/Window.DataContext&gt;</span>
+
+<span class="kw">&lt;Grid&gt;</span>
+    <span class="cm">&lt;!-- Path 默认就是 DataContext 上的属性 --&gt;</span>
+    <span class="kw">&lt;TextBlock</span><span class="fn"> Text</span>=<span class="st">"{Binding Path=Title}"</span> <span class="kw">/&gt;</span>
+    <span class="cm">&lt;!-- Path= 可省略 --&gt;</span>
+    <span class="kw">&lt;TextBlock</span><span class="fn"> Text</span>=<span class="st">"{Binding Title}"</span> <span class="kw">/&gt;</span>
+    <span class="cm">&lt;!-- {Binding .}：绑定 DataContext 本身 --&gt;</span>
+    <span class="kw">&lt;ContentControl</span><span class="fn"> Content</span>=<span class="st">"{Binding .}"</span> <span class="kw">/&gt;</span>
+<span class="kw">&lt;/Grid&gt;</span></code></pre>
+  </div>
+
+  <h3>绑定源（Source）的多种形式</h3>
+  <table>
+    <tr><th>方式</th><th>XAML</th><th>用途</th></tr>
+    <tr><td><code>DataContext</code></td><td><code>{Binding X}</code></td><td>最常用，沿树继承</td></tr>
+    <tr><td><code>Source=</code></td><td><code>{Binding X, Source={StaticResource cfg}}</code></td><td>绑定到资源对象</td></tr>
+    <tr><td><code>ElementName=</code></td><td><code>{Binding Text, ElementName=txtName}</code></td><td>控件到控件</td></tr>
+    <tr><td><code>RelativeSource Self</code></td><td><code>{Binding ActualWidth, RelativeSource={RelativeSource Self}}</code></td><td>绑定自身</td></tr>
+    <tr><td><code>RelativeSource TemplatedParent</code></td><td><code>{TemplateBinding Width}</code> 简写</td><td>模板内绑定到模板宿主</td></tr>
+    <tr><td><code>RelativeSource FindAncestor</code></td><td><code>{Binding DataContext.X, RelativeSource={RelativeSource AncestorType=Window}}</code></td><td>向上找祖先</td></tr>
+  </table>
+
+  <h3>Mode 与 UpdateSourceTrigger</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">BindingMode</div>
+      <table>
+        <tr><th>Mode</th><th>方向</th></tr>
+        <tr><td><code>OneWay</code></td><td>源 → 目标（默认，多数只读）</td></tr>
+        <tr><td><code>TwoWay</code></td><td>双向（TextBox.Text 默认）</td></tr>
+        <tr><td><code>OneTime</code></td><td>仅初始化时同步一次</td></tr>
+        <tr><td><code>OneWayToSource</code></td><td>目标 → 源（反向）</td></tr>
+        <tr><td><code>Default</code></td><td>由目标 DP 元数据决定</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">UpdateSourceTrigger</div>
+      <table>
+        <tr><th>Trigger</th><th>回写时机</th></tr>
+        <tr><td><code>PropertyChanged</code></td><td>每次目标变更立即（推荐 TextBox）</td></tr>
+        <tr><td><code>LostFocus</code></td><td>失去焦点时（TextBox 默认）</td></tr>
+        <tr><td><code>Explicit</code></td><td>仅手动调用 <code>BindingExpression.UpdateSource</code></td></tr>
+        <tr><td><code>Default</code></td><td>由目标 DP 元数据决定</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h3>INotifyPropertyChanged 与 ObservableCollection</h3>
+  <div class="card">
+    <pre><code><span class="kw">public class</span> <span class="ty">UserViewModel</span> : <span class="ty">INotifyPropertyChanged</span>
+{
+    <span class="kw">private string</span> _name = <span class="st">""</span>;
+    <span class="kw">public string</span> Name {
+        <span class="kw">get</span> => _name;
+        <span class="kw">set</span> {
+            <span class="kw">if</span> (_name != value) {
+                _name = value;
+                <span class="fn">OnPropertyChanged</span>();     <span class="cm">// [CallerMemberName] 自动填 "Name"</span>
+            }
+        }
+    }
+
+    <span class="kw">public event</span> <span class="ty">PropertyChangedEventHandler</span>? PropertyChanged;
+    <span class="kw">protected void</span> <span class="fn">OnPropertyChanged</span>([<span class="ty">CallerMemberName</span>] <span class="kw">string</span>? p = <span class="kw">null</span>)
+        => PropertyChanged?.<span class="fn">Invoke</span>(<span class="kw">this</span>, <span class="kw">new</span> <span class="ty">PropertyChangedEventArgs</span>(p));
+}
+
+<span class="cm">// 集合：ObservableCollection 在增删时触发 CollectionChanged</span>
+<span class="kw">public</span> <span class="ty">ObservableCollection</span>&lt;<span class="ty">UserViewModel</span>&gt; Users { <span class="kw">get</span>; } = <span class="kw">new</span>();</code></pre>
+  </div>
+
+  <h3>IValueConverter</h3>
+  <p>源类型与目标类型不一致时（如 <code>bool</code> → <code>Visibility</code>），用 <code>IValueConverter</code> 转换。内置 <code>BooleanToVisibilityConverter</code> 最常用。</p>
+  <div class="card">
+    <pre><code><span class="kw">public class</span> <span class="ty">InverseBooleanConverter</span> : <span class="ty">IValueConverter</span> {
+    <span class="kw">public object</span> <span class="fn">Convert</span>(<span class="kw">object</span> v, <span class="ty">Type</span> t, <span class="kw">object</span> p, <span class="ty">CultureInfo</span> c)
+        => !(<span class="ty">bool</span>)v;
+    <span class="kw">public object</span> <span class="fn">ConvertBack</span>(<span class="kw">object</span> v, <span class="ty">Type</span> t, <span class="kw">object</span> p, <span class="ty">CultureInfo</span> c)
+        => !(<span class="ty">bool</span>)v;
+}
+
+<span class="cm">&lt;!-- 在资源中实例化 --&gt;</span>
+<span class="cm">&lt;!-- &lt;local:InverseBooleanConverter x:Key="InvBool" /&gt; --&gt;</span>
+<span class="cm">&lt;!-- &lt;CheckBox IsChecked="{Binding IsEnabled, Converter={StaticResource InvBool}}" /&gt; --&gt;</span></code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>常见坑</strong>：<code>INotifyPropertyChanged</code> 触发时，属性名必须<strong>大小写完全一致</strong>，否则绑定不更新。用 <code>[CallerMemberName]</code> 比手写字符串更安全。此外，<strong>替换整个集合对象</strong>（<code>Users = new ...</code>）不会触发 <code>ObservableCollection</code> 的事件——必须在原集合上 Add/Remove，或让持有集合的属性也通知变更。
+  </div>
+</section>
+
+<section id="routing" class="toc-link">
+  <h2><span class="num">08</span> 路由事件与命令</h2>
+  <p>WPF 的<strong>路由事件（Routed Event）</strong>不是普通 CLR 事件，它会在<strong>元素树</strong>上传播。这让外层容器可以监听内层任意控件的事件——例如把 StackPanel 上所有 Button 的 Click 统一在一个处理器里。</p>
+
+  <h3>三种路由策略</h3>
+  <table>
+    <tr><th>策略</th><th>传播方向</th><th>前缀约定</th><th>典型事件</th></tr>
+    <tr><td><strong>Tunnel（隧道）</strong></td><td>根 → 源</td><td><code>Preview</code></td><td>PreviewMouseDown、PreviewKeyDown</td></tr>
+    <tr><td><strong>Bubble（冒泡）</strong></td><td>源 → 根</td><td>（多数）</td><td>Click、MouseDown、TextChanged</td></tr>
+    <tr><td><strong>Direct（直接）</strong></td><td>不传播</td><td>—</td><td>ButtonBase.Click（实为 Bubble，但语义直接）</td></tr>
+  </table>
+  <p>隧道事件总是先于冒泡事件触发——这让父元素有机会<strong>预览并拦截</strong>。在 <code>Preview*</code> 中设 <code>e.Handled = true</code> 会让随后的对应 Bubble 事件<strong>也被取消</strong>。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 路由事件的定义（注册到 EventManager）</span>
+<span class="kw">public static readonly</span> <span class="ty">RoutedEvent</span> TapEvent =
+    <span class="ty">EventManager</span>.<span class="fn">RegisterRoutedEvent</span>(
+        <span class="st">"Tap"</span>, <span class="ty">RoutingStrategy</span>.Bubble,
+        <span class="kw">typeof</span>(<span class="ty">RoutedEventHandler</span>), <span class="kw">typeof</span>(<span class="ty">MyControl</span>));
+
+<span class="kw">public event</span> <span class="ty">RoutedEventHandler</span> Tap {
+    <span class="kw">add</span> => <span class="fn">AddHandler</span>(TapEvent, value);
+    <span class="kw">remove</span> => <span class="fn">RemoveHandler</span>(TapEvent, value);
+}
+
+<span class="cm">// 触发</span>
+<span class="kw">protected virtual void</span> <span class="fn">OnTap</span>() {
+    <span class="ty">RoutedEventArgs</span> e = <span class="kw">new</span>(TapEvent, <span class="kw">this</span>);
+    <span class="fn">RaiseEvent</span>(e);     <span class="cm">// 沿可视化树冒泡</span>
+}
+
+<span class="cm">// 任意祖先都能监听后代元素的事件</span>
+<span class="cm">// XAML: &lt;StackPanel Button.Click="Stack_Click"&gt;</span>
+<span class="cm">//      &lt;Button /&gt;&lt;Button /&gt;&lt;/StackPanel&gt;</span>
+<span class="kw">private void</span> <span class="fn">Stack_Click</span>(<span class="kw">object</span> s, <span class="ty">RoutedEventArgs</span> e) {
+    <span class="ty">Button</span>? btn = e.<span class="fn">OriginalSource</span> <span class="kw">as</span> <span class="ty">Button</span>;   <span class="cm">// 实际起源</span>
+    <span class="ty">Button</span>? src = e.Source <span class="kw">as</span> <span class="ty">Button</span>;          <span class="cm">// 逻辑源（可能被修正）</span>
+}</code></pre>
+  </div>
+
+  <h3>RoutedEventArgs 关键成员</h3>
+  <ul>
+    <li><code>Handled</code>：设为 true 后续节点不再收到该事件（同样阻止对应 Preview/Bubble 配对）。</li>
+    <li><code>Source</code>：逻辑树中触发事件的元素，可能被事件处理器显式修改。</li>
+    <li><code>OriginalSource</code>：可视化树中真正的起源（例如 Button 内的 TextBlock）。</li>
+    <li><code>RoutedEvent</code>：标识是哪个路由事件，可用来在多事件复用同一处理器时区分。</li>
+  </ul>
+
+  <h3>命令（Commands）</h3>
+  <p>事件直接耦合 View 与 code-behind；<strong>命令</strong>则把“用户意图”抽象为可绑定对象，是 MVVM 解耦的关键。WPF 的命令系统由三部分组成：</p>
+  <ul>
+    <li><code>RoutedCommand</code>：WPF 内置命令实现，本身不含逻辑，只是个<strong>标识符</strong>（如 <code>ApplicationCommands.Copy</code>）。</li>
+    <li><code>CommandBinding</code>：把命令绑定到具体的 <code>Executed</code> / <code>CanExecute</code> 处理器，通常挂在 Window/UserControl 上。</li>
+    <li><code>InputBinding</code>：把快捷键/鼠标手势绑定到命令。</li>
+  </ul>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- 内置命令绑定 --&gt;</span>
+<span class="kw">&lt;Window.CommandBindings&gt;</span>
+    <span class="kw">&lt;CommandBinding</span><span class="fn"> Command</span>=<span class="st">"ApplicationCommands.Open"</span>
+                  <span class="fn"> Executed</span>=<span class="st">"OnOpen"</span> <span class="fn">CanExecute</span>=<span class="st">"OnCanOpen"</span> <span class="kw">/&gt;</span>
+<span class="kw">&lt;/Window.CommandBindings&gt;</span>
+
+<span class="kw">&lt;Window.InputBindings&gt;</span>
+    <span class="kw">&lt;KeyBinding</span><span class="fn"> Command</span>=<span class="st">"ApplicationCommands.Open"</span>
+               <span class="fn"> Gesture</span>=<span class="st">"Ctrl+O"</span> <span class="kw">/&gt;</span>
+<span class="kw">&lt;/Window.InputBindings&gt;</span>
+
+<span class="kw">&lt;Button</span><span class="fn"> Command</span>=<span class="st">"ApplicationCommands.Open"</span><span class="fn"> Content</span>=<span class="st">"Open"</span> <span class="kw">/&gt;</span>
+
+<span class="cm">// code-behind</span>
+<span class="kw">private void</span> <span class="fn">OnOpen</span>(<span class="kw">object</span> s, <span class="ty">ExecutedRoutedEventArgs</span> e) { <span class="cm">/* 打开 */</span> }
+<span class="kw">private void</span> <span class="fn">OnCanOpen</span>(<span class="kw">object</span> s, <span class="ty">CanExecuteRoutedEventArgs</span> e) {
+    e.<span class="fn">CanExecute</span> = <span class="fn">HasDocument</span>();
+}</code></pre>
+  </div>
+
+  <h3>ICommand：MVVM 友好的命令</h3>
+  <p>RoutedCommand 依赖 CommandBinding（通常在 code-behind），MVVM 中更常用 <strong>ICommand</strong> 接口，由 ViewModel 直接实现，无需 CommandBinding。</p>
+  <div class="card">
+    <pre><code><span class="kw">public interface</span> <span class="ty">ICommand</span> {
+    <span class="kw">event</span> <span class="ty">EventHandler</span>? CanExecuteChanged;
+    <span class="kw">bool</span> <span class="fn">CanExecute</span>(<span class="kw">object</span>? parameter);
+    <span class="kw">void</span> <span class="fn">Execute</span>(<span class="kw">object</span>? parameter);
+}
+
+<span class="cm">// 经典 RelayCommand 实现（详见 10 章 MVVM）</span>
+<span class="kw">public class</span> <span class="ty">RelayCommand</span> : <span class="ty">ICommand</span> {
+    <span class="kw">private readonly</span> <span class="ty">Action</span>&lt;<span class="kw">object</span>?&gt; _execute;
+    <span class="kw">private readonly</span> <span class="ty">Func</span>&lt;<span class="kw">object</span>?, <span class="ty">bool</span>&gt; _canExecute;
+    <span class="kw">public</span> <span class="ty">RelayCommand</span>(<span class="ty">Action</span>&lt;<span class="kw">object</span>?&gt; exec, <span class="ty">Func</span>&lt;<span class="kw">object</span>?, <span class="ty">bool</span>&gt;? can = <span class="kw">null</span>) {
+        _execute = exec; _canExecute = can ?? (_ => <span class="kw">true</span>);
+    }
+    <span class="kw">public bool</span> <span class="fn">CanExecute</span>(<span class="kw">object</span>? p) => _canExecute(p);
+    <span class="kw">public void</span> <span class="fn">Execute</span>(<span class="kw">object</span>? p) => _execute(p);
+    <span class="kw">public event</span> <span class="ty">EventHandler</span>? CanExecuteChanged {
+        <span class="kw">add</span> => <span class="ty">CommandManager</span>.<span class="fn">RequerySuggested</span> += value;
+        <span class="kw">remove</span> => <span class="ty">CommandManager</span>.<span class="fn">RequerySuggested</span> -= value;
+    }
+}</code></pre>
+  </div>
+</section>
+
+<section id="style" class="toc-link">
+  <h2><span class="num">09</span> 样式与模板</h2>
+  <p>WPF 把<strong>视觉外观</strong>完全从控件逻辑中剥离。Style 负责统一属性，ControlTemplate 负责重塑控件本身的外观，DataTemplate 负责重塑数据的呈现，三者结合可实现 WinForms 不可企及的视觉定制力。</p>
+
+  <h3>Style 与 Setter</h3>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- 在 Window.Resources 中定义命名样式 --&gt;</span>
+<span class="kw">&lt;Window.Resources&gt;</span>
+    <span class="kw">&lt;Style</span><span class="fn"> x:Key</span>=<span class="st">"PrimaryButton"</span><span class="fn"> TargetType</span>=<span class="st">"Button"</span><span class="kw">&gt;</span>
+        <span class="kw">&lt;Setter</span><span class="fn"> Property</span>=<span class="st">"Background"</span><span class="fn"> Value</span>=<span class="st">"#0a6cff"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;Setter</span><span class="fn"> Property</span>=<span class="st">"Foreground"</span><span class="fn"> Value</span>=<span class="st">"White"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;Setter</span><span class="fn"> Property</span>=<span class="st">"FontWeight"</span><span class="fn"> Value</span>=<span class="st">"Bold"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;Setter</span><span class="fn"> Property</span>=<span class="st">"Padding"</span><span class="fn"> Value</span>=<span class="st">"16,8"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;Style.Triggers&gt;</span>
+            <span class="cm">&lt;!-- 鼠标悬停 --&gt;</span>
+            <span class="kw">&lt;Trigger</span><span class="fn"> Property</span>=<span class="st">"IsMouseOver"</span><span class="fn"> Value</span>=<span class="st">"True"</span><span class="kw">&gt;</span>
+                <span class="kw">&lt;Setter</span><span class="fn"> Property</span>=<span class="st">"Background"</span><span class="fn"> Value</span>=<span class="st">"#0050c8"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;/Trigger&gt;</span>
+            <span class="cm">&lt;!-- 数据触发：基于绑定的值 --&gt;</span>
+            <span class="kw">&lt;DataTrigger</span><span class="fn"> Binding</span>=<span class="st">"{Binding IsEnabled}"</span><span class="fn"> Value</span>=<span class="st">"False"</span><span class="kw">&gt;</span>
+                <span class="kw">&lt;Setter</span><span class="fn"> Property</span>=<span class="st">"Opacity"</span><span class="fn"> Value</span>=<span class="st">"0.5"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;/DataTrigger&gt;</span>
+        <span class="kw">&lt;/Style.Triggers&gt;</span>
+    <span class="kw">&lt;/Style&gt;</span>
+<span class="kw">&lt;/Window.Resources&gt;</span>
+
+<span class="kw">&lt;Button</span><span class="fn"> Style</span>=<span class="st">"{StaticResource PrimaryButton}"</span><span class="fn"> Content</span>=<span class="st">"Save"</span> <span class="kw">/&gt;</span>
+
+<span class="cm">&lt;!-- 无 x:Key 的 Style 自动应用到所有 TargetType（隐式样式） --&gt;</span>
+<span class="kw">&lt;Style</span><span class="fn"> TargetType</span>=<span class="st">"TextBlock"</span><span class="kw">&gt;</span>      <span class="cm">&lt;!-- 所有 TextBlock 生效 --&gt;</span>
+    <span class="kw">&lt;Setter</span><span class="fn"> Property</span>=<span class="st">"Foreground"</span><span class="fn"> Value</span>=<span class="st">"#333"</span> <span class="kw">/&gt;</span>
+<span class="kw">&lt;/Style&gt;</span></code></pre>
+  </div>
+
+  <h3>ControlTemplate：彻底重塑控件外观</h3>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- 把 Button 变成圆角按钮 --&gt;</span>
+<span class="kw">&lt;Style</span><span class="fn"> TargetType</span>=<span class="st">"Button"</span><span class="kw">&gt;</span>
+    <span class="kw">&lt;Setter</span><span class="fn"> Property</span>=<span class="st">"Template"</span><span class="kw">&gt;</span>
+        <span class="kw">&lt;Setter.Value&gt;</span>
+            <span class="kw">&lt;ControlTemplate</span><span class="fn"> TargetType</span>=<span class="st">"Button"</span><span class="kw">&gt;</span>
+                <span class="kw">&lt;Border</span><span class="fn"> x:Name</span>=<span class="st">"Bd"</span>
+                        <span class="fn"> Background</span>=<span class="st">"{TemplateBinding Background}"</span>
+                        <span class="fn"> BorderBrush</span>=<span class="st">"{TemplateBinding BorderBrush}"</span>
+                        <span class="fn"> BorderThickness</span>=<span class="st">"{TemplateBinding BorderThickness}"</span>
+                        <span class="fn"> CornerRadius</span>=<span class="st">"8"</span><span class="kw">&gt;</span>
+                    <span class="kw">&lt;ContentPresenter</span><span class="fn"> HorizontalAlignment</span>=<span class="st">"Center"</span>
+                                      <span class="fn"> VerticalAlignment</span>=<span class="st">"Center"</span> <span class="kw">/&gt;</span>
+                <span class="kw">&lt;/Border&gt;</span>
+                <span class="kw">&lt;ControlTemplate.Triggers&gt;</span>
+                    <span class="kw">&lt;Trigger</span><span class="fn"> Property</span>=<span class="st">"IsPressed"</span><span class="fn"> Value</span>=<span class="st">"True"</span><span class="kw">&gt;</span>
+                        <span class="kw">&lt;Setter</span><span class="fn"> TargetName</span>=<span class="st">"Bd"</span><span class="fn"> Property</span>=<span class="st">"Opacity"</span><span class="fn"> Value</span>=<span class="st">"0.7"</span> <span class="kw">/&gt;</span>
+                    <span class="kw">&lt;/Trigger&gt;</span>
+                <span class="kw">&lt;/ControlTemplate.Triggers&gt;</span>
+            <span class="kw">&lt;/ControlTemplate&gt;</span>
+        <span class="kw">&lt;/Setter.Value&gt;</span>
+    <span class="kw">&lt;/Setter&gt;</span>
+<span class="kw">&lt;/Style&gt;</span></code></pre>
+  </div>
+  <p><code>{TemplateBinding X}</code> 是 <code>{Binding X, RelativeSource={RelativeSource TemplatedParent}}</code> 的简写——把模板内的属性桥接到模板宿主控件本身的属性，确保重写外观后 <code>Background="Red"</code> 仍然生效。</p>
+
+  <h3>DataTemplate：重塑数据呈现</h3>
+  <div class="card">
+    <pre><code><span class="kw">&lt;DataTemplate</span><span class="fn"> DataType</span>=<span class="st">"{x:Type vm:User}"</span><span class="kw">&gt;</span>    <span class="cm">&lt;!-- 隐式：User 自动应用此模板 --&gt;</span>
+    <span class="kw">&lt;Border</span><span class="fn"> Padding</span>=<span class="st">"8"</span><span class="fn"> BorderBrush</span>=<span class="st">"#ddd"</span><span class="fn"> BorderThickness</span>=<span class="st">"0,0,0,1"</span><span class="kw">&gt;</span>
+        <span class="kw">&lt;StackPanel&gt;</span>
+            <span class="kw">&lt;TextBlock</span><span class="fn"> Text</span>=<span class="st">"{Binding Name}"</span><span class="fn"> FontWeight</span>=<span class="st">"Bold"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;TextBlock</span><span class="fn"> Text</span>=<span class="st">"{Binding Email}"</span><span class="fn"> Foreground</span>=<span class="st">"Gray"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;/StackPanel&gt;</span>
+    <span class="kw">&lt;/Border&gt;</span>
+<span class="kw">&lt;/DataTemplate&gt;</span>
+
+<span class="cm">&lt;!-- 绑定 User / List&lt;User&gt; 时自动套用上述模板 --&gt;</span>
+<span class="cm">&lt;!-- &lt;ContentControl Content="{Binding SelectedUser}" /&gt; --&gt;</span></code></pre>
+  </div>
+
+  <h3>资源与 ResourceDictionary</h3>
+  <p>资源（画刷、样式、模板、转换器）存放在 <code>&lt;FrameworkElement.Resources&gt;</code> 或独立 <code>ResourceDictionary</code>（XAML 文件）中，用 <code>x:Key</code> 索引。<strong>StaticResource</strong> 在加载时一次性查找，性能好但替换资源不会更新引用；<strong>DynamicResource</strong> 运行时查找，能响应主题切换与语言切换。</p>
+  <div class="callout warn">
+    <strong>StaticResource vs DynamicResource</strong>：<code>StaticResource</code> 要求<strong>在使用之前定义</strong>（XAML 是顺序解析），跨文件引用必须先 Merge；<code>DynamicResource</code> 可以前向引用、能动态切换主题，但每次访问都查字典、性能略低。主题相关的系统颜色（<code>SystemColors.WindowBrushKey</code>）必须用 DynamicResource 才能跟随系统暗黑模式切换。
+  </div>
+</section>
+
+<section id="mvvm" class="toc-link">
+  <h2><span class="num">10</span> MVVM 模式</h2>
+  <p><strong>MVVM（Model-View-ViewModel）</strong>是 WPF 的事实标准架构，由 John Gossman 于 2005 年提出，是 Martin Fowler 的 Presentation Model 在 WPF 上的具体化。核心思想：<strong>ViewModel 用纯 C# 表达 UI 状态与逻辑，View 用纯 XAML 绑定 ViewModel</strong>，二者完全解耦，ViewModel 可单元测试。</p>
+
+  <h3>三层职责</h3>
+  <table>
+    <tr><th>层</th><th>技术</th><th>职责</th><th>不应做的事</th></tr>
+    <tr><td><strong>Model</strong></td><td>纯 C# / DTO</td><td>业务实体、数据持久化</td><td>不引用 UI、不实现 INPC</td></tr>
+    <tr><td><strong>ViewModel</strong></td><td>C# + INPC + ICommand</td><td>UI 状态、命令逻辑、转换</td><td>不引用 View 类型</td></tr>
+    <tr><td><strong>View</strong></td><td>XAML + 少量 code-behind</td><td>布局、绑定、视觉</td><td>不含业务逻辑</td></tr>
+  </table>
+
+  <h3>完整 ViewModel 示例</h3>
+  <div class="card">
+    <pre><code><span class="kw">public class</span> <span class="ty">UserEditorViewModel</span> : <span class="ty">ObservableObject</span>   <span class="cm">// INPC 基类</span>
+{
+    <span class="kw">private string</span> _name = <span class="st">""</span>;
+    <span class="kw">private int</span> _age;
+    <span class="kw">private</span> <span class="ty">User?</span> _selected;
+
+    <span class="kw">public string</span> Name {
+        <span class="kw">get</span> => _name;
+        <span class="kw">set</span> => <span class="fn">SetProperty</span>(<span class="kw">ref</span> _name, value);   <span class="cm">// 触发 INPC</span>
+    }
+    <span class="kw">public int</span> Age {
+        <span class="kw">get</span> => _age;
+        <span class="kw">set</span> => <span class="fn">SetProperty</span>(<span class="kw">ref</span> _age, value);
+    }
+    <span class="kw">public</span> <span class="ty">User?</span> Selected {
+        <span class="kw">get</span> => _selected;
+        <span class="kw">set</span> => <span class="fn">SetProperty</span>(<span class="kw">ref</span> _selected, value);
+    }
+
+    <span class="kw">public</span> <span class="ty">ObservableCollection</span>&lt;<span class="ty">User</span>&gt; Users { <span class="kw">get</span>; } = <span class="kw">new</span>();
+
+    <span class="kw">public</span> <span class="ty">ICommand</span> AddCommand { <span class="kw">get</span>; }
+    <span class="kw">public</span> <span class="ty">ICommand</span> RemoveCommand { <span class="kw">get</span>; }
+
+    <span class="kw">public</span> <span class="ty">UserEditorViewModel</span>() {
+        AddCommand    = <span class="kw">new</span> <span class="ty">RelayCommand</span>(_ => <span class="fn">Add</span>(), _ => !<span class="kw">string</span>.<span class="fn">IsNullOrWhiteSpace</span>(Name));
+        RemoveCommand = <span class="kw">new</span> <span class="ty">RelayCommand</span>(_ => <span class="fn">Remove</span>(), _ => Selected <span class="kw">is not null</span>);
+    }
+
+    <span class="kw">private void</span> <span class="fn">Add</span>() {
+        Users.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">User</span> { Name = Name, Age = Age });
+        Name = <span class="st">""</span>; Age = <span class="num">0</span>;
+    }
+    <span class="kw">private void</span> <span class="fn">Remove</span>() {
+        <span class="kw">if</span> (Selected <span class="kw">is not null</span>) Users.<span class="fn">Remove</span>(Selected);
+    }
+}</code></pre>
+  </div>
+
+  <h3>CommunityToolkit.Mvvm 与源生成器</h3>
+  <p>微软的 <strong>CommunityToolkit.Mvvm</strong>（前身是 MvvmLight / Prism 的部分能力）用 C# <strong>源生成器（Source Generator）</strong>在编译期自动生成 INPC 与 ICommand 的样板，VM 代码变得极简：</p>
+  <div class="card">
+    <pre><code><span class="kw">public partial class</span> <span class="ty">UserEditorViewModel</span> : <span class="ty">ObservableObject</span>   <span class="cm">// partial 必须</span>
+{
+    <span class="cm">// [ObservableProperty] 自动生成 public string Name { get; set; } + INPC</span>
+    [<span class="ty">ObservableProperty</span>]
+    <span class="kw">private string</span> _name = <span class="st">""</span>;
+
+    [<span class="ty">ObservableProperty</span>]
+    <span class="kw">private int</span> _age;
+
+    <span class="cm">// [RelayCommand] 自动生成 ICommand AddCommand + 私有 Add 方法</span>
+    [<span class="ty">RelayCommand</span>(<span class="ty">CanExecute</span> = <span class="kw">nameof</span>(CanAdd))]
+    <span class="kw">private void</span> <span class="fn">Add</span>() { <span class="cm">/* ... */</span> }
+    <span class="kw">private bool</span> <span class="fn">CanAdd</span>() => !<span class="kw">string</span>.<span class="fn">IsNullOrWhiteSpace</span>(Name);
+
+    <span class="kw">public</span> <span class="ty">ObservableCollection</span>&lt;<span class="ty">User</span>&gt; Users { <span class="kw">get</span>; } = <span class="kw">new</span>();
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>MVVM 是 WPF 的最佳实践</strong>：它让 UI 与业务逻辑彻底解耦——ViewModel 不引用任何 UI 类型（无 <code>Window</code>、<code>MessageBox</code>），可独立测试，可在 WPF/UWP/WinUI/MAUI 间复用。View 通过 XAML 数据绑定驱动，状态变更由 INPC 自动传播。Designer 在设计时还能注入“假数据”预览界面。这套范式已成为 XAML 生态的通用架构。
+  </div>
+
+  <div class="callout warn">
+    <strong>何时违反 MVVM</strong>：纯 UI 行为（弹窗位置、Focus 管理、动画触发）可以放 code-behind，强行塞进 ViewModel 反而让 VM 依赖 View 抽象。MessageBox 这种“UI 服务”应抽象成 <code>IDialogService</code> 接口注入 VM，保持可测试性。
+  </div>
+</section>
+
+<section id="graphics" class="toc-link">
+  <h2><span class="num">11</span> 绘图与动画</h2>
+  <p>WPF 的图形系统基于 DirectX，<strong>所有绘图都是矢量的</strong>，缩放无锯齿。Shape 是高层的可交互图形元素，Geometry 是纯几何描述，Drawing/Visual 是轻量的低开销绘图。动画则构建在<strong>依赖属性</strong>之上——任何 DP 都能被 Timeline 驱动。</p>
+
+  <h3>Shape 与 Geometry</h3>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- Shape：可直接放进面板的图形元素 --&gt;</span>
+<span class="kw">&lt;Canvas&gt;</span>
+    <span class="kw">&lt;Ellipse</span><span class="fn"> Width</span>=<span class="st">"100"</span><span class="fn"> Height</span>=<span class="st">"100"</span><span class="fn"> Fill</span>=<span class="st">"Orange"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;Rectangle</span><span class="fn"> Canvas.Left</span>=<span class="st">"120"</span><span class="fn"> Width</span>=<span class="st">"80"</span><span class="fn"> Height</span>=<span class="st">"40"</span>
+              <span class="fn"> Stroke</span>=<span class="st">"Black"</span><span class="fn"> StrokeThickness</span>=<span class="st">"2"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;Path</span><span class="fn"> Stroke</span>=<span class="st">"Blue"</span><span class="fn"> StrokeThickness</span>=<span class="st">"2"</span><span class="kw">&gt;</span>
+        <span class="kw">&lt;Path.Data&gt;</span>
+            <span class="cm">&lt;!-- Stream Geometry：M=Move, L=Line, Z=Close --&gt;</span>
+            <span class="kw">&lt;PathGeometry</span><span class="fn"> Figures</span>=<span class="st">"M 10,10 L 100,50 L 10,90 Z"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;/Path.Data&gt;</span>
+    <span class="kw">&lt;/Path&gt;</span>
+<span class="kw">&lt;/Canvas&gt;</span></code></pre>
+  </div>
+
+  <h3>Drawing / Visual：轻量绘图</h3>
+  <p>Shape 每个都是完整 FrameworkElement，参与布局与事件，开销大。<code>Drawing</code> 是纯绘图指令，<code>DrawingVisual</code> 是最轻量的 Visual——直接通过 <code>DrawingContext</code> 绘制，适合做图表、地图、粒子系统这类“上千个图形”的场景。</p>
+  <div class="card">
+    <pre><code><span class="kw">public class</span> <span class="ty">FastCanvas</span> : <span class="ty">FrameworkElement</span>
+{
+    <span class="kw">private readonly</span> <span class="ty">DrawingVisual</span> _visual = <span class="kw">new</span>();
+
+    <span class="kw">public</span> <span class="ty">FastCanvas</span>() {
+        <span class="kw">using</span> (<span class="ty">DrawingContext</span> dc = _visual.<span class="fn">RenderOpen</span>()) {
+            dc.<span class="fn">DrawRectangle</span>(<span class="ty">Brushes</span>.White, <span class="kw">null</span>, <span class="kw">new</span> <span class="ty">Rect</span>(<span class="num">0</span>, <span class="num">0</span>, <span class="num">1000</span>, <span class="num">1000</span>));
+            <span class="kw">for</span> (<span class="ty">int</span> i = <span class="num">0</span>; i &lt; <span class="num">10000</span>; i++) {
+                dc.<span class="fn">DrawEllipse</span>(<span class="ty">Brushes</span>.OrangeRed, <span class="kw">null</span>,
+                    <span class="kw">new</span> <span class="ty">Point</span>(<span class="fn">Rand</span>(), <span class="fn">Rand</span>()), <span class="num">2</span>, <span class="num">2</span>);
+            }
+        }
+        <span class="fn">AddVisualChild</span>(_visual);
+        <span class="fn">AddLogicalChild</span>(_visual);
+    }
+    <span class="kw">protected override int</span> <span class="fn">VisualChildrenCount</span> => <span class="num">1</span>;
+    <span class="kw">protected override</span> <span class="ty">Visual</span> <span class="fn">GetVisualChild</span>(<span class="ty">int</span> i) => _visual;
+}</code></pre>
+  </div>
+
+  <h3>动画（Storyboard + Timeline）</h3>
+  <p>WPF 动画的本质是<strong>“随时间改变依赖属性的值”</strong>。由于 DP 优先级中<strong>动画高于本地值</strong>，动画运行时本地值会被压住。Storyboard 是一组并行/串行 Timeline 的容器，通常由 EventTrigger 触发。</p>
+  <div class="card">
+    <pre><code><span class="kw">&lt;Button</span><span class="fn"> Width</span>=<span class="st">"100"</span><span class="fn"> Height</span>=<span class="st">"40"</span><span class="fn"> Content</span>=<span class="st">"Pulse"</span><span class="kw">&gt;</span>
+    <span class="kw">&lt;Button.Triggers&gt;</span>
+        <span class="kw">&lt;EventTrigger</span><span class="fn"> RoutedEvent</span>=<span class="st">"Button.Click"</span><span class="kw">&gt;</span>
+            <span class="kw">&lt;BeginStoryboard&gt;</span>
+                <span class="kw">&lt;Storyboard&gt;</span>
+                    <span class="cm">&lt;!-- DoubleAnimation：动画 double 类型的 DP（如 Width） --&gt;</span>
+                    <span class="kw">&lt;DoubleAnimation</span><span class="fn"> Storyboard.TargetProperty</span>=<span class="st">"Width"</span>
+                                    <span class="fn"> To</span>=<span class="st">"200"</span><span class="fn"> Duration</span>=<span class="st">"0:0:0.4"</span>
+                                    <span class="fn"> AutoReverse</span>=<span class="st">"True"</span><span class="fn"> RepeatBehavior</span>=<span class="st">"3x"</span> <span class="kw">/&gt;</span>
+                    <span class="cm">&lt;!-- 用缓动函数让动画更自然 --&gt;</span>
+                    <span class="kw">&lt;DoubleAnimation</span><span class="fn"> Storyboard.TargetProperty</span>=<span class="st">"Opacity"</span>
+                                    <span class="fn"> From</span>=<span class="st">"1"</span><span class="fn"> To</span>=<span class="st">"0.3"</span><span class="fn"> Duration</span>=<span class="st">"0:0:0.3"</span><span class="kw">&gt;</span>
+                        <span class="kw">&lt;DoubleAnimation.EasingFunction&gt;</span>
+                            <span class="kw">&lt;CubicEase</span><span class="fn"> EasingMode</span>=<span class="st">"EaseOut"</span> <span class="kw">/&gt;</span>
+                        <span class="kw">&lt;/DoubleAnimation.EasingFunction&gt;</span>
+                    <span class="kw">&lt;/DoubleAnimation&gt;</span>
+                <span class="kw">&lt;/Storyboard&gt;</span>
+            <span class="kw">&lt;/BeginStoryboard&gt;</span>
+        <span class="kw">&lt;/EventTrigger&gt;</span>
+    <span class="kw">&lt;/Button.Triggers&gt;</span>
+<span class="kw">&lt;/Button&gt;</span></code></pre>
+  </div>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">内置动画类型</div>
+      <ul>
+        <li><code>DoubleAnimation</code>：double（Width/Opacity/Canvas.Left）</li>
+        <li><code>ColorAnimation</code>：Color（SolidColorBrush.Color）</li>
+        <li><code>PointAnimation</code>：Point（Path 几何节点）</li>
+        <li><code>ThicknessAnimation</code>：Margin/Padding</li>
+        <li><code>ObjectAnimationUsingKeyFrames</code>：离散对象（如图标切换）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">EasingFunction 缓动</div>
+      <ul>
+        <li><code>Linear</code>：匀速</li>
+        <li><code>CubicEase / QuadraticEase</code>：经典缓动</li>
+        <li><code>ElasticEase / BounceEase</code>：弹性/弹跳</li>
+        <li><code>BackEase</code>：回弹</li>
+        <li><code>CircleEase / SineEase</code>：三角函数曲线</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <strong>动画的硬件加速</strong>：WPF 中只要动画影响的是<strong>变换（Transform）、不透明度（Opacity）、剪裁（Clip）</strong>，合成线程就能直接在 GPU 上插值，不占用 UI 线程。把 Button 包在 <code>&lt;RenderTransform&gt;&lt;ScaleTransform/&gt;&lt;/RenderTransform&gt;</code> 里、动画 Scale，比动画 Width 高效得多。
+  </div>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">12</span> 完整 MVVM 示例</h2>
+  <p>下面是一个完整的<strong>用户管理 CRUD 界面</strong>，体现 MVVM + 数据绑定 + 命令的完整协作：输入框双向绑定、列表绑定 ObservableCollection、按钮绑定 ICommand、状态控制 CanExecute。</p>
+
+  <h3>Model</h3>
+  <div class="card">
+    <pre><code><span class="cm">// Models/User.cs</span>
+<span class="kw">namespace</span> <span class="ty">UserMgr.Models</span>;
+
+<span class="kw">public class</span> <span class="ty">User</span>
+{
+    <span class="kw">public</span> <span class="ty">Guid</span> Id { <span class="kw">get</span>; <span class="kw">set</span>; } = <span class="ty">Guid</span>.<span class="fn">NewGuid</span>();
+    <span class="kw">public string</span> Name { <span class="kw">get</span>; <span class="kw">set</span>; } = <span class="st">""</span>;
+    <span class="kw">public int</span> Age { <span class="kw">get</span>; <span class="kw">set</span>; }
+}</code></pre>
+  </div>
+
+  <h3>ViewModel</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ViewModels/UserEditorViewModel.cs</span>
+<span class="kw">using</span> <span class="ty">CommunityToolkit.Mvvm.Input</span>;
+<span class="kw">using</span> <span class="ty">CommunityToolkit.Mvvm.ComponentModel</span>;
+<span class="kw">using</span> <span class="ty">UserMgr.Models</span>;
+
+<span class="kw">namespace</span> <span class="ty">UserMgr.ViewModels</span>;
+
+<span class="kw">public partial class</span> <span class="ty">UserEditorViewModel</span> : <span class="ty">ObservableObject</span>
+{
+    [<span class="ty">ObservableProperty</span>]
+    <span class="kw">private string</span> _name = <span class="st">""</span>;
+
+    [<span class="ty">ObservableProperty</span>]
+    [<span class="ty">NotifyPropertyChangedFor</span>(<span class="kw">nameof</span>(CanAdd)))]   <span class="cm">// Name 变化时刷新 CanAdd</span>
+    <span class="kw">private int</span> _age;
+
+    [<span class="ty">ObservableProperty</span>]
+    [<span class="ty">NotifyCanExecuteChangedFor</span>(<span class="kw">nameof</span>(RemoveCommand))]
+    <span class="kw">private</span> <span class="ty">User?</span> _selected;
+
+    <span class="kw">public</span> <span class="ty">ObservableCollection</span>&lt;<span class="ty">User</span>&gt; Users { <span class="kw">get</span>; } = <span class="kw">new</span>();
+
+    <span class="kw">public bool</span> CanAdd => !<span class="kw">string</span>.<span class="fn">IsNullOrWhiteSpace</span>(Name) &amp;&amp; Age &gt; <span class="num">0</span> &amp;&amp; Age &lt; <span class="num">150</span>;
+
+    [<span class="ty">RelayCommand</span>(<span class="ty">CanExecute</span> = <span class="kw">nameof</span>(CanAdd))]
+    <span class="kw">private void</span> <span class="fn">Add</span>() {
+        Users.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">User</span> { Name = Name, Age = Age });
+        Name = <span class="st">""</span>; Age = <span class="num">0</span>;
+    }
+
+    [<span class="ty">RelayCommand</span>(<span class="ty">CanExecute</span> = <span class="kw">nameof</span>(CanRemove))]
+    <span class="kw">private void</span> <span class="fn">Remove</span>() {
+        <span class="kw">if</span> (Selected <span class="kw">is not null</span>) Users.<span class="fn">Remove</span>(Selected);
+    }
+    <span class="kw">private bool</span> <span class="fn">CanRemove</span>() => Selected <span class="kw">is not null</span>;
+}</code></pre>
+  </div>
+
+  <h3>View（XAML）</h3>
+  <div class="card">
+    <pre><code><span class="cm">&lt;!-- Views/UserEditorView.xaml --&gt;</span>
+<span class="kw">&lt;Window</span><span class="fn"> x:Class</span>=<span class="st">"UserMgr.Views.UserEditorView"</span>
+        <span class="fn">xmlns</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml/presentation"</span>
+        <span class="fn">xmlns:x</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml"</span>
+        <span class="fn">xmlns:vm</span>=<span class="st">"clr-namespace:UserMgr.ViewModels"</span>
+        <span class="fn">Title</span>=<span class="st">"User Manager"</span> <span class="fn">Height</span>=<span class="st">"450"</span> <span class="fn">Width</span>=<span class="st">"500"</span><span class="kw">&gt;</span>
+
+    <span class="kw">&lt;Window.DataContext&gt;</span>
+        <span class="kw">&lt;vm:UserEditorViewModel</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;/Window.DataContext&gt;</span>
+
+    <span class="kw">&lt;Window.Resources&gt;</span>
+        <span class="kw">&lt;DataTemplate</span><span class="fn"> DataType</span>=<span class="st">"{x:Type vm:User}"</span><span class="kw">&gt;</span>
+            <span class="kw">&lt;Grid&gt;</span>
+                <span class="kw">&lt;Grid.ColumnDefinitions&gt;</span>
+                    <span class="kw">&lt;ColumnDefinition</span><span class="fn"> Width</span>=<span class="st">"*"</span> <span class="kw">/&gt;</span>
+                    <span class="kw">&lt;ColumnDefinition</span><span class="fn"> Width</span>=<span class="st">"80"</span> <span class="kw">/&gt;</span>
+                <span class="kw">&lt;/Grid.ColumnDefinitions&gt;</span>
+                <span class="kw">&lt;TextBlock</span><span class="fn"> Grid.Column</span>=<span class="st">"0"</span><span class="fn"> Text</span>=<span class="st">"{Binding Name}"</span> <span class="kw">/&gt;</span>
+                <span class="kw">&lt;TextBlock</span><span class="fn"> Grid.Column</span>=<span class="st">"1"</span><span class="fn"> Text</span>=<span class="st">"{Binding Age}"</span> <span class="fn"> Foreground</span>=<span class="st">"Gray"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;/Grid&gt;</span>
+        <span class="kw">&lt;/DataTemplate&gt;</span>
+    <span class="kw">&lt;/Window.Resources&gt;</span>
+
+    <span class="kw">&lt;Grid</span><span class="fn"> Margin</span>=<span class="st">"16"</span><span class="kw">&gt;</span>
+        <span class="kw">&lt;Grid.RowDefinitions&gt;</span>
+            <span class="kw">&lt;RowDefinition</span><span class="fn"> Height</span>=<span class="st">"Auto"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;RowDefinition</span><span class="fn"> Height</span>=<span class="st">"*"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;/Grid.RowDefinitions&gt;</span>
+
+        <span class="cm">&lt;!-- 输入区 --&gt;</span>
+        <span class="kw">&lt;StackPanel</span><span class="fn"> Grid.Row</span>=<span class="st">"0"</span><span class="fn"> Orientation</span>=<span class="st">"Horizontal"</span><span class="fn"> Margin</span>=<span class="st">"0,0,0,12"</span><span class="kw">&gt;</span>
+            <span class="kw">&lt;TextBlock</span><span class="fn"> Text</span>=<span class="st">"Name:"</span><span class="fn"> VerticalAlignment</span>=<span class="st">"Center"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;TextBox</span><span class="fn"> Width</span>=<span class="st">"120"</span><span class="fn"> Margin</span>=<span class="st">"6,0"</span>
+                    <span class="fn"> Text</span>=<span class="st">"{Binding Name, UpdateSourceTrigger=PropertyChanged}"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;TextBlock</span><span class="fn"> Text</span>=<span class="st">"Age:"</span><span class="fn"> VerticalAlignment</span>=<span class="st">"Center"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;TextBox</span><span class="fn"> Width</span>=<span class="st">"50"</span><span class="fn"> Margin</span>=<span class="st">"6,0"</span>
+                    <span class="fn"> Text</span>=<span class="st">"{Binding Age, UpdateSourceTrigger=PropertyChanged}"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;Button</span><span class="fn"> Content</span>=<span class="st">"Add"</span><span class="fn"> Margin</span>=<span class="st">"6,0"</span><span class="fn"> Padding</span>=<span class="st">"12,2"</span>
+                    <span class="fn"> Command</span>=<span class="st">"{Binding AddCommand}"</span> <span class="kw">/&gt;</span>
+            <span class="kw">&lt;Button</span><span class="fn"> Content</span>=<span class="st">"Remove"</span><span class="fn"> Margin</span>=<span class="st">"6,0"</span><span class="fn"> Padding</span>=<span class="st">"12,2"</span>
+                    <span class="fn"> Command</span>=<span class="st">"{Binding RemoveCommand}"</span> <span class="kw">/&gt;</span>
+        <span class="kw">&lt;/StackPanel&gt;</span>
+
+        <span class="cm">&lt;!-- 列表区 --&gt;</span>
+        <span class="kw">&lt;ListBox</span><span class="fn"> Grid.Row</span>=<span class="st">"1"</span>
+                <span class="fn"> ItemsSource</span>=<span class="st">"{Binding Users}"</span>
+                <span class="fn"> SelectedItem</span>=<span class="st">"{Binding Selected, Mode=TwoWay}"</span> <span class="kw">/&gt;</span>
+    <span class="kw">&lt;/Grid&gt;</span>
+<span class="kw">&lt;/Window&gt;</span></code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>无 code-behind 业务逻辑</strong>：整个示例的 View 没有任何业务代码，<code>UserEditorView.xaml.cs</code> 只有默认的构造函数 + <code>InitializeComponent()</code>。所有状态（Name/Age/Selected/Users）和命令（AddCommand/RemoveCommand）都在 ViewModel，按钮的 <code>IsEnabled</code> 自动跟随 <code>CanExecute</code>——这是 MVVM 的精髓：<strong>声明式绑定驱动一切</strong>。
+  </div>
+</section>
+
+<section id="modern" class="toc-link">
+  <h2><span class="num">13</span> 对比 WinForms/WinUI</h2>
+  <p>WPF 已是成熟稳定的框架，<strong>仍在维护但不再有大特性</strong>。微软当前主推的 Windows 原生 UI 框架是 <strong>WinUI 3 / Windows App SDK</strong>（以及跨平台的 .NET MAUI）。对开发者而言，三者各有定位：</p>
+
+  <table>
+    <tr><th>框架</th><th>渲染</th><th>语言</th><th>XAML</th><th>数据绑定</th><th>定位</th><th>维护状态</th></tr>
+    <tr><td><strong>WinForms</strong></td><td>GDI+（即时）</td><td>C# / VB</td><td>无（设计器拖拽）</td><td>弱（BindingSource）</td><td>经典桌面、维护遗留</td><td>稳定维护</td></tr>
+    <tr><td><strong>WPF</strong></td><td>DirectX 9（保留）</td><td>C# + XAML</td><td>有（WPF XAML）</td><td>强（DP + Binding）</td><td>富客户端、企业 LOB</td><td>稳定，无新特性</td></tr>
+    <tr><td><strong>WinUI 3</strong></td><td>DirectX 12（WinRT）</td><td>C# + C++ + XAML</td><td>有（WinUI XAML）</td><td>强（{x:Bind} 编译期）</td><td>现代 Windows 原生</td><td>微软主推</td></tr>
+    <tr><td><strong>.NET MAUI</strong></td><td>各平台原生</td><td>C# + XAML</td><td>有（MAUI XAML）</td><td>强</td><td>跨平台（Win/Mac/iOS/Android）</td><td>演进中</td></tr>
+  </table>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">WPF vs WinForms</div>
+      <ul>
+        <li><strong>渲染</strong>：WPF DirectX 矢量；WinForms GDI 位图</li>
+        <li><strong>布局</strong>：WPF 流式面板；WinForms 绝对坐标为主</li>
+        <li><strong>绑定</strong>：WPF 一等公民；WinForms 弱化（BindingSource）</li>
+        <li><strong>XAML</strong>：WPF 声明式；WinForms 代码 + 设计器</li>
+        <li><strong>学习曲线</strong>：WPF 陡（DP/路由事件/MVVM）；WinForms 平</li>
+        <li><strong>性能</strong>：WinForms 轻量；WPF 启动慢、内存高</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">WPF vs WinUI 3</div>
+      <ul>
+        <li><strong>架构</strong>：WPF 托管；WinUI 3 是 WinRT 投影（C++/C#）</li>
+        <li><strong>绑定</strong>：WPF <code>{Binding}</code> 反射；WinUI <code>{x:Bind}</code> 编译期</li>
+        <li><strong>主题</strong>：WPF 自定义；WinUI 内置 Fluent/Mica</li>
+        <li><strong>控件</strong>：WinUI 更现代（ColorPicker、TreeView 重设计）</li>
+        <li><strong>兼容</strong>：WPF 跨 Windows 版本好；WinUI 仅 Win10 1809+</li>
+        <li><strong>未来</strong>：WPF 维护态；WinUI 是微软下一代主推</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout danger">
+    <strong>选型建议</strong>：维护遗留系统、深度调用 Win32、企业内部 LOB 应用，<strong>WPF 仍是稳妥选择</strong>；全新面向消费者的现代 Windows 应用、需要 Fluent 设计，<strong>选 WinUI 3</strong>；跨平台需求选 <strong>.NET MAUI</strong>；极轻量工具类程序可继续用 <strong>WinForms</strong>。不要在 WPF 与 WinUI 之间犹豫太久——两者的 MVVM 范式与 XAML 概念高度一致，技能可迁移。
+  </div>
+
+  <div class="callout warn">
+    <strong>WPF 的局限</strong>：基于 .NET Framework / .NET Core 3+，仅 Windows；默认主题（Aero/Luna）相比 Fluent 显得过时（需第三方库如 WPF-UI、MaterialDesign 补救）；启动慢、内存占用高于 WinForms；3D 能力弱（基于 DirectX 9 的 Viewport3D，不再演进）。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">14</span> 命名空间索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">.NET 9 / WindowsBase.dll / PresentationCore.dll / PresentationFramework.dll</span>   <span class="cmt">WPF 程序集根</span>
+├── <span class="dir">System.Windows</span>                  <span class="cmt">核心抽象与基础类</span>
+│   ├── <span class="file">DispatcherObject.cs</span>          <span class="cmt">线程亲和基类（持有 Dispatcher）</span>
+│   ├── <span class="file">DependencyObject.cs</span>          <span class="cmt">DP / 附加属性的宿主（GetValue/SetValue）</span>
+│   ├── <span class="file">Visual.cs</span>                     <span class="cm">渲染层基类，可视化树节点</span>
+│   ├── <span class="file">UIElement.cs</span>                  <span class="cm">布局 + 输入 + 路由事件</span>
+│   ├── <span class="file">FrameworkElement.cs</span>          <span class="cm">Style/DataContext/Binding/资源</span>
+│   ├── <span class="file">Window.cs</span>                     <span class="cm">顶级窗口</span>
+│   ├── <span class="file">Application.cs</span>                <span class="cm">应用对象、资源、生命周期</span>
+│   └── <span class="file">ResourceDictionary.cs</span>        <span class="cm">资源字典</span>
+├── <span class="dir">System.Windows.Controls</span>        <span class="cmt">控件库</span>
+│   ├── <span class="file">Control.cs</span>                    <span class="cm">控件基类（Template）</span>
+│   ├── <span class="file">ContentControl.cs</span>            <span class="cm">单内容控件（Button/Window/...）</span>
+│   ├── <span class="file">HeaderedContentControl.cs</span>    <span class="cm">带标题（GroupBox/Expander）</span>
+│   ├── <span class="file">ItemsControl.cs</span>              <span class="cm">列表基类</span>
+│   ├── <span class="file">Selector.cs</span>                  <span class="cm">可选择列表（ListBox/ComboBox）</span>
+│   ├── <span class="file">Panel.cs</span>                     <span class="cm">布局面板基类</span>
+│   ├── <span class="file">Grid / StackPanel / DockPanel.cs</span>
+│   ├── <span class="file">Canvas.cs</span>                     <span class="cm">绝对坐标面板</span>
+│   ├── <span class="file">VirtualizingStackPanel.cs</span>    <span class="cm">虚拟化栈面板（ListBox 默认）</span>
+│   ├── <span class="file">Button / TextBox / TextBlock.cs</span>
+│   ├── <span class="file">ListBox / ComboBox / ListView.cs</span>
+│   ├── <span class="file">DataGrid.cs</span>                   <span class="cm">表格控件</span>
+│   └── <span class="file">UserControl.cs</span>                <span class="cm">用户组合控件</span>
+├── <span class="dir">System.Windows.Controls.Primitives</span>   <span class="cmt">控件原语（不直接使用）</span>
+│   ├── <span class="file">ButtonBase.cs / ToggleButton.cs</span>
+│   ├── <span class="file">Popup.cs / Track.cs / TickBar.cs</span>
+│   └── <span class="file">UniformGrid.cs</span>
+├── <span class="dir">System.Windows.Data</span>             <span class="cmt">数据绑定</span>
+│   ├── <span class="file">Binding.cs</span>                    <span class="cm">Binding 表达式对象</span>
+│   ├── <span class="file">BindingExpression.cs</span>         <span class="cm">运行时绑定实例</span>
+│   ├── <span class="file">IValueConverter.cs</span>           <span class="cm">值转换器接口</span>
+│   ├── <span class="file">IMultiValueConverter.cs</span>      <span class="cm">多值转换器</span>
+│   └── <span class="file">RelativeSource.cs</span>            <span class="cm">Self/FindAncestor/TemplatedParent</span>
+├── <span class="dir">System.Windows.Input</span>            <span class="cmt">输入与命令</span>
+│   ├── <span class="file">ICommand.cs</span>                   <span class="cm">命令接口（MVVM 核心）</span>
+│   ├── <span class="file">RoutedCommand.cs</span>             <span class="cm">WPF 内置命令实现</span>
+│   ├── <span class="file">CommandBinding.cs</span>            <span class="cm">命令绑定（Executed/CanExecute）</span>
+│   ├── <span class="file">CommandManager.cs</span>            <span class="cm">RequerySuggested 全局刷新</span>
+│   ├── <span class="file">InputBinding.cs / KeyBinding.cs</span>   <span class="cm">手势到命令</span>
+│   ├── <span class="file">Mouse / Keyboard.cs</span>          <span class="cm">静态输入 API</span>
+│   └── <span class="file">ApplicationCommands / NavigationCommands.cs</span>   <span class="cm">内置命令库</span>
+├── <span class="dir">System.Windows.Markup</span>           <span class="cmt">XAML 支持</span>
+│   ├── <span class="file">MarkupExtension.cs</span>           <span class="cm">标记扩展基类</span>
+│   ├── <span class="file">StaticResourceExtension.cs</span>   <span class="cm">{StaticResource}</span>
+│   ├── <span class="file">DynamicResourceExtension.cs</span>  <span class="cm">{DynamicResource}</span>
+│   ├── <span class="file">BindingExtension.cs</span>          <span class="cm">{Binding}</span>
+│   ├── <span class="file">TypeExtension.cs / NullExtension.cs</span>
+│   └── <span class="file">ContentPropertyAttribute.cs</span>  <span class="cm">内容属性标注</span>
+├── <span class="dir">System.Windows.Media</span>            <span class="cmt">图形与渲染</span>
+│   ├── <span class="file">Visual.cs / ContainerVisual.cs</span>   <span class="cm">可视化树节点</span>
+│   ├── <span class="file">DrawingContext.cs</span>           <span class="cm">轻量绘图上下文</span>
+│   ├── <span class="file">Drawing / Geometry / PathGeometry.cs</span>
+│   ├── <span class="file">Brush / SolidColorBrush / LinearGradientBrush.cs</span>
+│   ├── <span class="file">Pen / Transform / MatrixTransform.cs</span>
+│   ├── <span class="file">BitmapImage / RenderTargetBitmap.cs</span>
+│   └── <span class="file">ScaleTransform / RotateTransform / TranslateTransform.cs</span>
+├── <span class="dir">System.Windows.Shapes</span>           <span class="cmt">高层图形元素</span>
+│   ├── <span class="file">Shape.cs</span>                      <span class="cm">基类（继承 FrameworkElement）</span>
+│   ├── <span class="file">Ellipse / Rectangle / Line.cs</span>
+│   ├── <span class="file">Path / Polyline / Polygon.cs</span>
+│   └── <span class="file">StreamGeometry.cs</span>             <span class="cm">紧凑的路径几何（流式）</span>
+├── <span class="dir">System.Windows.Threading</span>        <span class="cmt">Dispatcher 调度</span>
+│   ├── <span class="file">Dispatcher.cs</span>                 <span class="cm">UI 线程消息泵</span>
+│   ├── <span class="file">DispatcherFrame.cs</span>           <span class="cm">嵌套消息循环</span>
+│   └── <span class="file">DispatcherTimer.cs</span>           <span class="cm">UI 线程定时器</span>
+└── <span class="dir">System.Windows.Navigation</span>       <span class="cmt">导航（Page 应用）</span>
+    ├── <span class="file">NavigationWindow.cs / Page.cs</span>
+    └── <span class="file">NavigationService.cs</span>
+  </pre></div>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>PresentationFramework.dll</code> WPF 高层 API（Window/Control/Panel/Style/Binding）的统一入口，反编译后可见几乎所有 FrameworkElement 行为。<br>
+    <code>PresentationCore.dll</code> Visual/UIElement/Dispatcher/Input 等底层抽象，理解布局与事件路由的关键。<br>
+    <code>WindowsBase.dll</code> DependencyProperty/DispatcherObject/ObservableCollection，WPF 的“基石三件套”。<br>
+    <code>System.Xaml.dll</code> XAML 读取器/写入器与标记扩展机制，理解 BAML 加载路径必读。<br>
+    <code>milcore.dll</code> 非托管 DirectX 渲染层，WPF 保留模式合成的核心（C++ 源码不公开，可读托管调用边界）。<br>
+    <code>CommunityToolkit.Mvvm</code> 现代 MVVM 库，含 ObservableObject / RelayCommand / 源生成器，是当前 WPF/UWP/WinUI/MAUI 通用的 VM 基础设施。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 .NET 9 (WPF) · PresentationFramework / PresentationCore · 生成于 2026-06-22</footer>
+<script src="common.js"></script>
+</body>
+</html>

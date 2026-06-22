@@ -42,9 +42,19 @@
     { t:"Linux veth", f:"linux-veth.html", top:"net" },
     { t:"Linux tun/tap", f:"linux-tun-tap.html", top:"net" },
     { t:"数据包接收流程", f:"linux-rx-packet.html", top:"net" },
-    { t:"数据包发送流程", f:"linux-tx-packet.html", top:"net" }
+    { t:"数据包发送流程", f:"linux-tx-packet.html", top:"net" },
+    { t:"Windows MFC", f:"windows-mfc.html", top:"windows" },
+    { t:"Windows Win32 API", f:"windows-win32.html", top:"windows" },
+    { t:"Windows ATL/WTL", f:"windows-atl-wtl.html", top:"windows" },
+    { t:"Windows Forms", f:"windows-winforms.html", top:"windows" },
+    { t:"Windows WPF", f:"windows-wpf.html", top:"windows" },
+    { t:"Windows UWP", f:"windows-uwp.html", top:"windows" },
+    { t:"Windows WinUI 3", f:"windows-winui3.html", top:"windows" },
+    { t:".NET MAUI", f:"windows-maui.html", top:"windows" },
+    { t:"Windows WebView2", f:"windows-webview2.html", top:"windows" },
+    { t:"Dioxus", f:"rust-dioxus.html", top:"rust" }
   ];
-  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", other:"硬件与平台" };
+  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", other:"硬件与平台" };
 
   // 主题切换
   var STORAGE_KEY = 'kernel-docs-theme';
@@ -110,7 +120,7 @@
     });
 
     var html = '<div class="doc-sidebar-hdr"><a class="back" href="index.html">← 导航页</a><div class="btns"><button class="hdr-btn" id="sb-collapse" title="收起">‹</button></div></div><nav class="doc-sidebar-nav">';
-    ['linux','fs','driver','net','other'].forEach(function(top) {
+    ['linux','fs','driver','net','windows','rust','other'].forEach(function(top) {
       var items = tops[top];
       if (!items || !items.length) return;
       html += '<div class="doc-sidebar-cat">' + (TOP_LABELS[top]||top) + '</div>';
@@ -125,6 +135,19 @@
     sidebar.className = 'doc-sidebar';
     sidebar.innerHTML = html;
     document.body.appendChild(sidebar);
+
+    // 将当前文档项滚动到侧边栏可见区域（避免每次打开都停在顶部）
+    requestAnimationFrame(function() {
+      var cur = sidebar.querySelector('.doc-sidebar-item.current');
+      if (!cur) return;
+      var scroller = sidebar.querySelector('.doc-sidebar-nav') || sidebar;
+      var sR = scroller.getBoundingClientRect();
+      var cR = cur.getBoundingClientRect();
+      // 已在可视区则无需滚动
+      if (cR.top >= sR.top - 1 && cR.bottom <= sR.bottom + 1) return;
+      // 让当前项尽量居中显示（仅滚动侧边栏容器，不影响主窗口）
+      scroller.scrollTop += cR.top - sR.top - (sR.height - cR.height) / 2;
+    });
 
     // 展开按钮
     var expandBtn = document.createElement('button');

@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Windows WebView2 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230066b3'/><stop offset='100%25' stop-color='%2300b294'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='70' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>V</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Windows WebView2 深度解析</h1>
+  <p class="subtitle">WebView2 — 嵌入 Edge Chromium 内核的混合应用方案</p>
+  <span class="version">WebView2 SDK 1.0.2792 · WebView2.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#architecture">架构与运行时</a></li>
+    <li><a href="#environment">环境与创建</a></li>
+    <li><a href="#frameworks">集成到各框架</a></li>
+    <li><a href="#core-api">核心 API</a></li>
+    <li><a href="#communication">原生 ↔ Web 通信</a></li>
+    <li><a href="#virtual-host">虚拟主机与本地资源</a></li>
+    <li><a href="#security">安全</a></li>
+    <li><a href="#deployment">打包与部署</a></li>
+    <li><a href="#example">完整示例</a></li>
+    <li><a href="#compare">对比 Electron/CEF</a></li>
+    <li><a href="#files">头文件索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>WebView2 是微软提供的<strong>现代 Web 视图控件</strong>，它把<strong>Microsoft Edge（Chromium 内核）的完整渲染引擎</strong>以控件形式嵌入到任意 Windows 应用中。开发者既拥有原生外壳的全部能力（文件系统、硬件、原生 API），又能用 Web 技术栈（HTML/CSS/JS/React/Vue）构建 UI——这就是<strong>混合应用（Hybrid App）</strong>模式。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">核心特性</div>
+      <ul>
+        <li><strong>Chromium 渲染</strong>：与 Edge 同源，完整 Web 兼容性</li>
+        <li><strong>多框架支持</strong>：WPF / WinForms / WinUI 3 / Win32 / MFC</li>
+        <li><strong>双向通信</strong>：WebMessage + 主机对象投影</li>
+        <li><strong>运行时复用</strong>：共享系统 Edge，无需自带浏览器</li>
+        <li><strong>自动更新</strong>：Evergreen 模式由微软推送安全更新</li>
+        <li><strong>本地资源映射</strong>：虚拟主机让 Web 加载本地文件</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">典型适用场景</div>
+      <table>
+        <tr><th>场景</th><th>说明</th></tr>
+        <tr><td>现代 UI 改造</td><td>遗留 MFC/Win32 用 Web 重构界面</td></tr>
+        <tr><td>跨端复用</td><td>复用已有的 Web 前端代码</td></tr>
+        <tr><td>富内容展示</td><td>复杂排版/图表/多媒体</td></tr>
+        <tr><td>快速迭代</td><td>UI 改动无需重新编译原生</td></tr>
+        <tr><td>混合应用</td><td>Teams / Edge 自身的 PWAs</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="callout tip">
+    <strong>定位</strong>：WebView2 与原生 GUI 框架<strong>互补</strong>而非替代——它是嵌入到 WPF/WinForms/WinUI/Win32/MFC 容器中的一个控件，原生负责窗口与系统集成，Web 负责 UI 渲染。
+  </div>
+</section>
+
+<section id="architecture" class="toc-link">
+  <h2><span class="num">02</span> 架构与运行时</h2>
+  <p>WebView2 的运行时（Runtime）是<strong>独立的 Edge Chromium 浏览器引擎</strong>，由微软通过 Windows Update 分发。客户端应用通过 SDK 调用，SDK 内部以 COM 桥接到运行时的多进程模型。</p>
+
+  <h3>两种运行时分发模式</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Evergreen（常青）</div>
+      <ul>
+        <li>随 Windows 更新自动升级</li>
+        <li>多 App 共享一份运行时</li>
+        <li>微软负责安全补丁</li>
+        <li>包体最小（SDK 仅几 MB）</li>
+        <li>当前主流推荐方式</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">FixedVersion（固定版本）</div>
+      <ul>
+        <li>解压一个固定版本的运行时随 App 分发</li>
+        <li>完全可控，无外部依赖</li>
+        <li>需自行处理更新与安全</li>
+        <li>体积大（~150MB）</li>
+        <li>适用于受控环境/合规要求</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>组件与进程模型</h3>
+  <div class="card">
+    <pre><code><span class="cm">// WebView2 整体架构</span>
+┌─────────────────────────────────────────────────────────┐
+│  <span class="ty">客户端 App</span>（WPF / WinForms / Win32 / WinUI）          │
+│    └── <span class="ty">WebView2 SDK</span>（托管包装 + COM 互操作）           │
+└──────────────────────────┬──────────────────────────────┘
+                           │ <span class="fn">COM / Project Reunion</span>
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│  <span class="ty">WebView2 Runtime</span>（Edge Chromium 内核，多进程）        │
+│    ├── <span class="ty">Browser Process</span>（主进程，1 个）              │
+│    │     └── 管理所有 WebView 实例、网络、GPU 调度          │
+│    ├── <span class="ty">Renderer Process</span>（渲染进程，每站点 1 个）     │
+│    │     └── Blink 渲染 + V8 JS 引擎（沙箱隔离）          │
+│    ├── <span class="ty">GPU Process</span>（图形合成，全局共享）            │
+│    └── <span class="ty">Utility Process</span>（网络/音频/存储服务）         │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+                <span class="ty">UserDataFolder</span>（每 App 独立）
+                  缓存 / Cookie / localStorage / IndexedDB</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>进程隔离</strong>：每个 WebView2 实例对应<strong>独立的渲染进程</strong>，与 Chrome 同源——单页崩溃不影响其他 WebView 或宿主进程。但所有实例共享同一个 <strong>UserDataFolder</strong>，<strong>不同 App 必须指定不同 UserDataFolder</strong>，否则 Cookie/缓存冲突。
+  </div>
+</section>
+
+<section id="environment" class="toc-link">
+  <h2><span class="num">03</span> 环境与创建</h2>
+  <p>WebView2 的初始化遵循<strong>三层对象模型</strong>：先创建 Environment（环境），再创建 Controller（控制器，承载 HWND/父控件），最后通过 Controller.CoreWebView2 拿到核心 WebView 用于操作。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 三层对象层级（C# 概念）</span>
+<span class="ty">CoreWebView2Environment</span>        <span class="cm">// 运行时环境（进程/数据目录/选项）</span>
+  └── <span class="ty">CoreWebView2Controller</span>      <span class="cm">// 控制器：管理窗口、焦点、缩放</span>
+        └── <span class="ty">CoreWebView2</span>             <span class="cm">// 核心：导航、JS、消息、设置</span>
+              └── <span class="ty">CoreWebView2Settings</span>  <span class="cm">// 行为开关（DevTools/脚本/状态栏）</span></code></pre>
+  </div>
+
+  <h3>C# 异步初始化</h3>
+  <div class="card">
+    <pre><code><span class="cm">// WPF / WinForms 中最常见的初始化模式</span>
+<span class="kw">public partial class</span> <span class="ty">MainWindow</span> : <span class="ty">Window</span>
+{
+    <span class="kw">public</span> <span class="ty">MainWindow</span>() {
+        <span class="fn">InitializeComponent</span>();
+        <span class="fn">InitializeAsync</span>();
+    }
+
+    <span class="kw">private async</span> <span class="ty">Task</span> <span class="fn">InitializeAsync</span>()
+    {
+        <span class="cm">// 1. 显式指定 UserDataFolder（多实例隔离的关键）</span>
+        <span class="kw">var</span> options = <span class="kw">new</span> <span class="ty">CoreWebView2EnvironmentOptions</span> {
+            AdditionalBrowserArguments = <span class="st">"--disable-features=msHubApps"</span>,
+            Language = <span class="st">"zh-CN"</span>
+        };
+        <span class="kw">var</span> env = <span class="kw">await</span> <span class="ty">CoreWebView2Environment</span>.<span class="fn">CreateAsync</span>(
+            browserExecutableFolder: <span class="kw">null</span>,             <span class="cm">// null = Evergreen</span>
+            userDataFolder: <span class="st">@"%LOCALAPPDATA%\MyApp\WebView"</span>,
+            options: options);
+
+        <span class="cm">// 2. 在指定环境下初始化控件</span>
+        <span class="kw">await</span> webView.<span class="fn">EnsureCoreWebView2Async</span>(env);
+
+        <span class="cm">// 3. 此后 CoreWebView2 可用</span>
+        webView.CoreWebView2.<span class="fn">Navigate</span>(<span class="st">"https://app.local/index.html"</span>);
+    }
+}</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 或使用最简形式（默认 Evergreen + 默认 UserDataFolder）</span>
+<span class="kw">public</span> <span class="ty">MainWindow</span>() {
+    <span class="fn">InitializeComponent</span>();
+    webView.<span class="fn">CoreWebView2InitializationCompleted</span> += (<span class="kw">s</span>, e) => {
+        <span class="kw">if</span> (e.IsSuccess) {
+            webView.CoreWebView2.<span class="fn">Navigate</span>(<span class="st">"https://localhost:8080"</span>);
+        }
+    };
+    <span class="fn">_</span> = webView.<span class="fn">EnsureCoreWebView2Async</span>();
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>三层关系</strong>：<code>Environment</code> 是<strong>进程级</strong>对象（一个 App 可共享一个），<code>Controller</code> 是<strong>窗口级</strong>对象（每控件一个，绑 HWND），<code>CoreWebView2</code> 是<strong>页面级</strong>对象（导航/JS/消息都在这里）。<code>CoreWebView2InitializationCompleted</code> 事件触发后才能安全使用 CoreWebView2，在此之前访问会抛 <code>InvalidOperationException</code>。
+  </div>
+</section>
+
+<section id="frameworks" class="toc-link">
+  <h2><span class="num">04</span> 集成到各框架</h2>
+  <p>WebView2 为每个主流 GUI 框架提供专门的<strong>包装控件</strong>，统一底层 API 但适配各自的布局、事件、句柄体系。</p>
+
+  <table>
+    <tr><th>框架</th><th>NuGet 包</th><th>控件名</th><th>底层基类</th></tr>
+    <tr><td>WPF</td><td><code>Microsoft.Web.WebView2.WPF</code></td><td><code>&lt;wv2:WebView2&gt;</code></td><td><code>HwndHost</code>（嵌入 HWND）</td></tr>
+    <tr><td>WinForms</td><td><code>Microsoft.Web.WebView2.WinForms</code></td><td><code>WebView2</code></td><td><code>Control</code></td></tr>
+    <tr><td>WinUI 3</td><td><code>Microsoft.Web.WebView2.WinUI</code></td><td><code>Microsoft.UI.Xaml.Controls.WebView2</code></td><td><code>FrameworkElement</code></td></tr>
+    <tr><td>Win32 / C++</td><td><code>Microsoft.Web.WebView2</code>（COM）</td><td><code>ICoreWebView2Controller</code></td><td>直接绑定 HWND</td></tr>
+    <tr><td>MFC</td><td>同 Win32 COM</td><td>封装为 <code>CWnd</code> 子类</td><td>HWND + COM</td></tr>
+  </table>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">WPF（XAML）</div>
+      <div class="card" style="box-shadow:none;">
+      <pre><code><span class="cm">&lt;!-- 在 XAML 中声明 --&gt;</span>
+<span class="kw">&lt;Window</span> <span class="pp">xmlns:wv2=</span><span class="st">"clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"</span><span class="kw">&gt;</span>
+  <span class="kw">&lt;wv2:WebView2</span> <span class="pp">Name=</span><span class="st">"webView"</span>
+                <span class="pp">Source=</span><span class="st">"https://example.com"</span> <span class="kw">/&gt;</span>
+<span class="kw">&lt;/Window&gt;</span></code></pre>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Win32 / C++（COM）</div>
+      <div class="card" style="box-shadow:none;">
+      <pre><code><span class="cm">// 直接绑定到 HWND</span>
+<span class="ty">HRESULT</span> <span class="fn">CreateWebView</span>(<span class="ty">HWND</span> hwndParent) {
+    <span class="kw">return</span> <span class="fn">CreateCoreWebView2EnvironmentWithOptions</span>(
+        <span class="ty">L</span><span class="st">"C:\\Runtime"</span>,         <span class="cm">// 运行时路径</span>
+        <span class="ty">L</span><span class="st">"C:\\UserData"</span>,        <span class="cm">// UserDataFolder</span>
+        <span class="kw">nullptr</span>,                <span class="cm">// 选项</span>
+        <span class="ty">Callback</span>&lt;<span class="ty">ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler</span>&gt;(
+            [<span class="kw">this</span>](<span class="ty">HRESULT</span>, <span class="ty">ICoreWebView2Environment</span>* env) {
+                env-><span class="fn">CreateCoreWebView2Controller</span>(hwndParent, ...);
+                <span class="kw">return</span> <span class="ty">S_OK</span>;
+            }).<span class="fn">Get</span>());
+}</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <strong>WinUI 3 注意</strong>：WinUI 3 的 WebView2 是<strong>原生 XAML 控件</strong>而非 HwndHost 互操作，性能与 DPI 处理更佳，但要求 Windows App SDK 1.0+。MFC 集成需自行用 <code>SubclassWindow</code> 把 Controller 的 HWND 包成 <code>CWnd</code>。
+  </div>
+</section>
+
+<section id="core-api" class="toc-link">
+  <h2><span class="num">05</span> 核心 API</h2>
+  <p><code>CoreWebView2</code> 暴露的核心能力分四类：<strong>导航</strong>、<strong>脚本执行</strong>、<strong>消息通信</strong>、<strong>辅助功能</strong>（截图/打印）。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 导航相关</span>
+webView.CoreWebView2.<span class="fn">Navigate</span>(<span class="st">"https://example.com"</span>);           <span class="cm">// 加载 URL</span>
+webView.CoreWebView2.<span class="fn">NavigateToString</span>(htmlContent);              <span class="cm">// 加载 HTML 字符串</span>
+<span class="kw">string</span> url = webView.CoreWebView2.<span class="fn">Source</span>;                           <span class="cm">// 当前 URL</span>
+webView.CoreWebView2.<span class="fn">GoBack</span>();   webView.CoreWebView2.<span class="fn">GoForward</span>();
+<span class="kw">bool</span> canBack = webView.CoreWebView2.<span class="fn">CanGoBack</span>();
+
+<span class="cm">// 事件：导航各阶段</span>
+webView.CoreWebView2.<span class="fn">NavigationStarting</span>    += OnNavStarting;     <span class="cm">// 可取消</span>
+webView.CoreWebView2.<span class="fn">NavigationCompleted</span>   += OnNavCompleted;    <span class="cm">// 成功/失败</span>
+webView.CoreWebView2.<span class="fn">SourceChanged</span>         += OnSourceChanged;
+webView.CoreWebView2.<span class="fn">HistoryChanged</span>        += OnHistoryChanged;
+
+<span class="cm">// 执行 JS 表达式，返回 JSON 字符串</span>
+<span class="kw">string</span> result = <span class="kw">await</span> webView.CoreWebView2.<span class="fn">ExecuteScriptAsync</span>(
+    <span class="st">"JSON.stringify({ width: window.innerWidth })"</span>);
+
+<span class="cm">// 截图（PNG 字节数组）</span>
+<span class="ty">Stream</span> stream = <span class="kw">await</span> webView.CoreWebView2.<span class="fn">CapturePreviewAsync</span>(
+    <span class="ty">CoreWebView2CapturePreviewImageFormat</span>.Png);
+
+<span class="cm">// 打印为 PDF</span>
+<span class="ty">Stream</span> pdf = <span class="kw">await</span> webView.CoreWebView2.<span class="fn">PrintToPdfAsync</span>(
+    <span class="st">@"C:\out.pdf"</span>, <span class="kw">null</span>);</code></pre>
+  </div>
+
+  <h3>C++ COM 等价写法</h3>
+  <div class="card">
+    <pre><code><span class="ty">wil::com_ptr</span>&lt;<span class="ty">ICoreWebView2</span>&gt; m_webView;
+
+<span class="ty">HRESULT</span> <span class="fn">NavigateAndExec</span>(<span class="ty">LPCWSTR</span> url) {
+    <span class="ty">HRESULT</span> hr = m_webView-><span class="fn">Navigate</span>(url);
+    <span class="kw">if</span> (<span class="ty">FAILED</span>(hr)) <span class="kw">return</span> hr;
+
+    <span class="cm">// 注册导航完成回调</span>
+    m_webView-><span class="fn">add_NavigationCompleted</span>(
+        <span class="ty">Callback</span>&lt;<span class="ty">ICoreWebView2NavigationCompletedEventHandler</span>&gt;(
+            [](<span class="ty">ICoreWebView2</span>*, <span class="ty">ICoreWebView2NavigationCompletedEventArgs</span>* args) {
+                <span class="ty">BOOL</span> success;
+                args-><span class="fn">get_IsSuccess</span>(&amp;success);
+                <span class="kw">if</span> (success) { <span class="cm">/* 页面就绪 */</span> }
+                <span class="kw">return</span> <span class="ty">S_OK</span>;
+            }).<span class="fn">Get</span>(),
+        &amp;m_navCompletedToken);
+    <span class="kw">return</span> <span class="ty">S_OK</span>;
+}
+
+<span class="cm">// 执行 JS</span>
+m_webView-><span class="fn">ExecuteScript</span>(<span class="ty">L</span><span class="st">"document.title"</span>,
+    <span class="ty">Callback</span>&lt;<span class="ty">ICoreWebView2ExecuteScriptCompletedHandler</span>&gt;(
+        [](<span class="ty">HRESULT</span> err, <span class="ty">LPCWSTR</span> resultJson) {
+            <span class="kw">if</span> (<span class="ty">SUCCEEDED</span>(err)) <span class="cm">/* resultJson 形如 "\"My Page\"" */</span>
+            <span class="kw">return</span> <span class="ty">S_OK</span>;
+        }).<span class="fn">Get</span>());</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>ExecuteScriptAsync 的返回</strong>：执行结果总是<strong>JSON 编码的字符串</strong>——<code>"42"</code> 是 <code>"42"</code>，<code>true</code> 是 <code>"true"</code>，对象需 <code>JSON.stringify</code>。这是常见坑：你不能直接拿到强类型值，必须 <code>JsonSerializer.Deserialize</code>。
+  </div>
+</section>
+
+<section id="communication" class="toc-link">
+  <h2><span class="num">06</span> 原生 ↔ Web 通信</h2>
+  <p>WebView2 提供两种原生与 Web 双向通信机制，分别适用于不同复杂度场景。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">WebMessage（消息传递）</div>
+      <ul>
+        <li>JSON 字符串双向收发</li>
+        <li>异步、解耦、简单</li>
+        <li>无强类型，需手动协议</li>
+        <li>适合：通知、事件、轻量调用</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">HostObject（对象投影）</div>
+      <ul>
+        <li>把 COM 对象暴露给 JS</li>
+        <li>JS 直接 <code>hostObj.Method()</code></li>
+        <li>同步 IPC，强类型签名</li>
+        <li>适合：紧密集成、复杂调用</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>方式一：WebMessage</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ── C# 端 ──</span>
+<span class="cm">// 接收 Web 发来的消息</span>
+webView.CoreWebView2.<span class="fn">WebMessageReceived</span> += (<span class="kw">s</span>, e) => {
+    <span class="kw">string</span> json = e.<span class="fn">TryGetWebMessageAsString</span>();
+    <span class="kw">var</span> msg = <span class="ty">JsonSerializer</span>.<span class="fn">Deserialize</span>&lt;<span class="ty">Msg</span>&gt;(json);
+    <span class="kw">if</span> (msg.type == <span class="st">"save"</span>) <span class="fn">SaveToFile</span>(msg.data);
+};
+
+<span class="cm">// 向 Web 发送消息</span>
+webView.CoreWebView2.<span class="fn">PostWebMessageAsJson</span>(<span class="ty">JsonSerializer</span>.<span class="fn">Serialize</span>(<span class="kw">new</span> {
+    type = <span class="st">"fileSaved"</span>, path = <span class="st">"C:\\a.txt"</span>
+}));
+
+<span class="cm">// ── Web 端（JS）──</span>
+<span class="kw">window</span>.chrome.webview.<span class="fn">postMessage</span>(<span class="ty">JSON</span>.<span class="fn">stringify</span>({ type: <span class="st">"save"</span>, data: content }));
+
+<span class="kw">window</span>.chrome.webview.<span class="fn">addEventListener</span>(<span class="st">'message'</span>, <span class="kw">event</span> => {
+    <span class="kw">const</span> msg = <span class="ty">JSON</span>.<span class="fn">parse</span>(event.data);
+    <span class="kw">if</span> (msg.type === <span class="st">'fileSaved'</span>) <span class="fn">showToast</span>(<span class="st">'已保存到 '</span> + msg.path);
+});</code></pre>
+  </div>
+
+  <h3>方式二：主机对象投影</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ── C#：定义并暴露一个对象 ──</span>
+[<span class="ty">ClassInterface</span>(<span class="ty">ClassInterfaceType</span>.AutoDual)]
+[<span class="ty">ComVisible</span>(<span class="kw">true</span>)]
+<span class="kw">public class</span> <span class="ty">FileBridge</span> {
+    <span class="kw">public string</span> <span class="fn">ReadAllText</span>(<span class="kw">string</span> path) =&gt; <span class="ty">File</span>.<span class="fn">ReadAllText</span>(path);
+    <span class="kw">public void</span> <span class="fn">WriteAllText</span>(<span class="kw">string</span> path, <span class="kw">string</span> content) =&gt; <span class="ty">File</span>.<span class="fn">WriteAllText</span>(path, content);
+}
+
+<span class="cm">// 注册：JS 中通过 chrome.webview.hostObjects.file 访问</span>
+webView.CoreWebView2.<span class="fn">AddHostObjectToScript</span>(<span class="st">"file"</span>, <span class="kw">new</span> <span class="ty">FileBridge</span>());
+
+<span class="cm">// ── Web 端（JS）：直接调用原生方法 ──</span>
+<span class="kw">async function</span> <span class="fn">loadConfig</span>() {
+    <span class="kw">const</span> { file } = <span class="kw">window</span>.chrome.webview.hostObjects;
+    <span class="kw">const</span> text = <span class="kw">await</span> file.<span class="fn">ReadAllText</span>(<span class="st">"C:\\config.json"</span>);  <span class="cm">// 同步 IPC，强类型</span>
+    <span class="kw">return</span> <span class="ty">JSON</span>.<span class="fn">parse</span>(text);
+}</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>HostObject 安全</strong>：暴露的 COM 对象<strong>所有公共方法</strong>都对页面中的任意 JS 可见，包括第三方脚本与 iframe（除非设置 <code>AddHostObjectToScript</code> 的同名参数限定同源）。<strong>仅暴露最小必要接口</strong>，绝不要把整个 <code>File</code>、<code>Process</code> 之类的危险对象直接投影——这等于把本地代码执行能力交给了 Web。
+  </div>
+
+  <div class="callout tip">
+    <strong>选型</strong>：消息传值简单安全但需要手写协议；HostObject 调用像本地代码但放大了攻击面。生产实践通常是<strong>WebMessage 负责高频事件流</strong>，<strong>HostObject 仅封装受控的、参数校验过的业务接口</strong>。
+  </div>
+</section>
+
+<section id="virtual-host" class="toc-link">
+  <h2><span class="num">07</span> 虚拟主机与本地资源</h2>
+  <p>WebView2 提供一套机制让 Web 端用<strong>标准 https 协议</strong>加载本地文件，而无需 <code>file://</code>（CORS 受限、路径暴露）或 <code>NavigateToString</code>（单文件限制）。</p>
+
+  <h3>SetVirtualHostNameToFolderMapping</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 把本地目录映射为虚拟主机</span>
+webView.CoreWebView2.<span class="fn">SetVirtualHostNameToFolderMapping</span>(
+    hostName: <span class="st">"app.local"</span>,
+    folderPath: <span class="st">@"C:\App\dist"</span>,           <span class="cm">// 或 AppContext.BaseDirectory</span>
+    accessKind: <span class="ty">CoreWebView2HostResourceAccessKind</span>.Allow);
+
+<span class="cm">// 之后 Web 端即可：</span>
+<span class="cm">//   fetch("https://app.local/config.json")</span>
+<span class="cm">//   &lt;link rel="stylesheet" href="https://app.local/style.css"&gt;</span>
+<span class="cm">//   import './module.js' from https://app.local/index.js</span>
+webView.CoreWebView2.<span class="fn">Navigate</span>(<span class="st">"https://app.local/index.html"</span>);</code></pre>
+  </div>
+
+  <h3>注入脚本与拦截请求</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 页面加载时注入全局 JS（每次导航都会执行）</span>
+webView.CoreWebView2.<span class="fn">AddScriptToExecuteOnDocumentCreatedAsync</span>(
+    <span class="st">"window.NATIVE = { version: '1.0', platform: 'win32' };"</span>);
+
+<span class="cm">// 拦截 Web 发起的请求（虚拟主机/真实网络都拦截）</span>
+webView.CoreWebView2.<span class="fn">WebResourceRequested</span> += (<span class="kw">s</span>, e) => {
+    <span class="kw">var</span> uri = e.Request.<span class="fn">Uri</span>;
+    <span class="kw">if</span> (uri.<span class="fn">StartsWith</span>(<span class="st">"https://app.local/api/"</span>)) {
+        <span class="kw">var</span> response = <span class="kw">new</span> <span class="ty">MemoryStream</span>(<span class="ty">Encoding</span>.UTF8.<span class="fn">GetBytes</span>(<span class="st">"{\"ok\":true}"</span>));
+        e.<span class="fn">GetDeferral</span>().<span class="fn">Complete</span>();
+        <span class="cm">// 用环境创建 Response 并赋给 e.Response</span>
+    }
+};
+<span class="cm">// 必须先添加 filter，否则事件不触发</span>
+webView.CoreWebView2.<span class="fn">AddWebResourceRequestedFilter</span>(
+    <span class="st">"https://app.local/api/*"</span>, <span class="ty">CoreWebView2WebResourceContext</span>.All);</code></pre>
+  </div>
+
+  <h3>自定义右键菜单</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 移除/添加右键菜单项</span>
+<span class="kw">var</span> menu = webView.CoreWebView2.<span class="fn">ContextMenuRequested</span>;
+webView.CoreWebView2.<span class="fn">ContextMenuRequested</span> += (<span class="kw">s</span>, e) => {
+    <span class="kw">var</span> items = e.<span class="fn">MenuItems</span>;
+    <span class="cm">// 移除"检查"和"重新加载"</span>
+    items.<span class="fn">RemoveAll</span>(i =&gt; i.<span class="fn">Name</span> == <span class="st">"inspect"</span> || i.<span class="fn">Name</span> == <span class="st">"reload"</span>);
+    <span class="cm">// 添加自定义项</span>
+    items.<span class="fn">Add</span>(<span class="kw">new</span> <span class="ty">CoreWebView2ContextMenuItem</span> {
+        Label = <span class="st">"导出为 PDF"</span>, CommandId = <span class="num">1001</span>
+    });
+};</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>虚拟主机的价值</strong>：本地资源以 <code>https://</code> 访问意味着所有 Web 标准 API（fetch、ES Modules、Service Worker 概念）都正常工作，CORS 不再是障碍；同时虚拟域名对页面透明，前端代码无需改动即可在本地/远程之间切换。
+  </div>
+</section>
+
+<section id="security" class="toc-link">
+  <h2><span class="num">08</span> 安全</h2>
+  <p>WebView2 继承 Chromium 的全部安全基础设施（沙箱、站点隔离、同源策略），但<strong>主机对象的暴露、运行时版本、导航控制</strong>是应用层必须自己把关的部分。</p>
+
+  <table>
+    <tr><th>安全配置项</th><th>API / 设置</th><th>建议</th></tr>
+    <tr><td>开发者工具</td><td><code>Settings.AreDevToolsEnabled</code></td><td>发布版关闭</td></tr>
+    <tr><td>浏览器快捷键</td><td><code>Settings.AreBrowserAcceleratorKeysEnabled</code></td><td>发布版关闭（避免 F5/Ctrl+N）</td></tr>
+    <tr><td>右键菜单</td><td><code>AreDefaultContextMenusEnabled</code></td><td>按需关闭</td></tr>
+    <tr><td>状态栏</td><td><code>IsStatusBarEnabled</code></td><td>按需关闭</td></tr>
+    <tr><td>导航拦截</td><td><code>NavigationStarting</code></td><td>白名单过滤 URL</td></tr>
+    <tr><td>主机对象范围</td><td><code>AddHostObjectToScript</code> 同源参数</td><td>限制为本地资源</td></tr>
+    <tr><td>脚本执行</td><td><code>IsScriptEnabled</code></td><td>纯 HTML 展示时关闭</td></tr>
+    <tr><td>UserDataFolder 权限</td><td>目录 ACL</td><td>每用户独立目录</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">// 发布版本的典型安全配置</span>
+<span class="kw">var</span> settings = webView.CoreWebView2.<span class="fn">Settings</span>;
+settings.<span class="fn">AreDevToolsEnabled</span> = <span class="kw">false</span>;                  <span class="cm">// 关闭 DevTools</span>
+settings.<span class="fn">AreBrowserAcceleratorKeysEnabled</span> = <span class="kw">false</span>;  <span class="cm">// 关闭浏览器快捷键</span>
+settings.<span class="fn">AreDefaultContextMenusEnabled</span> = <span class="kw">false</span>;
+settings.<span class="fn">IsStatusBarEnabled</span> = <span class="kw">false</span>;
+settings.<span class="fn">IsBuiltInErrorPageEnabled</span> = <span class="kw">true</span>;
+
+<span class="cm">// 导航白名单</span>
+webView.CoreWebView2.<span class="fn">NavigationStarting</span> += (<span class="kw">s</span>, e) => {
+    <span class="kw">var</span> allowed = <span class="kw">new</span>[] { <span class="st">"https://app.local"</span>, <span class="st">"https://login.example.com"</span> };
+    <span class="kw">if</span> (!allowed.<span class="fn">Any</span>(p =&gt; e.<span class="fn">Uri</span>.<span class="fn">StartsWith</span>(p))) {
+        e.<span class="fn">Cancel</span> = <span class="kw">true</span>;                       <span class="cm">// 拦截外部跳转</span>
+    }
+};</code></pre>
+  </div>
+
+  <div class="callout danger">
+    <strong>主机对象是最大风险面</strong>：通过 <code>AddHostObjectToScript</code> 暴露的任意方法都能被<strong>页面中的任意 JS 调用</strong>——包括 XSS 注入的脚本、第三方广告、跨域 iframe。<strong>绝不要</strong>暴露 <code>File</code>、<code>Process</code>、<code>Registry</code>、<code>PowerShell</code> 等危险对象，应封装一个<strong>最小接口</strong>，对参数做严格校验。一旦页面被 XSS，整个宿主机随之沦陷。
+  </div>
+
+  <div class="callout tip">
+    <strong>SmartScreen</strong>：Edge 运行时默认集成 Microsoft Defender SmartScreen，对导航到的 URL 做钓鱼/恶意软件检查，可在运行时策略中关闭但<strong>不建议</strong>。
+  </div>
+</section>
+
+<section id="deployment" class="toc-link">
+  <h2><span class="num">09</span> 打包与部署</h2>
+  <p>WebView2 运行时的部署方式直接决定应用的体积、可控性和更新策略。微软提供三种官方分发方案。</p>
+
+  <table>
+    <tr><th>分发方式</th><th>体积</th><th>更新</th><th>可控性</th><th>典型用途</th></tr>
+    <tr><td>Evergreen Bootstrapper</td><td>~2MB（在线引导）</td><td>自动（微软推送）</td><td>低</td><td>消费应用，联网安装</td></tr>
+    <tr><td>Evergreen Standalone Installer</td><td>~150MB（离线包）</td><td>自动</td><td>低</td><td>内网/离线部署</td></tr>
+    <tr><td>FixedVersion</td><td>~150MB（随 App 解压）</td><td>手动</td><td>完全</td><td>合规/受控环境</td></tr>
+  </table>
+
+  <h3>运行时检测与安装</h3>
+  <div class="card">
+    <pre><code><span class="cm">// C#：检测运行时版本</span>
+<span class="kw">string</span> version = <span class="kw">await</span> <span class="ty">CoreWebView2Environment</span>.<span class="fn">GetAvailableBrowserVersionStringAsync</span>();
+<span class="kw">if</span> (<span class="kw">string</span>.<span class="fn">IsNullOrEmpty</span>(version)) {
+    <span class="cm">// 未安装：触发 Bootstrapper 静默安装</span>
+    <span class="ty">Process</span>.<span class="fn">Start</span>(<span class="st">"MicrosoftEdgeWebview2Setup.exe"</span>, <span class="st">"/silent /install"</span>);
+}
+
+<span class="cm">// C++：通过导出函数 GetAvailableCoreWebView2BrowserVersionString</span>
+<span class="ty">LPWSTR</span> version = <span class="kw">nullptr</span>;
+<span class="fn">GetAvailableCoreWebView2BrowserVersionString</span>(<span class="kw">nullptr</span>, &amp;version);
+<span class="kw">if</span> (version == <span class="kw">nullptr</span>) { <span class="cm">/* 未安装，启动安装器 */</span> }
+<span class="fn">CoTaskMemFree</span>(version);</code></pre>
+  </div>
+
+  <h3>企业部署</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Intune / 组策略</div>
+      <ul>
+        <li>通过 MDM 下发 Evergreen 安装包</li>
+        <li>组策略控制更新通道</li>
+        <li>可禁用自动更新（合规）</li>
+        <li>强制使用 FixedVersion</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">FixedVersion 目录结构</div>
+      <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">MyApp/</span>
+├── <span class="file">MyApp.exe</span>
+├── <span class="file">WebView2Loader.dll</span>      <span class="cmt">SDK 加载器</span>
+└── <span class="dir">runtime/</span>                <span class="cmt">解压的 FixedVersion</span>
+    ├── <span class="file">msedgewebview2.exe</span>
+    ├── <span class="dir">r.130.0.2849.46/</span>
+    └── ...
+      </pre></div>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <strong>Evergreen 优势</strong>：消费级应用首选——微软持续推送安全补丁，应用无需自管更新。<strong>FixedVersion 警告</strong>：你会失去自动安全更新，必须自行跟踪 CVE 并重新打包发布。
+  </div>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">10</span> 完整示例</h2>
+  <p>一个完整的 WPF 应用：嵌入 WebView2、加载本地 HTML（通过虚拟主机）、实现 JS 与 C# 双向消息通信、调用前端函数获取返回值。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// ── MainWindow.xaml ──</span>
+<span class="kw">&lt;Window</span> <span class="pp">x:Class=</span><span class="st">"MyApp.MainWindow"</span>
+        <span class="pp">xmlns:wv2=</span><span class="st">"clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"</span><span class="kw">&gt;</span>
+  <span class="kw">&lt;Grid&gt;</span>
+    <span class="kw">&lt;wv2:WebView2</span> <span class="pp">Name=</span><span class="st">"webView"</span> <span class="kw">/&gt;</span>
+  <span class="kw">&lt;/Grid&gt;</span>
+<span class="kw">&lt;/Window&gt;</span>
+
+<span class="cm">// ── MainWindow.xaml.cs ──</span>
+<span class="kw">using</span> <span class="ty">System.IO</span>;
+<span class="kw">using</span> <span class="ty">System.Text.Json</span>;
+<span class="kw">using</span> <span class="ty">Microsoft.Web.WebView2.Core</span>;
+
+<span class="kw">public partial class</span> <span class="ty">MainWindow</span> : <span class="ty">Window</span>
+{
+    <span class="kw">public</span> <span class="ty">MainWindow</span>() {
+        <span class="fn">InitializeComponent</span>();
+        <span class="fn">Loaded</span> += <span class="kw">async</span> (_, _) =&gt; <span class="kw">await</span> <span class="fn">InitAsync</span>();
+    }
+
+    <span class="kw">private async</span> <span class="ty">Task</span> <span class="fn">InitAsync</span>()
+    {
+        <span class="cm">// 1. 初始化（指定 UserDataFolder 隔离）</span>
+        <span class="kw">await</span> webView.<span class="fn">EnsureCoreWebView2Async</span>(
+            <span class="kw">await</span> <span class="ty">CoreWebView2Environment</span>.<span class="fn">CreateAsync</span>(
+                browserExecutableFolder: <span class="kw">null</span>,
+                userDataFolder: <span class="ty">Path</span>.<span class="fn">Combine</span>(
+                    <span class="ty">Environment</span>.<span class="fn">GetFolderPath</span>(<span class="ty">Environment</span>.<span class="ty">SpecialFolder</span>.LocalApplicationData),
+                    <span class="st">"MyApp"</span>, <span class="st">"WebView"</span>)));
+
+        <span class="kw">var</span> core = webView.CoreWebView2;
+
+        <span class="cm">// 2. 发布版安全配置</span>
+        core.<span class="fn">Settings</span>.<span class="fn">AreDevToolsEnabled</span> = <span class="ty">Debugger</span>.<span class="fn">IsAttached</span>;
+
+        <span class="cm">// 3. 虚拟主机：本地 ./dist 映射为 https://app.local</span>
+        <span class="kw">var</span> dist = <span class="ty">Path</span>.<span class="fn">Combine</span>(<span class="ty">AppContext</span>.<span class="fn">BaseDirectory</span>, <span class="st">"dist"</span>);
+        core.<span class="fn">SetVirtualHostNameToFolderMapping</span>(
+            <span class="st">"app.local"</span>, dist,
+            <span class="ty">CoreWebView2HostResourceAccessKind</span>.Allow);
+
+        <span class="cm">// 4. 接收 Web 消息</span>
+        core.<span class="fn">WebMessageReceived</span> += (<span class="kw">_</span>, e) =&gt; {
+            <span class="kw">var</span> msg = <span class="ty">JsonSerializer</span>.<span class="fn">Deserialize</span>&lt;<span class="ty">JsonElement</span>&gt;(e.<span class="fn">TryGetWebMessageAsString</span>());
+            <span class="kw">if</span> (msg.<span class="fn">GetProperty</span>(<span class="st">"type"</span>).<span class="fn">GetString</span>() == <span class="st">"save"</span>) {
+                <span class="ty">File</span>.<span class="fn">WriteAllText</span>(<span class="st">"data.json"</span>,
+                    msg.<span class="fn">GetProperty</span>(<span class="st">"data"</span>).<span class="fn">GetRawText</span>());
+                core.<span class="fn">PostWebMessageAsJson</span>(<span class="st">"{\"type\":\"saved\"}"</span>);
+            }
+        };
+
+        <span class="cm">// 5. 注入启动脚本</span>
+        <span class="kw">await</span> core.<span class="fn">AddScriptToExecuteOnDocumentCreatedAsync</span>(
+            <span class="st">"window.NATIVE = { save: d =&gt; chrome.webview.postMessage(JSON.stringify({type:'save',data:d})) };"</span>);
+
+        <span class="cm">// 6. 加载首页</span>
+        core.<span class="fn">Navigate</span>(<span class="st">"https://app.local/index.html"</span>);
+
+        <span class="cm">// 7. 页面就绪后调用前端函数</span>
+        core.<span class="fn">NavigationCompleted</span> += <span class="kw">async</span> (<span class="kw">_</span>, e) =&gt; {
+            <span class="kw">if</span> (!e.<span class="fn">IsSuccess</span>) <span class="kw">return</span>;
+            <span class="kw">string</span> json = <span class="kw">await</span> core.<span class="fn">ExecuteScriptAsync</span>(
+                <span class="st">"JSON.stringify(getStats())"</span>);   <span class="cm">// 返回 JSON 字符串</span>
+            <span class="kw">var</span> stats = <span class="ty">JsonSerializer</span>.<span class="fn">Deserialize</span>&lt;<span class="ty">Stats</span>&gt;(json);
+            <span class="fn">UpdateTitleBar</span>(stats);
+        };
+    }
+}</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// ── dist/index.html（本地 Web 资源）──</span>
+&lt;<span class="kw">!DOCTYPE</span> html&gt;
+&lt;<span class="kw">html</span>&gt;&lt;<span class="kw">body</span>&gt;
+  &lt;<span class="kw">button</span> <span class="pp">onclick</span>=<span class="st">"NATIVE.save({count:42})"</span>&gt;保存到本地&lt;/<span class="kw">button</span>&gt;
+  &lt;<span class="kw">script</span>&gt;
+    <span class="kw">function</span> <span class="fn">getStats</span>() { <span class="kw">return</span> { users: <span class="num">100</span>, active: <span class="num">30</span> }; }
+    <span class="kw">window</span>.chrome.webview.<span class="fn">addEventListener</span>(<span class="st">'message'</span>, e =&gt; {
+      <span class="kw">const</span> { type } = <span class="ty">JSON</span>.<span class="fn">parse</span>(e.data);
+      <span class="kw">if</span> (type === <span class="st">'saved'</span>) <span class="fn">alert</span>(<span class="st">'已保存'</span>);
+    });
+  &lt;/<span class="kw">script</span>&gt;
+&lt;/<span class="kw">body</span>&gt;&lt;/<span class="kw">html</span>&gt;</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>本例体现的完整闭环</strong>：本地 HTML 通过虚拟主机加载 → JS 调 <code>NATIVE.save()</code> 触发 WebMessage → C# 处理后写文件并回消息 → JS 弹窗。同时 C# 通过 <code>ExecuteScriptAsync</code> 主动调用前端函数取返回值，覆盖了双向通信的全部典型用法。
+  </div>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">11</span> 对比 Electron / CEF</h2>
+  <p>三大嵌入式 Web 方案各有取舍：Electron 自带 Node.js + Chromium，CEF 是 C++ 嵌入，WebView2 复用系统 Edge。</p>
+
+  <table>
+    <tr><th>维度</th><th>WebView2</th><th>Electron</th><th>CEF</th></tr>
+    <tr><td>内核来源</td><td>系统 Edge（共享）</td><td>自带 Chromium</td><td>自带 Chromium</td></tr>
+    <tr><td>运行时体积</td><td>~2MB（Evergreen）/ ~150MB（Fixed）</td><td>~150MB+</td><td>~100MB+</td></tr>
+    <tr><td>内存占用</td><td>低（共享系统进程）</td><td>高（独立 Chromium）</td><td>高（独立 Chromium）</td></tr>
+    <tr><td>主语言</td><td>C++ / C# / 任意</td><td>JavaScript / Node.js</td><td>C++（chromiumembed）</td></tr>
+    <tr><td>原生能力</td><td>Win32 / .NET（强原生）</td><td>Node.js API（跨平台）</td><td>C++ 原生（跨平台）</td></tr>
+    <tr><td>安全更新</td><td>微软 Evergreen 自动</td><td>需升 Electron 大版本</td><td>需升 CEF 版本</td></tr>
+    <tr><td>跨平台</td><td>仅 Windows</td><td>Win/macOS/Linux</td><td>Win/macOS/Linux</td></tr>
+    <tr><td>启动速度</td><td>快（运行时常驻）</td><td>中（启 Node + Chromium）</td><td>中（启 Chromium）</td></tr>
+    <tr><td>生态</td><td>Win 原生 + Web</td><td>npm 巨大生态</td><td>C++ 工程化生态</td></tr>
+  </table>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">何时选 WebView2</div>
+      <ul>
+        <li>仅 Windows 平台</li>
+        <li>已有 WPF/WinForms/Win32/MFC 工程</li>
+        <li>追求小体积、低内存</li>
+        <li>需要原生系统集成（驱动/硬件）</li>
+        <li>安全更新由微软兜底</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">何时选 Electron / CEF</div>
+      <ul>
+        <li>需要跨平台（CEF/Electron）</li>
+        <li>全栈 JS（Electron）</li>
+        <li>完全自控内核版本（CEF）</li>
+        <li>已有大量 npm 依赖（Electron）</li>
+        <li>不依赖系统浏览器（CEF）</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <strong>WebView2 的核心优势</strong>：<strong>复用系统 Edge 运行时</strong>——包体最小、内存最低、安全更新由微软维护。VS Code、Teams 客户端、Edge 自身的部分组件已转向 WebView2。代价是<strong>锁定 Windows 平台</strong>和<strong>运行时可能未预装</strong>（Win10 需 Bootstrapper，Win11 默认有）。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">12</span> 头文件 / NuGet 索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">WebView2 SDK 安装根目录</span>
+├── <span class="file">WebView2.h</span>                  <span class="cmt">C++ COM 主接口：ICoreWebView2 / Controller / Environment</span>
+├── <span class="file">WebView2EnvironmentOptions.h</span>  <span class="cmt">环境选项：附加浏览器参数、语言、自定义 CRS</span>
+├── <span class="file">WebView2Experimental.h</span>        <span class="cmt">实验性 API（非稳定，谨慎使用）</span>
+├── <span class="dir">NuGet: Microsoft.Web.WebView2.Core</span>   <span class="cmt">.NET 核心：CoreWebView2Environment 等</span>
+├── <span class="dir">NuGet: Microsoft.Web.WebView2.WPF</span>    <span class="cmt">WPF 控件：Microsoft.Web.WebView2.Wpf.WebView2</span>
+├── <span class="dir">NuGet: Microsoft.Web.WebView2.WinForms</span> <span class="cmt">WinForms 控件：Microsoft.Web.WebView2.WinForms.WebView2</span>
+├── <span class="dir">NuGet: Microsoft.Web.WebView2.WinUI</span>   <span class="cmt">WinUI 3 控件：Microsoft.UI.Xaml.Controls.WebView2</span>
+└── <span class="file">WebView2Loader.dll</span>           <span class="cmt">运行时加载器，随 App 分发（COM 桥）</span>
+  </pre></div>
+
+  <table>
+    <tr><th>SDK 包</th><th>用途</th><th>语言</th></tr>
+    <tr><td><code>Microsoft.Web.WebView2</code></td><td>底层 COM + 加载器</td><td>C++ / COM</td></tr>
+    <tr><td><code>Microsoft.Web.WebView2.Core</code></td><td>.NET 核心 API（<code>CoreWebView2*</code>）</td><td>C# / VB.NET</td></tr>
+    <tr><td><code>Microsoft.Web.WebView2.WPF</code></td><td>WPF 控件包装</td><td>C# / XAML</td></tr>
+    <tr><td><code>Microsoft.Web.WebView2.WinForms</code></td><td>WinForms 控件包装</td><td>C# / VB.NET</td></tr>
+    <tr><td><code>Microsoft.Web.WebView2.WinUI</code></td><td>WinUI 3 原生控件</td><td>C# / C++ / XAML</td></tr>
+  </table>
+
+  <hr class="divider">
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>WebView2.h</code> C++ COM 主接口，含 ICoreWebView2 / Controller / Environment 三层定义。<br>
+    <code>WebView2EnvironmentOptions.h</code> 环境选项，附加浏览器参数与语言设置。<br>
+    <code>Microsoft.Web.WebView2.Core</code> .NET 核心 API，CoreWebView2 所有能力的托管封装。<br>
+    <code>Microsoft.Web.WebView2.WPF</code> WPF 控件，XAML 集成与 HwndHost 互操作。<br>
+    Microsoft Learn《Microsoft Edge WebView2》与 GitHub <code>microsoft/WebView2Samples</code> 为最权威的官方参考。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 WebView2 SDK (Edge Chromium 运行时) · 生成于 2026-06-22</footer>
+<script src="common.js"></script>
+</body>
+</html>

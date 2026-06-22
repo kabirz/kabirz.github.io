@@ -160,10 +160,26 @@ const DOCS = [
   { t:"Linux tun/tap", f:"linux-tun-tap.html", d:"虚拟网络设备 — VPN 与虚拟化的基石", i:"orange", tags:["tun","tap","VPN","虚拟化"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
   { t:"数据包接收流程", f:"linux-rx-packet.html", d:"网卡 → 内存 → 协议栈 → 应用层（UDP 示例）", i:"orange", tags:["NAPI","softirq","IP","UDP","收包"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
   { t:"数据包发送流程", f:"linux-tx-packet.html", d:"应用层 → 协议栈 → 网卡 → 网线（UDP 示例）", i:"orange", tags:["sendto","qdisc","ARP","发包"], top:"net", topLabel:"网络", cat:"net", catLabel:"网络" },
+
+  // ── Windows ──
+  { t:"Windows MFC 深度解析", f:"windows-mfc.html", d:"消息映射、Doc/View、RTTI、序列化、GDI、SDI 实战", i:"purple", tags:["MFC","Win32","C++","桌面开发"], top:"windows", topLabel:"Windows 开发", cat:"windows", catLabel:"Windows 开发" },
+  { t:"Windows Win32 API 深度解析", f:"windows-win32.html", d:"事件驱动、消息机制、GDI、控件、对话框、资源、完整程序骨架", i:"blue", tags:["Win32","GUI","GDI","消息机制"], top:"windows", topLabel:"Windows 开发", cat:"windows", catLabel:"Windows 开发" },
+  { t:"Windows ATL/WTL 深度解析", f:"windows-atl-wtl.html", d:"轻量 C++ 模板 GUI、CWindowImpl、消息映射、DDX、对比 MFC", i:"green", tags:["ATL","WTL","模板","C++"], top:"windows", topLabel:"Windows 开发", cat:"windows", catLabel:"Windows 开发" },
+  { t:"Windows Forms 深度解析", f:"windows-winforms.html", d:"Control 层次、事件模型、布局、数据绑定、GDI+、UI 线程", i:"purple", tags:["WinForms",".NET","事件驱动","数据绑定"], top:"windows", topLabel:"Windows 开发", cat:"windows", catLabel:"Windows 开发" },
+  { t:"Windows WPF 深度解析", f:"windows-wpf.html", d:"XAML、依赖属性、数据绑定、路由命令、样式模板、MVVM、动画", i:"red", tags:["WPF","XAML","MVVM","数据绑定"], top:"windows", topLabel:"Windows 开发", cat:"windows", catLabel:"Windows 开发" },
+  { t:"Windows UWP 深度解析", f:"windows-uwp.html", d:"WinRT、应用生命周期、x:Bind、异步、沙箱、MSIX、vs WinUI3", i:"orange", tags:["UWP","WinRT","x:Bind","MSIX"], top:"windows", topLabel:"Windows 开发", cat:"windows", catLabel:"Windows 开发" },
+  { t:"Windows WinUI 3 深度解析", f:"windows-winui3.html", d:"Windows App SDK、Mica/Acrylic、x:Bind、互操作、打包与未打包", i:"red", tags:["WinUI3","WinAppSDK","Mica","现代UI"], top:"windows", topLabel:"Windows 开发", cat:"windows", catLabel:"Windows 开发" },
+  { t:".NET MAUI 深度解析", f:"windows-maui.html", d:"跨平台 XAML、Handler 模式、MVVM、Shell 导航、平台特定", i:"orange", tags:["MAUI","跨平台","XAML","Handler"], top:"windows", topLabel:"Windows 开发", cat:"windows", catLabel:"Windows 开发" },
+  { t:"Windows WebView2 深度解析", f:"windows-webview2.html", d:"Edge 内核嵌入、CoreWebView2、原生↔Web 通信、MSIX、对比 Electron", i:"blue", tags:["WebView2","Edge","混合应用","Chromium"], top:"windows", topLabel:"Windows 开发", cat:"windows", catLabel:"Windows 开发" },
+
+  // ── Rust ──
+  { t:"Dioxus 深度解析", f:"rust-dioxus.html", d:"RSX、组件、Hooks、Signals 响应式、路由、多平台渲染（Web/Desktop/Mobile/TUI）", i:"purple", tags:["Dioxus","Rust","RSX","Signals","WASM"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"Rust 开发" },
 ];
 
 const ICON_MAP = {
   linux: { emoji: "🐧", color: "#0969da" },
+  windows: { emoji: "🪟", color: "#0078d4" },
+  rust: { emoji: "🦀", color: "#dea584" },
   zephyr: { emoji: "⚡", color: "#1769aa" },
   docker: { emoji: "🐳", color: "#2496ed" },
   ai: { emoji: "🤖", color: "#ff6b6b" },
