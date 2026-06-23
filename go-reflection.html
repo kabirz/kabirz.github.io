@@ -41,7 +41,7 @@
   <p><code>reflect.Type</code> 表示 Go 中的类型信息。通过 <code>reflect.TypeOf()</code> 获取任意变量的类型，返回的 Type 接口包含丰富的类型元数据方法。</p>
 
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">inspectType</span>(v <span class="ty">interface</span>{}) {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">inspectType</span>(v <span class="ty">interface</span>{}) {
     t := <span class="fn">reflect.TypeOf</span>(v)
     
     <span class="fn">fmt.Printf</span>(<span class="s">"Name: %v\n"</span>, t.Name())        <span class="cm">// 类型名称</span>
@@ -60,7 +60,7 @@
   <p><code>reflect.Value</code> 表示运行时的一个具体值实例。通过 <code>reflect.ValueOf()</code> 获取值的反射对象。Value 提供了读取、修改值以及调用方法的能力。</p>
 
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">inspectValue</span>(v <span class="ty">interface</span>{}) {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">inspectValue</span>(v <span class="ty">interface</span>{}) {
     val := <span class="fn">reflect.ValueOf</span>(v)
     
     <span class="fn">fmt.Printf</span>(<span class="s">"Value: %v\n"</span>, val)              <span class="cm">// 值的字符串表示</span>
@@ -105,7 +105,7 @@
 
   <h3>通过反射读取结构体字段</h3>
   <div class="card">
-    <pre><code><span class="kw">type</span> Person <span class="kw">struct</span> {
+    <pre><code class="language-go"><span class="kw">type</span> Person <span class="kw">struct</span> {
     Name <span class="ty">string</span> `json:<span class="s">"name"</span>`
     Age  <span class="ty">int</span>    `json:<span class="s">"age"</span>`
     addr <span class="ty">string</span>  <span class="cm">// 未导出字段</span>
@@ -134,7 +134,7 @@
 
   <h3>通过反射设置值</h3>
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">setFields</span>(ptr <span class="ty">interface</span>{}, fieldName <span class="ty">string</span>, value <span class="ty">interface</span>{}) {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">setFields</span>(ptr <span class="ty">interface</span>{}, fieldName <span class="ty">string</span>, value <span class="ty">interface</span>{}) {
     val := <span class="fn">reflect.ValueOf</span>(ptr)
     
     <span class="cm">// 确保传入的是指针</span>
@@ -161,7 +161,7 @@ p := &amp;Person{Name: <span class="s">"Alice"</span>, Age: <span class="num">30
 
   <h3>动态调用方法</h3>
   <div class="card">
-    <pre><code><span class="kw">type</span> Calculator <span class="kw">struct</span>{}
+    <pre><code class="language-go"><span class="kw">type</span> Calculator <span class="kw">struct</span>{}
 
 <span class="kw">func</span> (Calculator) <span class="fn">Add</span>(a, b <span class="ty">int</span>) <span class="ty">int</span> { <span class="kw">return</span> a + b }
 <span class="kw">func</span> (Calculator) <span class="fn">Mul</span>(a, b <span class="ty">int</span>) <span class="ty">int</span> { <span class="kw">return</span> a * b }
@@ -192,7 +192,7 @@ p := &amp;Person{Name: <span class="s">"Alice"</span>, Age: <span class="num">30
 
   <h3>动态创建类型</h3>
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">makeSliceAndMap</span>() {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">makeSliceAndMap</span>() {
     <span class="cm">// 动态创建切片</span>
     sliceType := <span class="fn">reflect.SliceOf</span>(<span class="fn">reflect.TypeOf</span>(<span class="num">0</span>))
     slice := <span class="fn">reflect.MakeSlice</span>(sliceType, <span class="num">0</span>, <span class="num">10</span>)
@@ -226,7 +226,7 @@ p := &amp;Person{Name: <span class="s">"Alice"</span>, Age: <span class="num">30
   <p><code>reflect.DeepEqual</code> 是 Go 标准库提供的深度比较函数。它递归地比较两个值的每一层，适用于无法直接使用 <code>==</code> 或 <code>!=</code> 比较的类型（如切片、map、结构体中的不可比较字段）。</p>
 
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">deepEqualExamples</span>() {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">deepEqualExamples</span>() {
     <span class="cm">// 切片比较</span>
     a := []<span class="ty">int</span>{<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>}
     b := []<span class="ty">int</span>{<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>}
@@ -255,7 +255,7 @@ p := &amp;Person{Name: <span class="s">"Alice"</span>, Age: <span class="num">30
   <p>在性能敏感的场景中，可以手写特定类型的比较函数来替代 <code>reflect.DeepEqual</code>。这不仅避免了反射的运行时开销，还能精确控制比较逻辑。</p>
 
   <div class="card">
-    <pre><code><span class="kw">type</span> Config <span class="kw">struct</span> {
+    <pre><code class="language-go"><span class="kw">type</span> Config <span class="kw">struct</span> {
     Name    <span class="ty">string</span>
     Version <span class="ty">int</span>
     Plugins []<span class="ty">string</span>
@@ -289,7 +289,7 @@ p := &amp;Person{Name: <span class="s">"Alice"</span>, Age: <span class="num">30
   <p>对于需要在多个地方复用的比较逻辑，可以定义比较接口（类似 Java 的 <code>equals()</code>）：</p>
 
   <div class="card">
-    <pre><code><span class="kw">type</span> Equaler <span class="kw">interface</span> {
+    <pre><code class="language-go"><span class="kw">type</span> Equaler <span class="kw">interface</span> {
     Equal(other <span class="ty">interface</span>{}) <span class="ty">bool</span>
 }
 
@@ -309,7 +309,7 @@ p := &amp;Person{Name: <span class="s">"Alice"</span>, Age: <span class="num">30
 
   <h3>基本语法</h3>
   <div class="card">
-    <pre><code><span class="cm">// 泛型函数：适用于任何可比较的类型</span>
+    <pre><code class="language-go"><span class="cm">// 泛型函数：适用于任何可比较的类型</span>
 <span class="kw">func</span> <span class="fn">Min</span>[T <span class="fn">cmp.Ordered</span>](a, b T) T {
     <span class="kw">if</span> a &lt; b {
         <span class="kw">return</span> a
@@ -355,7 +355,7 @@ v, _ := s.Pop()  <span class="cm">// v 是 int 类型</span></code></pre>
 
   <h3>类型参数声明位置</h3>
   <div class="card">
-    <pre><code><span class="cm">// 函数上的类型参数</span>
+    <pre><code class="language-go"><span class="cm">// 函数上的类型参数</span>
 <span class="kw">func</span> Map[T, R <span class="ty">any</span>](input []T, fn <span class="kw">func</span>(T) R) []R {
     result := <span class="fn">make</span>([]R, <span class="fn">len</span>(input))
     <span class="kw">for</span> i, v := <span class="kw">range</span> input {
@@ -389,7 +389,7 @@ v, _ := s.Pop()  <span class="cm">// v 是 int 类型</span></code></pre>
   <p>Go 的 <code>cmp</code> 和 <code>constraints</code> 实验包（Go 1.21 起 <code>cmp</code> 已成为标准库）提供了一组预定义的泛型约束：</p>
 
   <div class="card">
-    <pre><code><span class="kw">import</span> <span class="s">"cmp"</span>
+    <pre><code class="language-go"><span class="kw">import</span> <span class="s">"cmp"</span>
 
 <span class="cm">// cmp.Ordered - 所有可排序的类型</span>
 <span class="cm">// 包含: int, int8..64, uint, uint8..64, float32, float64, string</span>
@@ -419,7 +419,7 @@ v, _ := s.Pop()  <span class="cm">// v 是 int 类型</span></code></pre>
   <p>约束本质上是一个接口类型，可以包含方法签名、类型列表（使用 <code>|</code> 操作符）或者嵌套其他约束。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 1. 方法约束 - 要求类型实现特定方法</span>
+    <pre><code class="language-go"><span class="cm">// 1. 方法约束 - 要求类型实现特定方法</span>
 <span class="kw">type</span> Stringer <span class="kw">interface</span> {
     <span class="fn">String</span>() <span class="ty">string</span>
 }
@@ -459,7 +459,7 @@ v, _ := s.Pop()  <span class="cm">// v 是 int 类型</span></code></pre>
   <p><code>~</code> 前缀表示底层类型匹配。例如 <code>~int</code> 不仅匹配 <code>int</code>，还匹配任何以 <code>int</code> 为底层类型的自定义类型。</p>
 
   <div class="card">
-    <pre><code><span class="kw">type</span> Age <span class="ty">int</span>
+    <pre><code class="language-go"><span class="kw">type</span> Age <span class="ty">int</span>
 <span class="kw">type</span> Count <span class="ty">int</span>
 
 <span class="kw">func</span> <span class="fn">Double</span>[T ~<span class="ty">int</span>](v T) T {
@@ -485,7 +485,7 @@ v, _ := s.Pop()  <span class="cm">// v 是 int 类型</span></code></pre>
   <p>Go 编译器可以从函数参数中自动推导类型参数，大多数情况下无需显式指定。这大大提高了泛型代码的可读性。</p>
 
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">Map</span>[T, R <span class="ty">any</span>](input []T, fn <span class="kw">func</span>(T) R) []R {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">Map</span>[T, R <span class="ty">any</span>](input []T, fn <span class="kw">func</span>(T) R) []R {
     result := <span class="fn">make</span>([]R, <span class="fn">len</span>(input))
     <span class="kw">for</span> i, v := <span class="kw">range</span> input {
         result[i] = fn(v)
@@ -523,7 +523,7 @@ v := <span class="fn">NewType</span>[<span class="ty">int</span>]()   <span clas
   <p>编译器为每个不同的类型参数组合生成独立的函数副本。这个过程称为实例化（Instantiation）。在 Go 中，实例化发生在编译时，不会产生运行时开销。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 编译器将为此生成两个独立的函数副本：</span>
+    <pre><code class="language-go"><span class="cm">// 编译器将为此生成两个独立的函数副本：</span>
 <span class="fn">Min</span>(<span class="num">1</span>, <span class="num">2</span>)         <span class="cm">// → func Min[int](a, b int) int</span>
 <span class="fn">Min</span>(<span class="num">1.5</span>, <span class="num">2.5</span>)     <span class="cm">// → func Min[float64](a, b float64) float64</span>
 <span class="fn">Min</span>(<span class="s">"a"</span>, <span class="s">"b"</span>)     <span class="cm">// → func Min[string](a, b string) string</span>
@@ -536,7 +536,7 @@ v := <span class="fn">NewType</span>[<span class="ty">int</span>]()   <span clas
   <p>当接口类型和具体类型同时匹配时，编译器的推导遵循"具体类型优先"的原则。但在某些场景下，类型推导可能产生歧义，需要显式类型注解。</p>
 
   <div class="card">
-    <pre><code><span class="kw">type</span> Adder <span class="kw">interface</span> {
+    <pre><code class="language-go"><span class="kw">type</span> Adder <span class="kw">interface</span> {
     <span class="fn">Add</span>(a, b <span class="ty">int</span>) <span class="ty">int</span>
 }
 
@@ -561,7 +561,7 @@ v := <span class="fn">NewType</span>[<span class="ty">int</span>]()   <span clas
 
   <h3>泛型 List</h3>
   <div class="card">
-    <pre><code><span class="kw">type</span> List[T <span class="ty">any</span>] <span class="kw">struct</span> {
+    <pre><code class="language-go"><span class="kw">type</span> List[T <span class="ty">any</span>] <span class="kw">struct</span> {
     head *node[T]
     tail *node[T]
     <span class="fn">len</span>  <span class="ty">int</span>
@@ -597,7 +597,7 @@ v := <span class="fn">NewType</span>[<span class="ty">int</span>]()   <span clas
 
   <h3>泛型 Set</h3>
   <div class="card">
-    <pre><code><span class="kw">type</span> Set[T <span class="fn">comparable</span>] <span class="kw">map</span>[T]<span class="kw">struct</span>{}
+    <pre><code class="language-go"><span class="kw">type</span> Set[T <span class="fn">comparable</span>] <span class="kw">map</span>[T]<span class="kw">struct</span>{}
 
 <span class="kw">func</span> NewSet[T <span class="fn">comparable</span>]() Set[T] {
     <span class="kw">return</span> <span class="fn">make</span>(Set[T])
@@ -638,7 +638,7 @@ s.Add(<span class="num">2</span>)
 
   <h3>泛型 OrderedMap</h3>
   <div class="card">
-    <pre><code><span class="kw">type</span> Entry[K, V <span class="ty">any</span>] <span class="kw">struct</span> {
+    <pre><code class="language-go"><span class="kw">type</span> Entry[K, V <span class="ty">any</span>] <span class="kw">struct</span> {
     Key   K
     Value V
 }
@@ -688,7 +688,7 @@ s.Add(<span class="num">2</span>)
   <p>泛型的最显著优势之一是在性能敏感场景中避免了接口装箱和动态分发开销。下面是一个典型的基准测试对比：</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 接口版本</span>
+    <pre><code class="language-go"><span class="cm">// 接口版本</span>
 <span class="kw">func</span> <span class="fn">ProcessInterface</span>(items []<span class="ty">interface</span>{}) {
     <span class="kw">for</span> _, v := <span class="kw">range</span> items {
         _ = v.(<span class="ty">int</span>)  <span class="cm">// 需要类型断言</span>
@@ -727,7 +727,7 @@ s.Add(<span class="num">2</span>)
 
   <h3>混合使用的模式</h3>
   <div class="card">
-    <pre><code><span class="cm">// 接口定义行为，泛型实现算法</span>
+    <pre><code class="language-go"><span class="cm">// 接口定义行为，泛型实现算法</span>
 <span class="kw">type</span> Sorter[T <span class="ty">any</span>] <span class="kw">interface</span> {
     <span class="fn">Less</span>(i, j T) <span class="ty">bool</span>
     <span class="fn">Swap</span>(i, j T)
@@ -766,7 +766,7 @@ s.Add(<span class="num">2</span>)
 
   <h3>反射的合理使用场景</h3>
   <div class="card">
-    <pre><code><span class="cm">// 1. 序列化/反序列化（encoding/json, encoding/xml 等）</span>
+    <pre><code class="language-go"><span class="cm">// 1. 序列化/反序列化（encoding/json, encoding/xml 等）</span>
 <span class="cm">// 2. 测试工具（表格驱动测试中的类型处理）</span>
 <span class="cm">// 3. ORM 框架（根据结构体标签生成 SQL）</span>
 <span class="cm">// 4. 配置解析（viper 等配置库）</span>
@@ -791,7 +791,7 @@ s.Add(<span class="num">2</span>)
 
   <h3>泛型使用指南</h3>
   <div class="card">
-    <pre><code><span class="cm">// ✅ 适合泛型：容器和数据结构</span>
+    <pre><code class="language-go"><span class="cm">// ✅ 适合泛型：容器和数据结构</span>
 <span class="kw">type</span> Tree[T <span class="ty">any</span>] <span class="kw">struct</span> { <span class="cm">/* ... */</span> }
 
 <span class="cm">// ✅ 适合泛型：算法（排序、搜索、聚合）</span>
@@ -817,7 +817,7 @@ s.Add(<span class="num">2</span>)
   <p>Go 1.22 中，反射和泛型可以协同工作。例如使用泛型为反射结果提供类型安全的外层包装：</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 泛型包装反射结果</span>
+    <pre><code class="language-go"><span class="cm">// 泛型包装反射结果</span>
 <span class="kw">func</span> JSONTo[T <span class="ty">any</span>](data []<span class="ty">byte</span>) (T, <span class="ty">error</span>) {
     <span class="kw">var</span> result T
     err := json.Unmarshal(data, &amp;result)
@@ -842,7 +842,7 @@ user, err := JSONTo[User](jsonData)
 
   <h3>性能决策树</h3>
   <div class="card">
-    <pre><code><span class="cm">// 选择策略</span>
+    <pre><code class="language-go"><span class="cm">// 选择策略</span>
 <span class="cm">//</span>
 <span class="cm">// 是否需要处理多种类型？</span>
 <span class="cm">// ├─ 是 → 类型集合是否固定且已知？</span>

@@ -99,7 +99,7 @@
   <h3>struct i2c_adapter（总线控制器）</h3>
   <div class="card">
     <p class="ref">include/linux/i2c.h:733-768</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">i2c_adapter</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">i2c_adapter</span> {
     <span class="kw">struct</span> <span class="ty">module</span> *owner;
     <span class="ty">unsigned int</span> class;                 <span class="cm">// 允许探测的设备类</span>
     <span class="kw">const struct</span> <span class="ty">i2c_algorithm</span> *algo;   <span class="cm">// 传输算法</span>
@@ -118,7 +118,7 @@
   <h3>struct i2c_client（从设备）</h3>
   <div class="card">
     <p class="ref">include/linux/i2c.h:331-356</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">i2c_client</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">i2c_client</span> {
     <span class="ty">unsigned short</span> flags;    <span class="cm">// I2C_CLIENT_TEN / I2C_CLIENT_SLAVE 等</span>
     <span class="ty">unsigned short</span> addr;      <span class="cm">// 7 位从设备地址（低位存储）</span>
     <span class="kw">char</span> name[I2C_NAME_SIZE]; <span class="cm">// 设备名</span>
@@ -131,7 +131,7 @@
   <h3>struct i2c_driver（从设备驱动）</h3>
   <div class="card">
     <p class="ref">include/linux/i2c.h:270-305</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">i2c_driver</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">i2c_driver</span> {
     <span class="ty">unsigned int</span> class;
     <span class="ty">int</span> (*probe)(<span class="kw">struct</span> <span class="ty">i2c_client</span> *client);
     <span class="ty">void</span> (*remove)(<span class="kw">struct</span> <span class="ty">i2c_client</span> *client);
@@ -151,7 +151,7 @@
   <h3>struct i2c_algorithm</h3>
   <div class="card">
     <p class="ref">include/linux/i2c.h:544-583</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">i2c_algorithm</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">i2c_algorithm</span> {
     <span class="cm">// I2C 传输（必须实现）</span>
     <span class="ty">int</span> (*master_xfer)(<span class="kw">struct</span> <span class="ty">i2c_adapter</span> *adap,
                        <span class="kw">struct</span> <span class="ty">i2c_msg</span> *msgs, <span class="ty">int</span> num);
@@ -168,7 +168,7 @@
   </div>
 
   <h3>I2C 消息结构</h3>
-  <pre><code><span class="kw">struct</span> <span class="ty">i2c_msg</span> {
+  <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">i2c_msg</span> {
     <span class="ty">__u16</span> addr;      <span class="cm">// 从设备地址</span>
     <span class="ty">__u16</span> flags;     <span class="cm">// I2C_M_RD / I2C_M_TEN / I2C_M_STOP 等</span>
     <span class="ty">__u16</span> len;       <span class="cm">// 数据长度</span>
@@ -210,7 +210,7 @@
 
   <h3>SMBus vs I2C</h3>
   <div class="card">
-    <pre><code><span class="cm">// SMBus 示例：读取温度传感器</span>
+    <pre><code class="language-c"><span class="cm">// SMBus 示例：读取温度传感器</span>
 <span class="ty">s32</span> temp = <span class="fn">i2c_smbus_read_word_data</span>(client, <span class="num">0x00</span>);
 
 <span class="cm">// 等价的 I2C 原始操作</span>
@@ -231,7 +231,7 @@
   <h2><span class="num">06</span> 设备树</h2>
 
   <h3>控制器节点</h3>
-  <pre><code><span class="ty">i2c0</span>: <span class="fn">i2c</span>@e0000000 {
+  <pre><code class="language-c"><span class="ty">i2c0</span>: <span class="fn">i2c</span>@e0000000 {
     compatible = <span class="st">"vendor,soc-i2c"</span>;
     reg = <span class="num">&lt;0xe0000000 0x1000&gt;</span>;
     interrupts = <span class="num">&lt;GIC_SPI 30 IRQ_TYPE_LEVEL_HIGH&gt;</span>;
@@ -270,7 +270,7 @@
   <p><code>i2c-dev.c</code> 为每个 I2C 适配器创建 <code>/dev/i2c-N</code> 字符设备，允许用户空间直接访问 I2C 总线。</p>
 
   <h3>用户空间接口</h3>
-  <pre><code><span class="cm">// 打开 I2C 总线</span>
+  <pre><code class="language-c"><span class="cm">// 打开 I2C 总线</span>
 $ ls -la /dev/i2c-*
 crw-rw---- 1 root i2c 89, 0 Jan  1 00:00 /dev/i2c-0
 crw-rw---- 1 root i2c 89, 1 Jan  1 00:00 /dev/i2c-1
@@ -302,7 +302,7 @@ read(fd, buf, <span class="num">32</span>);  <span class="cm">// 接收数据</s
   <h2><span class="num">08</span> 编写驱动</h2>
 
   <h3>I2C 从设备驱动模板</h3>
-  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/i2c.h&gt;</span>
+  <pre><code class="language-c"><span class="kw">#include</span> <span class="st">&lt;linux/i2c.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/module.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/delay.h&gt;</span>
 

@@ -87,7 +87,7 @@
   <p>WPF 的核心由<strong>托管层（managed）</strong>与<strong>非托管层（milcore）</strong>组成。<code>milcore.dll</code> 用 C++ 编写，封装 DirectX 9，负责合成、纹理、动画时间线；托管程序集在其之上提供 Dispatcher、Visual、输入、布局、控件、数据绑定等高层 API。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// WPF 托管程序集（按抽象层级从下到上）</span>
+    <pre><code class="language-cpp"><span class="cm">// WPF 托管程序集（按抽象层级从下到上）</span>
 <span class="ty">PresentationCore</span>          <span class="cm">// Visual / Dispatcher / Input / Geometry（底层）</span>
 <span class="ty">PresentationFramework</span>     <span class="cm">// Window / Control / Panel / Style / Binding（高层）</span>
 <span class="ty">System.Xaml</span>               <span class="cm">// XAML 解析器、标记扩展、类型映射</span>
@@ -101,7 +101,7 @@
   <h3>Dispatcher：UI 线程调度器</h3>
   <p>所有 UI 对象派生自 <code>DispatcherObject</code>，<strong>归属于创建它的 Dispatcher（即 UI 线程）</strong>。跨线程访问 UI 会抛 <code>InvalidOperationException</code>。后台线程通过 <code>Dispatcher.Invoke/BeginInvoke</code> 切回。</p>
   <div class="card">
-    <pre><code><span class="cm">// 后台线程更新 UI</span>
+    <pre><code class="language-cpp"><span class="cm">// 后台线程更新 UI</span>
 <span class="kw">private async void</span> <span class="fn">OnLoad</span>(<span class="ty">object</span> s, <span class="ty">RoutedEventArgs</span> e)
 {
     <span class="ty">string</span> data = <span class="kw">await Task</span>.<span class="fn">Run</span>(() => <span class="fn">DownloadHeavy</span>());
@@ -118,7 +118,7 @@
   <h3>可视化树（Visual Tree）与逻辑树（Logical Tree）</h3>
   <p>WPF 维护<strong>两棵树</strong>。<strong>逻辑树</strong>对应 XAML 中直接书写的元素层次，用于属性继承、资源查找、事件路由；<strong>可视化树</strong>是逻辑树的<strong>渲染展开</strong>，把每个控件的 ControlTemplate 内部细节也展开为 Visual 节点，是 milcore 真正绘制的对象图。</p>
   <div class="card">
-    <pre><code><span class="cm">// XAML（逻辑树视角）</span>
+    <pre><code class="language-cpp"><span class="cm">// XAML（逻辑树视角）</span>
 <span class="kw">&lt;Window</span><span class="fn"> x:Name</span>=<span class="st">"Root"</span><span class="kw">&gt;</span>
   <span class="kw">&lt;Button</span><span class="fn"> Content</span>=<span class="st">"OK"</span> <span class="kw">/&gt;</span>
 <span class="kw">&lt;/Window&gt;</span>
@@ -166,7 +166,7 @@
   <h3>渲染管线（保留模式）</h3>
   <p>WinForms 是<strong>即时模式</strong>：每次 <code>OnPaint</code> 都由应用主动重绘。WPF 是<strong>保留模式</strong>：你修改 Visual 树上的属性，<code>milcore</code> 在<strong>合成线程（Composition Thread）</strong>和 UI 线程配合下，以 60fps 持续重新合成画面，应用代码无需处理 WM_PAINT。</p>
   <div class="card">
-    <pre><code><span class="cm">// UI 线程：执行托管代码、布局、动画时间线</span>
+    <pre><code class="language-cpp"><span class="cm">// UI 线程：执行托管代码、布局、动画时间线</span>
 <span class="cm">// 合成线程：从 Visual 树合成最终帧、提交 DirectX 纹理</span>
 <span class="cm">// 渲染线程：Direct3D 提交 GPU</span>
 
@@ -186,7 +186,7 @@
 
   <h3>基本结构与命名空间</h3>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- MainWindow.xaml --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- MainWindow.xaml --&gt;</span>
 <span class="kw">&lt;Window</span><span class="fn"> x:Class</span>=<span class="st">"MyApp.MainWindow"</span>
         <span class="fn">xmlns</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml/presentation"</span>
         <span class="fn">xmlns:x</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml"</span>
@@ -207,7 +207,7 @@
   <h3>属性元素与内容属性</h3>
   <p>复杂属性用<strong>属性元素语法</strong>（<code>Type.Property</code>）；元素的内联子节点由 <code>ContentPropertyAttribute</code> 决定（如 <code>Window.Content</code>、<code>Panel.Children</code>、<code>Border.Child</code>），无需显式写出。</p>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- 属性元素语法：给 Button.Background 设渐变画刷 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- 属性元素语法：给 Button.Background 设渐变画刷 --&gt;</span>
 <span class="kw">&lt;Button</span><span class="fn"> Content</span>=<span class="st">"Gradient"</span><span class="kw">&gt;</span>
     <span class="kw">&lt;Button.Background&gt;</span>
         <span class="kw">&lt;LinearGradientBrush</span><span class="fn"> StartPoint</span>=<span class="st">"0,0"</span> <span class="fn">EndPoint</span>=<span class="st">"1,1"</span><span class="kw">&gt;</span>
@@ -238,7 +238,7 @@
 
   <h3>code-behind 与 x:Class</h3>
   <div class="card">
-    <pre><code><span class="cm">// MainWindow.xaml.cs —— partial 类与 XAML 编译产物合并</span>
+    <pre><code class="language-cpp"><span class="cm">// MainWindow.xaml.cs —— partial 类与 XAML 编译产物合并</span>
 <span class="kw">namespace</span> <span class="ty">MyApp</span>;
 
 <span class="kw">public partial class</span> <span class="ty">MainWindow</span> : <span class="ty">Window</span>
@@ -262,7 +262,7 @@
   <p>WPF 控件层次的核心是<strong>“内容模型”</strong>：大多数控件的 <code>Content</code> 或 <code>Items</code> 属性可以接受<strong>任意对象</strong>，由 DataTemplate 决定如何呈现。这让 WPF 控件比 WinForms“控件 = 外观 + 数据”的耦合松得多。</p>
 
   <div class="card">
-    <pre><code><span class="ty">DispatcherObject</span>
+    <pre><code class="language-cpp"><span class="ty">DispatcherObject</span>
 └── <span class="ty">Visual</span>
     └── <span class="ty">UIElement</span>                  <span class="cm">// 布局、输入、路由事件</span>
         └── <span class="ty">FrameworkElement</span>      <span class="cm">// Width/Height/Style/DataContext/Binding</span>
@@ -293,7 +293,7 @@
   <h3>ContentControl：内容模型</h3>
   <p><code>ContentControl</code> 的 <code>Content</code> 属性类型是 <code>object</code>——可以是字符串、UIElement、或任意业务对象。如果是 UIElement，直接渲染；否则通过 <code>ContentTemplate</code>（DataTemplate）转换。</p>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- 内容是字符串 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- 内容是字符串 --&gt;</span>
 <span class="kw">&lt;Button</span><span class="fn"> Content</span>=<span class="st">"Save"</span> <span class="kw">/&gt;</span>
 
 <span class="cm">&lt;!-- 内容是 UIElement（任意复杂） --&gt;</span>
@@ -311,7 +311,7 @@
   <h3>ItemsControl：列表模型</h3>
   <p><code>ItemsControl</code> 的 <code>ItemsSource</code> 接收 <code>IEnumerable</code>，对每个数据项用 <code>ItemTemplate</code>（DataTemplate）生成 UI 容器，由 <code>ItemsPanel</code> 决定容器布局。</p>
   <div class="card">
-    <pre><code><span class="kw">&lt;ItemsControl</span><span class="fn"> ItemsSource</span>=<span class="st">"{Binding Users}"</span><span class="kw">&gt;</span>
+    <pre><code class="language-cpp"><span class="kw">&lt;ItemsControl</span><span class="fn"> ItemsSource</span>=<span class="st">"{Binding Users}"</span><span class="kw">&gt;</span>
     <span class="kw">&lt;ItemsControl.ItemsPanel&gt;</span>
         <span class="kw">&lt;ItemsPanelTemplate&gt;</span>
             <span class="kw">&lt;StackPanel</span><span class="fn"> Orientation</span>=<span class="st">"Vertical"</span> <span class="kw">/&gt;</span>
@@ -367,7 +367,7 @@
     <li>固定数值（如 <code>100</code>，单位为 device-independent pixel = 1/96 英寸）</li>
   </ul>
   <div class="card">
-    <pre><code><span class="kw">&lt;Grid&gt;</span>
+    <pre><code class="language-cpp"><span class="kw">&lt;Grid&gt;</span>
     <span class="kw">&lt;Grid.ColumnDefinitions&gt;</span>
         <span class="kw">&lt;ColumnDefinition</span><span class="fn"> Width</span>=<span class="st">"Auto"</span> <span class="kw">/&gt;</span>      <span class="cm">&lt;!-- 标签列，按内容 --&gt;</span>
         <span class="kw">&lt;ColumnDefinition</span><span class="fn"> Width</span>=<span class="st">"*"</span>  <span class="kw">/&gt;</span>      <span class="cm">&lt;!-- 输入框列，填充 --&gt;</span>
@@ -390,7 +390,7 @@
 
   <h3>两阶段布局</h3>
   <div class="card">
-    <pre><code><span class="cm">// UIElement 提供的虚拟方法（简化）</span>
+    <pre><code class="language-cpp"><span class="cm">// UIElement 提供的虚拟方法（简化）</span>
 <span class="kw">protected abstract</span> <span class="ty">Size</span> <span class="fn">MeasureCore</span>(<span class="ty">Size</span> availableSize);
 <span class="kw">protected abstract</span> <span class="ty">Rect</span> <span class="fn">ArrangeCore</span>(<span class="ty">Rect</span> finalRect);
 
@@ -428,7 +428,7 @@
 
   <h3>注册与包装</h3>
   <div class="card">
-    <pre><code><span class="kw">public class</span> <span class="ty">FancyButton</span> : <span class="ty">Button</span>
+    <pre><code class="language-cpp"><span class="kw">public class</span> <span class="ty">FancyButton</span> : <span class="ty">Button</span>
 {
     <span class="cm">// 1. 注册：名称、类型、宿主类、默认元数据（默认值 + 变更回调）</span>
     <span class="kw">public static readonly</span> <span class="ty">DependencyProperty</span> CornerRadiusProperty =
@@ -476,7 +476,7 @@
   <h3>附加属性（Attached Property）</h3>
   <p>附加属性是一种特殊的 DP，<strong>由一个类型注册，但附加到另一个类型的实例上</strong>。最典型的是 <code>Grid.Row</code> / <code>Canvas.Left</code> / <code>DockPanel.Dock</code>——父面板把坐标信息“贴”在子元素身上。</p>
   <div class="card">
-    <pre><code><span class="cm">// Canvas 注册的附加属性：Canvas.Left / Canvas.Top</span>
+    <pre><code class="language-cpp"><span class="cm">// Canvas 注册的附加属性：Canvas.Left / Canvas.Top</span>
 <span class="kw">public static readonly</span> <span class="ty">DependencyProperty</span> LeftProperty =
     <span class="ty">DependencyProperty</span>.<span class="fn">RegisterAttached</span>(
         <span class="st">"Left"</span>, <span class="kw">typeof</span>(<span class="ty">double</span>), <span class="kw">typeof</span>(<span class="ty">Canvas</span>),
@@ -505,7 +505,7 @@
   <h3>Binding 表达式与 DataContext</h3>
   <p><code>DataContext</code> 是 <code>FrameworkElement</code> 的<strong>可继承</strong>属性——子元素不显式指定 Source 时，会沿逻辑树向上找到最近的非 null DataContext。这是 MVVM 的核心机制：在 Window 上设一次 ViewModel，所有子控件都能绑定。</p>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- DataContext 继承：根窗口设一次 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- DataContext 继承：根窗口设一次 --&gt;</span>
 <span class="kw">&lt;Window.DataContext&gt;</span>
     <span class="kw">&lt;local:MainViewModel</span> <span class="kw">/&gt;</span>
 <span class="kw">&lt;/Window.DataContext&gt;</span>
@@ -558,7 +558,7 @@
 
   <h3>INotifyPropertyChanged 与 ObservableCollection</h3>
   <div class="card">
-    <pre><code><span class="kw">public class</span> <span class="ty">UserViewModel</span> : <span class="ty">INotifyPropertyChanged</span>
+    <pre><code class="language-cpp"><span class="kw">public class</span> <span class="ty">UserViewModel</span> : <span class="ty">INotifyPropertyChanged</span>
 {
     <span class="kw">private string</span> _name = <span class="st">""</span>;
     <span class="kw">public string</span> Name {
@@ -583,7 +583,7 @@
   <h3>IValueConverter</h3>
   <p>源类型与目标类型不一致时（如 <code>bool</code> → <code>Visibility</code>），用 <code>IValueConverter</code> 转换。内置 <code>BooleanToVisibilityConverter</code> 最常用。</p>
   <div class="card">
-    <pre><code><span class="kw">public class</span> <span class="ty">InverseBooleanConverter</span> : <span class="ty">IValueConverter</span> {
+    <pre><code class="language-cpp"><span class="kw">public class</span> <span class="ty">InverseBooleanConverter</span> : <span class="ty">IValueConverter</span> {
     <span class="kw">public object</span> <span class="fn">Convert</span>(<span class="kw">object</span> v, <span class="ty">Type</span> t, <span class="kw">object</span> p, <span class="ty">CultureInfo</span> c)
         => !(<span class="ty">bool</span>)v;
     <span class="kw">public object</span> <span class="fn">ConvertBack</span>(<span class="kw">object</span> v, <span class="ty">Type</span> t, <span class="kw">object</span> p, <span class="ty">CultureInfo</span> c)
@@ -614,7 +614,7 @@
   <p>隧道事件总是先于冒泡事件触发——这让父元素有机会<strong>预览并拦截</strong>。在 <code>Preview*</code> 中设 <code>e.Handled = true</code> 会让随后的对应 Bubble 事件<strong>也被取消</strong>。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 路由事件的定义（注册到 EventManager）</span>
+    <pre><code class="language-cpp"><span class="cm">// 路由事件的定义（注册到 EventManager）</span>
 <span class="kw">public static readonly</span> <span class="ty">RoutedEvent</span> TapEvent =
     <span class="ty">EventManager</span>.<span class="fn">RegisterRoutedEvent</span>(
         <span class="st">"Tap"</span>, <span class="ty">RoutingStrategy</span>.Bubble,
@@ -656,7 +656,7 @@
     <li><code>InputBinding</code>：把快捷键/鼠标手势绑定到命令。</li>
   </ul>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- 内置命令绑定 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- 内置命令绑定 --&gt;</span>
 <span class="kw">&lt;Window.CommandBindings&gt;</span>
     <span class="kw">&lt;CommandBinding</span><span class="fn"> Command</span>=<span class="st">"ApplicationCommands.Open"</span>
                   <span class="fn"> Executed</span>=<span class="st">"OnOpen"</span> <span class="fn">CanExecute</span>=<span class="st">"OnCanOpen"</span> <span class="kw">/&gt;</span>
@@ -679,7 +679,7 @@
   <h3>ICommand：MVVM 友好的命令</h3>
   <p>RoutedCommand 依赖 CommandBinding（通常在 code-behind），MVVM 中更常用 <strong>ICommand</strong> 接口，由 ViewModel 直接实现，无需 CommandBinding。</p>
   <div class="card">
-    <pre><code><span class="kw">public interface</span> <span class="ty">ICommand</span> {
+    <pre><code class="language-cpp"><span class="kw">public interface</span> <span class="ty">ICommand</span> {
     <span class="kw">event</span> <span class="ty">EventHandler</span>? CanExecuteChanged;
     <span class="kw">bool</span> <span class="fn">CanExecute</span>(<span class="kw">object</span>? parameter);
     <span class="kw">void</span> <span class="fn">Execute</span>(<span class="kw">object</span>? parameter);
@@ -708,7 +708,7 @@
 
   <h3>Style 与 Setter</h3>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- 在 Window.Resources 中定义命名样式 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- 在 Window.Resources 中定义命名样式 --&gt;</span>
 <span class="kw">&lt;Window.Resources&gt;</span>
     <span class="kw">&lt;Style</span><span class="fn"> x:Key</span>=<span class="st">"PrimaryButton"</span><span class="fn"> TargetType</span>=<span class="st">"Button"</span><span class="kw">&gt;</span>
         <span class="kw">&lt;Setter</span><span class="fn"> Property</span>=<span class="st">"Background"</span><span class="fn"> Value</span>=<span class="st">"#0a6cff"</span> <span class="kw">/&gt;</span>
@@ -738,7 +738,7 @@
 
   <h3>ControlTemplate：彻底重塑控件外观</h3>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- 把 Button 变成圆角按钮 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- 把 Button 变成圆角按钮 --&gt;</span>
 <span class="kw">&lt;Style</span><span class="fn"> TargetType</span>=<span class="st">"Button"</span><span class="kw">&gt;</span>
     <span class="kw">&lt;Setter</span><span class="fn"> Property</span>=<span class="st">"Template"</span><span class="kw">&gt;</span>
         <span class="kw">&lt;Setter.Value&gt;</span>
@@ -765,7 +765,7 @@
 
   <h3>DataTemplate：重塑数据呈现</h3>
   <div class="card">
-    <pre><code><span class="kw">&lt;DataTemplate</span><span class="fn"> DataType</span>=<span class="st">"{x:Type vm:User}"</span><span class="kw">&gt;</span>    <span class="cm">&lt;!-- 隐式：User 自动应用此模板 --&gt;</span>
+    <pre><code class="language-cpp"><span class="kw">&lt;DataTemplate</span><span class="fn"> DataType</span>=<span class="st">"{x:Type vm:User}"</span><span class="kw">&gt;</span>    <span class="cm">&lt;!-- 隐式：User 自动应用此模板 --&gt;</span>
     <span class="kw">&lt;Border</span><span class="fn"> Padding</span>=<span class="st">"8"</span><span class="fn"> BorderBrush</span>=<span class="st">"#ddd"</span><span class="fn"> BorderThickness</span>=<span class="st">"0,0,0,1"</span><span class="kw">&gt;</span>
         <span class="kw">&lt;StackPanel&gt;</span>
             <span class="kw">&lt;TextBlock</span><span class="fn"> Text</span>=<span class="st">"{Binding Name}"</span><span class="fn"> FontWeight</span>=<span class="st">"Bold"</span> <span class="kw">/&gt;</span>
@@ -799,7 +799,7 @@
 
   <h3>完整 ViewModel 示例</h3>
   <div class="card">
-    <pre><code><span class="kw">public class</span> <span class="ty">UserEditorViewModel</span> : <span class="ty">ObservableObject</span>   <span class="cm">// INPC 基类</span>
+    <pre><code class="language-cpp"><span class="kw">public class</span> <span class="ty">UserEditorViewModel</span> : <span class="ty">ObservableObject</span>   <span class="cm">// INPC 基类</span>
 {
     <span class="kw">private string</span> _name = <span class="st">""</span>;
     <span class="kw">private int</span> _age;
@@ -841,7 +841,7 @@
   <h3>CommunityToolkit.Mvvm 与源生成器</h3>
   <p>微软的 <strong>CommunityToolkit.Mvvm</strong>（前身是 MvvmLight / Prism 的部分能力）用 C# <strong>源生成器（Source Generator）</strong>在编译期自动生成 INPC 与 ICommand 的样板，VM 代码变得极简：</p>
   <div class="card">
-    <pre><code><span class="kw">public partial class</span> <span class="ty">UserEditorViewModel</span> : <span class="ty">ObservableObject</span>   <span class="cm">// partial 必须</span>
+    <pre><code class="language-cpp"><span class="kw">public partial class</span> <span class="ty">UserEditorViewModel</span> : <span class="ty">ObservableObject</span>   <span class="cm">// partial 必须</span>
 {
     <span class="cm">// [ObservableProperty] 自动生成 public string Name { get; set; } + INPC</span>
     [<span class="ty">ObservableProperty</span>]
@@ -874,7 +874,7 @@
 
   <h3>Shape 与 Geometry</h3>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- Shape：可直接放进面板的图形元素 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- Shape：可直接放进面板的图形元素 --&gt;</span>
 <span class="kw">&lt;Canvas&gt;</span>
     <span class="kw">&lt;Ellipse</span><span class="fn"> Width</span>=<span class="st">"100"</span><span class="fn"> Height</span>=<span class="st">"100"</span><span class="fn"> Fill</span>=<span class="st">"Orange"</span> <span class="kw">/&gt;</span>
     <span class="kw">&lt;Rectangle</span><span class="fn"> Canvas.Left</span>=<span class="st">"120"</span><span class="fn"> Width</span>=<span class="st">"80"</span><span class="fn"> Height</span>=<span class="st">"40"</span>
@@ -891,7 +891,7 @@
   <h3>Drawing / Visual：轻量绘图</h3>
   <p>Shape 每个都是完整 FrameworkElement，参与布局与事件，开销大。<code>Drawing</code> 是纯绘图指令，<code>DrawingVisual</code> 是最轻量的 Visual——直接通过 <code>DrawingContext</code> 绘制，适合做图表、地图、粒子系统这类“上千个图形”的场景。</p>
   <div class="card">
-    <pre><code><span class="kw">public class</span> <span class="ty">FastCanvas</span> : <span class="ty">FrameworkElement</span>
+    <pre><code class="language-cpp"><span class="kw">public class</span> <span class="ty">FastCanvas</span> : <span class="ty">FrameworkElement</span>
 {
     <span class="kw">private readonly</span> <span class="ty">DrawingVisual</span> _visual = <span class="kw">new</span>();
 
@@ -914,7 +914,7 @@
   <h3>动画（Storyboard + Timeline）</h3>
   <p>WPF 动画的本质是<strong>“随时间改变依赖属性的值”</strong>。由于 DP 优先级中<strong>动画高于本地值</strong>，动画运行时本地值会被压住。Storyboard 是一组并行/串行 Timeline 的容器，通常由 EventTrigger 触发。</p>
   <div class="card">
-    <pre><code><span class="kw">&lt;Button</span><span class="fn"> Width</span>=<span class="st">"100"</span><span class="fn"> Height</span>=<span class="st">"40"</span><span class="fn"> Content</span>=<span class="st">"Pulse"</span><span class="kw">&gt;</span>
+    <pre><code class="language-cpp"><span class="kw">&lt;Button</span><span class="fn"> Width</span>=<span class="st">"100"</span><span class="fn"> Height</span>=<span class="st">"40"</span><span class="fn"> Content</span>=<span class="st">"Pulse"</span><span class="kw">&gt;</span>
     <span class="kw">&lt;Button.Triggers&gt;</span>
         <span class="kw">&lt;EventTrigger</span><span class="fn"> RoutedEvent</span>=<span class="st">"Button.Click"</span><span class="kw">&gt;</span>
             <span class="kw">&lt;BeginStoryboard&gt;</span>
@@ -971,7 +971,7 @@
 
   <h3>Model</h3>
   <div class="card">
-    <pre><code><span class="cm">// Models/User.cs</span>
+    <pre><code class="language-cpp"><span class="cm">// Models/User.cs</span>
 <span class="kw">namespace</span> <span class="ty">UserMgr.Models</span>;
 
 <span class="kw">public class</span> <span class="ty">User</span>
@@ -984,7 +984,7 @@
 
   <h3>ViewModel</h3>
   <div class="card">
-    <pre><code><span class="cm">// ViewModels/UserEditorViewModel.cs</span>
+    <pre><code class="language-cpp"><span class="cm">// ViewModels/UserEditorViewModel.cs</span>
 <span class="kw">using</span> <span class="ty">CommunityToolkit.Mvvm.Input</span>;
 <span class="kw">using</span> <span class="ty">CommunityToolkit.Mvvm.ComponentModel</span>;
 <span class="kw">using</span> <span class="ty">UserMgr.Models</span>;
@@ -1024,7 +1024,7 @@
 
   <h3>View（XAML）</h3>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- Views/UserEditorView.xaml --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- Views/UserEditorView.xaml --&gt;</span>
 <span class="kw">&lt;Window</span><span class="fn"> x:Class</span>=<span class="st">"UserMgr.Views.UserEditorView"</span>
         <span class="fn">xmlns</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml/presentation"</span>
         <span class="fn">xmlns:x</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml"</span>

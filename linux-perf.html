@@ -36,7 +36,7 @@
   <h2><span class="num">01</span> 概述</h2>
   <p>Linux 内核的可观测性（observability）由多个子系统组成。本文档聚焦<strong>性能监控</strong>层，与已有的 <a href="linux-ftrace.html">ftrace 深度解析</a> 互补。</p>
 
-<pre><code>┌──────────────────────────────────────────────┐
+<pre><code class="language-c">┌──────────────────────────────────────────────┐
 │  用户态工具                                    │
 │  perf / bpftrace / strace / ftrace / dtrace   │
 └────────────┬───────────────────┬──────────────┘
@@ -72,7 +72,7 @@
 <section id="core" class="toc-link">
   <h2><span class="num">02</span> perf 核心框架</h2>
 
-<pre><code>// include/linux/perf_event.h
+<pre><code class="language-c">// include/linux/perf_event.h
 struct perf_event {
     struct list_head                event_entry;
     struct list_head                sibling_list;
@@ -191,7 +191,7 @@ struct pmu {
 </code></pre>
 
   <p>perf_event_open 系统调用：</p>
-<pre><code>// kernel/events/core.c
+<pre><code class="language-c">// kernel/events/core.c
 SYSCALL_DEFINE5(perf_event_open,
                 struct perf_event_attr __user *, attr_uptr,
                 pid_t, pid, int, cpu, int, group_fd, unsigned long, flags)
@@ -255,7 +255,7 @@ struct perf_event_attr {
 
   <p>硬件 PMU (Performance Monitoring Unit) 通过架构特定驱动实现。x86 上是 Intel/AMD PMU：</p>
 
-<pre><code>// arch/x86/events/intel/core.c (Intel PMU)
+<pre><code class="language-c">// arch/x86/events/intel/core.c (Intel PMU)
 static struct pmu intel_pmu = {
     .name           = "intel",
     .task_ctx_nr    = perf_hw_context,
@@ -347,7 +347,7 @@ struct hw_perf_event {
 </code></pre>
 
   <p>PEBS (Processor Event-Based Sampling)：Intel 的精确采样机制：</p>
-<pre><code>// PEBS 在事件触发时让 CPU 自动写入一个状态记录
+<pre><code class="language-c">// PEBS 在事件触发时让 CPU 自动写入一个状态记录
 // 包含 RIP, RSP, RFLAGS, RAX-R15（无内核切换开销）
 // 比 IRQ-based 采样精度高得多
 
@@ -369,7 +369,7 @@ struct pebs_lbr {
 <section id="ringbuf" class="toc-link">
   <h2><span class="num">04</span> perf 环形缓冲区</h2>
 
-<pre><code>// kernel/events/ring_buffer.c
+<pre><code class="language-c">// kernel/events/ring_buffer.c
 
 struct perf_buffer {
     struct rcu_head            rcu_head;
@@ -475,7 +475,7 @@ void perf_output_end(struct perf_output_handle *handle)
 </code></pre>
 
   <p>Intel PT (Processor Trace)：</p>
-<pre><code>// Intel PT 是硬件辅助的执行追踪
+<pre><code class="language-c">// Intel PT 是硬件辅助的执行追踪
 // 通过 aux buffer 输出
 // 包含：执行路径、时序、分支、时间戳
 // perf record -e intel_pt// ...
@@ -490,7 +490,7 @@ void perf_output_end(struct perf_output_handle *handle)
 
   <p>perf 不只是硬件采样，还支持软件事件：</p>
 
-<pre><code>// 软件事件 (PERF_TYPE_SOFTWARE)：
+<pre><code class="language-c">// 软件事件 (PERF_TYPE_SOFTWARE)：
 enum perf_sw_ids {
     PERF_COUNT_SW_CPU_CLOCK,         // CPU 时钟
     PERF_COUNT_SW_TASK_CLOCK,        // 任务 CPU 时间
@@ -547,7 +547,7 @@ TRACE_EVENT(sched_switch,
 </code></pre>
 
   <p>Tracepoint 内部结构：</p>
-<pre><code>// include/linux/tracepoint-defs.h
+<pre><code class="language-c">// include/linux/tracepoint-defs.h
 struct tracepoint {
     const char              *name;
     struct static_call_key  *key;             // 静态调用入口
@@ -574,7 +574,7 @@ struct tracepoint {
 <section id="tp-perf" class="toc-link">
   <h2><span class="num">06</span> Tracepoint 与 perf 的连接</h2>
 
-<pre><code>// kernel/trace/trace_event_perf.c
+<pre><code class="language-c">// kernel/trace/trace_event_perf.c
 int perf_trace_init(struct perf_event *perf_event)
 {
     struct trace_event_call *tp_event;
@@ -643,7 +643,7 @@ void perf_tp_event(u16 event_type, u64 count, void *record,
 
   <p>kprobe 允许在<strong>任意内核指令</strong>处动态插入探针。</p>
 
-<pre><code>// include/linux/kprobes.h
+<pre><code class="language-c">// include/linux/kprobes.h
 struct kprobe {
     struct hlist_node     hlist;
     struct list_head      list;
@@ -706,7 +706,7 @@ struct kretprobe {
 </code></pre>
 
   <p>通过 tracefs 使用 kprobe：</p>
-<pre><code>// /sys/kernel/debug/tracing/kprobe_events
+<pre><code class="language-c">// /sys/kernel/debug/tracing/kprobe_events
 // 添加：
 echo 'p:my_probe vfs_read' > kprobe_events
 echo 'r:my_ret vfs_read $retval' >> kprobe_events
@@ -731,7 +731,7 @@ echo 1 > events/kprobes/my_probe/enable
 
   <p>uprobe 是 kprobe 的用户态对应物，可以追踪用户态程序的函数入口。</p>
 
-<pre><code>// kernel/trace/uprobe.c
+<pre><code class="language-c">// kernel/trace/uprobe.c
 struct uprobe {
     struct rb_node         rb_node;          // 全局红黑树节点
     refcount_t             ref;

@@ -119,7 +119,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/if_inet6.h:167 — IPv6 设备状态</span>
+    <pre><code class="language-c"><span class="cm">// include/net/if_inet6.h:167 — IPv6 设备状态</span>
 <span class="kw">struct</span> <span class="ty">inet6_dev</span> {
     <span class="kw">struct</span> <span class="ty">net_device</span>  *dev;          <span class="cm">// 关联的网络设备</span>
     <span class="kw">struct</span> <span class="ty">list_head</span>   addr_list;    <span class="cm">// ★ 地址链表（可能有多个 IPv6 地址）</span>
@@ -229,7 +229,7 @@
 </pre></div>
 
   <div class="card">
-    <pre><code><span class="cm"># 查看 IPv6 地址</span>
+    <pre><code class="language-c"><span class="cm"># 查看 IPv6 地址</span>
 $ ip -6 addr show
 2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt;
     inet6 fe80::a00:27ff:fe3b:d9b9/64 scope link     <span class="cm"># 链路本地</span>
@@ -277,7 +277,7 @@ default via fe80::1 dev eth0 proto ra metric 1024
 
   <h3>Linux IPv6 系统调优</h3>
   <div class="card">
-    <pre><code><span class="cm"># 启用 IPv6</span>
+    <pre><code class="language-c"><span class="cm"># 启用 IPv6</span>
 $ sysctl -w net.ipv6.conf.all.disable_ipv6=0
 
 <span class="cm"># 禁用 IPv6（如果不需要）</span>

@@ -160,7 +160,7 @@ vlan_dev_priv.real_dev = eth0  ← 每个 VLAN 设备指向底层物理网卡
   <h2><span class="num">04</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/if_vlan.h:178 — VLAN 设备私有数据</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/if_vlan.h:178 — VLAN 设备私有数据</span>
 <span class="kw">struct</span> <span class="ty">vlan_dev_priv</span> {
     <span class="ty">unsigned int</span>    nr_ingress_mappings;    <span class="cm">// 入方向优先级映射数</span>
     <span class="ty">u32</span>             ingress_priority_map[<span class="num">8</span>]; <span class="cm">// PCP → 内核优先级映射</span>
@@ -317,7 +317,7 @@ vlan_dev_priv.real_dev = eth0  ← 每个 VLAN 设备指向底层物理网卡
   <h2><span class="num">07</span> 配置命令</h2>
 
   <div class="card">
-    <pre><code><span class="cm"># 创建 VLAN 子接口</span>
+    <pre><code class="language-c"><span class="cm"># 创建 VLAN 子接口</span>
 $ ip link add link eth0 name eth0.10 type vlan id 10
 $ ip addr add 10.0.0.1/24 dev eth0.10
 $ ip link set eth0.10 up

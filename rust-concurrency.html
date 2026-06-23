@@ -62,7 +62,7 @@
 <section id="thread" class="toc-link">
   <h2><span class="num">02</span> Thread</h2>
 
-<pre><code>use std::thread;
+<pre><code class="language-rust">use std::thread;
 use std::time::Duration;
 
 // 创建线程
@@ -120,7 +120,7 @@ COUNTER.with(|c| {
 <section id="send-sync" class="toc-link">
   <h2><span class="num">03</span> Send/Sync 详解</h2>
 
-<pre><code>// Send: 类型可以跨线程转移所有权
+<pre><code class="language-rust">// Send: 类型可以跨线程转移所有权
 //   T: Send 表示 T 可以从一个线程 move 到另一个线程
 
 // Sync: &T 可以跨线程共享
@@ -165,7 +165,7 @@ thread::spawn(move || {
 <section id="mutex" class="toc-link">
   <h2><span class="num">04</span> Mutex / RwLock</h2>
 
-<pre><code>// Mutex&lt;T&gt; — 互斥锁
+<pre><code class="language-rust">// Mutex&lt;T&gt; — 互斥锁
 use std::sync::Mutex;
 
 let m = Mutex::new(5);
@@ -217,7 +217,7 @@ let lock = RwLock::new(5);
 </code></pre>
 
   <p>parking_lot 库：</p>
-<pre><code>// [dependencies]
+<pre><code class="language-rust">// [dependencies]
 // parking_lot = "0.12"
 
 use parking_lot::Mutex;
@@ -241,7 +241,7 @@ let mut g = m.lock();   // 不返回 Result（无 poison）
 <section id="arc" class="toc-link">
   <h2><span class="num">05</span> Arc 引用计数</h2>
 
-<pre><code>// Arc&lt;T&gt; — 原子引用计数（多线程）
+<pre><code class="language-rust">// Arc&lt;T&gt; — 原子引用计数（多线程）
 use std::sync::Arc;
 
 let data = Arc::new(vec![1, 2, 3]);
@@ -311,7 +311,7 @@ if let Some(strong_again) = weak.upgrade() {
 <section id="condvar" class="toc-link">
   <h2><span class="num">06</span> Condvar 条件变量</h2>
 
-<pre><code>use std::sync::{Arc, Mutex, Condvar};
+<pre><code class="language-rust">use std::sync::{Arc, Mutex, Condvar};
 use std::thread;
 
 let pair = Arc::new((Mutex::new(false), Condvar::new()));
@@ -370,7 +370,7 @@ let val = INIT.call_once(|| {
 <section id="channels" class="toc-link">
   <h2><span class="num">07</span> 通道 (Channels)</h2>
 
-<pre><code>// "Don't communicate by sharing memory; share memory by communicating"
+<pre><code class="language-rust">// "Don't communicate by sharing memory; share memory by communicating"
 
 use std::sync::mpsc;
 use std::thread;
@@ -420,7 +420,7 @@ match rx.try_recv() {
 </code></pre>
 
   <p>crossbeam-channel（更强大的实现）：</p>
-<pre><code>// [dependencies]
+<pre><code class="language-rust">// [dependencies]
 // crossbeam-channel = "0.5"
 
 use crossbeam_channel::{bounded, unbounded, select, tick, after};
@@ -457,7 +457,7 @@ let timeout = after(Duration::from_secs(5));
 <section id="atomic" class="toc-link">
   <h2><span class="num">08</span> 原子操作</h2>
 
-<pre><code>use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, AtomicPtr, Ordering};
+<pre><code class="language-rust">use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, AtomicPtr, Ordering};
 
 // 基本原子类型
 let counter = AtomicUsize::new(0);
@@ -510,7 +510,7 @@ impl&lt;T&gt; Stack&lt;T&gt; {
 <section id="memory-ordering" class="toc-link">
   <h2><span class="num">09</span> 内存序</h2>
 
-<pre><code>// Ordering 控制原子操作周围的内存可见性
+<pre><code class="language-rust">// Ordering 控制原子操作周围的内存可见性
 
 // 5 种 Ordering：
 //   Relaxed       - 只保证本操作原子，无其他同步
@@ -561,7 +561,7 @@ println!("{}", data.load(Ordering::Relaxed));
 <section id="patterns" class="toc-link">
   <h2><span class="num">10</span> 并发模式</h2>
 
-<pre><code>// 1. 共享可变状态（Arc&lt;Mutex&lt;T&gt;&gt;）
+<pre><code class="language-rust">// 1. 共享可变状态（Arc&lt;Mutex&lt;T&gt;&gt;）
 let state = Arc::new(Mutex::new(State::new()));
 let mut handles = vec![];
 for _ in 0..4 {
@@ -647,7 +647,7 @@ let result = tokio::task::spawn_blocking(|| {
 </code></pre>
 
   <p>测试并发代码：</p>
-<pre><code>// 1. loom：并发模型检查器
+<pre><code class="language-rust">// 1. loom：并发模型检查器
 // 模拟所有可能的线程交错
 #[loom::test]
 fn test_concurrent() {

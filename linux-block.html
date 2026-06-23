@@ -45,7 +45,7 @@
   </table>
 
   <p>IO 路径概览：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-c">┌─────────────────────────────────────────┐
 │   用户态：read/write/fsync                │
 │   direct I/O / buffered I/O              │
 └────────────────┬────────────────────────┘
@@ -77,7 +77,7 @@
 
   <p><code>bio</code> (Block IO) 是块层最核心的数据结构，描述一次 I/O 操作：</p>
 
-<pre><code>// include/linux/blk_types.h
+<pre><code class="language-c">// include/linux/blk_types.h
 struct bio {
     struct bio              *bi_next;       // 链表下一个
     struct block_device     *bi_bdev;       // 目标块设备
@@ -101,7 +101,7 @@ struct bio {
 </code></pre>
 
   <p>关键概念：</p>
-<pre><code>// 操作码 (bi_opf 的高位):
+<pre><code class="language-c">// 操作码 (bi_opf 的高位):
 enum req_op {
     REQ_OP_READ      = 0,
     REQ_OP_WRITE     = 1,
@@ -138,7 +138,7 @@ struct bvec_iter {
 </code></pre>
 
   <p>bio_vec — I/O 段：</p>
-<pre><code>// include/linux/bvec.h
+<pre><code class="language-c">// include/linux/bvec.h
 struct bio_vec {
     struct page    *bv_page;       // 内存页
     unsigned int    bv_len;        // 段长度
@@ -159,7 +159,7 @@ bio_alloc(GFP_KERNEL, 1);  // 单页
 <section id="queue" class="toc-link">
   <h2><span class="num">03</span> gendisk 与 request_queue</h2>
 
-<pre><code>// include/linux/blkdev.h
+<pre><code class="language-c">// include/linux/blkdev.h
 struct gendisk {
     int                 major;
     int                 first_minor;
@@ -200,7 +200,7 @@ struct block_device_operations {
 </code></pre>
 
   <p>请求队列：</p>
-<pre><code>// include/linux/blkdev.h
+<pre><code class="language-c">// include/linux/blkdev.h
 struct request_queue {
     struct blk_mq_tags   *queue_tags;        // 共享标签
     struct xarray         blkcg_pols;
@@ -257,7 +257,7 @@ struct queue_limits {
 <section id="submit" class="toc-link">
   <h2><span class="num">04</span> IO 提交路径</h2>
 
-<pre><code>// 完整路径：syscall → submit_bio → blk-mq
+<pre><code class="language-c">// 完整路径：syscall → submit_bio → blk-mq
 
 // 1. 系统调用入口（块设备文件直接读写）
 // block/fops.c
@@ -324,7 +324,7 @@ static void __submit_bio_noacct_mq(struct request_queue *q, struct bio *bio)
 </code></pre>
 
   <p>Plugging 机制（批量优化）：</p>
-<pre><code>// 当线程连续提交多个 bio 时
+<pre><code class="language-c">// 当线程连续提交多个 bio 时
 // 使用 blk_start_plug() / blk_finish_plug() 标记
 // 在 plug 内的 bio 先暂存
 // 在 finish_plug 时一次性提交
@@ -356,7 +356,7 @@ struct blk_plug {
 
   <p>blk-mq (Block Multi-Queue) 是现代块层核心。设计目标：<strong>多核扩展性</strong>，让多 CPU 不再争抢一个全局队列。</p>
 
-<pre><code>// 三层队列：
+<pre><code class="language-c">// 三层队列：
 //   software queue (每 CPU 一个) 
 //   → hardware context (hctx)
 //   → hardware queue (hw queue, NVMe SQ)
@@ -406,7 +406,7 @@ struct blk_mq_hw_ctx {
 </code></pre>
 
   <p>blk_mq_ops — 驱动实现的接口：</p>
-<pre><code>// include/linux/blk-mq.h
+<pre><code class="language-c">// include/linux/blk-mq.h
 struct blk_mq_queue_data {
     blk_status_t (*queue_rq)(struct blk_mq_hw_ctx *,
                               const struct blk_mq_queue_data *);
@@ -447,7 +447,7 @@ static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
 </code></pre>
 
   <p>提交路径细节：</p>
-<pre><code>// block/blk-mq.c
+<pre><code class="language-c">// block/blk-mq.c
 blk_status_t blk_mq_request_issue_directly(struct request *rq, bool last)
 {
     struct blk_mq_hw_ctx *hctx = rq->mq_hctx;
@@ -476,7 +476,7 @@ void blk_mq_dispatch_rq_list(struct blk_mq_hw_ctx *hctx,
 <section id="request" class="toc-link">
   <h2><span class="num">06</span> struct request 与标签</h2>
 
-<pre><code>// include/linux/blk-mq.h
+<pre><code class="language-c">// include/linux/blk-mq.h
 struct request {
     struct request_queue    *q;
     struct blk_mq_ctx       *mq_ctx;
@@ -544,7 +544,7 @@ struct request {
 </code></pre>
 
   <p>标签 (tag) 管理：</p>
-<pre><code>// 标签是 request 在驱动中的索引
+<pre><code class="language-c">// 标签是 request 在驱动中的索引
 // 每个硬件队列有自己的标签池
 
 // include/linux/blk-mq.h
@@ -577,7 +577,7 @@ struct blk_mq_tags {
 
   <p>I/O 调度器（电梯）在 request 之间做合并和排序，提高吞吐或公平性。</p>
 
-<pre><code>// include/linux/elevator.h
+<pre><code class="language-c">// include/linux/elevator.h
 struct elevator_mq_ops {
     int  (*init_sched)(struct request_queue *, struct elevator_queue *);
     void (*exit_sched)(struct elevator_queue *);

@@ -85,14 +85,14 @@
 
   <div class="card">
     <p><strong>自相关矩阵 M:</strong></p>
-    <pre><code>M = Σ w(x,y) * [ Ix²   IxIy ]
+    <pre><code class="language-python">M = Σ w(x,y) * [ Ix²   IxIy ]
                [ IxIy  Iy²  ]
 
 其中 Ix, Iy 是 x/y 方向的梯度
 w(x,y) 是高斯加权窗口</code></pre>
 
     <p><strong>角点响应 R:</strong></p>
-    <pre><code>R = det(M) - k * trace(M)²
+    <pre><code class="language-python">R = det(M) - k * trace(M)²
   = λ₁λ₂ - k * (λ₁ + λ₂)²
 
 λ₁, λ₂: M 的特征值
@@ -106,7 +106,7 @@ R &gt; 0 → 角点（λ₁, λ₂ 都大）</code></pre>
 
   <h3>2.2 OpenCV 实现</h3>
   <div class="card">
-    <pre><code><span class="kw">import</span> cv2
+    <pre><code class="language-python"><span class="kw">import</span> cv2
 <span class="kw">import</span> numpy <span class="kw">as</span> np
 
 img = cv2.imread(<span class="str">"building.jpg"</span>)
@@ -158,7 +158,7 @@ cv2.imshow(<span class="str">"Harris Corners"</span>, img_harris)</code></pre>
   <p>SIFT 首先构建高斯金字塔，然后通过高斯差分（Difference of Gaussian, DoG）在不同尺度上检测极值点：</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 高斯金字塔与 DoG 构建</span>
+    <pre><code class="language-python"><span class="cm">// 高斯金字塔与 DoG 构建</span>
 <span class="cm">// 每组 (Octave) 图像尺寸减半</span>
 <span class="cm">// 每层 (Layer) 使用不同高斯核 σ 平滑</span>
 
@@ -177,7 +177,7 @@ Octave 2: [2σ, 2kσ, 2k²σ, ...]         (1/2 尺寸)
   <h3>3.3 关键点精确定位</h3>
   <p>通过子像素插值（Taylor 展开）精确定位关键点位置和尺度，并去除低对比度和边缘响应点：</p>
   <div class="card">
-    <pre><code><span class="cm">// 子像素插值（Taylor 展开到二次项）</span>
+    <pre><code class="language-python"><span class="cm">// 子像素插值（Taylor 展开到二次项）</span>
 <span class="cm">// D(x) = D + ∂Dᵀ/∂x · x + ½ · xᵀ · ∂²D/∂x² · x</span>
 <span class="cm">// 极值位置: x̂ = -∂²D⁻¹/∂x² · ∂D/∂x</span>
 
@@ -193,7 +193,7 @@ Octave 2: [2σ, 2kσ, 2k²σ, ...]         (1/2 尺寸)
   <h3>3.4 方向分配</h3>
   <p>为每个关键点分配一个或多个主方向，实现旋转不变性：</p>
   <div class="card">
-    <pre><code><span class="cm">// 梯度幅值和方向</span>
+    <pre><code class="language-python"><span class="cm">// 梯度幅值和方向</span>
 m(x,y) = √((L(x+1,y)-L(x-1,y))² + (L(x,y+1)-L(x,y-1))²)
 θ(x,y) = atan2(L(x,y+1)-L(x,y-1), L(x+1,y)-L(x-1,y))
 
@@ -206,7 +206,7 @@ m(x,y) = √((L(x+1,y)-L(x-1,y))² + (L(x,y+1)-L(x,y-1))²)
   <h3>3.5 描述子生成</h3>
   <p>SIFT 描述子是一个 128 维向量（4x4 子区域 x 8 方向），具有光照和视角不变性：</p>
   <div class="card">
-    <pre><code><span class="cm">// 描述子生成步骤：</span>
+    <pre><code class="language-python"><span class="cm">// 描述子生成步骤：</span>
 <span class="cm">// 1. 将关键点周围 16x16 区域旋转到主方向</span>
 <span class="cm">// 2. 分为 4x4 个子区域（每个子区域 4x4 像素）</span>
 <span class="cm">// 3. 每个子区域统计 8 方向的梯度直方图</span>
@@ -218,7 +218,7 @@ m(x,y) = √((L(x+1,y)-L(x-1,y))² + (L(x,y+1)-L(x,y-1))²)
 
   <h3>3.6 OpenCV 中的 SIFT</h3>
   <div class="card">
-    <pre><code><span class="kw">import</span> cv2
+    <pre><code class="language-python"><span class="kw">import</span> cv2
 
 <span class="cm"># SIFT 在 opencv-contrib-python 中</span>
 <span class="cm"># pip install opencv-contrib-python</span>
@@ -278,7 +278,7 @@ print(<span class="str">f"图像2 特征点数: {len(kp2)}, 描述子形状: {de
   <p>FAST（Features from Accelerated Segment Test）是 ORB 使用的角点检测器。它的核心思想非常高效：一个像素如果是角点，那么它周围圆形邻域上应该有足够多的像素与其差异较大。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// FAST-12 检测（12 个连续点均超过阈值）</span>
+    <pre><code class="language-python"><span class="cm">// FAST-12 检测（12 个连续点均超过阈值）</span>
 <span class="cm">// 以候选点 p 为中心，半径为 3 的 Bresenham 圆上</span>
 <span class="cm">// 有 16 个像素点（编号 1-16）</span>
 <span class="cm">// 如果编号 1, 5, 9, 13 中至少有 3 个满足阈值条件</span>
@@ -296,7 +296,7 @@ keypoints = fast.detect(img, None)</code></pre>
   <p>BRIEF（Binary Robust Independent Elementary Features）通过比较关键点周围随机选取的像素点对，生成二值描述子：</p>
 
   <div class="card">
-    <pre><code><span class="cm">// BRIEF 描述子生成</span>
+    <pre><code class="language-python"><span class="cm">// BRIEF 描述子生成</span>
 <span class="cm">// 1. 在关键点周围选取 512 个随机位置对 (x_i, y_i)</span>
 <span class="cm">// 2. 对每对像素 p(x_i), p(y_i) 进行比较</span>
 <span class="cm">//    τ(p; x, y) = 1  if p(x) < p(y), else 0</span>
@@ -311,7 +311,7 @@ keypoints = fast.detect(img, None)</code></pre>
 
   <h3>4.4 OpenCV 中的 ORB</h3>
   <div class="card">
-    <pre><code><span class="kw">import</span> cv2
+    <pre><code class="language-python"><span class="kw">import</span> cv2
 
 img = cv2.imread(<span class="str">"scene.jpg"</span>)
 
@@ -353,7 +353,7 @@ img_orb = cv2.drawKeypoints(
   <p>暴力匹配（BFMatcher）将每个查询描述子与所有训练描述子逐一计算距离，返回最匹配的那对。对于二值描述子（ORB）使用汉明距离，对于浮点描述子（SIFT）使用 L2 欧氏距离。</p>
 
   <div class="card">
-    <pre><code><span class="kw">import</span> cv2
+    <pre><code class="language-python"><span class="kw">import</span> cv2
 
 <span class="cm"># 假设已经通过 SIFT 或 ORB 得到 kp1, des1, kp2, des2</span>
 
@@ -389,7 +389,7 @@ result = cv2.drawMatches(
   <p>FLANN（Fast Library for Approximate Nearest Neighbors）适用于大规模特征点匹配。它使用 KD-Tree（浮点）或 LSH（二值）索引结构，比暴力匹配快得多，但返回的是近似结果。</p>
 
   <div class="card">
-    <pre><code><span class="kw">import</span> cv2
+    <pre><code class="language-python"><span class="kw">import</span> cv2
 
 <span class="cm">// FLANN 匹配器参数设置</span>
 
@@ -434,7 +434,7 @@ good = [m <span class="kw">for</span> m, n <span class="kw">in</span> matches <s
   <p>RANSAC（Random Sample Consensus）是 Fisher 和 Bolles 在 1981 年提出的鲁棒参数估计算法。在特征匹配中，RANSAC 用于从包含大量误匹配（外点）的匹配集中估算出正确的几何变换（单应矩阵或基础矩阵）。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// RANSAC 算法步骤：</span>
+    <pre><code class="language-python"><span class="cm">// RANSAC 算法步骤：</span>
 <span class="cm">// 1. 随机选取最小样本集（单应矩阵需要 4 对匹配点）</span>
 <span class="cm">// 2. 根据样本集计算变换矩阵 H</span>
 <span class="cm">// 3. 用 H 测试所有匹配点，统计内点（重投影误差 < 阈值）</span>
@@ -451,7 +451,7 @@ good = [m <span class="kw">for</span> m, n <span class="kw">in</span> matches <s
 
   <h3>6.2 OpenCV 实现</h3>
   <div class="card">
-    <pre><code><span class="kw">import</span> cv2
+    <pre><code class="language-python"><span class="kw">import</span> cv2
 <span class="kw">import</span> numpy <span class="kw">as</span> np
 
 <span class="cm">// 将匹配点转换为坐标矩阵</span>
@@ -505,7 +505,7 @@ inlier_matches = [m <span class="kw">for</span> i, m <span class="kw">in</span> 
 
   <h3>7.2 单应矩阵与透视变换</h3>
   <div class="card">
-    <pre><code><span class="kw">import</span> cv2
+    <pre><code class="language-python"><span class="kw">import</span> cv2
 <span class="kw">import</span> numpy <span class="kw">as</span> np
 
 <span class="cm">// 假设已经从匹配中计算出 H</span>
@@ -555,7 +555,7 @@ panorama = np.where(warped_img1 &gt; 0, warped_img1, warped_img2)</code></pre>
   <p>OpenCV 提供了封装好的拼接模块，可以自动处理完整的拼接流程：</p>
 
   <div class="card">
-    <pre><code><span class="kw">import</span> cv2
+    <pre><code class="language-python"><span class="kw">import</span> cv2
 
 <span class="cm">// 创建拼接器</span>
 stitcher = cv2.Stitcher.create(cv2.Stitcher_PANORAMA)
@@ -597,7 +597,7 @@ stitcher.setBlendResol(0.5)            <span class="cm">// 融合分辨率</span
   <p>以下是一个完整的物体识别示例集，展示从特征提取到匹配到定位的完整流程：</p>
 
   <div class="card">
-    <pre><code><span class="kw">import</span> cv2
+    <pre><code class="language-python"><span class="kw">import</span> cv2
 <span class="kw">import</span> numpy <span class="kw">as</span> np
 
 <span class="kw">class</span> <span class="ty">FeatureMatcher</span>:

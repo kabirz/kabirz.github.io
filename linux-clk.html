@@ -118,7 +118,7 @@
   <h3>struct clk_core（内部核心）</h3>
   <div class="card">
     <p class="ref">drivers/clk/clk.c:66-104</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">clk_core</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">clk_core</span> {
     <span class="kw">const char</span> *name;                <span class="cm">// 时钟名</span>
     <span class="kw">const struct</span> <span class="ty">clk_ops</span> *ops;       <span class="cm">// 操作回调</span>
     <span class="kw">struct</span> <span class="ty">clk_hw</span> *hw;                <span class="cm">// 硬件句柄</span>
@@ -144,7 +144,7 @@
   <h3>struct clk_ops（操作回调）</h3>
   <div class="card">
     <p class="ref">include/linux/clk-provider.h:234-250</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">clk_ops</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">clk_ops</span> {
     <span class="cm">// 使能控制</span>
     <span class="ty">int</span> (*prepare)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw);      <span class="cm">// 可睡眠</span>
     <span class="ty">void</span> (*unprepare)(<span class="kw">struct</span> <span class="ty">clk_hw</span> *hw);
@@ -171,7 +171,7 @@
 
   <h3>struct clk_hw（硬件句柄）</h3>
   <div class="card">
-    <pre><code><span class="cm">// 提供者向核心层暴露的硬件抽象</span>
+    <pre><code class="language-c"><span class="cm">// 提供者向核心层暴露的硬件抽象</span>
 <span class="kw">struct</span> <span class="ty">clk_hw</span> {
     <span class="kw">struct</span> <span class="ty">clk_core</span> *core;
     <span class="kw">struct</span> <span class="ty">clk_hw</span> *parent;
@@ -243,7 +243,7 @@
   </table>
 
   <h3>设备树中的时钟</h3>
-  <pre><code><span class="cm">// 常见时钟节点</span>
+  <pre><code class="language-c"><span class="cm">// 常见时钟节点</span>
 <span class="ty">clk</span>@<span class="num">0x00</span> {
     <span class="cm">// 晶振（固定频率）</span>
     <span class="ty">osc</span>: <span class="fn">oscillator</span>@<span class="num">0</span> {
@@ -296,7 +296,7 @@
   <h2><span class="num">06</span> 设备树</h2>
 
   <h3>消费者节点</h3>
-  <pre><code><span class="ty">uart0</span>: <span class="fn">serial</span>@<span class="num">0x10000000</span> {
+  <pre><code class="language-c"><span class="ty">uart0</span>: <span class="fn">serial</span>@<span class="num">0x10000000</span> {
     compatible = <span class="st">"ns16550a"</span>;
     reg = <span class="num">&lt;0x10000000 0x1000&gt;</span>;
     interrupts = <span class="num">&lt;0 1 IRQ_TYPE_LEVEL_HIGH&gt;</span>;
@@ -311,7 +311,7 @@
 };</code></pre>
 
   <h3>消费者 API</h3>
-  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/clk.h&gt;</span>
+  <pre><code class="language-c"><span class="kw">#include</span> <span class="st">&lt;linux/clk.h&gt;</span>
 
 <span class="cm">// 获取时钟</span>
 <span class="kw">struct</span> <span class="ty">clk</span> *clk;
@@ -339,7 +339,7 @@ clk = <span class="fn">devm_clk_get</span>(&dev, <span class="st">"uart"</span>)
   <h2><span class="num">07</span> 编写驱动</h2>
 
   <h3>时钟控制器驱动模板</h3>
-  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/clk-provider.h&gt;</span>
+  <pre><code class="language-c"><span class="kw">#include</span> <span class="st">&lt;linux/clk-provider.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/platform_device.h&gt;</span>
 
 <span class="kw">struct</span> <span class="ty">my_clk_priv</span> {

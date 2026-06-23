@@ -36,7 +36,7 @@
   <p>pprof 是 Go 内置的性能分析工具，可以对 CPU 使用、内存分配、goroutine 阻塞、互斥锁竞争等进行采样和分析。Go 提供了两种引入方式：<code>runtime/pprof</code>（应用内编程接口）和 <code>net/http/pprof</code>（HTTP 服务接口）。</p>
 
   <h3>两种引入方式</h3>
-  <pre><code>// 方式 1：runtime/pprof（适合 CLI 工具、一次性分析）
+  <pre><code class="language-go">// 方式 1：runtime/pprof（适合 CLI 工具、一次性分析）
 package main
 
 import (
@@ -99,7 +99,7 @@ func main() {
   <p>CPU 性能分析通过定时中断采样，默认频率 100 Hz（每 10ms 采样一次）。记录每个采样时刻当前 goroutine 的调用栈。</p>
 
   <h3>采集 CPU Profile</h3>
-  <pre><code># 方式 1：自动采集 30 秒
+  <pre><code class="language-go"># 方式 1：自动采集 30 秒
 go tool pprof http://localhost:6060/debug/pprof/profile
 
 # 方式 2：指定时长
@@ -118,7 +118,7 @@ runtime.SetCPUProfileRate(100)  // 100 Hz
 runtime.SetCPUProfileRate(0)   // 停止</code></pre>
 
   <h3>pprof 交互式分析</h3>
-  <pre><code># 进入交互式模式
+  <pre><code class="language-go"># 进入交互式模式
 go tool pprof cpu.pprof
 
 # 常用命令
@@ -152,7 +152,7 @@ go tool pprof cpu.pprof
 (pprof) quit</code></pre>
 
   <h3>火焰图</h3>
-  <pre><code># 生成 SVG 火焰图（需要 graphviz）
+  <pre><code class="language-go"># 生成 SVG 火焰图（需要 graphviz）
 go tool pprof -svg cpu.pprof &gt; cpu.svg
 
 # 生成火焰图 HTML（交互式）
@@ -173,7 +173,7 @@ go tool pprof -http=:8080 -base=cpu-before.pprof cpu-after.pprof</code></pre>
   </div>
 
   <h3>CPU 热点分析实例</h3>
-  <pre><code>// 示例：分析 JSON 序列化性能问题
+  <pre><code class="language-go">// 示例：分析 JSON 序列化性能问题
 func handleRequest(w http.ResponseWriter, r *http.Request) {
     var data LargeStruct
     // 反序列化请求体
@@ -229,7 +229,7 @@ func handleRequestOptimized(w http.ResponseWriter, r *http.Request) {
   </ul>
 
   <h3>采集内存 Profile</h3>
-  <pre><code># 采集当前堆快照（inuse 模式）
+  <pre><code class="language-go"># 采集当前堆快照（inuse 模式）
 go tool pprof http://localhost:6060/debug/pprof/heap
 
 # 采集分配累计数据（alloc 模式）
@@ -250,7 +250,7 @@ runtime.GC()  // 先 GC 减少噪声
 pprof.Lookup("heap").WriteTo(memFile, 0)</code></pre>
 
   <h3>内存泄漏分析</h3>
-  <pre><code>// 示例：goroutine 泄漏导致的内存泄漏
+  <pre><code class="language-go">// 示例：goroutine 泄漏导致的内存泄漏
 func leakExample() {
     ch := make(chan int)
     
@@ -285,7 +285,7 @@ go tool pprof -base heap1.pprof heap2.pprof
 go tool pprof -http=:8080 goroutine.pprof</code></pre>
 
   <h3>内存分配优化实践</h3>
-  <pre><code>// ❌ 低效：频繁分配
+  <pre><code class="language-go">// ❌ 低效：频繁分配
 func processItems(items []int) []int {
     result := []int{}
     for _, item := range items {
@@ -354,7 +354,7 @@ func parseLogsOptimized(lines []string) []LogEntry {
   <p>阻塞分析记录 goroutine 在 channel、互斥锁、网络 I/O 等操作上的等待时间和等待次数。启用后可以定位并发瓶颈。</p>
 
   <h3>启用阻塞分析</h3>
-  <pre><code>// 阻塞分析默认是关闭的，需要在代码中显式启用
+  <pre><code class="language-go">// 阻塞分析默认是关闭的，需要在代码中显式启用
 import "runtime"
 
 func init() {
@@ -369,7 +369,7 @@ func init() {
 // curl -X POST http://localhost:6060/debug/pprof/block?rate=1</code></pre>
 
   <h3>分析阻塞 Profile</h3>
-  <pre><code># 采集阻塞数据
+  <pre><code class="language-go"># 采集阻塞数据
 go tool pprof http://localhost:6060/debug/pprof/block
 
 # 采集互斥锁数据
@@ -398,7 +398,7 @@ go tool pprof http://localhost:6060/debug/pprof/goroutine
   </div>
 
   <h3>Goroutine 堆栈分析</h3>
-  <pre><code>// 查看所有 goroutine 的完整堆栈（用于排查死锁或 goroutine 泄漏）
+  <pre><code class="language-go">// 查看所有 goroutine 的完整堆栈（用于排查死锁或 goroutine 泄漏）
 func dumpGoroutines() {
     buf := make([]byte, 1 &lt;&lt; 20)  // 1MB 缓冲区
     n := runtime.Stack(buf, true)   // true = 所有 goroutine
@@ -422,7 +422,7 @@ go tool pprof http://localhost:6060/debug/pprof/goroutine
   <p>pprof 提供的是<strong>采样统计</strong>，而 <code>go tool trace</code> 提供的是<strong>完整时间线</strong>。trace 可以展示 goroutine 调度、GC 阶段、网络事件、系统调用等细节。</p>
 
   <h3>采集 Trace</h3>
-  <pre><code>// 方式 1：HTTP 方式
+  <pre><code class="language-go">// 方式 1：HTTP 方式
 // 访问 http://localhost:6060/debug/pprof/trace?seconds=5
 
 import (
@@ -449,7 +449,7 @@ go test -trace=trace.out ./...
 </code></pre>
 
   <h3>分析 Trace</h3>
-  <pre><code># 启动 trace 可视化界面
+  <pre><code class="language-go"># 启动 trace 可视化界面
 go tool trace trace.out
 
 # 浏览器打开（通常 http://127.0.0.1:53495），可以看到：
@@ -478,7 +478,7 @@ go tool trace trace.out
 #    - 自定义追踪任务</code></pre>
 
   <h3>GC 阶段分析</h3>
-  <pre><code>// 在 trace 时间线中，GC 阶段用红色标记
+  <pre><code class="language-go">// 在 trace 时间线中，GC 阶段用红色标记
 // GC 包含以下阶段：
 //
 // 1. Mark Assist（标记辅助）
@@ -513,7 +513,7 @@ export GODEBUG=gctrace=1
 // 0.007ms      → STW 标记终止</code></pre>
 
   <h3>Goroutine 状态分析</h3>
-  <pre><code>// 在 trace 中 goroutine 有四种状态颜色：
+  <pre><code class="language-go">// 在 trace 中 goroutine 有四种状态颜色：
 // - 绿色（Running）：正在执行
 // - 蓝色（Runnable）：可运行但等待调度
 // - 红色（GC）：参与垃圾回收
@@ -546,7 +546,7 @@ trace 中的 Scheduler latency profile 显示
   <p>benchstat 是 Go 官方提供的基准测试统计分析工具。对同一组基准测试运行多次，benchstat 可以计算统计置信度，避免因单次运行的随机波动得出错误结论。</p>
 
   <h3>运行基准测试</h3>
-  <pre><code>// 标准 Go 基准测试
+  <pre><code class="language-go">// 标准 Go 基准测试
 func BenchmarkHash(b *testing.B) {
     data := []byte("hello world")
     b.ResetTimer()
@@ -586,7 +586,7 @@ func BenchmarkCustomMetric(b *testing.B) {
 }</code></pre>
 
   <h3>安装与使用 benchstat</h3>
-  <pre><code># 安装
+  <pre><code class="language-go"># 安装
 go install golang.org/x/perf/cmd/benchstat@latest
 
 # 运行基准测试（10 次取统计）
@@ -632,7 +632,7 @@ benchstat old.txt new.txt
   </div>
 
   <h3>更高级的基准测试</h3>
-  <pre><code>// 函数级基准测试（避免编译器优化）
+  <pre><code class="language-go">// 函数级基准测试（避免编译器优化）
 var result interface{}  // 包级变量防止优化
 
 func BenchmarkJSONMarshal(b *testing.B) {
@@ -667,7 +667,7 @@ func BenchmarkHash100K(b *testing.B){ benchmarkHashSize(b, 100*1024) }</code></p
   <p>pprof 提供了多种可视化方式，帮助更直观地理解性能数据。</p>
 
   <h3>Web UI 交互式分析</h3>
-  <pre><code># 启动 Web 界面（推荐）
+  <pre><code class="language-go"># 启动 Web 界面（推荐）
 go tool pprof -http=:8080 cpu.pprof
 
 # 浏览器访问 http://localhost:8080
@@ -685,7 +685,7 @@ go tool pprof -http=:8080 -base=cpu-baseline.pprof cpu-optimized.pprof
 go tool pprof -http=:8080 -nodefraction=0.01 cpu.pprof</code></pre>
 
   <h3>调用图生成</h3>
-  <pre><code># 生成 SVG 调用图（需要 graphviz）
+  <pre><code class="language-go"># 生成 SVG 调用图（需要 graphviz）
 go tool pprof -svg cpu.pprof &gt; cpu.svg
 
 # 生成 PNG
@@ -703,7 +703,7 @@ go tool pprof -gif cpu.pprof &gt; cpu.gif
 # --edgefraction=0.05：只显示占总采样 5% 以上的边</code></pre>
 
   <h3>火焰图详解</h3>
-  <pre><code># 生成交互式火焰图 HTML
+  <pre><code class="language-go"># 生成交互式火焰图 HTML
 go tool pprof -http=:8080 cpu.pprof
 # 点击 VIEW → Flame Graph
 
@@ -739,7 +739,7 @@ flamegraph.pl cpu.folded &gt; flame.svg
   <p>综合运用以上工具进行实际性能优化。以下案例覆盖最常见的优化场景。</p>
 
   <h3>GC 调优</h3>
-  <pre><code>// 场景：高吞吐服务频繁 GC（使用 gctrace 观察）
+  <pre><code class="language-go">// 场景：高吞吐服务频繁 GC（使用 gctrace 观察）
 // GODEBUG=gctrace=1 输出显示 GC 每 10ms 触发一次
 
 // 调优策略 1：增加 GOGC（从 100 到 400）
@@ -767,7 +767,7 @@ export GOMEMLIMIT=4GiB  // Go 1.19+：设置硬性内存限制
   </div>
 
   <h3>内存优化案例</h3>
-  <pre><code>// 原始版本（有内存问题）
+  <pre><code class="language-go">// 原始版本（有内存问题）
 type UserCache struct {
     mu    sync.RWMutex
     cache map[string]*User
@@ -839,7 +839,7 @@ func (c *ShardedCache) Get(key string) *User {
 }</code></pre>
 
   <h3>并发优化</h3>
-  <pre><code>// 场景：处理大量独立任务
+  <pre><code class="language-go">// 场景：处理大量独立任务
     
 // ❌ 低效：为每个任务创建 goroutine
 func processAll(items []Item) {
@@ -897,7 +897,7 @@ func processAllErrGroup(ctx context.Context, items []Item) error {
 }</code></pre>
 
   <h3>sync.Pool 最佳实践</h3>
-  <pre><code>// sync.Pool 用于复用临时对象，减少 GC 压力
+  <pre><code class="language-go">// sync.Pool 用于复用临时对象，减少 GC 压力
 // 适用于：高频率创建且快速释放的对象
 
 // 缓冲区池

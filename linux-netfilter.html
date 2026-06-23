@@ -119,7 +119,7 @@
 
   <h3>数据包的三条路径</h3>
   <div class="card">
-    <pre><code><span class="cm">// 路径 1：本机收到的数据包（目的 IP 是本机）</span>
+    <pre><code class="language-c"><span class="cm">// 路径 1：本机收到的数据包（目的 IP 是本机）</span>
 PRE_ROUTING → LOCAL_IN → <span class="ty">local processes</span>
 
 <span class="cm">// 路径 2：转发的数据包（目的 IP 不是本机）</span>
@@ -310,7 +310,7 @@ LOCAL_OUT  ──→  <span style="color:#bc4c00">conntrack</span>  ──→  m
 
   <h3>nf_hook_ops — 钩子操作结构</h3>
   <div class="card">
-    <pre><code><span class="cm">// include/linux/netfilter.h:98</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/netfilter.h:98</span>
 <span class="kw">struct</span> <span class="ty">nf_hook_ops</span> {
     <span class="kw">struct</span> <span class="ty">list_head</span>    list;       <span class="cm">// 链表节点</span>
     <span class="kw">struct</span> <span class="ty">rcu_head</span>      rcu;        <span class="cm">// RCU 释放</span>
@@ -339,7 +339,7 @@ LOCAL_OUT  ──→  <span style="color:#bc4c00">conntrack</span>  ──→  m
 
   <h3>nf_inet_hooks 枚举</h3>
   <div class="card">
-    <pre><code><span class="cm">// include/uapi/linux/netfilter.h:42</span>
+    <pre><code class="language-c"><span class="cm">// include/uapi/linux/netfilter.h:42</span>
 <span class="kw">enum</span> <span class="ty">nf_inet_hooks</span> {
     NF_INET_PRE_ROUTING,   <span class="cm">// = 0</span>
     NF_INET_LOCAL_IN,      <span class="cm">// = 1</span>

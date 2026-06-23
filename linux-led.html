@@ -103,7 +103,7 @@
   <h3>struct led_classdev（LED 设备）</h3>
   <div class="card">
     <p class="ref">include/linux/leds.h:91-244</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">led_classdev</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">led_classdev</span> {
     <span class="kw">const char</span> *name;                 <span class="cm">// LED 名称</span>
     <span class="ty">unsigned int</span> brightness;           <span class="cm">// 当前亮度</span>
     <span class="ty">unsigned int</span> max_brightness;       <span class="cm">// 最大亮度</span>
@@ -142,7 +142,7 @@
   <h3>struct led_trigger（触发器）</h3>
   <div class="card">
     <p class="ref">include/linux/leds.h:483-503</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">led_trigger</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">led_trigger</span> {
     <span class="kw">const char</span> *name;            <span class="cm">// 触发器名称</span>
     <span class="ty">int</span> (*activate)(<span class="kw">struct</span> <span class="ty">led_classdev</span> *led_cdev);
     <span class="ty">void</span> (*deactivate)(<span class="kw">struct</span> <span class="ty">led_classdev</span> *led_cdev);
@@ -156,7 +156,7 @@
 
   <h3>亮度枚举</h3>
   <div class="card">
-    <pre><code><span class="kw">enum</span> <span class="ty">led_brightness</span> {
+    <pre><code class="language-c"><span class="kw">enum</span> <span class="ty">led_brightness</span> {
     LED_OFF     = <span class="num">0</span>,
     LED_ON      = <span class="num">1</span>,
     LED_HALF    = <span class="num">127</span>,
@@ -195,7 +195,7 @@
   </table>
 
   <h3>自定义触发器示例</h3>
-  <pre><code><span class="cm">// 注册自定义触发器</span>
+  <pre><code class="language-c"><span class="cm">// 注册自定义触发器</span>
 <span class="kw">static struct</span> <span class="ty">led_trigger</span> my_trigger = {
     .name = <span class="st">"my-event"</span>,
     .activate = my_activate,
@@ -230,7 +230,7 @@
   <h2><span class="num">05</span> sysfs 接口</h2>
 
   <h3>LED sysfs 文件</h3>
-  <pre><code><span class="cm">// 查看所有 LED</span>
+  <pre><code class="language-c"><span class="cm">// 查看所有 LED</span>
 $ ls /sys/class/leds/
 input3::capslock  input3::numlock  input3::scrolllock  mmc0::  power::battery-charging
 
@@ -271,7 +271,7 @@ $ echo 500 > /sys/class/leds/input3::capslock/delay_off</code></pre>
   <h2><span class="num">06</span> 设备树</h2>
 
   <h3>GPIO LED</h3>
-  <pre><code><span class="cm">// LED 控制器节点</span>
+  <pre><code class="language-c"><span class="cm">// LED 控制器节点</span>
 <span class="ty">leds</span> {
     compatible = <span class="st">"gpio-leds"</span>;
 
@@ -319,7 +319,7 @@ $ echo 500 > /sys/class/leds/input3::capslock/delay_off</code></pre>
   <h2><span class="num">07</span> 编写驱动</h2>
 
   <h3>LED 驱动模板</h3>
-  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/leds.h&gt;</span>
+  <pre><code class="language-c"><span class="kw">#include</span> <span class="st">&lt;linux/leds.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/module.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/platform_device.h&gt;</span>
 

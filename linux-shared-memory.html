@@ -112,7 +112,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// ipc/shm.c — SysV 共享内存段</span>
+    <pre><code class="language-c"><span class="cm">// ipc/shm.c — SysV 共享内存段</span>
 <span class="kw">struct</span> <span class="ty">shmid_kernel</span> {
     <span class="kw">struct</span> <span class="ty"> kern_ipc_perm</span>  shm_perm;
     <span class="kw">struct</span> <span class="ty">file</span>          *shm_file;    <span class="cm">// ★ 关联的 tmpfs 文件</span>
@@ -190,7 +190,7 @@
 </pre></div>
 
   <div class="card">
-    <pre><code><span class="cm">// 代码示例</span>
+    <pre><code class="language-c"><span class="cm">// 代码示例</span>
 <span class="kw">#include</span> <span class="st">&lt;sys/mman.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;sys/stat.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;fcntl.h&gt;</span>

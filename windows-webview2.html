@@ -97,7 +97,7 @@
 
   <h3>组件与进程模型</h3>
   <div class="card">
-    <pre><code><span class="cm">// WebView2 整体架构</span>
+    <pre><code class="language-cpp"><span class="cm">// WebView2 整体架构</span>
 ┌─────────────────────────────────────────────────────────┐
 │  <span class="ty">客户端 App</span>（WPF / WinForms / Win32 / WinUI）          │
 │    └── <span class="ty">WebView2 SDK</span>（托管包装 + COM 互操作）           │
@@ -129,7 +129,7 @@
   <p>WebView2 的初始化遵循<strong>三层对象模型</strong>：先创建 Environment（环境），再创建 Controller（控制器，承载 HWND/父控件），最后通过 Controller.CoreWebView2 拿到核心 WebView 用于操作。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 三层对象层级（C# 概念）</span>
+    <pre><code class="language-cpp"><span class="cm">// 三层对象层级（C# 概念）</span>
 <span class="ty">CoreWebView2Environment</span>        <span class="cm">// 运行时环境（进程/数据目录/选项）</span>
   └── <span class="ty">CoreWebView2Controller</span>      <span class="cm">// 控制器：管理窗口、焦点、缩放</span>
         └── <span class="ty">CoreWebView2</span>             <span class="cm">// 核心：导航、JS、消息、设置</span>
@@ -138,7 +138,7 @@
 
   <h3>C# 异步初始化</h3>
   <div class="card">
-    <pre><code><span class="cm">// WPF / WinForms 中最常见的初始化模式</span>
+    <pre><code class="language-cpp"><span class="cm">// WPF / WinForms 中最常见的初始化模式</span>
 <span class="kw">public partial class</span> <span class="ty">MainWindow</span> : <span class="ty">Window</span>
 {
     <span class="kw">public</span> <span class="ty">MainWindow</span>() {
@@ -168,7 +168,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// 或使用最简形式（默认 Evergreen + 默认 UserDataFolder）</span>
+    <pre><code class="language-cpp"><span class="cm">// 或使用最简形式（默认 Evergreen + 默认 UserDataFolder）</span>
 <span class="kw">public</span> <span class="ty">MainWindow</span>() {
     <span class="fn">InitializeComponent</span>();
     webView.<span class="fn">CoreWebView2InitializationCompleted</span> += (<span class="kw">s</span>, e) => {
@@ -202,7 +202,7 @@
     <div class="card">
       <div class="card-title">WPF（XAML）</div>
       <div class="card" style="box-shadow:none;">
-      <pre><code><span class="cm">&lt;!-- 在 XAML 中声明 --&gt;</span>
+      <pre><code class="language-cpp"><span class="cm">&lt;!-- 在 XAML 中声明 --&gt;</span>
 <span class="kw">&lt;Window</span> <span class="pp">xmlns:wv2=</span><span class="st">"clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"</span><span class="kw">&gt;</span>
   <span class="kw">&lt;wv2:WebView2</span> <span class="pp">Name=</span><span class="st">"webView"</span>
                 <span class="pp">Source=</span><span class="st">"https://example.com"</span> <span class="kw">/&gt;</span>
@@ -212,7 +212,7 @@
     <div class="card">
       <div class="card-title">Win32 / C++（COM）</div>
       <div class="card" style="box-shadow:none;">
-      <pre><code><span class="cm">// 直接绑定到 HWND</span>
+      <pre><code class="language-cpp"><span class="cm">// 直接绑定到 HWND</span>
 <span class="ty">HRESULT</span> <span class="fn">CreateWebView</span>(<span class="ty">HWND</span> hwndParent) {
     <span class="kw">return</span> <span class="fn">CreateCoreWebView2EnvironmentWithOptions</span>(
         <span class="ty">L</span><span class="st">"C:\\Runtime"</span>,         <span class="cm">// 运行时路径</span>
@@ -238,7 +238,7 @@
   <p><code>CoreWebView2</code> 暴露的核心能力分四类：<strong>导航</strong>、<strong>脚本执行</strong>、<strong>消息通信</strong>、<strong>辅助功能</strong>（截图/打印）。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 导航相关</span>
+    <pre><code class="language-cpp"><span class="cm">// 导航相关</span>
 webView.CoreWebView2.<span class="fn">Navigate</span>(<span class="st">"https://example.com"</span>);           <span class="cm">// 加载 URL</span>
 webView.CoreWebView2.<span class="fn">NavigateToString</span>(htmlContent);              <span class="cm">// 加载 HTML 字符串</span>
 <span class="kw">string</span> url = webView.CoreWebView2.<span class="fn">Source</span>;                           <span class="cm">// 当前 URL</span>
@@ -266,7 +266,7 @@ webView.CoreWebView2.<span class="fn">HistoryChanged</span>        += OnHistoryC
 
   <h3>C++ COM 等价写法</h3>
   <div class="card">
-    <pre><code><span class="ty">wil::com_ptr</span>&lt;<span class="ty">ICoreWebView2</span>&gt; m_webView;
+    <pre><code class="language-cpp"><span class="ty">wil::com_ptr</span>&lt;<span class="ty">ICoreWebView2</span>&gt; m_webView;
 
 <span class="ty">HRESULT</span> <span class="fn">NavigateAndExec</span>(<span class="ty">LPCWSTR</span> url) {
     <span class="ty">HRESULT</span> hr = m_webView-><span class="fn">Navigate</span>(url);
@@ -326,7 +326,7 @@ m_webView-><span class="fn">ExecuteScript</span>(<span class="ty">L</span><span 
 
   <h3>方式一：WebMessage</h3>
   <div class="card">
-    <pre><code><span class="cm">// ── C# 端 ──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── C# 端 ──</span>
 <span class="cm">// 接收 Web 发来的消息</span>
 webView.CoreWebView2.<span class="fn">WebMessageReceived</span> += (<span class="kw">s</span>, e) => {
     <span class="kw">string</span> json = e.<span class="fn">TryGetWebMessageAsString</span>();
@@ -350,7 +350,7 @@ webView.CoreWebView2.<span class="fn">PostWebMessageAsJson</span>(<span class="t
 
   <h3>方式二：主机对象投影</h3>
   <div class="card">
-    <pre><code><span class="cm">// ── C#：定义并暴露一个对象 ──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── C#：定义并暴露一个对象 ──</span>
 [<span class="ty">ClassInterface</span>(<span class="ty">ClassInterfaceType</span>.AutoDual)]
 [<span class="ty">ComVisible</span>(<span class="kw">true</span>)]
 <span class="kw">public class</span> <span class="ty">FileBridge</span> {
@@ -384,7 +384,7 @@ webView.CoreWebView2.<span class="fn">AddHostObjectToScript</span>(<span class="
 
   <h3>SetVirtualHostNameToFolderMapping</h3>
   <div class="card">
-    <pre><code><span class="cm">// 把本地目录映射为虚拟主机</span>
+    <pre><code class="language-cpp"><span class="cm">// 把本地目录映射为虚拟主机</span>
 webView.CoreWebView2.<span class="fn">SetVirtualHostNameToFolderMapping</span>(
     hostName: <span class="st">"app.local"</span>,
     folderPath: <span class="st">@"C:\App\dist"</span>,           <span class="cm">// 或 AppContext.BaseDirectory</span>
@@ -399,7 +399,7 @@ webView.CoreWebView2.<span class="fn">Navigate</span>(<span class="st">"https://
 
   <h3>注入脚本与拦截请求</h3>
   <div class="card">
-    <pre><code><span class="cm">// 页面加载时注入全局 JS（每次导航都会执行）</span>
+    <pre><code class="language-cpp"><span class="cm">// 页面加载时注入全局 JS（每次导航都会执行）</span>
 webView.CoreWebView2.<span class="fn">AddScriptToExecuteOnDocumentCreatedAsync</span>(
     <span class="st">"window.NATIVE = { version: '1.0', platform: 'win32' };"</span>);
 
@@ -419,7 +419,7 @@ webView.CoreWebView2.<span class="fn">AddWebResourceRequestedFilter</span>(
 
   <h3>自定义右键菜单</h3>
   <div class="card">
-    <pre><code><span class="cm">// 移除/添加右键菜单项</span>
+    <pre><code class="language-cpp"><span class="cm">// 移除/添加右键菜单项</span>
 <span class="kw">var</span> menu = webView.CoreWebView2.<span class="fn">ContextMenuRequested</span>;
 webView.CoreWebView2.<span class="fn">ContextMenuRequested</span> += (<span class="kw">s</span>, e) => {
     <span class="kw">var</span> items = e.<span class="fn">MenuItems</span>;
@@ -454,7 +454,7 @@ webView.CoreWebView2.<span class="fn">ContextMenuRequested</span> += (<span clas
   </table>
 
   <div class="card">
-    <pre><code><span class="cm">// 发布版本的典型安全配置</span>
+    <pre><code class="language-cpp"><span class="cm">// 发布版本的典型安全配置</span>
 <span class="kw">var</span> settings = webView.CoreWebView2.<span class="fn">Settings</span>;
 settings.<span class="fn">AreDevToolsEnabled</span> = <span class="kw">false</span>;                  <span class="cm">// 关闭 DevTools</span>
 settings.<span class="fn">AreBrowserAcceleratorKeysEnabled</span> = <span class="kw">false</span>;  <span class="cm">// 关闭浏览器快捷键</span>
@@ -493,7 +493,7 @@ webView.CoreWebView2.<span class="fn">NavigationStarting</span> += (<span class=
 
   <h3>运行时检测与安装</h3>
   <div class="card">
-    <pre><code><span class="cm">// C#：检测运行时版本</span>
+    <pre><code class="language-cpp"><span class="cm">// C#：检测运行时版本</span>
 <span class="kw">string</span> version = <span class="kw">await</span> <span class="ty">CoreWebView2Environment</span>.<span class="fn">GetAvailableBrowserVersionStringAsync</span>();
 <span class="kw">if</span> (<span class="kw">string</span>.<span class="fn">IsNullOrEmpty</span>(version)) {
     <span class="cm">// 未安装：触发 Bootstrapper 静默安装</span>
@@ -542,7 +542,7 @@ webView.CoreWebView2.<span class="fn">NavigationStarting</span> += (<span class=
   <p>一个完整的 WPF 应用：嵌入 WebView2、加载本地 HTML（通过虚拟主机）、实现 JS 与 C# 双向消息通信、调用前端函数获取返回值。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// ── MainWindow.xaml ──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── MainWindow.xaml ──</span>
 <span class="kw">&lt;Window</span> <span class="pp">x:Class=</span><span class="st">"MyApp.MainWindow"</span>
         <span class="pp">xmlns:wv2=</span><span class="st">"clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"</span><span class="kw">&gt;</span>
   <span class="kw">&lt;Grid&gt;</span>
@@ -613,7 +613,7 @@ webView.CoreWebView2.<span class="fn">NavigationStarting</span> += (<span class=
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// ── dist/index.html（本地 Web 资源）──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── dist/index.html（本地 Web 资源）──</span>
 &lt;<span class="kw">!DOCTYPE</span> html&gt;
 &lt;<span class="kw">html</span>&gt;&lt;<span class="kw">body</span>&gt;
   &lt;<span class="kw">button</span> <span class="pp">onclick</span>=<span class="st">"NATIVE.save({count:42})"</span>&gt;保存到本地&lt;/<span class="kw">button</span>&gt;

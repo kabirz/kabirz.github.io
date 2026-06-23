@@ -64,7 +64,7 @@
 <section id="architecture" class="toc-link">
   <h2><span class="num">02</span> 架构组件</h2>
 
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-rust">┌─────────────────────────────────────────┐
 │            Tokio Runtime                 │
 │                                          │
 │  ┌────────────────────────────────────┐ │
@@ -100,7 +100,7 @@
 </code></pre>
 
   <p>核心 trait：</p>
-<pre><code>// tokio::runtime
+<pre><code class="language-rust">// tokio::runtime
 pub struct Runtime {
     scheduler: Scheduler,
     handle: Handle,
@@ -119,7 +119,7 @@ let result: T = handle.await.unwrap();
 <section id="runtime" class="toc-link">
   <h2><span class="num">03</span> Runtime 类型</h2>
 
-<pre><code>// 1. Current Thread（单线程）
+<pre><code class="language-rust">// 1. Current Thread（单线程）
 let rt = tokio::runtime::Builder::new_current_thread()
     .enable_all()
     .build()
@@ -179,7 +179,7 @@ rt.shutdown_timeout(Duration::from_secs(30));
 <section id="scheduler" class="toc-link">
   <h2><span class="num">04</span> Scheduler</h2>
 
-<pre><code>// Tokio 调度器：work-stealing scheduler
+<pre><code class="language-rust">// Tokio 调度器：work-stealing scheduler
 // 
 // 类似 Go 的 GMP 模型
 // 每个 Worker thread 有本地队列
@@ -230,7 +230,7 @@ tokio::task::yield_now().await;
 <section id="reactor" class="toc-link">
   <h2><span class="num">05</span> Reactor 与 IO</h2>
 
-<pre><code>// Reactor 基于 mio
+<pre><code class="language-rust">// Reactor 基于 mio
 // mio 是 epoll/kqueue/IOCP 的抽象
 // 
 // 平台：
@@ -299,7 +299,7 @@ async fn main() {
 <section id="timer" class="toc-link">
   <h2><span class="num">06</span> Timer</h2>
 
-<pre><code>// Tokio Timer 基于 timing wheel + heap
+<pre><code class="language-rust">// Tokio Timer 基于 timing wheel + heap
 // 精度：毫秒级
 // 支持海量并发定时器
 
@@ -346,7 +346,7 @@ let elapsed = start.elapsed();
 <section id="spawn" class="toc-link">
   <h2><span class="num">07</span> Task 管理</h2>
 
-<pre><code>// spawn 启动一个 task
+<pre><code class="language-rust">// spawn 启动一个 task
 let handle = tokio::spawn(async {
     // 这段代码异步执行
     42
@@ -405,7 +405,7 @@ let result = tokio::task::spawn_blocking(|| {
 <section id="channels" class="toc-link">
   <h2><span class="num">08</span> Tokio Channels</h2>
 
-<pre><code>// 4 种 channel：
+<pre><code class="language-rust">// 4 种 channel：
 // 1. mpsc - 多生产者，单消费者
 use tokio::sync::mpsc;
 let (tx, mut rx) = mpsc::channel(100);
@@ -462,7 +462,7 @@ permit.send("data");
 <section id="blocking" class="toc-link">
   <h2><span class="num">09</span> 阻塞任务处理</h2>
 
-<pre><code>// 问题：阻塞操作（CPU 密集、同步 IO）会卡住 async runtime
+<pre><code class="language-rust">// 问题：阻塞操作（CPU 密集、同步 IO）会卡住 async runtime
 
 // 错误做法：
 async fn bad() {
@@ -512,7 +512,7 @@ async fn long_loop() {
 <section id="internals" class="toc-link">
   <h2><span class="num">10</span> 内部实现</h2>
 
-<pre><code>// Tokio 内部模块：
+<pre><code class="language-rust">// Tokio 内部模块：
 // tokio/src/
 
 // 1. runtime/
@@ -589,7 +589,7 @@ struct Header {
   </table>
 
   <p>Tokio-uring（io_uring 支持）：</p>
-<pre><code>// 用 io_uring 减少系统调用
+<pre><code class="language-rust">// 用 io_uring 减少系统调用
 // 适合高 IO 场景
 
 use tokio_uring::fs::File;
@@ -611,7 +611,7 @@ println!("{}", res.unwrap());
 </code></pre>
 
   <p>Tokio Console（调试工具）：</p>
-<pre><code>// tokio-console 实时监控
+<pre><code class="language-rust">// tokio-console 实时监控
 // 类似 htop，但是是 task 级别
 
 // 启用：

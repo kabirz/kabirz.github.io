@@ -51,7 +51,7 @@
   </table>
 
   <h3>典型流程</h3>
-  <pre><code>// 完整的人脸识别系统流程
+  <pre><code class="language-python">// 完整的人脸识别系统流程
 
 // 1. 人脸检测 (Face Detection)
 //    输入: 原始图像
@@ -90,7 +90,7 @@
   <p>MTCNN (Multi-Task Cascaded Convolutional Networks) 将人脸检测和对齐任务结合到一个级联架构中。它由三个网络串联组成,以从粗到精的方式逐步检测和细化人脸框与关键点。</p>
 
   <h3>三阶段级联结构</h3>
-  <pre><code>// MTCNN 整体流程
+  <pre><code class="language-python">// MTCNN 整体流程
 
 // 阶段 1: P-Net (Proposal Network)
 // 输入: 图像金字塔 (多尺度缩放)
@@ -124,7 +124,7 @@
 //   landmark_reg:  Conv 1x1 (10)</code></pre>
 
   <h3>多任务训练</h3>
-  <pre><code>// MTCNN 训练损失 (三任务联合)
+  <pre><code class="language-python">// MTCNN 训练损失 (三任务联合)
 
 // 1. 人脸分类损失 (Cross Entropy)
 //    只使用有标签的人脸/非人脸数据
@@ -174,7 +174,7 @@ L = min(alpha * L_det + beta * L_box + gamma * L_landmark)
   <p>RetinaFace 是一个单阶段人脸检测模型,它在 RetinaNet 的基础上引入了特征金字塔、SSH (Single Stage Headless) 上下文模块和关键点回归分支,在 WiderFace 数据集上取得了全面领先的成绩。</p>
 
   <h3>核心架构</h3>
-  <pre><code>// RetinaFace 结构
+  <pre><code class="language-python">// RetinaFace 结构
 
 // 骨干网络: ResNet-50/101 或 MobileNet
 
@@ -202,7 +202,7 @@ L = min(alpha * L_det + beta * L_box + gamma * L_landmark)
   <h3>Sample-Aware Loss</h3>
   <p>RetinaFace 在训练时使用改进的损失函数。针对人脸检测中的类别不平衡和难例挖掘问题,它引入了多层次监督和多任务损失。</p>
 
-  <pre><code>// RetinaFace 损失函数
+  <pre><code class="language-python">// RetinaFace 损失函数
 
 // 1. 人脸分类损失 - Focal Loss
 L_cls(p, y) = -y * (1-p)^gamma * log(p)
@@ -252,7 +252,7 @@ L_lmk = smooth_l1(pred_lmk, gt_lmk)
   <h3>核心思想</h3>
   <p>FaceNet 使用三元组损失 (Triplet Loss) 来训练一个深度卷积网络。三元组由三张图片组成：锚点 (Anchor)、正例 (Positive、同一人)、负例 (Negative、不同人)。</p>
 
-  <pre><code>// 三元组损失 (Triplet Loss)
+  <pre><code class="language-python">// 三元组损失 (Triplet Loss)
 
 // 目标: 让 anchor-positive 距离 < anchor-negative 距离
 // 且小于 margin (边界)
@@ -284,7 +284,7 @@ L = max(||f(A) - f(P)||^2 - ||f(A) - f(N)||^2 + alpha, 0)
 // 在每个 mini-batch 中,对每个 anchor 选择最难的负例</code></pre>
 
   <h3>三元组选择策略详解</h3>
-  <pre><code># 三元组选择 (TensorFlow 风格)
+  <pre><code class="language-python"># 三元组选择 (TensorFlow 风格)
 def batch_hard_triplet_selection(embeddings, labels, margin=0.3):
     # embeddings: (B, D) 归一化的特征向量
     # labels: (B,) 身份标签
@@ -321,7 +321,7 @@ def batch_hard_triplet_selection(embeddings, labels, margin=0.3):
   <h3>FaceNet 网络结构</h3>
   <p>FaceNet 可以使用不同的卷积网络作为特征提取器。原始论文比较了两种架构：Zeiler&Fergus 风格的 NN2 和基于 Inception 的 NN3。输出是一个 128 维的特征向量（L2 归一化后位于单位超球面上）。</p>
 
-  <pre><code>// FaceNet 网络结构 (NN2)
+  <pre><code class="language-python">// FaceNet 网络结构 (NN2)
 
 // Input: 224x224x3
 // Conv 7x7/2 (64) -> BN -> ReLU -> MaxPool 3x3/2
@@ -351,7 +351,7 @@ def batch_hard_triplet_selection(embeddings, labels, margin=0.3):
   <p>ArcFace (Additive Angular Margin Loss) 是当前人脸识别领域最广泛使用的损失函数之一。它在 Softmax 的基础上引入了加性角度间隔,使学习到的特征在超球面上具有更好的类内紧凑性和类间可分离性。</p>
 
   <h3>从 Softmax 到 ArcFace</h3>
-  <pre><code>// Softmax Loss (传统分类损失)
+  <pre><code class="language-python">// Softmax Loss (传统分类损失)
 // 决策边界: W1*x + b1 = W2*x + b2
 // 只要求类别线性可分离,不要求特征紧凑
 
@@ -375,7 +375,7 @@ def batch_hard_triplet_selection(embeddings, labels, margin=0.3):
 //    几何意义更明确,更稳定</code></pre>
 
   <h3>ArcFace 损失公式</h3>
-  <pre><code>// ArcFace 损失函数
+  <pre><code class="language-python">// ArcFace 损失函数
 
 // L = -1/N * sum(log(
 //        exp(s * cos(theta_yi + m))
@@ -395,7 +395,7 @@ def batch_hard_triplet_selection(embeddings, labels, margin=0.3):
 // 即需要真类的角度比最接近的假类至少小 m</code></pre>
 
   <h3>PyTorch 实现</h3>
-  <pre><code>import torch
+  <pre><code class="language-python">import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -466,7 +466,7 @@ class ArcFaceLoss(nn.Module):
   <p>InsightFace 是开源的人脸分析工具库,由 InsightFace 团队开发和维护。它提供了 ArcFace 损失的参考实现、完整的人脸检测/识别/对齐训练和推理流程,以及大量预训练模型。</p>
 
   <h3>核心功能</h3>
-  <pre><code>// InsightFace Python 库使用
+  <pre><code class="language-python">// InsightFace Python 库使用
 
 import insightface
 import cv2
@@ -511,7 +511,7 @@ for face in faces:
   </table>
 
   <h3>训练自定义模型</h3>
-  <pre><code># InsightFace 训练配置
+  <pre><code class="language-python"># InsightFace 训练配置
 # configs/ms1mv3_r18.py
 
 config = dict(
@@ -564,7 +564,7 @@ config = dict(
   <h3>关键点检测</h3>
   <p>人脸对齐的第一步是检测面部关键点 (Landmarks)。最常用的是 5 点标注：左眼中心、右眼中心、鼻尖、左嘴角、右嘴角。也有 68 点、106 点等更精细的标注方案。</p>
 
-  <pre><code>// 5 点关键点标注
+  <pre><code class="language-python">// 5 点关键点标注
 // 索引 0: 左眼中心  (Left Eye)
 // 索引 1: 右眼中心  (Right Eye)
 // 索引 2: 鼻尖      (Nose Tip)
@@ -581,7 +581,7 @@ const float TEMPLATE[5][2] = {
 };</code></pre>
 
   <h3>仿射变换与相似变换</h3>
-  <pre><code># 人脸对齐 (Python + OpenCV)
+  <pre><code class="language-python"># 人脸对齐 (Python + OpenCV)
 import cv2
 import numpy as np
 
@@ -660,7 +660,7 @@ def face_align(image, landmarks, output_size=(112, 112)):
   <h3>静默活体检测 (Texture-Based)</h3>
   <p>静默活体检测通过分析单帧图像的纹理和颜色特征来区分真人和假体。真人的皮肤有独特的纹理和光谱特性,而照片或屏幕有二次成像的特征。</p>
 
-  <pre><code>// 静默活体检测的常用特征
+  <pre><code class="language-python">// 静默活体检测的常用特征
 
 // 1. 纹理分析 (LBP, Local Binary Patterns)
 //    真实人脸有丰富的细节纹理
@@ -687,7 +687,7 @@ def face_align(image, landmarks, output_size=(112, 112)):
   <h3>多模态活体检测</h3>
   <p>多模态活体检测利用不同传感器的互补信息来提高检测的鲁棒性。</p>
 
-  <pre><code>// 常用传感器模态
+  <pre><code class="language-python">// 常用传感器模态
 
 // 1. RGB 摄像头
 //    常规的可见光图像
@@ -712,7 +712,7 @@ def face_align(image, landmarks, output_size=(112, 112)):
   <h3>动作指令活体检测</h3>
   <p>通过让用户执行随机指令（眨眼、张嘴、摇头、点头）来验证活体。真人能够自然流畅地执行动作,而照片或视频难以实时生成正确的动作序列。</p>
 
-  <pre><code>// 动作指令活体检测流程
+  <pre><code class="language-python">// 动作指令活体检测流程
 // 1. 随机生成动作指令序列
 //   例: ["blink", "open_mouth", "turn_left"]
 // 2. 实时跟踪面部动作
@@ -741,7 +741,7 @@ def face_align(image, landmarks, output_size=(112, 112)):
   <p>当人脸识别系统从实验室走向生产环境,面临的挑战从模型精度转变为系统架构、检索效率和持续学习。一个典型的大规模人脸识别系统需要处理百万到亿级的人脸数据。</p>
 
   <h3>系统架构</h3>
-  <pre><code>// 大规模人脸识别系统架构
+  <pre><code class="language-python">// 大规模人脸识别系统架构
 
 // 离线部分:
 // - 特征提取管道: 检测 -> 对齐 -> 嵌入 -> 入库
@@ -780,7 +780,7 @@ def face_align(image, landmarks, output_size=(112, 112)):
   </table>
 
   <h3>Faiss 使用示例</h3>
-  <pre><code>import faiss
+  <pre><code class="language-python">import faiss
 import numpy as np
 
 # 构建索引
@@ -820,7 +820,7 @@ def l2_normalize(embeddings):
     return embeddings / norms</code></pre>
 
   <h3>GPU 加速与多级检索</h3>
-  <pre><code># Faiss GPU 索引
+  <pre><code class="language-python"># Faiss GPU 索引
 res = faiss.StandardGpuResources()
 gpu_index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
 
@@ -851,7 +851,7 @@ class TwoStageRetriever:
   <h3>持续学习与模型更新</h3>
   <p>人脸识别系统上线后,会遇到新注册用户、光照环境变化、新攻击类型等问题。系统需要支持持续学习和模型更新而不影响线上服务。</p>
 
-  <pre><code>// 模型更新策略
+  <pre><code class="language-python">// 模型更新策略
 
 // 1. 增量训练 (Incremental Learning)
 //    使用新数据微调模型

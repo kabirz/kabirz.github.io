@@ -102,7 +102,7 @@
 
   <h3>atomic_t API</h3>
   <div class="card">
-    <pre><code><span class="cm">// 初始化</span>
+    <pre><code class="language-c"><span class="cm">// 初始化</span>
 <span class="ty">atomic_t</span> counter = <span class="fn">ATOMIC_INIT</span>(<span class="num">0</span>);
 
 <span class="cm">// 基本操作</span>
@@ -131,7 +131,7 @@
   <h3>内存序变体</h3>
   <div class="card">
     <p class="ref">include/linux/atomic.h:10-78</p>
-    <pre><code><span class="cm">// 四种变体：</span>
+    <pre><code class="language-c"><span class="cm">// 四种变体：</span>
 
 <span class="cm">// 1. Relaxed（无序）— 最快，无排序保证</span>
 <span class="fn">atomic_add_unless_relaxed</span>(v, <span class="num">1</span>, <span class="num">0</span>);
@@ -175,7 +175,7 @@
 
   <h3>refcount_t API</h3>
   <div class="card">
-    <pre><code><span class="cm">// 初始化</span>
+    <pre><code class="language-c"><span class="cm">// 初始化</span>
 <span class="fn">refcount_set</span>(&ref, <span class="num">1</span>);           <span class="cm">// 设置初始引用</span>
 
 <span class="cm">// 增加引用（无检查）</span>
@@ -215,7 +215,7 @@
 
   <h3>使用示例</h3>
   <div class="card">
-    <pre><code><span class="cm">// spinlock_t — 保护短临界区</span>
+    <pre><code class="language-c"><span class="cm">// spinlock_t — 保护短临界区</span>
 <span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(my_lock);
 
 <span class="fn">spin_lock</span>(&my_lock);
@@ -266,7 +266,7 @@
 
   <h3>使用示例</h3>
   <div class="card">
-    <pre><code><span class="cm">// 生产者-消费者模式</span>
+    <pre><code class="language-c"><span class="cm">// 生产者-消费者模式</span>
 <span class="cm">// 生产者：</span>
 data = <span class="num">42</span>;
 <span class="fn">smp_wmb</span>();             <span class="cm">// 确保 data 在 ready 之前写入</span>
@@ -296,7 +296,7 @@ ready = <span class="num">1</span>;
 
   <h3>atomic_long_t</h3>
   <div class="card">
-    <pre><code><span class="cm">// 32 位系统上 32 位，64 位系统上 64 位</span>
+    <pre><code class="language-c"><span class="cm">// 32 位系统上 32 位，64 位系统上 64 位</span>
 <span class="ty">atomic_long_t</span> counter;
 
 <span class="fn">atomic_long_set</span>(&counter, <span class="num">100</span>);
@@ -327,7 +327,7 @@ ready = <span class="num">1</span>;
 
   <h3>引用计数模式</h3>
   <div class="card">
-    <pre><code><span class="cm">// 典型的引用计数生命周期</span>
+    <pre><code class="language-c"><span class="cm">// 典型的引用计数生命周期</span>
 <span class="kw">struct</span> <span class="ty">my_object</span> {
     <span class="kw">struct</span> <span class="ty">refcount_t</span> refcount;
     <span class="cm">// ... 其他字段 ...</span>
@@ -350,7 +350,7 @@ ready = <span class="num">1</span>;
 
   <h3>per-CPU 计数器模式</h3>
   <div class="card">
-    <pre><code><span class="cm">// 高性能 per-CPU 计数器</span>
+    <pre><code class="language-c"><span class="cm">// 高性能 per-CPU 计数器</span>
 <span class="kw">DEFINE_PER_CPU</span>(<span class="ty">unsigned long</span>, my_counter);
 
 <span class="cm">// 仅访问当前 CPU（无锁）</span>

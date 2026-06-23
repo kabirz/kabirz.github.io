@@ -48,7 +48,7 @@
   </table>
 
   <h3>Go 1.21 新增内置泛型函数</h3>
-  <pre><code>// Go 1.21 新增的三个泛型函数
+  <pre><code class="language-go">// Go 1.21 新增的三个泛型函数
 package main
 
 import (
@@ -93,7 +93,7 @@ func main() {
   <p>类型参数（Type Parameters）是泛型的核心。Go 使用方括号 <code>[]</code> 声明类型参数，而不是像 C++ 的尖括号 <code>&lt;&gt;</code>。</p>
 
   <h3>函数泛型</h3>
-  <pre><code>package main
+  <pre><code class="language-go">package main
 
 import "fmt"
 
@@ -129,7 +129,7 @@ func main() {
 }</code></pre>
 
   <h3>类型泛型</h3>
-  <pre><code>// 泛型结构体
+  <pre><code class="language-go">// 泛型结构体
 type Stack[T any] struct {
     items []T
 }
@@ -162,7 +162,7 @@ func main() {
 }</code></pre>
 
   <h3>方法泛型限制</h3>
-  <pre><code>// 方法不能引入新的类型参数（Go 1.18+ 限制）
+  <pre><code class="language-go">// 方法不能引入新的类型参数（Go 1.18+ 限制）
 type Container[T any] struct {
     value T
 }
@@ -206,7 +206,7 @@ func main() {
   <p>约束（Constraints）定义了类型参数允许的类型集合。Go 通过接口类型来定义约束。</p>
 
   <h3>内置约束</h3>
-  <pre><code>import "cmp"
+  <pre><code class="language-go">import "cmp"
 
 // any：所有类型的约束（interface{} 的别名）
 func Identity[T any](v T) T { return v }
@@ -227,7 +227,7 @@ func Sort[T cmp.Ordered](slice []T) {
 }</code></pre>
 
   <h3>自定义约束</h3>
-  <pre><code>// 使用接口定义约束
+  <pre><code class="language-go">// 使用接口定义约束
 type Numeric interface {
     ~int | ~int8 | ~int16 | ~int32 | ~int64 |
     ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
@@ -260,7 +260,7 @@ type Stringer interface {
 }</code></pre>
 
   <h3>~ 底层类型匹配</h3>
-  <pre><code>type MyInt int
+  <pre><code class="language-go">type MyInt int
 type MyString string
 
 // 严格匹配：不接受 MyInt
@@ -282,7 +282,7 @@ func main() {
 // int 的类型集：只有 int 本身</code></pre>
 
   <h3>约束字面量</h3>
-  <pre><code>// 内联约束：无需定义具名约束
+  <pre><code class="language-go">// 内联约束：无需定义具名约束
 func Min[T ~int | ~float64](a, b T) T {
     if a &lt; b {
         return a
@@ -308,7 +308,7 @@ func Process[T interface {
   <p>类型推导（Type Inference）让调用泛型函数时可以省略大部分类型参数，编译器根据函数参数和返回值的上下文自动推导。</p>
 
   <h3>函数参数推导</h3>
-  <pre><code>func Map[T, U any](s []T, fn func(T) U) []U {
+  <pre><code class="language-go">func Map[T, U any](s []T, fn func(T) U) []U {
     result := make([]U, len(s))
     for i, v := range s {
         result[i] = fn(v)
@@ -335,7 +335,7 @@ func main() {
 }</code></pre>
 
   <h3>类型实例化</h3>
-  <pre><code>// 编译器为每个类型参数生成专用代码
+  <pre><code class="language-go">// 编译器为每个类型参数生成专用代码
 type Stack[T any] struct { items []T }
 
 // Stack[int] 和 Stack[string] 生成两份不同代码
@@ -354,7 +354,7 @@ var strStack Stack[string]
   </div>
 
   <h3>自动实例化限制</h3>
-  <pre><code>// 限制 1：不能对类型参数做类型断言
+  <pre><code class="language-go">// 限制 1：不能对类型参数做类型断言
 func TypeSwitch[T any](v T) {
     // switch v.(type) {  // 编译错误！
     // case int: ...
@@ -390,7 +390,7 @@ var intValidator Validator[int] = NewValidator(func(i int) bool {
   <p>在泛型之前，Go 的标准容器使用 <code>interface{}</code>，需要运行时类型断言。泛型让容器变得类型安全且更高效。</p>
 
   <h3>泛型 List</h3>
-  <pre><code>package main
+  <pre><code class="language-go">package main
 
 import "fmt"
 
@@ -433,7 +433,7 @@ func (l *List[T]) ForEach(fn func(T)) {
 }</code></pre>
 
   <h3>泛型 Set</h3>
-  <pre><code>type Set[T comparable] struct {
+  <pre><code class="language-go">type Set[T comparable] struct {
     items map[T]struct{}
 }
 
@@ -480,7 +480,7 @@ func (s *Set[T]) Intersect(other *Set[T]) *Set[T] {
 }</code></pre>
 
   <h3>泛型 OrderedMap</h3>
-  <pre><code>type OrderedMap[K comparable, V any] struct {
+  <pre><code class="language-go">type OrderedMap[K comparable, V any] struct {
     keys   []K
     values map[K]V
 }
@@ -525,7 +525,7 @@ func (m *OrderedMap[K, V]) Iterate(fn func(K, V) bool) {
 }</code></pre>
 
   <h3>泛型 Heap</h3>
-  <pre><code>type Heap[T any] struct {
+  <pre><code class="language-go">type Heap[T any] struct {
     items []T
     less  func(a, b T) bool
 }
@@ -607,7 +607,7 @@ func main() {
   <p>泛型使得编写类型安全的算法库成为可能。以下演示常见的泛型算法模式。</p>
 
   <h3>排序与搜索</h3>
-  <pre><code>import (
+  <pre><code class="language-go">import (
     "cmp"
     "slices"
 )
@@ -642,7 +642,7 @@ func BinarySearch[T cmp.Ordered](slice []T, target T) (int, bool) {
 }</code></pre>
 
   <h3>过滤与映射</h3>
-  <pre><code>// 过滤
+  <pre><code class="language-go">// 过滤
 func Filter[T any](slice []T, predicate func(T) bool) []T {
     result := make([]T, 0, len(slice))
     for _, v := range slice {
@@ -694,7 +694,7 @@ func main() {
 }</code></pre>
 
   <h3>去重与分组</h3>
-  <pre><code>// 去重（stable）
+  <pre><code class="language-go">// 去重（stable）
 func Unique[T comparable](slice []T) []T {
     seen := make(map[T]struct{})
     result := make([]T, 0, len(slice))
@@ -754,7 +754,7 @@ func Flatten[T any](slices [][]T) []T {
   <p>在泛型出现之前，Go 社区使用代码生成工具实现类型安全的重复代码。泛型是否能完全取代代码生成？</p>
 
   <h3>genny：泛型前的代码生成方案</h3>
-  <pre><code>// genny 使用注释标记生成代码
+  <pre><code class="language-go">// genny 使用注释标记生成代码
 // 源文件：stack_genny.go
 //go:generate genny -in=stack_genny.go -out=stack_int.go gen "T=int"
 //go:generate genny -in=stack_genny.go -out=stack_string.go gen "T=string"
@@ -773,7 +773,7 @@ func (s *Stack[T]) Push(item T) {
 // 生成后：Stack_int.go, Stack_string.go</code></pre>
 
   <h3>stringer：字符串方法生成</h3>
-  <pre><code>//go:generate stringer -type=Pill
+  <pre><code class="language-go">//go:generate stringer -type=Pill
 
 package pill
 
@@ -815,7 +815,7 @@ const (
   <p>泛型在性能上通常优于接口（interface{}），但可能略低于手写特殊化代码。以下通过基准测试对比三种方案的差异。</p>
 
   <h3>性能基准测试</h3>
-  <pre><code>package main
+  <pre><code class="language-go">package main
 
 import (
     "testing"
@@ -895,7 +895,7 @@ func BenchmarkSpecializedStack(b *testing.B) {
 }</code></pre>
 
   <h3>典型基准测试结果</h3>
-  <pre><code># Go 1.22, Linux amd64
+  <pre><code class="language-go"># Go 1.22, Linux amd64
 BenchmarkInterfaceStack-8     50_000_000    32.5 ns/op    8 B/op    1 allocs/op
 BenchmarkGenericStack-8      100_000_000    12.3 ns/op    0 B/op    0 allocs/op
 BenchmarkSpecializedStack-8  150_000_000     8.1 ns/op    0 B/op    0 allocs/op
@@ -910,7 +910,7 @@ BenchmarkSpecializedStack-8  150_000_000     8.1 ns/op    0 B/op    0 allocs/op
   </div>
 
   <h3>二进制大小对比</h3>
-  <pre><code># 泛型对二进制大小的影响
+  <pre><code class="language-go"># 泛型对二进制大小的影响
 # 三个版本使用相同算法处理 int/float64/string
 
 # Interface 版本（单份代码 + 类型断言）
@@ -943,7 +943,7 @@ go build -o app_gen .
   <h2><span class="num">09</span> 最佳实践与陷阱</h2>
 
   <h3>最佳实践</h3>
-  <pre><code>// 1. 优先使用标准库泛型
+  <pre><code class="language-go">// 1. 优先使用标准库泛型
 // Go 1.21 的 slices 和 maps 包已经覆盖大部分场景
 import (
     "slices"
@@ -985,7 +985,7 @@ func Sort(data sort.Interface)
 func Sort[T cmp.Ordered](data []T)</code></pre>
 
   <h3>常见陷阱</h3>
-  <pre><code>// 陷阱 1：误用 any 导致运行时错误
+  <pre><code class="language-go">// 陷阱 1：误用 any 导致运行时错误
 func Unmarshal[T any](data []byte) (T, error) {
     var v T
     // 不是所有 T 都实现了 json.Unmarshaler

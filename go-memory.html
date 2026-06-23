@@ -68,7 +68,7 @@
   <p>Go 程序的初始化遵循严格的 happens-before 规则。包级别的 <code>init</code> 函数在同一个文件中按照声明顺序执行，不同包之间按照依赖拓扑排序执行。所有 <code>init</code> 函数执行完毕后，<code>main.main</code> 才开始执行。</p>
 
   <div class="card">
-    <pre><code><span class="kw">var</span> a <span class="ty">int</span>
+    <pre><code class="language-go"><span class="kw">var</span> a <span class="ty">int</span>
 
 <span class="kw">func</span> <span class="fn">init</span>() {
     a = <span class="num">1</span>  <span class="cm">// (1) 对 a 的写入</span>
@@ -83,7 +83,7 @@
   <p><code>go</code> 语句创建 goroutine 时，创建操作 happens-before 新 goroutine 的第一个指令执行。反过来，goroutine 的退出则没有这样的保证 - 你必须在主 goroutine 中显式同步（如通过 channel 或 WaitGroup）才能感知到子 goroutine 的完成。</p>
 
   <div class="card">
-    <pre><code>c := <span class="fn">make</span>(<span class="kw">chan</span> <span class="ty">int</span>)
+    <pre><code class="language-go">c := <span class="fn">make</span>(<span class="kw">chan</span> <span class="ty">int</span>)
 <span class="kw">var</span> result <span class="ty">int</span>
 
 <span class="kw">go</span> <span class="kw">func</span>() {
@@ -105,7 +105,7 @@
   <p>对于缓冲 channel，发送操作 happens-before 对应的接收操作的前提是 channel 已满（即接收发生在发送之后）。一个特殊规则是：<code>close(ch)</code> 操作 happens-before 从 channel 中接收到零值。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 缓冲 channel 示例</span>
+    <pre><code class="language-go"><span class="cm">// 缓冲 channel 示例</span>
 ch := <span class="fn">make</span>(<span class="kw">chan</span> <span class="ty">int</span>, <span class="num">3</span>)
 ch &lt;- <span class="num">1</span>  <span class="cm">// 发送 happens-before 接收（缓冲区内）</span>
 ch &lt;- <span class="num">2</span>
@@ -139,7 +139,7 @@ ch &lt;- <span class="num">2</span>
   <p>Go 提供了内置的竞态检测器（Race Detector），通过 <code>-race</code> 标志启用。它在运行时对所有的内存访问进行插桩，检测未同步的并发访问。Race Detector 基于 <strong>ThreadSanitizer</strong>（TSan）技术实现，具有较低的性能开销（通常 2-20 倍慢）和良好的检测精度。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// race_demo.go - 存在数据竞争的代码</span>
+    <pre><code class="language-go"><span class="cm">// race_demo.go - 存在数据竞争的代码</span>
 <span class="kw">package</span> main
 
 <span class="kw">func</span> <span class="fn">main</span>() {
@@ -197,7 +197,7 @@ ch &lt;- <span class="num">2</span>
 
   <h3>逃逸分析的决策树</h3>
   <div class="card">
-    <pre><code><span class="cm">// 逃逸决策的伪代码逻辑</span>
+    <pre><code class="language-go"><span class="cm">// 逃逸决策的伪代码逻辑</span>
 <span class="kw">func</span> <span class="fn">analyzeEscape</span>(n Node) EscapeLocation {
     <span class="kw">if</span> n 是全局变量 <span class="kw">return</span> Heap
     <span class="kw">if</span> n 的地址被返回 <span class="kw">return</span> Heap
@@ -222,7 +222,7 @@ ch &lt;- <span class="num">2</span>
   <p>函数的参数是指针类型时，编译器需要分析指针所指向的值是否逃逸。如果形参指针被存储到全局变量或通过返回值传出，则指向的值必须分配在堆上。</p>
 
   <div class="card">
-    <pre><code><span class="kw">type</span> User <span class="kw">struct</span> {
+    <pre><code class="language-go"><span class="kw">type</span> User <span class="kw">struct</span> {
     Name <span class="ty">string</span>
     Age  <span class="ty">int</span>
 }
@@ -242,7 +242,7 @@ ch &lt;- <span class="num">2</span>
   <p>当一个函数返回一个局部变量的地址时，该变量必须逃逸到堆上，因为栈帧在函数返回后将被销毁。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 典型返回值逃逸</span>
+    <pre><code class="language-go"><span class="cm">// 典型返回值逃逸</span>
 <span class="kw">func</span> <span class="fn">createPointer</span>() *<span class="ty">int</span> {
     x := <span class="num">42</span>
     <span class="kw">return</span> &amp;x  <span class="cm">// x 逃逸到堆上</span>
@@ -292,7 +292,7 @@ ch &lt;- <span class="num">2</span>
   </ul>
 
   <div class="card">
-    <pre><code><span class="cm">// 栈复制时机 - 递归或深度调用导致栈增长</span>
+    <pre><code class="language-go"><span class="cm">// 栈复制时机 - 递归或深度调用导致栈增长</span>
 <span class="kw">func</span> <span class="fn">deepRecursion</span>(n <span class="ty">int</span>) {
     <span class="kw">if</span> n &lt;= <span class="num">0</span> {
         <span class="kw">return</span>
@@ -314,7 +314,7 @@ ch &lt;- <span class="num">2</span>
 
   <h3>取地址导致逃逸</h3>
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">escapeOnAddrOfLocal</span>() {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">escapeOnAddrOfLocal</span>() {
     x := <span class="num">10</span>
     p := &amp;x     <span class="cm">// 取地址，但 p 没有逃逸出函数</span>
     *p = <span class="num">20</span>
@@ -332,7 +332,7 @@ ch &lt;- <span class="num">2</span>
   <p>闭包引用局部变量时，如果闭包本身逃逸，被引用的局部变量也会逃逸。编译器需要将捕获的变量分配到堆上，因为闭包可能在创建它的函数返回后继续使用。</p>
 
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">closureEscape</span>() <span class="kw">func</span>() {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">closureEscape</span>() <span class="kw">func</span>() {
     x := <span class="num">100</span>   <span class="cm">// 被闭包捕获</span>
     <span class="kw">return</span> <span class="kw">func</span>() {
         x++    <span class="cm">// x 逃逸到堆上</span>
@@ -353,7 +353,7 @@ ch &lt;- <span class="num">2</span>
   <p>将具体类型赋值给接口变量时，如果编译器无法确定接口的具体类型，值会被装箱到堆上。这是最常见的非预期逃逸场景。</p>
 
   <div class="card">
-    <pre><code><span class="kw">type</span> Stringer <span class="kw">interface</span> {
+    <pre><code class="language-go"><span class="kw">type</span> Stringer <span class="kw">interface</span> {
     <span class="fn">String</span>() <span class="ty">string</span>
 }
 
@@ -375,7 +375,7 @@ ch &lt;- <span class="num">2</span>
 
   <h3>动态类型导致逃逸</h3>
   <div class="card">
-    <pre><code><span class="cm">// fmt.Printf 接收 interface{} 类型参数</span>
+    <pre><code class="language-go"><span class="cm">// fmt.Printf 接收 interface{} 类型参数</span>
 <span class="kw">func</span> <span class="fn">fmtEscape</span>() {
     x := <span class="num">42</span>
     <span class="fn">fmt.Printf</span>(<span class="s">"%d"</span>, x)  <span class="cm">// x 逃逸 - 作为 interface{} 参数传递</span>
@@ -403,7 +403,7 @@ ch &lt;- <span class="num">2</span>
   <p>函数内联是 Go 编译器最重要的优化之一。内联将函数调用直接展开为被调用函数的代码体，从而消除调用开销并开启更多的逃逸分析和常量传播机会。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 小函数会被自动内联</span>
+    <pre><code class="language-go"><span class="cm">// 小函数会被自动内联</span>
 <span class="kw">func</span> <span class="fn">add</span>(a, b <span class="ty">int</span>) <span class="ty">int</span> {
     <span class="kw">return</span> a + b
 }
@@ -421,7 +421,7 @@ ch &lt;- <span class="num">2</span>
   <p>当编译器能在编译时确定接口调用的具体目标方法时，它可以将接口调用替换为直接调用。这避免了接口分发的运行时开销并开启了进一步的优化。</p>
 
   <div class="card">
-    <pre><code><span class="kw">type</span> Logger <span class="kw">interface</span> {
+    <pre><code class="language-go"><span class="kw">type</span> Logger <span class="kw">interface</span> {
     <span class="fn">Log</span>(msg <span class="ty">string</span>)
 }
 
@@ -441,7 +441,7 @@ ch &lt;- <span class="num">2</span>
   <p>内联和逃逸分析经常协同工作。当函数被内联后，之前因为跨函数边界无法分析的变量现在可以被精确分析，更多的变量可以保留在栈上。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 内联使逃逸分析更精确</span>
+    <pre><code class="language-go"><span class="cm">// 内联使逃逸分析更精确</span>
 <span class="kw">func</span> <span class="fn">smallFunc</span>() *<span class="ty">int</span> {
     x := <span class="num">5</span>
     <span class="kw">return</span> &amp;x  <span class="cm">// 不内联时：x 逃逸到堆</span>
@@ -476,7 +476,7 @@ ch &lt;- <span class="num">2</span>
 
   <h3>性能对比基准测试</h3>
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">BenchmarkStack</span>(b *<span class="ty">testing</span>.B) {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">BenchmarkStack</span>(b *<span class="ty">testing</span>.B) {
     <span class="kw">for</span> i := <span class="num">0</span>; i &lt; b.N; i++ {
         <span class="cm">// 栈分配 - 零 GC 压力</span>
         p := Point{X: i, Y: i}
@@ -511,7 +511,7 @@ ch &lt;- <span class="num">2</span>
 
   <h3>sync.Pool 实践</h3>
   <div class="card">
-    <pre><code><span class="kw">var</span> bufferPool = sync.Pool{
+    <pre><code class="language-go"><span class="kw">var</span> bufferPool = sync.Pool{
     New: <span class="kw">func</span>() <span class="ty">interface</span>{} {
         <span class="kw">return</span> &amp;bytes.Buffer{}
     },
@@ -536,7 +536,7 @@ ch &lt;- <span class="num">2</span>
 
   <h3>实战分析流程</h3>
   <div class="card">
-    <pre><code><span class="cm">// 1. 查看逃逸分析</span>
+    <pre><code class="language-go"><span class="cm">// 1. 查看逃逸分析</span>
 $ go build -gcflags="-m" .
 ./main.go:10:6: can inline smallFunc
 ./main.go:15:23: inlining call to smallFunc

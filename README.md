@@ -38,7 +38,7 @@
 docs/
 ├── index.html            # 导航页（左侧栏 + 搜索，数据驱动渲染）
 ├── common.css            # 公共样式（主题、侧边栏、所有组件）
-├── common.js             # 公共脚本（主题切换、侧边栏生成、滚动高亮）
+├── common.js             # 公共脚本（主题切换、侧边栏生成、滚动高亮、代码高亮）
 ├── AGENTS.md             # 文档生成规范
 ├── README.md             # 本文件
 ├── linux-*.html          # 140 篇 Linux 内核深度解析
@@ -53,7 +53,7 @@ docs/
 
 - **HTML5** — 语义化标签
 - **CSS3** — CSS 变量、Flexbox/Grid、`@media` 响应式
-- **JavaScript** — ES6+、IntersectionObserver、localStorage
+- **JavaScript** — ES6+、IntersectionObserver、localStorage、Prism.js
 - **无依赖** — 纯原生实现，无需构建工具
 
 ## 📝 许可

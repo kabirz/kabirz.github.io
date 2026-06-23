@@ -37,7 +37,7 @@
   <p>PCI (Peripheral Component Interconnect) 及其后继 PCIe 是 x86/ARM 服务器的主流外设总线。Linux PCI 子系统负责<strong>枚举总线</strong>、<strong>绑定驱动</strong>、<strong>管理资源</strong>、<strong>处理中断</strong>。</p>
 
   <p>硬件拓扑：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-c">┌─────────────────────────────────────────┐
 │                  CPU                     │
 │         ┌──────────────────┐             │
 │         │  Root Complex    │             │
@@ -75,7 +75,7 @@
 <section id="structs" class="toc-link">
   <h2><span class="num">02</span> 核心数据结构</h2>
 
-<pre><code>// include/linux/pci.h
+<pre><code class="language-c">// include/linux/pci.h
 
 // 1. struct pci_dev — 单个 PCI 设备
 struct pci_dev {
@@ -172,7 +172,7 @@ struct pci_driver {
 
   <p>BIOS/UEFI 完成硬件枚举（分配总线号、BAR 资源、IRQ）。Linux 启动时再次扫描：</p>
 
-<pre><code>// drivers/pci/probe.c
+<pre><code class="language-c">// drivers/pci/probe.c
 
 // 入口（架构相关）：
 // x86: arch/x86/pci/common.c → pcibios_scan_specific_bus()
@@ -265,7 +265,7 @@ int pci_read_base(struct pci_dev *dev, enum pci_bar_type type,
 <section id="driver" class="toc-link">
   <h2><span class="num">04</span> 驱动绑定</h2>
 
-<pre><code>// drivers/pci/pci-driver.c
+<pre><code class="language-c">// drivers/pci/pci-driver.c
 
 // 入口：注册 PCI 驱动
 int __pci_register_driver(struct pci_driver *drv, struct module *owner)
@@ -357,7 +357,7 @@ static int my_driver_probe(struct pci_dev *pdev, const struct pci_device_id *ent
 <section id="config" class="toc-link">
   <h2><span class="num">05</span> 配置空间访问</h2>
 
-<pre><code>// PCI 配置空间：64 字节（基本），4KB（PCIe 扩展）
+<pre><code class="language-c">// PCI 配置空间：64 字节（基本），4KB（PCIe 扩展）
 
 // 标准 Header（Type 0）：
 //  Offset  Size  Field
@@ -413,7 +413,7 @@ struct pci_ops {
 </code></pre>
 
   <p>Capabilities 链表：</p>
-<pre><code>// 从 Capabilities Pointer (offset 0x34) 开始
+<pre><code class="language-c">// 从 Capabilities Pointer (offset 0x34) 开始
 // 每个 capability 8-bit ID + 8-bit next ptr
 
 // 常见 capability IDs:
@@ -465,7 +465,7 @@ struct pci_ops {
 
   <p>MSI/MSI-X 是 PCIe 的中断机制（详见 <a href="linux-irq.html">通用中断子系统</a>），通过写特定地址触发中断，无需专用引脚。</p>
 
-<pre><code>// drivers/pci/msi/
+<pre><code class="language-c">// drivers/pci/msi/
 
 // MSI-X 描述符
 struct msix_entry {
@@ -515,7 +515,7 @@ int pci_irq_vector(struct pci_dev *dev, unsigned int nr)
 </code></pre>
 
   <p>使用模式：</p>
-<pre><code>// 单 vector（最常见）：
+<pre><code class="language-c">// 单 vector（最常见）：
 int nvec = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_MSIX);
 int irq = pci_irq_vector(pdev, 0);
 request_irq(irq, handler, 0, name, pdev);
@@ -535,7 +535,7 @@ irq_set_affinity_hint(irq, cpumask_of(cpu));
 <section id="pcie" class="toc-link">
   <h2><span class="num">07</span> PCIe 能力与 ASPM</h2>
 
-<pre><code>// drivers/pci/pcie/aspm.c — Active State Power Management
+<pre><code class="language-c">// drivers/pci/pcie/aspm.c — Active State Power Management
 
 // ASPM 链路状态：
 //  L0: 全活跃
@@ -586,7 +586,7 @@ irq_set_affinity_hint(irq, cpumask_of(cpu));
 <section id="hp" class="toc-link">
   <h2><span class="num">08</span> 电源管理与热插拔</h2>
 
-<pre><code>// 电源管理状态：
+<pre><code class="language-c">// 电源管理状态：
 typedef int __bitwise pci_power_t;
 #define PCI_D0     ((pci_power_t) 0)
 #define PCI_D1     ((pci_power_t) 1)

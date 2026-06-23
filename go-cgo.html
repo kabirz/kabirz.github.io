@@ -37,7 +37,7 @@
 
   <h3>基础语法</h3>
   <p>CGo 代码写在 Go 源文件中，C 代码写在 <code>import "C"</code> 之前的注释中：</p>
-  <pre><code>package main
+  <pre><code class="language-go">package main
 
 /*
 #include &lt;stdio.h&gt;
@@ -74,7 +74,7 @@ func main() {
 
   <h3>#cgo 指令</h3>
   <p><code>#cgo</code> 注释用于控制 C 编译器的标志和链接选项：</p>
-  <pre><code>// 编译标志
+  <pre><code class="language-go">// 编译标志
 // #cgo CFLAGS: -I/usr/local/include
 // #cgo CPPFLAGS: -I/opt/include
 // #cgo LDFLAGS: -L/usr/local/lib -lmylib -lpthread
@@ -96,7 +96,7 @@ import "C"</code></pre>
 
   <h3>CGo 的工作流程</h3>
   <p>Go 工具链在编译 CGo 文件时会自动调用 C 编译器：</p>
-  <pre><code># 查看 CGo 相关的环境变量
+  <pre><code class="language-go"># 查看 CGo 相关的环境变量
 go env CC                       # C 编译器路径
 go env CGO_ENABLED              # CGo 是否启用（1/0）
 go env CGO_CFLAGS               # 额外的 C 编译标志
@@ -137,7 +137,7 @@ go build -x -work ./mypackage</code></pre>
 
   <h3>字符串转换</h3>
   <p>字符串是 CGo 中最常用的跨边界数据类型，Go 提供了两个转换函数：</p>
-  <pre><code>import "C"
+  <pre><code class="language-go">import "C"
 import "unsafe"
 
 func main() {
@@ -164,7 +164,7 @@ func main() {
 
   <h3>指针传递</h3>
   <p>Go 指针不能直接传递给 C，除非使用 <code>unsafe.Pointer</code> 转换。Go 1.17 引入了 <code>runtime.Pinner</code> 来固定 Go 对象的内存位置：</p>
-  <pre><code>import (
+  <pre><code class="language-go">import (
     "C"
     "runtime"
     "unsafe"
@@ -189,7 +189,7 @@ func main() {
 }</code></pre>
 
   <h3>结构体与联合体</h3>
-  <pre><code>/*
+  <pre><code class="language-go">/*
 typedef struct {
     char name[64];
     int age;
@@ -223,7 +223,7 @@ func main() {
 
   <h3>C 堆内存分配</h3>
   <p>使用 <code>C.malloc</code> 和 <code>C.free</code> 在 C 堆上分配和释放内存：</p>
-  <pre><code>import "C"
+  <pre><code class="language-go">import "C"
 import "unsafe"
 
 // 分配并初始化 C 内存
@@ -250,7 +250,7 @@ func main() {
   </div>
 
   <h3>跨语言内存泄漏案例</h3>
-  <pre><code>// 错误示例：C.CString 未释放导致泄漏
+  <pre><code class="language-go">// 错误示例：C.CString 未释放导致泄漏
 func logMessage(msg string) {
     // 每次调用都分配 C 内存，但从不释放
     cs := C.CString(msg)
@@ -285,7 +285,7 @@ func processManySafe(messages []string) {
 
   <h3>Go 对象固定（Pinning）</h3>
   <p>从 Go 1.21 开始，<code>runtime.Pinner</code> 提供了安全的 Go 对象固定机制：</p>
-  <pre><code>import (
+  <pre><code class="language-go">import (
     "runtime"
     "unsafe"
 )
@@ -349,7 +349,7 @@ func main() {
 
   <h3>基准测试</h3>
   <p>以下基准展示 CGo 调用与纯 Go 调用的差距：</p>
-  <pre><code>// pure_go.go
+  <pre><code class="language-go">// pure_go.go
 func GoNop() {}
 
 // cgo.go
@@ -371,7 +371,7 @@ func BenchmarkCGoNop(b *testing.B) {
         CGoNop()
     }
 }</code></pre>
-  <pre><code># 典型结果（Go 1.22, Linux amd64）：
+  <pre><code class="language-go"># 典型结果（Go 1.22, Linux amd64）：
 BenchmarkGoNop-8    1000000000    0.4 ns/op
 BenchmarkCGoNop-8    20000000     75 ns/op    # ~180 倍慢！
 
@@ -382,7 +382,7 @@ BenchmarkCGoMalloc-8  5000000    250 ns/op</code></pre>
 
   <h3>CGO 阈值</h3>
   <p>在实际项目中，设定 CGo 调用频率的上限是一个重要的架构决策：</p>
-  <pre><code>// 安全阈值示例
+  <pre><code class="language-go">// 安全阈值示例
 const (
     // 每秒 CGo 调用建议上限
     MaxCGOCallsPerSecond = 100_000
@@ -424,7 +424,7 @@ func processData(data []byte) {
   <p>减少 CGo 边界跨越次数的核心策略是：<strong>批量处理</strong>。将多次小调用合并为一次大调用。</p>
 
   <h3>批量处理模式</h3>
-  <pre><code>// ❌ 低效：逐元素 CGo 调用
+  <pre><code class="language-go">// ❌ 低效：逐元素 CGo 调用
 func sumArraySlow(nums []int32) int32 {
     var total C.int
     for _, n := range nums {
@@ -456,7 +456,7 @@ int32_t sum_array(const int32_t* arr, size_t len) {
 */</code></pre>
 
   <h3>数据打包策略</h3>
-  <pre><code>// 将多个参数打包为结构体，减少 CGo 调用
+  <pre><code class="language-go">// 将多个参数打包为结构体，减少 CGo 调用
 type BatchRequest struct {
     inputs  [][]byte
     results [][]byte
@@ -501,7 +501,7 @@ func processBatch(inputs [][]byte) [][]byte {
 
   <h3>连接池与复用</h3>
   <p>对于需要反复调用 C 库的场景，使用连接池复用 C 上下文：</p>
-  <pre><code>type CContextPool struct {
+  <pre><code class="language-go">type CContextPool struct {
     pool sync.Pool
 }
 
@@ -538,7 +538,7 @@ func (p *CContextPool) Process(data []byte) []byte {
   <p>CGo 支持从 C 代码调用 Go 函数，通过 <code>//export</code> 指令导出 Go 函数给 C 使用。</p>
 
   <h3>export 基础用法</h3>
-  <pre><code>package main
+  <pre><code class="language-go">package main
 
 /*
 #include &lt;stdint.h&gt;
@@ -576,7 +576,7 @@ func main() {
 
   <h3>闭包跨边界</h3>
   <p>C 语言不支持闭包，所以无法直接传递 Go 闭包给 C。解决方法是在 C 端存储上下文指针：</p>
-  <pre><code>package main
+  <pre><code class="language-go">package main
 
 /*
 typedef struct {
@@ -621,7 +621,7 @@ func main() {
 }</code></pre>
 
   <h3>避免回调中的 Go 对象泄漏</h3>
-  <pre><code>// 安全包装器：确保 Go 对象在回调完成后被清理
+  <pre><code class="language-go">// 安全包装器：确保 Go 对象在回调完成后被清理
 type CallbackHandle struct {
     cb     func(int)
     pinner runtime.Pinner
@@ -650,7 +650,7 @@ func goSafeCallback(handlePtr unsafe.Pointer, result C.int) {
 
   <h3>构建标签与条件编译</h3>
   <p>使用构建标签控制是否启用 CGo：</p>
-  <pre><code>// nocgo.go（禁用 CGo 时的纯 Go 实现）
+  <pre><code class="language-go">// nocgo.go（禁用 CGo 时的纯 Go 实现）
 //go:build !cgo
 
 package crypto
@@ -682,7 +682,7 @@ func computeHash(data []byte) []byte {
 }</code></pre>
 
   <h3>静态链接与动态链接</h3>
-  <pre><code>// 动态链接（默认）
+  <pre><code class="language-go">// 动态链接（默认）
 // #cgo LDFLAGS: -L/usr/local/lib -lmylib
 // 运行时需要 libmylib.so 在 LD_LIBRARY_PATH 中
 
@@ -707,7 +707,7 @@ func computeHash(data []byte) []byte {
 
   <h3>CGo 交叉编译</h3>
   <p>CGo 的交叉编译需要对应的 C 交叉编译器：</p>
-  <pre><code># Linux amd64 → Linux arm64（需要 aarch64-linux-gnu-gcc）
+  <pre><code class="language-go"># Linux amd64 → Linux arm64（需要 aarch64-linux-gnu-gcc）
 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build
 
 # Linux → Windows amd64（需要 x86_64-w64-mingw32-gcc）
@@ -724,7 +724,7 @@ GOOS=darwin GOARCH=amd64 CC=o64-clang go build
 
   <h3>构建缓存与增量编译</h3>
   <p>CGo 的编译缓存与纯 Go 不同：</p>
-  <pre><code># CGo 编译产物缓存位置
+  <pre><code class="language-go"># CGo 编译产物缓存位置
 go env GOCACHE  # Go 编译缓存（包含 CGo 相关）
 
 # 清除所有 CGo 相关缓存
@@ -743,7 +743,7 @@ go build -x -v ./...
 
   <h3>微基准测试</h3>
   <p>Go 的 benchmark 框架可以精确测量 CGo 调用开销：</p>
-  <pre><code>import (
+  <pre><code class="language-go">import (
     "testing"
     "unsafe"
 )
@@ -794,7 +794,7 @@ func BenchmarkCGoIndividual(b *testing.B) {
 
   <h3>使用 benchstat 分析</h3>
   <p>运行多次基准测试并用 benchstat 统计对比：</p>
-  <pre><code># 运行基准测试多次
+  <pre><code class="language-go"># 运行基准测试多次
 go test -bench=. -count=10 ./... &gt; bench.txt
 benchstat bench.txt
 
@@ -811,7 +811,7 @@ benchstat old.txt new.txt
 
   <h3>阻塞分析</h3>
   <p>CGo 调用会阻塞 goroutine，使用 pprof 分析阻塞开销：</p>
-  <pre><code>import (
+  <pre><code class="language-go">import (
     "net/http"
     _ "net/http/pprof"
     "runtime"
@@ -829,7 +829,7 @@ func main() {
     
     // ... 应用代码
 }</code></pre>
-  <pre><code># 采集阻塞分析
+  <pre><code class="language-go"># 采集阻塞分析
 go tool pprof http://localhost:6060/debug/pprof/block
 
 # 查看 CGo 相关的阻塞
@@ -848,7 +848,7 @@ go tool pprof http://localhost:6060/debug/pprof/goroutine
 
   <h3>CGo 开销跟踪</h3>
   <p>Go 1.20+ 支持通过 <code>GODEBUG=cgocheck=1</code> 调试 CGo 指针传递的安全性：</p>
-  <pre><code>export GODEBUG=cgocheck=1
+  <pre><code class="language-go">export GODEBUG=cgocheck=1
 # 检测到非法指针传递时会 panic 并提供详细堆栈
 
 # 更详细的 CGo 调度跟踪
@@ -860,7 +860,7 @@ export GODEBUG=cgocheck=1,scheddetail=1,schedtrace=1000
 // 注意 threads 数量：CGo 调用可能导致线程数增加</code></pre>
 
   <h3>社区工具</h3>
-  <pre><code># 安装 CGo 性能分析工具
+  <pre><code class="language-go"># 安装 CGo 性能分析工具
 go install golang.org/x/perf/cmd/benchstat@latest
 
 # 使用 perf 分析 C 侧代码

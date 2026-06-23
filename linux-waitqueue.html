@@ -62,7 +62,7 @@
 <section id="structure" class="toc-link">
   <h2><span class="num">02</span> 数据结构</h2>
   <div class="card">
-    <pre><code><span class="cm">// include/linux/wait.h:28-38</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/wait.h:28-38</span>
 <span class="kw">struct</span> <span class="ty">wait_queue_entry</span> {
     <span class="ty">unsigned int</span> flags;        <span class="cm">// WQ_FLAG_EXCLUSIVE 等</span>
     <span class="ty">void</span> *private;             <span class="cm">// 私有数据（通常为 task_struct）</span>
@@ -79,7 +79,7 @@
 
   <h3>初始化</h3>
   <div class="card">
-    <pre><code><span class="cm">// 静态初始化</span>
+    <pre><code class="language-c"><span class="cm">// 静态初始化</span>
 <span class="kw">DECLARE_WAIT_QUEUE_HEAD</span>(my_wq);
 
 <span class="cm">// 动态初始化</span>
@@ -136,7 +136,7 @@
 
   <h3>wait_event 实现逻辑</h3>
   <div class="card">
-    <pre><code><span class="cm">// wait_event(wq_head, condition) 的等价展开：</span>
+    <pre><code class="language-c"><span class="cm">// wait_event(wq_head, condition) 的等价展开：</span>
 <span class="kw">for</span> (;;) {
     <span class="fn">prepare_to_wait</span>(&wq_head, &wait, TASK_UNINTERRUPTIBLE);
     <span class="kw">if</span> (condition)  <span class="cm">// 检查条件</span>
@@ -164,7 +164,7 @@
   <h2><span class="num">05</span> 内部实现</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// 唤醒函数</span>
+    <pre><code class="language-c"><span class="cm">// 唤醒函数</span>
 <span class="kw">void</span> <span class="fn">__wake_up</span>(<span class="kw">struct</span> <span class="ty">wait_queue_head</span> *wq_head, <span class="ty">unsigned int</span> mode,
                <span class="ty">int</span> nr_exclusive, <span class="ty">void</span> *key)
 {
@@ -202,7 +202,7 @@
   <h2><span class="num">07</span> 使用模式</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// 模式一：等待事件条件</span>
+    <pre><code class="language-c"><span class="cm">// 模式一：等待事件条件</span>
 <span class="kw">DECLARE_WAIT_QUEUE_HEAD</span>(wq);
 <span class="kw">int</span> data_ready = <span class="num">0</span>;
 
@@ -217,7 +217,7 @@ process(data);</code></pre>
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// 模式二：I/O 完成等待</span>
+    <pre><code class="language-c"><span class="cm">// 模式二：I/O 完成等待</span>
 <span class="kw">struct</span> <span class="ty">my_request</span> {
     <span class="kw">struct</span> <span class="ty">wait_queue_head</span> wq;
     <span class="ty">int</span> completed;
@@ -238,7 +238,7 @@ req.completed = <span class="num">1</span>;
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// 模式三：网络数据到达</span>
+    <pre><code class="language-c"><span class="cm">// 模式三：网络数据到达</span>
 <span class="kw">static DECLARE_WAIT_QUEUE_HEAD</span>(rx_wq);
 
 <span class="cm">// 中断处理：数据到达</span>
@@ -252,7 +252,7 @@ req.completed = <span class="num">1</span>;
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// 模式四：超时等待</span>
+    <pre><code class="language-c"><span class="cm">// 模式四：超时等待</span>
 <span class="ty">int</span> ret;
 ret = <span class="fn">wait_event_timeout</span>(wq, condition, <span class="fn">msecs_to_jiffies</span>(<span class="num">5000</span>));
 <span class="kw">if</span> (ret == <span class="num">0</span>) {

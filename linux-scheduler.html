@@ -94,7 +94,7 @@
   <h3>优先级计算</h3>
   <div class="card">
     <p class="ref">include/linux/sched/prio.h</p>
-    <pre><code><span class="kw">#define</span> MAX_RT_PRIO    <span class="num">100</span>    <span class="cm">// RT 优先级范围: 0-99</span>
+    <pre><code class="language-c"><span class="kw">#define</span> MAX_RT_PRIO    <span class="num">100</span>    <span class="cm">// RT 优先级范围: 0-99</span>
 <span class="kw">#define</span> NICE_WIDTH     <span class="num">40</span>     <span class="cm">// nice 范围: -20 ~ +19</span>
 <span class="kw">#define</span> MAX_PRIO       <span class="num">140</span>    <span class="cm">// MAX_RT_PRIO + NICE_WIDTH</span>
 <span class="kw">#define</span> DEFAULT_PRIO   <span class="num">120</span>    <span class="cm">// 默认优先级 (nice=0)</span>
@@ -148,7 +148,7 @@
   <h3>struct sched_class</h3>
   <div class="card">
     <p class="ref">kernel/sched/sched.h:2500-2620</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">sched_class</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">sched_class</span> {
     <span class="ty">void</span> (*enqueue_task)(<span class="kw">struct</span> <span class="ty">rq</span> *rq, <span class="kw">struct</span> <span class="ty">task_struct</span> *p, <span class="ty">int</span> flags);
     <span class="ty">bool</span> (*dequeue_task)(<span class="kw">struct</span> <span class="ty">rq</span> *rq, <span class="kw">struct</span> <span class="ty">task_struct</span> *p, <span class="ty">int</span> flags);
     <span class="ty">void</span> (*yield_task)(<span class="kw">struct</span> <span class="ty">rq</span> *rq);
@@ -171,7 +171,7 @@
   <h3>struct rq（运行队列）</h3>
   <div class="card">
     <p class="ref">kernel/sched/sched.h:1124-1250</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">rq</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">rq</span> {
     <span class="ty">unsigned int</span> nr_running;       <span class="cm">// 可运行任务总数</span>
     <span class="kw">struct</span> <span class="ty">task_struct</span> __rcu *curr; <span class="cm">// 当前运行任务</span>
     <span class="kw">struct</span> <span class="ty">task_struct</span> __rcu *donor; <span class="cm">// 调度上下文（proxy exec）</span>
@@ -196,7 +196,7 @@
   <h3>struct cfs_rq（CFS 运行队列）</h3>
   <div class="card">
     <p class="ref">kernel/sched/sched.h:678-772</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">cfs_rq</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">cfs_rq</span> {
     <span class="kw">struct</span> <span class="ty">load_weight</span> load;       <span class="cm">// 总权重</span>
     <span class="ty">unsigned int</span> nr_queued;        <span class="cm">// 队列中的实体数</span>
     <span class="ty">unsigned int</span> h_nr_queued;     <span class="cm">// 层级任务数（含组）</span>
@@ -246,7 +246,7 @@
   </div>
 
   <h3>vruntime 计算</h3>
-  <pre><code><span class="cm">// 虚拟运行时间更新</span>
+  <pre><code class="language-c"><span class="cm">// 虚拟运行时间更新</span>
 delta_exec = now - prev->se.exec_start;     <span class="cm">// 实际执行时间</span>
 vruntime += delta_exec * (NICE_0_LOAD / weight);  <span class="cm">// 加权计算</span>
 
@@ -265,7 +265,7 @@ vruntime += delta_exec * (NICE_0_LOAD / weight);  <span class="cm">// 加权计�
 
   <h3>调度实体</h3>
   <div class="card">
-    <pre><code><span class="cm">// 每个任务在 CFS 中对应一个 sched_entity</span>
+    <pre><code class="language-c"><span class="cm">// 每个任务在 CFS 中对应一个 sched_entity</span>
 <span class="kw">struct</span> <span class="ty">sched_entity</span> {
     <span class="kw">struct</span> <span class="ty">load_weight</span> load;      <span class="cm">// 权重（由 nice 值决定）</span>
     <span class="kw">struct</span> <span class="ty">rb_node</span> run_node;      <span class="cm">// 红黑树节点</span>
@@ -309,7 +309,7 @@ vruntime += delta_exec * (NICE_0_LOAD / weight);  <span class="cm">// 加权计�
 
   <h3>优先级数组</h3>
   <div class="card">
-    <pre><code><span class="cm">// RT 使用位图 + 链表实现 O(1) 调度</span>
+    <pre><code class="language-c"><span class="cm">// RT 使用位图 + 链表实现 O(1) 调度</span>
 <span class="kw">struct</span> <span class="ty">rt_rq</span> {
     <span class="kw">struct</span> <span class="ty">rt_prio_array</span> active;  <span class="cm">// 100 个优先级的位图 + 链表</span>
     <span class="ty">unsigned int</span> rt_nr_running;
@@ -336,7 +336,7 @@ vruntime += delta_exec * (NICE_0_LOAD / weight);  <span class="cm">// 加权计�
 
   <h3>参数说明</h3>
   <div class="card">
-    <pre><code><span class="cm">// sched_setattr() 设置</span>
+    <pre><code class="language-c"><span class="cm">// sched_setattr() 设置</span>
 <span class="kw">struct</span> <span class="ty">sched_attr</span> {
     <span class="ty">u32</span> size;
     <span class="ty">u32</span> sched_policy;
@@ -413,7 +413,7 @@ vruntime += delta_exec * (NICE_0_LOAD / weight);  <span class="cm">// 加权计�
   <h3>关键机制</h3>
   <div class="card">
     <p class="ref">kernel/sched/ext.c</p>
-    <pre><code><span class="cm">// BPF 调度器通过 scx_ops 结构体注册回调</span>
+    <pre><code class="language-c"><span class="cm">// BPF 调度器通过 scx_ops 结构体注册回调</span>
 <span class="cm">// 关键回调：</span>
 <span class="cm">//   .select_cpu  — 选择 CPU</span>
 <span class="cm">//   .enqueue     — 任务入队</span>
@@ -478,7 +478,7 @@ vruntime += delta_exec * (NICE_0_LOAD / weight);  <span class="cm">// 加权计�
   </table>
 
   <h3>抢占点</h3>
-  <pre><code><span class="cm">// 抢占发生的时机：</span>
+  <pre><code class="language-c"><span class="cm">// 抢占发生的时机：</span>
 1. 从中断返回内核态时
 2. 从系统调用返回用户态时
 3. 内核中显式调用 <span class="fn">cond_resched()</span> 时

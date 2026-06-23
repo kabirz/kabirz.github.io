@@ -66,7 +66,7 @@
 
   <h3>用户态 API</h3>
   <div class="card">
-    <pre><code><span class="cm">// 头文件：&lt;sys/select.h&gt;</span>
+    <pre><code class="language-c"><span class="cm">// 头文件：&lt;sys/select.h&gt;</span>
 <span class="ty">int</span> <span class="fn">select</span>(<span class="ty">int</span> nfds,
            <span class="ty">fd_set</span> *readfds,     <span class="cm">// 监听可读的 fd 集合</span>
            <span class="ty">fd_set</span> *writefds,    <span class="cm">// 监听可写的 fd 集合</span>
@@ -118,7 +118,7 @@
 
   <h3>核心数据结构</h3>
   <div class="card">
-    <pre><code><span class="cm">// fs/select.c:483 — do_select 核心逻辑</span>
+    <pre><code class="language-c"><span class="cm">// fs/select.c:483 — do_select 核心逻辑</span>
 <span class="kw">static</span> noinline_for_stack <span class="ty">int</span> <span class="fn">do_select</span>(<span class="ty">int</span> n, <span class="ty">fd_set_bits</span> *fds,
                                         <span class="kw">struct</span> <span class="ty">timespec64</span> *end_time)
 {
@@ -164,7 +164,7 @@
 
   <h3>用户态 API</h3>
   <div class="card">
-    <pre><code><span class="cm">// 头文件：&lt;poll.h&gt;</span>
+    <pre><code class="language-c"><span class="cm">// 头文件：&lt;poll.h&gt;</span>
 <span class="ty">int</span> <span class="fn">poll</span>(<span class="kw">struct</span> <span class="ty">pollfd</span> fds[], <span class="ty">nfds_t</span> nfds, <span class="ty">int</span> timeout);
 
 <span class="kw">struct</span> <span class="ty">pollfd</span> {
@@ -196,7 +196,7 @@
 
   <h3>内核实现</h3>
   <div class="card">
-    <pre><code><span class="cm">// fs/compat.c / fs/select.c — sys_poll → do_poll</span>
+    <pre><code class="language-c"><span class="cm">// fs/compat.c / fs/select.c — sys_poll → do_poll</span>
 <span class="cm">// do_poll 核心与 do_select 几乎相同：</span>
 <span class="cm">// 1. 遍历所有 pollfd</span>
 <span class="cm">// 2. 对每个 fd 调用 vfs_poll()</span>
@@ -213,7 +213,7 @@
 
   <h3>用户态 API</h3>
   <div class="card">
-    <pre><code><span class="cm">// 1. 创建 epoll 实例</span>
+    <pre><code class="language-c"><span class="cm">// 1. 创建 epoll 实例</span>
 <span class="ty">int</span> epfd = <span class="fn">epoll_create1</span>(<span class="num">0</span>);
 
 <span class="cm">// 2. 添加/修改/删除监听的 fd</span>
@@ -239,7 +239,7 @@
 
   <h3>核心数据结构</h3>
   <div class="card">
-    <pre><code><span class="cm">// fs/eventpoll.c:179 — epoll 实例</span>
+    <pre><code class="language-c"><span class="cm">// fs/eventpoll.c:179 — epoll 实例</span>
 <span class="kw">struct</span> <span class="ty">eventpoll</span> {
     <span class="kw">struct</span> <span class="ty">mutex</span>          mtx;         <span class="cm">// 保护 epoll 的互斥锁</span>
     <span class="kw">struct</span> <span class="ty">wait_queue_head_t</span> wq;      <span class="cm">// epoll_wait 的等待队列</span>
@@ -323,7 +323,7 @@
 
   <h3>epoll 回调机制</h3>
   <div class="card">
-    <pre><code><span class="cm">// 当驱动/协议栈有数据就绪时，调用 wake_up()</span>
+    <pre><code class="language-c"><span class="cm">// 当驱动/协议栈有数据就绪时，调用 wake_up()</span>
 <span class="cm">// → 依次调用每个 wait_queue_entry 的 func</span>
 <span class="cm">// → 也就是 ep_poll_callback()</span>
 
@@ -380,7 +380,7 @@
       <li><strong>回调注册</strong>：epoll_ctl 时通过 poll_wait 注册 ep_poll_callback，fd 就绪时直接将 epitem 加入 rdllist</li>
       <li><strong>就绪链表</strong>（eventpoll.rdllist）：epoll_wait 只遍历就绪的 fd，不扫描全部</li>
     </ul>
-    <pre><code><span class="cm">// 对比：</span>
+    <pre><code class="language-c"><span class="cm">// 对比：</span>
 <span class="cm">// select/poll: epoll_wait → O(n) 扫描全部 fd</span>
 <span class="cm">// epoll:       epoll_wait → O(1) 取 rdllist 首元素</span>
 <span class="cm">//</span>
@@ -440,7 +440,7 @@
 
   <div class="card">
     <div class="card-title" style="color:#cf222e">1. epoll ET 模式未读完数据</div>
-    <pre><code><span class="cm">// 错误：只读了一部分数据就返回</span>
+    <pre><code class="language-c"><span class="cm">// 错误：只读了一部分数据就返回</span>
 n = <span class="fn">read</span>(fd, buf, <span class="num">1024</span>);  <span class="cm">// 可能只读了一部分</span>
 
 <span class="cm">// 正确：循环读取直到 EAGAIN</span>
@@ -450,7 +450,7 @@ n = <span class="fn">read</span>(fd, buf, <span class="num">1024</span>);  <span
 
   <div class="card">
     <div class="card-title" style="color:#bc4c00">2. ET 模式使用阻塞 fd</div>
-    <pre><code><span class="cm">// 错误：阻塞 fd 在 ET 模式下 read 可能永久阻塞</span>
+    <pre><code class="language-c"><span class="cm">// 错误：阻塞 fd 在 ET 模式下 read 可能永久阻塞</span>
 n = <span class="fn">read</span>(fd, buf, <span class="num">1024</span>);  <span class="cm">// 如果没有数据，永远阻塞</span>
 
 <span class="cm">// 正确：ET 模式必须使用非阻塞 fd</span>
@@ -460,7 +460,7 @@ n = <span class="fn">read</span>(fd, buf, <span class="num">1024</span>);  <span
 
   <div class="card">
     <div class="card-title" style="color:var(--accent3)">3. fd 被 close 后 epoll 自动删除</div>
-    <pre><code><span class="cm">// epoll 会自动从红黑树中移除被 close 的 fd</span>
+    <pre><code class="language-c"><span class="cm">// epoll 会自动从红黑树中移除被 close 的 fd</span>
 <span class="cm">// 但 epoll_ctl(EPOLL_CTL_DEL) 是更好的实践</span>
 <span class="fn">close</span>(fd);                   <span class="cm">// 内核自动清理</span>
 <span class="cm">// 或者：</span>
@@ -470,7 +470,7 @@ n = <span class="fn">read</span>(fd, buf, <span class="num">1024</span>);  <span
 
   <div class="card">
     <div class="card-title" style="color:#0969da">4. signal handler 中的 EINTR</div>
-    <pre><code><span class="cm">// select/poll/epoll_wait 可能被信号中断</span>
+    <pre><code class="language-c"><span class="cm">// select/poll/epoll_wait 可能被信号中断</span>
 <span class="kw">while</span> (<span class="num">1</span>) {
     n = <span class="fn">epoll_wait</span>(epfd, events, max, timeout);
     <span class="kw">if</span> (n == <span class="num">-1</span>) {

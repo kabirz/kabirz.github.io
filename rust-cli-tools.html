@@ -53,7 +53,7 @@
   </table>
 
   <p>典型 Cargo.toml：</p>
-<pre><code>[dependencies]
+<pre><code class="language-rust">[dependencies]
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
@@ -75,7 +75,7 @@ strip = true
 <section id="clap" class="toc-link">
   <h2><span class="num">02</span> clap 命令行解析</h2>
 
-<pre><code>// clap 是事实标准的 CLI 库
+<pre><code class="language-rust">// clap 是事实标准的 CLI 库
 // features = ["derive"] 提供 derive 宏
 
 use clap::{Parser, Subcommand};
@@ -155,7 +155,7 @@ fn main() -> anyhow::Result&lt;()&gt; {
 </code></pre>
 
   <p>常见用法：</p>
-<pre><code>// 1. 位置参数
+<pre><code class="language-rust">// 1. 位置参数
 #[arg(num_args = 1..)]   // 至少一个
 files: Vec&lt;PathBuf&gt;,
 
@@ -209,7 +209,7 @@ command: Commands,
 <section id="errors" class="toc-link">
   <h2><span class="num">03</span> 错误处理</h2>
 
-<pre><code>// anyhow：错误"包"，简单应用首选
+<pre><code class="language-rust">// anyhow：错误"包"，简单应用首选
 use anyhow::{Context, Result};
 
 fn main() -> Result&lt;()&gt; {
@@ -273,7 +273,7 @@ fn main() -> Result&lt;(), Report&gt; {
 <section id="colors" class="toc-link">
   <h2><span class="num">04</span> 彩色输出</h2>
 
-<pre><code>// colored - 简单
+<pre><code class="language-rust">// colored - 简单
 use colored::*;
 
 println!("{}", "hello".red().bold());
@@ -307,7 +307,7 @@ print!("\x1b[31m{}\x1b[0m", "red");
 <section id="progress" class="toc-link">
   <h2><span class="num">05</span> 进度条</h2>
 
-<pre><code>// indicatif - 进度条
+<pre><code class="language-rust">// indicatif - 进度条
 use indicatif::{ProgressBar, ProgressStyle};
 
 let pb = ProgressBar::new(1000);
@@ -358,7 +358,7 @@ reader.read_to_end(&amp;mut buf)?;
 <section id="interactive" class="toc-link">
   <h2><span class="num">06</span> 交互式输入</h2>
 
-<pre><code>// dialoguer - 经典
+<pre><code class="language-rust">// dialoguer - 经典
 use dialoguer::{Input, Select, Confirm, Password, MultiSelect, theme::ColorfulTheme};
 
 // 文本输入
@@ -404,7 +404,7 @@ let date = DateSelect::new("When?").prompt()?;
 <section id="logging" class="toc-link">
   <h2><span class="num">07</span> 日志</h2>
 
-<pre><code>// 1. log + env_logger（简单）
+<pre><code class="language-rust">// 1. log + env_logger（简单）
 // [dependencies]
 // log = "0.4"
 // env_logger = "0.11"
@@ -456,7 +456,7 @@ tracing_subscriber::fmt()
 <section id="config" class="toc-link">
   <h2><span class="num">08</span> 配置管理</h2>
 
-<pre><code>// config-rs - 多来源配置
+<pre><code class="language-rust">// config-rs - 多来源配置
 // [dependencies]
 // config = "0.14"
 // serde = { version = "1", features = ["derive"] }
@@ -521,7 +521,7 @@ let cfg: Config = confy::load("myapp", None)?;
 </code></pre>
 
   <p>路径与目录：</p>
-<pre><code>// dirs - 跨平台标准目录
+<pre><code class="language-rust">// dirs - 跨平台标准目录
 use dirs::*;
 
 let home: Option&lt;PathBuf&gt; = home_dir();        // ~
@@ -544,7 +544,7 @@ if let Some(proj_dirs) = ProjectDirs::from("com", "mycompany", "My App") {
 <section id="templates" class="toc-link">
   <h2><span class="num">09</span> 模板与扩展</a></h2>
 
-<pre><code>// 1. 文本模板
+<pre><code class="language-rust">// 1. 文本模板
 // tinytemplate - 极简
 // handlebars - 功能完整
 use handlebars::Handlebars;
@@ -646,7 +646,7 @@ let body = reqwest::get("https://api.example.com/data").await?.text().await?;
   </table>
 
   <p>项目模板：</p>
-<pre><code>// cargo-generate - 项目模板工具
+<pre><code class="language-rust">// cargo-generate - 项目模板工具
 cargo install cargo-generate
 cargo generate rust-cli/cli-template myapp
 
@@ -674,7 +674,7 @@ cargo generate rust-cli/cli-template myapp
 </code></pre>
 
   <p>常见 CLI 模式：</p>
-<pre><code>// 1. 长选项 + 短选项 + 环境变量
+<pre><code class="language-rust">// 1. 长选项 + 短选项 + 环境变量
 #[arg(short = 'p', long = "port", env = "APP_PORT", default_value = "8080")]
 port: u16,
 

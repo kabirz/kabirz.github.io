@@ -54,7 +54,7 @@
   </ul>
 
   <p>最小示例：</p>
-<pre><code># docker-compose.yml
+<pre><code class="language-bash"># docker-compose.yml
 services:
   web:
     image: nginx:alpine
@@ -73,7 +73,7 @@ volumes:
   dbdata:
 </code></pre>
 
-<pre><code># 启动
+<pre><code class="language-bash"># 启动
 $ docker compose up -d
 
 # 状态
@@ -96,7 +96,7 @@ $ docker compose down -v
 <section id="format" class="toc-link">
   <h2><span class="num">02</span> Compose 文件格式</h2>
 
-<pre><code>// Compose 文件顶层结构（v3+）：
+<pre><code class="language-bash">// Compose 文件顶层结构（v3+）：
 {
   // 版本（v2 后可选）
   "version": "3.9",
@@ -134,7 +134,7 @@ $ docker compose down -v
 </code></pre>
 
   <p>多文件合并规则：</p>
-<pre><code># Compose 文件优先级（从低到高）：
+<pre><code class="language-bash"># Compose 文件优先级（从低到高）：
 # 1. 默认：docker-compose.yml + docker-compose.override.yml
 # 2. -f 指定的多个文件，按顺序合并
 # 3. COMPOSE_FILE 环境变量
@@ -160,7 +160,7 @@ docker compose up
 </code></pre>
 
   <p>变量插值：</p>
-<pre><code># .env 文件（自动加载）
+<pre><code class="language-bash"># .env 文件（自动加载）
 POSTGRES_PASSWORD=secret
 APP_PORT=8080
 
@@ -189,7 +189,7 @@ port: ${PORT:?required}
 <section id="services" class="toc-link">
   <h2><span class="num">03</span> 服务定义</h2>
 
-<pre><code>services:
+<pre><code class="language-bash">services:
   web:
     # 镜像（image 或 build 二选一）
     image: nginx:alpine
@@ -362,7 +362,7 @@ port: ${PORT:?required}
 <section id="volumes" class="toc-link">
   <h2><span class="num">04</span> 卷与网络</h2>
 
-<pre><code>volumes:
+<pre><code class="language-bash">volumes:
   # 默认（自动创建）
   dbdata:
   
@@ -421,7 +421,7 @@ networks:
 <section id="deploy" class="toc-link">
   <h2><span class="num">05</span> 部署与资源</h2>
 
-<pre><code>services:
+<pre><code class="language-bash">services:
   web:
     image: nginx
     deploy:
@@ -476,7 +476,7 @@ networks:
 </code></pre>
 
   <p>非 Swarm 警告：</p>
-<pre><code># deploy 字段仅在 swarm 模式生效（docker stack deploy）
+<pre><code class="language-bash"># deploy 字段仅在 swarm 模式生效（docker stack deploy）
 # 普通 compose up 时会被忽略（除 resources 限制）
 
 # 单机资源限制（compose v2 真正生效）：
@@ -494,7 +494,7 @@ services:
 <section id="profiles" class="toc-link">
   <h2><span class="num">06</span> Profile 与多环境</h2>
 
-<pre><code>services:
+<pre><code class="language-bash">services:
   web:
     image: nginx
     profiles:
@@ -522,7 +522,7 @@ docker compose --profile prod --profile monitor up
 </code></pre>
 
   <p>多环境模式（推荐）：</p>
-<pre><code># docker-compose.yml（基础）
+<pre><code class="language-bash"># docker-compose.yml（基础）
 # docker-compose.override.yml（开发默认）
 # docker-compose.prod.yml（生产）
 
@@ -544,7 +544,7 @@ docker compose --env-file .env.prod up
 
   <p>Compose v2 完全用 Go 重写，集成到 docker CLI 作为 plugin：</p>
 
-<pre><code>// 调用方式：
+<pre><code class="language-bash">// 调用方式：
 docker compose up    # 新（v2）
 docker-compose up    # 老（v1，Python）
 
@@ -561,7 +561,7 @@ docker-compose up    # 老（v1，Python）
 </code></pre>
 
   <p>Compose v2 内部架构：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-bash">┌─────────────────────────────────────────┐
 │  docker CLI                              │
 │  ↓ dispatch                              │
 ├─────────────────────────────────────────┤
@@ -591,7 +591,7 @@ docker-compose up    # 老（v1，Python）
 </code></pre>
 
   <p>关键 Go 类型：</p>
-<pre><code>// pkg/compose/types.go
+<pre><code class="language-bash">// pkg/compose/types.go
 type Project struct {
     Name         string
     WorkingDir   string
@@ -650,7 +650,7 @@ type ServiceConfig struct {
   </table>
 
   <p>常用选项：</p>
-<pre><code>docker compose up -d                 # 后台运行
+<pre><code class="language-bash">docker compose up -d                 # 后台运行
 docker compose up --build            # 强制重新构建
 docker compose up --force-recreate   # 强制重建容器
 docker compose up --scale web=3      # 启动 3 个 web 实例
@@ -673,7 +673,7 @@ docker compose convert               # 同上（v2 名字）
 
   <p>Compose 是 Swarm 的<strong>声明式输入</strong>。可以部署到集群：</p>
 
-<pre><code># 启用 swarm
+<pre><code class="language-bash"># 启用 swarm
 docker swarm init
 docker swarm join --token ... &lt;manager_ip&gt;:2377
 
@@ -689,7 +689,7 @@ docker stack rm myapp
 </code></pre>
 
   <p>Swarm 特有概念：</p>
-<pre><code>// 1. Stack
+<pre><code class="language-bash">// 1. Stack
 //    一组相关服务的集合
 //    来自 compose 文件
 

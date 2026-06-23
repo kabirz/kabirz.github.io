@@ -40,7 +40,7 @@
 <section id="api" class="toc-link">
   <h2><span class="num">02</span> API 与使用</h2>
   <div class="card">
-    <pre><code><span class="cm">// inotify API</span>
+    <pre><code class="language-c"><span class="cm">// inotify API</span>
 <span class="kw">#include</span> <span class="st">&lt;sys/inotify.h&gt;</span>
 
 <span class="cm">// 1. 创建 inotify 实例</span>
@@ -83,7 +83,7 @@
   </table>
 
   <div class="card">
-    <pre><code><span class="cm"># 实用示例：监控 /var/log 变化</span>
+    <pre><code class="language-c"><span class="cm"># 实用示例：监控 /var/log 变化</span>
 <span class="cm"># inotifywait（from inotify-tools 包）</span>
 $ inotifywait -m -r /var/log -e create,delete,modify
 Setting up watches.  Beware: since -r was given, this may take a while!

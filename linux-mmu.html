@@ -164,7 +164,7 @@
   </div>
 
   <h3>页表类型定义</h3>
-  <pre><code><span class="cm">// arch/x86/include/asm/pgtable_64_types.h</span>
+  <pre><code class="language-c"><span class="cm">// arch/x86/include/asm/pgtable_64_types.h</span>
 <span class="kw">typedef</span> <span class="ty">unsigned long</span> pteval_t;
 <span class="kw">typedef</span> <span class="kw">struct</span> { pteval_t pte; } <span class="ty">pte_t</span>;
 <span class="kw">typedef</span> <span class="kw">struct</span> { pmdval_t pmd; } <span class="ty">pmd_t</span>;
@@ -186,7 +186,7 @@
   <h3>struct vm_fault（缺页上下文）</h3>
   <div class="card">
     <p class="ref">include/linux/mm.h:698-742</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">vm_fault</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">vm_fault</span> {
     <span class="kw">const struct</span> {
         <span class="kw">struct</span> <span class="ty">vm_area_struct</span> *vma;    <span class="cm">// 目标 VMA</span>
         <span class="ty">gfp_t</span> gfp_mask;                <span class="cm">// 分配掩码</span>
@@ -212,7 +212,7 @@
   <h3>x86 MMU 上下文</h3>
   <div class="card">
     <p class="ref">arch/x86/include/asm/mmu.h:25-80</p>
-    <pre><code><span class="kw">typedef struct</span> {
+    <pre><code class="language-c"><span class="kw">typedef struct</span> {
     <span class="ty">u64</span> ctx_id;              <span class="cm">// mm 唯一标识，永不复用</span>
     <span class="ty">atomic64_t</span> tlb_gen;      <span class="cm">// TLB 代际计数器（延迟刷新跟踪）</span>
     <span class="ty">unsigned long</span> next_trim_cpumask;
@@ -230,7 +230,7 @@
   <h3>struct vm_operations_struct（VMA 操作）</h3>
   <div class="card">
     <p class="ref">include/linux/mm.h:749</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">vm_operations_struct</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">vm_operations_struct</span> {
     <span class="ty">void</span> (*open)(<span class="kw">struct</span> <span class="ty">vm_area_struct</span> *area);
     <span class="ty">void</span> (*close)(<span class="kw">struct</span> <span class="ty">vm_area_struct</span> *area);
     <span class="ty">vm_fault_t</span> (*fault)(<span class="kw">struct</span> <span class="ty">vm_fault</span> *vmf);
@@ -247,7 +247,7 @@
   <h3>struct mmu_gather（批量 TLB 刷新）</h3>
   <div class="card">
     <p class="ref">include/asm-generic/tlb.h</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">mmu_gather</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">mmu_gather</span> {
     <span class="kw">struct</span> <span class="ty">mm_struct</span> *mm;
     <span class="kw">struct</span> <span class="ty">mmu_gather_batch</span> *active;  <span class="cm">// 当前批次</span>
     <span class="kw">struct</span> <span class="ty">mmu_gather_batch</span> local;    <span class="cm">// 本地小批次（栈上）</span>
@@ -312,7 +312,7 @@
   </div>
 
   <h3>页表行走（__handle_mm_fault）</h3>
-  <pre><code><span class="cm">// mm/memory.c:6384-6485</span>
+  <pre><code class="language-c"><span class="cm">// mm/memory.c:6384-6485</span>
 <span class="kw">static</span> <span class="ty">vm_fault_t</span> <span class="fn">__handle_mm_fault</span>(<span class="kw">struct</span> <span class="ty">vm_area_struct</span> *vma,
         <span class="ty">unsigned long</span> address, <span class="ty">unsigned int</span> flags)
 {
@@ -337,7 +337,7 @@
 }</code></pre>
 
   <h3>PTE 缺页分发</h3>
-  <pre><code><span class="cm">// mm/memory.c:6302-6376</span>
+  <pre><code class="language-c"><span class="cm">// mm/memory.c:6302-6376</span>
 <span class="kw">static</span> <span class="ty">vm_fault_t</span> <span class="fn">handle_pte_fault</span>(<span class="kw">struct</span> <span class="ty">vm_fault</span> *vmf)
 {
     <span class="kw">if</span> (unlikely(pmd_none(*vmf->pmd))) {
@@ -385,7 +385,7 @@
   <h3>写时复制（do_wp_page）</h3>
   <div class="card">
     <p class="ref">mm/memory.c:4178-4271</p>
-    <pre><code><span class="fn">do_wp_page</span>(vmf) {
+    <pre><code class="language-c"><span class="fn">do_wp_page</span>(vmf) {
     <span class="cm">// 1. 共享映射 (VM_SHARED)</span>
     <span class="kw">if</span> (vma->vm_flags & (VM_SHARED | VM_MAYSHARE)) {
         <span class="kw">if</span> (!vmf->page || is_fsdax_page(vmf->page))
@@ -426,7 +426,7 @@
   <h3>switch_mm — 进程切换时的地址空间切换</h3>
   <div class="card">
     <p class="ref">arch/x86/mm/tlb.c:783</p>
-    <pre><code><span class="ty">void</span> <span class="fn">switch_mm_irqs_off</span>(<span class="kw">struct</span> <span class="ty">mm_struct</span> *prev, <span class="kw">struct</span> <span class="ty">mm_struct</span> *next,
+    <pre><code class="language-c"><span class="ty">void</span> <span class="fn">switch_mm_irqs_off</span>(<span class="kw">struct</span> <span class="ty">mm_struct</span> *prev, <span class="kw">struct</span> <span class="ty">mm_struct</span> *next,
                          <span class="kw">struct</span> <span class="ty">task_struct</span> *tsk)
 {
     <span class="kw">if</span> (prev == next) {
@@ -450,7 +450,7 @@
   </div>
 
   <h3>CR3 构建</h3>
-  <pre><code><span class="cm">// arch/x86/mm/tlb.c:161-172</span>
+  <pre><code class="language-c"><span class="cm">// arch/x86/mm/tlb.c:161-172</span>
 <span class="kw">static inline</span> <span class="ty">unsigned long</span> <span class="fn">build_cr3</span>(<span class="ty">pgd_t</span> *pgd, <span class="ty">u16</span> asid, <span class="ty">unsigned long</span> lam)
 {
     <span class="ty">unsigned long</span> cr3 = __sme_pa(pgd) | lam;  <span class="cm">// SMEP 加密 + LAM</span>
@@ -539,7 +539,7 @@
   <div class="card">
     <p class="ref">include/linux/mmu_notifier.h:51-60, 64-80</p>
     <p>通知辅助 MMU（KVM、VFIO）页表变化：</p>
-    <pre><code><span class="kw">enum</span> <span class="ty">mmu_notifier_event</span> {
+    <pre><code class="language-c"><span class="kw">enum</span> <span class="ty">mmu_notifier_event</span> {
     MMU_NOTIFY_UNMAP,           <span class="cm">// munmap/mremap — 解除映射</span>
     MMU_NOTIFY_CLEAR,           <span class="cm">// PTE 清除 — madvise/替换页</span>
     MMU_NOTIFY_PROTECTION_VMA,  <span class="cm">// mprotect — 整个 VMA 权限变更</span>

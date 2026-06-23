@@ -74,7 +74,7 @@
 <section id="data" class="toc-link">
   <h2><span class="num">03</span> 核心数据结构</h2>
   <div class="card">
-    <pre><code><span class="cm">// include/linux/mmzone.h — NUMA 节点</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/mmzone.h — NUMA 节点</span>
 <span class="kw">struct</span> <span class="ty">pglist_data</span> {  <span class="cm">// 每个 NUMA 节点一个</span>
     <span class="kw">struct</span> <span class="ty">list_head</span>  <span class="ty">zonelists</span>;    <span class="cm">// Zone 回退链表</span>
     <span class="ty">u32</span>               nr_zones;      <span class="cm">// Zone 数量</span>
@@ -103,7 +103,7 @@
   </table>
 
   <div class="card">
-    <pre><code><span class="cm"># 设置进程的 NUMA 策略</span>
+    <pre><code class="language-c"><span class="cm"># 设置进程的 NUMA 策略</span>
 $ numactl --membind=0 ./myapp         <span class="cm"># 绑定到 Node 0</span>
 $ numactl --interleave=all ./myapp    <span class="cm"># 交错分配</span>
 $ numactl --cpunodebind=0 ./myapp     <span class="cm"># 绑定 CPU 到 Node 0</span>

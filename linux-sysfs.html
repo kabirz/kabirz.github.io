@@ -98,7 +98,7 @@
 <section id="data" class="toc-link">
   <h2><span class="num">03</span> 核心数据结构</h2>
   <div class="card">
-    <pre><code><span class="cm">// kobject + 属性 = sysfs 的基础</span>
+    <pre><code class="language-c"><span class="cm">// kobject + 属性 = sysfs 的基础</span>
 
 <span class="kw">struct</span> <span class="ty">kobject</span> {          <span class="cm">// 内核对象基类</span>
     <span class="kw">const char</span>      *name;     <span class="cm">// 对象名称（成为目录名）</span>
@@ -176,7 +176,7 @@
 <section id="usecases" class="toc-link">
   <h2><span class="num">05</span> 应用场景</h2>
   <div class="card">
-    <pre><code><span class="cm"># 网络设备调试</span>
+    <pre><code class="language-c"><span class="cm"># 网络设备调试</span>
 $ cat /sys/class/net/eth0/mtu              <span class="cm"># 查看 MTU</span>
 $ echo 9000 > /sys/class/net/eth0/mtu     <span class="cm"># 设置 Jumbo Frame</span>
 $ cat /sys/class/net/eth0/statistics/rx_packets  <span class="cm"># 收包计数</span>

@@ -68,7 +68,7 @@
 <section id="declarative" class="toc-link">
   <h2><span class="num">02</span> 声明式宏 macro_rules!</h2>
 
-<pre><code>// 基本语法
+<pre><code class="language-rust">// 基本语法
 macro_rules! my_macro {
     // 模式 => 展开
     ($x:expr) => { println!("{}", $x) };
@@ -113,7 +113,7 @@ macro_rules! println {
 <section id="patterns" class="toc-link">
   <h2><span class="num">03</span> 模式与匹配</h2>
 
-<pre><code>// 元变量（fragment）类型：
+<pre><code class="language-rust">// 元变量（fragment）类型：
 //   $x:expr     表达式
 //   $x:ident    标识符
 //   $x:ty       类型
@@ -178,7 +178,7 @@ let m = matrix![1, 2, 3; 4, 5, 6];
 <section id="hygiene" class="toc-link">
   <h2><span class="num">04</span> 宏卫生性</h2>
 
-<pre><code>// 卫生宏：宏展开不污染调用方作用域
+<pre><code class="language-rust">// 卫生宏：宏展开不污染调用方作用域
 
 macro_rules! using_x {
     ($e:expr) => { x + $e };
@@ -236,7 +236,7 @@ println!("{}", my_var);  // 5
 <section id="proc-macro" class="toc-link">
   <h2><span class="num">05</span> 过程宏</h2>
 
-<pre><code>// 过程宏是 Rust 编译器调用的函数
+<pre><code class="language-rust">// 过程宏是 Rust 编译器调用的函数
 // 接收 TokenStream 输入，返回 TokenStream 输出
 
 // 三种类型：
@@ -299,7 +299,7 @@ fn main() {
 <section id="derive" class="toc-link">
   <h2><span class="num">06</span> Derive 宏</h2>
 
-<pre><code>// 内置 derive：
+<pre><code class="language-rust">// 内置 derive：
 //   Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash
 //   Default
 
@@ -363,7 +363,7 @@ fn derive_struct(ast: &amp;DeriveInput, s: &amp;syn::DataStruct) -> TokenStream 
 <section id="attribute" class="toc-link">
   <h2><span class="num">07</span> Attribute 宏</h2>
 
-<pre><code>// Attribute 宏：修改或替换被标注的代码
+<pre><code class="language-rust">// Attribute 宏：修改或替换被标注的代码
 
 #[proc_macro_attribute]
 pub fn log_calls(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -421,7 +421,7 @@ fn main() {
 <section id="function-like" class="toc-link">
   <h2><span class="num">08</span> Function-like 宏</h2>
 
-<pre><code>// Function-like 宏：像函数调用，但参数是任意 token
+<pre><code class="language-rust">// Function-like 宏：像函数调用，但参数是任意 token
 
 #[proc_macro]
 pub fn sql(input: TokenStream) -> TokenStream {
@@ -483,7 +483,7 @@ const VERSION: &amp;'static str = env!("CARGO_PKG_VERSION");
     <tr><td><code>proc-macro2</code></td><td>proc_macro 的稳定版本</td></tr>
   </table>
 
-<pre><code>// 常用 syn 类型：
+<pre><code class="language-rust">// 常用 syn 类型：
 //   DeriveInput       - struct/enum 用于 derive
 //   ItemFn            - 函数
 //   ItemStruct        - 结构体
@@ -532,7 +532,7 @@ let expanded = quote! {
   </table>
 
   <p>cargo expand — 调试工具：</p>
-<pre><code>// 安装
+<pre><code class="language-rust">// 安装
 rustup component add rustc-codegen-cranelift-preview  # 可选
 cargo install cargo-expand
 
@@ -552,7 +552,7 @@ cargo expand --bin my_app
 <section id="best-practices" class="toc-link">
   <h2><span class="num">10</span> 最佳实践</h2>
 
-<pre><code>// 1. 优先用函数，必要时才用宏
+<pre><code class="language-rust">// 1. 优先用函数，必要时才用宏
 //   - 宏调试困难
 //   - 增加编译时间
 //   - 错误信息可能晦涩
@@ -628,7 +628,7 @@ fn compile_fail() {
 </code></pre>
 
   <p>常见陷阱：</p>
-<pre><code>// 1. 宏展开顺序
+<pre><code class="language-rust">// 1. 宏展开顺序
 //   - 不保证多次展开顺序
 //   - 依赖副作用：危险
 

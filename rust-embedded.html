@@ -50,7 +50,7 @@
   </table>
 
   <p>嵌入式 Rust 分层：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-rust">┌─────────────────────────────────────────┐
 │   Application Code                      │
 ├─────────────────────────────────────────┤
 │   Framework（RTIC / Embassy / 自管）     │
@@ -72,7 +72,7 @@
 <section id="no-std" class="toc-link">
   <h2><span class="num">02</span> no_std 环境</h2>
 
-<pre><code>// #![no_std] 移除 std 依赖
+<pre><code class="language-rust">// #![no_std] 移除 std 依赖
 // 只能用 core + alloc（可选）
 
 #![no_std]
@@ -112,7 +112,7 @@ fn main() -> ! {
 </code></pre>
 
   <p>无堆数据结构：</p>
-<pre><code>// heapless：基于数组的容器
+<pre><code class="language-rust">// heapless：基于数组的容器
 use heapless::spsc::Queue;
 use heapless::Vec as HVec;
 use heapless::String as HString;
@@ -134,7 +134,7 @@ s.push_str("hello").unwrap();
 <section id="hal" class="toc-link">
   <h2><span class="num">03</span> embedded-hal 抽象</h2>
 
-<pre><code>// embedded-hal 是嵌入式 Rust 的核心 trait 库
+<pre><code class="language-rust">// embedded-hal 是嵌入式 Rust 的核心 trait 库
 // 类似 std::io::Read/Write，但针对硬件
 
 // 主要 trait：
@@ -177,7 +177,7 @@ blink_led(&amp;mut MyLed, 5);
 </code></pre>
 
   <p>I2C 示例（温度传感器）：</p>
-<pre><code>use embedded_hal::i2c::I2c;
+<pre><code class="language-rust">use embedded_hal::i2c::I2c;
 
 const TMP102_ADDR: u8 = 0x48;
 
@@ -193,7 +193,7 @@ fn read_temperature&lt;I2C: I2c&gt;(i2c: &amp;mut I2C) -> Result&lt;f32, I2C::Er
 <section id="pac" class="toc-link">
   <h2><span class="num">04</span> PAC / HAL / BSP</h2>
 
-<pre><code>// PAC (Peripheral Access Crate)
+<pre><code class="language-rust">// PAC (Peripheral Access Crate)
 //   - 由 SVD 文件自动生成
 //   - 直接访问寄存器
 //   - svd2rust 工具
@@ -274,7 +274,7 @@ let mut led = pins.led.into_push_pull_output();
 <section id="memory" class="toc-link">
   <h2><span class="num">05</span> 内存布局</h2>
 
-<pre><code>// 嵌入式可执行文件 = ELF + 自定义段
+<pre><code class="language-rust">// 嵌入式可执行文件 = ELF + 自定义段
 
 // 内存映射（典型 Cortex-M）：
 // 0x00000000 +----------+
@@ -314,7 +314,7 @@ fn main() -> ! {
 </code></pre>
 
   <p>alloc 在嵌入式：</p>
-<pre><code>// 需要实现 #[global_allocator]
+<pre><code class="language-rust">// 需要实现 #[global_allocator]
 // 用 linked_list_allocator 或 alloc-cortex-m
 
 use alloc_cortex_m::CortexMHeap;
@@ -344,7 +344,7 @@ v.push(1);
 
   <p>RTIC (Real-Time Interrupt-driven Concurrency) 是 Rust 嵌入式<strong>主要并发框架</strong>。</p>
 
-<pre><code>// [dependencies]
+<pre><code class="language-rust">// [dependencies]
 // cortex-m-rtic = "1.0"
 // 
 // 关键概念：
@@ -408,7 +408,7 @@ mod app {
   </ul>
 
   <p>优先级抢占：</p>
-<pre><code>// RTIC 通过 priority 实现抢占：
+<pre><code class="language-rust">// RTIC 通过 priority 实现抢占：
 #[task(binds = IRQ_LOW, priority = 1)]
 fn low(ctx: low::Context) { ... }
 
@@ -430,7 +430,7 @@ fn high(ctx: high::Context) { ... }
 
   <p>Embassy 是基于 Rust async/await 的<strong>异步嵌入式框架</strong>。</p>
 
-<pre><code>// [dependencies]
+<pre><code class="language-rust">// [dependencies]
 // embassy-executor = { version = "0.5", features = ["arch-cortex-m", "executor-thread"] }
 // embassy-time = "0.3"
 // embassy-rp = { version = "0.1", features = ["time-driver"] }
@@ -499,7 +499,7 @@ async fn main(spawner: Spawner) {
   </ul>
 
   <p>协议栈：</p>
-<pre><code>// Embassy 提供完整网络栈
+<pre><code class="language-rust">// Embassy 提供完整网络栈
 use embassy_net::{
     Stack, StackResources, Config,
     Ipv4Address, StaticConfigurator,
@@ -528,7 +528,7 @@ socket.write(b"hello").await.unwrap();
 <section id="debug" class="toc-link">
   <h2><span class="num">08</span> 调试与烧录</h2>
 
-<pre><code>// 烧录工具：
+<pre><code class="language-rust">// 烧录工具：
 // 1. probe-rs（推荐）
 //    cargo install probe-rs-tools
 //    
@@ -596,7 +596,7 @@ cargo run --release
   </table>
 
   <p>选择建议：</p>
-<pre><code>初学者 → Raspberry Pi Pico ($4)
+<pre><code class="language-rust">初学者 → Raspberry Pi Pico ($4)
    - 文档完善
    - 社区活跃
    - Rust 生态最完整
@@ -638,7 +638,7 @@ cargo run --release
   </table>
 
   <p>常用 crate：</p>
-<pre><code>// 内存
+<pre><code class="language-rust">// 内存
 heapless          - 无堆容器
 alloc-cortex-m    - Cortex-M allocator
 linked_list_allocator
@@ -696,7 +696,7 @@ probe-run
 </code></pre>
 
   <p>调试技巧：</p>
-<pre><code>// 1. probe-rs + defmt（推荐）
+<pre><code class="language-rust">// 1. probe-rs + defmt（推荐）
 // .cargo/config.toml:
 [env]
 DEFMT_LOG = "debug"
@@ -722,7 +722,7 @@ defmt::error!("error: {:?}", err);
 </code></pre>
 
   <p>优化大小：</p>
-<pre><code>// release 模式
+<pre><code class="language-rust">// release 模式
 cargo build --release
 
 // Cargo.toml:

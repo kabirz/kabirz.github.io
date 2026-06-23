@@ -71,7 +71,7 @@
   <p>MAUI 架构可分为<strong>三层</strong>：底层是 <code>Microsoft.Maui</code>（跨平台抽象，定义 <code>IView</code>/<code>IApplication</code> 等接口），中层是 <code>Microsoft.Maui.Controls</code>（XAML 控件层，如 <code>Button</code>/<code>Entry</code>），上层是<strong>平台实现</strong>（Windows=WinUI 3，iOS=UIKit，macOS=AppKit，Android=Android View）。控件与平台之间通过 <strong>Handler</strong> 解耦。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// MAUI 架构层次（简化）</span>
+    <pre><code class="language-cpp"><span class="cm">// MAUI 架构层次（简化）</span>
 <span class="cm">┌─────────────────────────────────────────────────────────┐</span>
 <span class="cm">│   你的应用（XAML + C# code-behind + ViewModel）           │</span>
 <span class="cm">└─────────────────────────────────────────────────────────┘</span>
@@ -122,7 +122,7 @@
   <p>MAUI 用<strong>标记语言 XAML</strong> 描述 UI 结构，用 <strong>C# code-behind</strong> 处理逻辑。一个页面派生自 <code>ContentPage</code>，其 <code>Content</code> 是单个根视图；控件派生自 <code>View</code>。XAML 顶部的 <code>x:Class</code> 指向同名 partial C# 类。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// ── MauiProgram.cs：应用入口 ──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── MauiProgram.cs：应用入口 ──</span>
 <span class="kw">public static class</span> <span class="ty">MauiProgram</span> {
     <span class="kw">public static</span> <span class="ty">MauiApp</span> <span class="fn">CreateMauiApp</span>() {
         <span class="kw">var</span> builder = <span class="ty">MauiApp</span>.<span class="fn">CreateBuilder</span>();
@@ -151,7 +151,7 @@
 
   <h3>XAML 页面示例</h3>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- MainPage.xaml --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- MainPage.xaml --&gt;</span>
 &lt;<span class="kw">ContentPage</span> <span class="ty">xmlns</span>=<span class="st">"http://schemas.microsoft.com/dotnet/2021/maui"</span>
              <span class="ty">xmlns:x</span>=<span class="st">"http://schemas.microsoft.com/winfx/2009/xaml"</span>
              <span class="ty">x:Class</span>=<span class="st">"MyApp.MainPage"</span>
@@ -223,7 +223,7 @@
 
   <h3>布局示例</h3>
   <div class="card">
-    <pre><code>&lt;<span class="kw">Grid</span> <span class="ty">RowDefinitions</span>=<span class="st">"Auto,*,Auto"</span>
+    <pre><code class="language-cpp">&lt;<span class="kw">Grid</span> <span class="ty">RowDefinitions</span>=<span class="st">"Auto,*,Auto"</span>
       <span class="ty">ColumnDefinitions</span>=<span class="st">"*,2*"</span>
       <span class="ty">Padding</span>=<span class="st">"20"</span>&gt;
 
@@ -277,7 +277,7 @@
 
   <h3>PropertyMapper 工作原理</h3>
   <div class="card">
-    <pre><code><span class="cm">// 每个 Handler 内部维护一个 PropertyMapper（简化）</span>
+    <pre><code class="language-cpp"><span class="cm">// 每个 Handler 内部维护一个 PropertyMapper（简化）</span>
 <span class="kw">public static</span> <span class="ty">PropertyMapper</span>&lt;<span class="ty">IEntry</span>, <span class="ty">EntryHandler</span>&gt; <span class="ty">EntryMapper</span> = <span class="kw">new</span>() {
     [<span class="ty">nameof</span>(<span class="ty">IEntry</span>.<span class="fn">Text</span>)]            = <span class="fn">MapText</span>,
     [<span class="ty">nameof</span>(<span class="ty">IEntry</span>.<span class="fn">TextColor</span>)]    = <span class="fn">MapTextColor</span>,
@@ -296,7 +296,7 @@
 
   <h3>定制原生控件：自定义 Entry 圆角边框</h3>
   <div class="card">
-    <pre><code><span class="cm">// ── 方式一：局部 AppendToMapping（推荐）──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── 方式一：局部 AppendToMapping（推荐）──</span>
 <span class="kw">public static class</span> <span class="ty">EntryExtensions</span> {
     <span class="kw">public static void</span> <span class="fn">UseRoundedEntry</span>(<span class="kw">this</span> <span class="ty">MauiAppBuilder</span> builder) {
         <span class="ty">EntryHandler</span>.<span class="ty">EntryMapper</span>.<span class="fn">AppendToMapping</span>(
@@ -335,7 +335,7 @@ native.<span class="fn">CornerRadius</span> = <span class="num">12</span>;
   <p>MAUI 内置<strong>数据绑定</strong>：用 XAML 的 <code>{Binding}</code> 表达式把视图属性连到 <code>BindingContext</code> 的属性。<code>BindingContext</code> 沿可视化树继承——父页设一次，子控件全用。<strong>注意</strong>：MAUI 不支持 WPF/UWP 的 <code>{x:Bind}</code>，统一用经典 <code>{Binding}</code>。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// ── 经典手写 ViewModel ──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── 经典手写 ViewModel ──</span>
 <span class="kw">public class</span> <span class="ty">CounterViewModel</span> : <span class="ty">INotifyPropertyChanged</span> {
     <span class="kw">private int</span> _count;
     <span class="kw">public int</span> <span class="fn">Count</span> {
@@ -360,7 +360,7 @@ native.<span class="fn">CornerRadius</span> = <span class="num">12</span>;
   <p>实际项目几乎都用 <strong>CommunityToolkit.Mvvm</strong>（前名 Microsoft.Toolkit.Mvvm）。它用<strong>源生成器</strong>从 <code>[ObservableProperty]</code> 特性自动生成带通知的属性，从 <code>[RelayCommand]</code> 生成 <code>ICommand</code>，样板代码减少 80%。</p>
 
   <div class="card">
-    <pre><code><span class="kw">public partial class</span> <span class="ty">TodoViewModel</span> : <span class="ty">ObservableObject</span> {
+    <pre><code class="language-cpp"><span class="kw">public partial class</span> <span class="ty">TodoViewModel</span> : <span class="ty">ObservableObject</span> {
     <span class="ty">ObservableCollection</span>&lt;<span class="ty">TodoItem</span>&gt; _items = <span class="kw">new</span>();
 
     <span class="kw">public</span> <span class="ty">ObservableCollection</span>&lt;<span class="ty">TodoItem</span>&gt; <span class="fn">Items</span> =&gt; _items;
@@ -436,7 +436,7 @@ native.<span class="fn">CornerRadius</span> = <span class="num">12</span>;
 
   <h3>Shell 路由导航</h3>
   <div class="card">
-    <pre><code>&lt;<span class="cm">&lt;!-- AppShell.xaml：声明 Shell 结构 --&gt;</span>
+    <pre><code class="language-cpp">&lt;<span class="cm">&lt;!-- AppShell.xaml：声明 Shell 结构 --&gt;</span>
 &lt;<span class="kw">Shell</span> <span class="ty">x:Class</span>=<span class="st">"App.AppShell"</span>
        <span class="ty">xmlns</span>=<span class="st">"..."</span> <span class="ty">xmlns:x</span>=<span class="st">"..."</span>&gt;
   &lt;<span class="kw">FlyoutItem</span> <span class="ty">Title</span>=<span class="st">"主页"</span> <span class="ty">Icon</span>=<span class="st">"home.svg"</span>&gt;
@@ -477,7 +477,7 @@ native.<span class="fn">CornerRadius</span> = <span class="num">12</span>;
 
   <h3>NavigationPage 传统栈导航</h3>
   <div class="card">
-    <pre><code><span class="cm">// 适用于不用 Shell 的简单场景</span>
+    <pre><code class="language-cpp"><span class="cm">// 适用于不用 Shell 的简单场景</span>
 <span class="kw">var</span> navPage = <span class="kw">new</span> <span class="ty">NavigationPage</span>(<span class="kw">new</span> <span class="ty">HomePage</span>());
 <span class="ty">App</span>.<span class="fn">Current</span>.<span class="fn">MainPage</span> = navPage;
 
@@ -521,7 +521,7 @@ native.<span class="fn">CornerRadius</span> = <span class="num">12</span>;
   <p>MAUI 用<strong>多目标</strong>（multi-target）把同一个项目编译成 4 套二进制：<code>net9.0-android</code>、<code>net9.0-ios</code>、<code>net9.0-maccatalyst</code>、<code>net9.0-windows</code>。在共享代码里用 <code>#if</code> 条件编译区分平台；也可以把平台专属代码放在 <strong>Platforms/</strong> 子文件夹，由编译系统按目标自动包含。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 共享文件中的条件编译</span>
+    <pre><code class="language-cpp"><span class="cm">// 共享文件中的条件编译</span>
 <span class="kw">public string</span> <span class="fn">GetPlatformName</span>() {
 <span class="kw">#if WINDOWS</span>
     <span class="kw">return</span> <span class="ty">Environment</span>.<span class="fn">OSVersion</span>.<span class="fn">ToString</span>();     <span class="cm">// Win32 路径</span>
@@ -559,7 +559,7 @@ native.<span class="fn">CornerRadius</span> = <span class="num">12</span>;
 
   <h3>Platforms/ 文件夹 + 部分类</h3>
   <div class="card">
-    <pre><code><span class="cm">// 项目结构</span>
+    <pre><code class="language-cpp"><span class="cm">// 项目结构</span>
 <span class="cm">// ├── MainPage.xaml.cs       （共享）</span>
 <span class="cm">// ├── Platforms/</span>
 <span class="cm">// │   ├── Windows/NativeService.cs    （仅 Windows 编译）</span>
@@ -582,7 +582,7 @@ svc.<span class="fn">Toast</span>(<span class="st">"saved"</span>);
 
   <h3>DependencyService 跨平台服务</h3>
   <div class="card">
-    <pre><code><span class="cm">// 共享接口</span>
+    <pre><code class="language-cpp"><span class="cm">// 共享接口</span>
 <span class="kw">public interface</span> <span class="ty">IPlatformInfo</span> {
     <span class="kw">string</span> <span class="fn">GetDeviceId</span>();
 }
@@ -615,7 +615,7 @@ builder.<span class="fn">Services</span>.<span class="fn">AddSingleton</span>&lt
 
   <h3>样式与资源</h3>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- App.xaml：全局资源 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- App.xaml：全局资源 --&gt;</span>
 &lt;<span class="kw">Application</span> <span class="ty">x:Class</span>=<span class="st">"App.App"</span>&gt;
   &lt;<span class="kw">Application</span>.<span class="ty">Resources</span>&gt;
     &lt;<span class="kw">ResourceDictionary</span>&gt;
@@ -662,7 +662,7 @@ builder.<span class="fn">Services</span>.<span class="fn">AddSingleton</span>&lt
 
   <h3>暗黑主题示例</h3>
   <div class="card">
-    <pre><code>&lt;<span class="kw">Application</span>.<span class="ty">Resources</span>&gt;
+    <pre><code class="language-cpp">&lt;<span class="kw">Application</span>.<span class="ty">Resources</span>&gt;
   &lt;<span class="kw">ResourceDictionary</span>&gt;
     &lt;<span class="kw">Color</span> <span class="ty">x:Key</span>=<span class="st">"PageBackground"</span>&gt;White&lt;/<span class="kw">Color</span>&gt;
     &lt;<span class="kw">Color</span> <span class="ty">x:Key</span>=<span class="st">"TextPrimary"</span>&gt;#1F1F1F&lt;/<span class="kw">Color</span>&gt;
@@ -686,7 +686,7 @@ builder.<span class="fn">Services</span>.<span class="fn">AddSingleton</span>&lt
 
   <h3>字体、图片、图标</h3>
   <div class="card">
-    <pre><code><span class="cm">// 字体（MauiProgram）</span>
+    <pre><code class="language-cpp"><span class="cm">// 字体（MauiProgram）</span>
 builder.<span class="fn">ConfigureFonts</span>(fonts =&gt; {
     fonts.<span class="fn">AddFont</span>(<span class="st">"OpenSans-Regular.ttf"</span>, <span class="st">"OpenSansRegular"</span>);
 });
@@ -712,7 +712,7 @@ builder.<span class="fn">ConfigureFonts</span>(fonts =&gt; {
   <p>下面是一个最小但完整的 MAUI 应用骨架，体现 <strong>MauiProgram + Shell + 页面 + ViewModel + 数据绑定 + 命令</strong>的协作。Windows 端编译为 WinUI 3 应用直接双击运行。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// ── MauiProgram.cs ──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── MauiProgram.cs ──</span>
 <span class="kw">public static class</span> <span class="ty">MauiProgram</span> {
     <span class="kw">public static</span> <span class="ty">MauiApp</span> <span class="fn">CreateMauiApp</span>() {
         <span class="kw">var</span> builder = <span class="ty">MauiApp</span>.<span class="fn">CreateBuilder</span>();
@@ -768,7 +768,7 @@ builder.<span class="fn">ConfigureFonts</span>(fonts =&gt; {
 
   <h3>CounterPage XAML</h3>
   <div class="card">
-    <pre><code>&lt;<span class="kw">ContentPage</span> <span class="ty">x:Class</span>=<span class="st">"App.CounterPage"</span>
+    <pre><code class="language-cpp">&lt;<span class="kw">ContentPage</span> <span class="ty">x:Class</span>=<span class="st">"App.CounterPage"</span>
              <span class="ty">xmlns</span>=<span class="st">"http://schemas.microsoft.com/dotnet/2021/maui"</span>
              <span class="ty">xmlns:x</span>=<span class="st">"http://schemas.microsoft.com/winfx/2009/xaml"</span>
              <span class="ty">xmlns:vm</span>=<span class="st">"clr-namespace:App.ViewModels"</span>

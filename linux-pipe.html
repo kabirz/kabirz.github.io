@@ -112,7 +112,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/pipe_fs_i.h:84 — 管道核心结构</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/pipe_fs_i.h:84 — 管道核心结构</span>
 <span class="kw">struct</span> <span class="ty">pipe_inode_info</span> {
     <span class="kw">struct</span> <span class="ty">mutex</span>           mutex;       <span class="cm">// 保护管道的互斥锁</span>
     <span class="kw">struct</span> <span class="ty">wait_queue_head_t</span> rd_wait, wr_wait; <span class="cm">// 读/写等待队列</span>
@@ -126,7 +126,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// pipe_buffer — 单个缓冲区槽位</span>
+    <pre><code class="language-c"><span class="cm">// pipe_buffer — 单个缓冲区槽位</span>
 <span class="kw">struct</span> <span class="ty">pipe_buffer</span> {
     <span class="kw">struct</span> <span class="ty">page</span>                *page;     <span class="cm">// 数据页面</span>
     <span class="kw">struct</span> <span class="ty">pipe_buf_operations</span> *ops;      <span class="cm">// 操作函数表</span>

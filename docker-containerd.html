@@ -67,7 +67,7 @@
 <section id="architecture" class="toc-link">
   <h2><span class="num">02</span> 架构与模块</h2>
 
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-bash">┌─────────────────────────────────────────┐
 │       containerd Binary                 │
 │       /usr/bin/containerd               │
 └─────────────────────────────────────────┘
@@ -106,7 +106,7 @@
 </code></pre>
 
   <p>核心 Go 包：</p>
-<pre><code>// containerd 主对象（containerd/services.go）
+<pre><code class="language-bash">// containerd 主对象（containerd/services.go）
 type Services struct {
     ContentStore     content.Store
     ImageStore       images.Store
@@ -137,7 +137,7 @@ type Services struct {
 
   <p>Content Store 是<strong>内容寻址的 blob 存储</strong>，所有镜像数据（manifest、config、layer）都存这里。</p>
 
-<pre><code>// containerd/core/content/content.go
+<pre><code class="language-bash">// containerd/core/content/content.go
 type Store interface {
     Reader(ctx context.Context, dgst digest.Digest) (ReaderAt, error)
     Info(ctx context.Context, dgst digest.Digest) (Info, error)
@@ -187,7 +187,7 @@ type Status struct {
 </code></pre>
 
   <p>API gRPC：</p>
-<pre><code>// containerd/api/services/content/v1/content.proto
+<pre><code class="language-bash">// containerd/api/services/content/v1/content.proto
 service Content {
     rpc Info(InfoRequest) returns (InfoResponse);
     rpc List(ListContentRequest) returns (stream ListContentResponse);
@@ -201,7 +201,7 @@ service Content {
 </code></pre>
 
   <p>Garbage Collection：</p>
-<pre><code>// Content store 支持 GC：
+<pre><code class="language-bash">// Content store 支持 GC：
 //   - 通过 lease 引用活跃 blob
 //   - 无引用的 blob 被 GC
 //   - GC 由 ScheduledGC 触发
@@ -218,7 +218,7 @@ ctr content get sha256:abc...  // 下载
 
   <p>Snapshotter 把<strong>不可变的 image layer</strong> 转化为<strong>可写的容器 rootfs</strong>。</p>
 
-<pre><code>// containerd/core/snapshots/snapshotter.go
+<pre><code class="language-bash">// containerd/core/snapshots/snapshotter.go
 type Snapshotter interface {
     Stat(ctx context.Context, key string) (Info, error)
     Update(ctx context.Context, info Info, fieldpaths ...string) (Info, error)
@@ -286,7 +286,7 @@ Mount{
 <section id="image" class="toc-link">
   <h2><span class="num">05</span> Image Management</h2>
 
-<pre><code>// containerd/core/images/image.go
+<pre><code class="language-bash">// containerd/core/images/image.go
 type Image struct {
     Name       string
     Labels     map[string]string
@@ -329,7 +329,7 @@ func (r *dockerFetcher) Fetch(ctx, desc) (io.ReadCloser, error) {
 </code></pre>
 
   <p>Lazy Pull 优化（stargz/nydus）：</p>
-<pre><code>// 传统 pull：下载所有 layer 才能运行
+<pre><code class="language-bash">// 传统 pull：下载所有 layer 才能运行
 // Lazy pull：只下载 manifest + index，运行时按需
 
 // stargz 格式：
@@ -394,7 +394,7 @@ const (
 </pre></code>
 
   <p>V2 Runtime（runc runtime）：</p>
-<pre><code>// containerd/runtime/v2/manager.go
+<pre><code class="language-bash">// containerd/runtime/v2/manager.go
 type Manager struct {
     root     string
     runtimes map[string]RuntimeInfo
@@ -420,7 +420,7 @@ type Runtime interface {
 </code></pre>
 
   <p>Task Service gRPC：</p>
-<pre><code>// containerd/api/services/tasks/v1/tasks.proto
+<pre><code class="language-bash">// containerd/api/services/tasks/v1/tasks.proto
 service Tasks {
     rpc Create(CreateTaskRequest)    returns (CreateTaskResponse);
     rpc Start(StartRequest)          returns (StartResponse);
@@ -446,7 +446,7 @@ service Tasks {
 
   <p>containerd 的所有组件都是<strong>插件</strong>，通过统一的 plugin 框架注册和发现：</p>
 
-<pre><code>// containerd/pkg/plugin/plugin.go
+<pre><code class="language-bash">// containerd/pkg/plugin/plugin.go
 type Plugin interface {
     Init() error
     Instance() interface{}
@@ -513,7 +513,7 @@ func init() {
 </code></pre>
 
   <p>配置文件：</p>
-<pre><code>// /etc/containerd/config.toml
+<pre><code class="language-bash">// /etc/containerd/config.toml
 version = 2
 
 [plugins."io.containerd.grpc.v1.cri"]
@@ -542,7 +542,7 @@ version = 2
 
   <p>CRI (Container Runtime Interface) 是 Kubernetes 定义的<strong>容器运行时接口</strong>。containerd 通过 cri-plugin 实现 CRI。</p>
 
-<pre><code>// CRI 是 gRPC 服务，定义在 kubernetes/cri-api
+<pre><code class="language-bash">// CRI 是 gRPC 服务，定义在 kubernetes/cri-api
 // 两个服务：RuntimeService + ImageService
 
 // RuntimeService:
@@ -592,7 +592,7 @@ service ImageService {
 </code></pre>
 
   <p>Kubelet 与 containerd 的交互：</p>
-<pre><code>// Kubelet 通过 CRI gRPC 调用 containerd
+<pre><code class="language-bash">// Kubelet 通过 CRI gRPC 调用 containerd
 // Socket: /run/containerd/containerd.sock
 
 // 启动 Pod：

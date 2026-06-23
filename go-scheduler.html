@@ -77,7 +77,7 @@
 
   <p>G 代表一个 goroutine，是 Go 运行时中最小的<strong>可执行单元</strong>。每个 G 包含栈、程序计数器、状态等元数据。</p>
 
-<pre><code>// runtime/runtime2.go (简化结构)
+<pre><code class="language-go">// runtime/runtime2.go (简化结构)
 type g struct {
     stack       stack        // 栈：lo 和 hi 地址
     stackguard0 uintptr      // 栈扩展检查哨兵
@@ -110,7 +110,7 @@ type g struct {
 
   <p>M 代表操作系统线程（machine thread），由 Go 运行时向内核申请的实际执行载体。</p>
 
-<pre><code>// runtime/runtime2.go (简化)
+<pre><code class="language-go">// runtime/runtime2.go (简化)
 type m struct {
     g0      *g        // 特殊 goroutine：执行调度代码
     curg    *g        // 当前正在执行的 G
@@ -136,7 +136,7 @@ type m struct {
 
   <p>P 是 M 和 G 之间的<strong>中间上下文</strong>，是 GMP 模型的精髓。P 决定了 M 可以执行 G 的能力（没有 P 的 M 处于 idle 状态）。</p>
 
-<pre><code>// runtime/runtime2.go (简化)
+<pre><code class="language-go">// runtime/runtime2.go (简化)
 type p struct {
     id          int32
     status      uint32    // _Pidle / _Prunning / _Psyscall / _Pgcstop / _Pdead
@@ -169,7 +169,7 @@ type p struct {
 
   <h3>schedule() 调度入口</h3>
 
-<pre><code>// runtime/proc.go — 调度主循环（简化）
+<pre><code class="language-go">// runtime/proc.go — 调度主循环（简化）
 func schedule() {
     _g_ := getg()  // 当前 M 上的 g0
     top:
@@ -225,7 +225,7 @@ func schedule() {
 
   <h3>execute() — 执行 G</h3>
 
-<pre><code>// runtime/proc.go — 执行 G（简化）
+<pre><code class="language-go">// runtime/proc.go — 执行 G（简化）
 func execute(gp *g, inheritTime bool) {
     _g_ := getg()           // 当前 M 上的 g0
     _g_.m.curg = gp         // M 标记正在执行的 G
@@ -261,7 +261,7 @@ func execute(gp *g, inheritTime bool) {
 
   <h3>窃取算法</h3>
 
-<pre><code>// runtime/proc.go — 工作窃取（简化）
+<pre><code class="language-go">// runtime/proc.go — 工作窃取（简化）
 func stealWork(now int64) (gp *g, inheritTime bool, err string) {
     pp := getg().m.p.ptr()
 
@@ -317,7 +317,7 @@ func runqsteal(_p_, p2 *p, stealRunNextG bool) *g {
 
   <p>除了每个 P 的本地队列，Go 还有一个<strong>全局运行队列</strong>。当 P 的本地队列为空且窃取失败时，会尝试从全局队列获取 G。</p>
 
-<pre><code>// 从全局队列批量获取
+<pre><code class="language-go">// 从全局队列批量获取
 func globrunqget(_p_ *p) *g {
     // 如果全局队列为空，返回 nil
     if sched.runqsize.Load() == 0 {
@@ -355,7 +355,7 @@ func globrunqget(_p_ *p) *g {
 
   <p><code>runtime.sysmon</code> 是一个特殊的 M（监控线程），不需要 P 即可运行。它负责周期性检查系统状态：</p>
 
-<pre><code>// runtime/proc.go — sysmon（简化）
+<pre><code class="language-go">// runtime/proc.go — sysmon（简化）
 func sysmon() {
     lastpoll := int64(0)
     now := nanotime()
@@ -390,7 +390,7 @@ func sysmon() {
 
   <p>Go 1.14 前的抢占方式：在每个函数调用的入口检查 <code>stackguard0</code>。如果 G 被标记为抢占，函数调用时会触发栈扩展检查，进而进入调度：</p>
 
-<pre><code>// 汇编层面，每个函数调用前会执行类似于：
+<pre><code class="language-go">// 汇编层面，每个函数调用前会执行类似于：
 // CMPQ stackguard0, SP
 // JHI morestack
 
@@ -408,7 +408,7 @@ func morestack() {
 
   <h3>信号抢占（Go 1.14+）</h3>
 
-<pre><code>// 流程：
+<pre><code class="language-go">// 流程：
 // 1. sysmon 检查到某个 G 连续运行超过 10ms
 // 2. sysmon 调用 preemptone(pp)
 // 3. preemptone 设置该 G 的 preempt = true
@@ -451,7 +451,7 @@ func doSigPreempt(gp *g, ctxt *sigctxt) {
 
   <h3>架构概览</h3>
 
-<pre><code>// 用户视角：同步风格
+<pre><code class="language-go">// 用户视角：同步风格
 conn, _ := net.Dial("tcp", "example.com:80")
 // goroutine 好像"阻塞"在这里，但实际是挂起
 n, err := conn.Read(buf)
@@ -468,7 +468,7 @@ n, err := conn.Read(buf)
 
   <h3>epoll（Linux 实现）</h3>
 
-<pre><code>// runtime/netpoll_epoll.go — Linux 实现
+<pre><code class="language-go">// runtime/netpoll_epoll.go — Linux 实现
 var epfd int = -1  // eBPF 文件描述符
 
 func netpollinit() {
@@ -530,7 +530,7 @@ func netpoll(delay int64) gList {
 
   <h3>entersyscall / exitsyscall</h3>
 
-<pre><code>// 系统调用前后的处理流程：
+<pre><code class="language-go">// 系统调用前后的处理流程：
 // 1. entersyscall 在进入系统调用前调用
 // 2. 保存 G 和 P 的关联关系
 // 3. P 被标记为 _Psyscall（可被其他 M 窃取）
@@ -574,7 +574,7 @@ func exitsyscall() {
 
   <p>当 M 进入系统调用后，sysmon 监控线程会检查 P 的状态：</p>
 
-<pre><code>// 在 sysmon 中：
+<pre><code class="language-go">// 在 sysmon 中：
 if pp.status == _Psyscall {
     // 如果系统调用超过一个阈值（通常是 20us）！
     // 或者超过了 syscalltick，尝试让出 P
@@ -598,7 +598,7 @@ func handoffp(pp *p) {
 
   <h3>线程生命周期管理</h3>
 
-<pre><code>// M 的创建
+<pre><code class="language-go">// M 的创建
 func newm(fn func(), pp *p, id int64) {
     // 分配 m 结构体
     mp := allocm(pp, fn, id)
@@ -624,7 +624,7 @@ var maxMcount int32 = 10000  // 硬编码上限
 
   <p>特殊场景下，goroutine 可以锁定到特定的 OS 线程（如 CGo 调用、GUI 编程）：</p>
 
-<pre><code>// 锁定
+<pre><code class="language-go">// 锁定
 import "runtime"
 runtime.LockOSThread()
 // 该 G 永远只在这个 M 上运行
@@ -642,7 +642,7 @@ runtime.UnlockOSThread()
 
   <h3>生成 Trace</h3>
 
-<pre><code>import (
+<pre><code class="language-go">import (
     "os"
     "runtime/trace"
 )
@@ -687,7 +687,7 @@ func main() {
 
   <h3>调度器事件分析</h3>
 
-<pre><code>// 使用 GODEBUG 环境变量查看调度事件
+<pre><code class="language-go">// 使用 GODEBUG 环境变量查看调度事件
 // GODEBUG=schedtrace=1000,scheddetail=1 ./myprogram
 
 // 输出示例：
@@ -708,7 +708,7 @@ func main() {
 
   <h3>常见调度问题诊断</h3>
 
-<pre><code>// 问题 1: 线程数持续增长
+<pre><code class="language-go">// 问题 1: 线程数持续增长
 // 原因：阻塞系统调用过多，M 被占满
 // 解法：减少系统调用，使用连接池，检查 CGo 调用
 

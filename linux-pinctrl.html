@@ -111,7 +111,7 @@
   <h3>全局数据结构</h3>
   <div class="card">
     <p class="ref">drivers/pinctrl/core.c:42-58</p>
-    <pre><code><span class="cm">// 三个核心全局链表</span>
+    <pre><code class="language-c"><span class="cm">// 三个核心全局链表</span>
 <span class="kw">static</span> LIST_HEAD(pinctrldev_list);     <span class="cm">// 所有已注册的引脚控制器</span>
 <span class="kw">static</span> LIST_HEAD(pinctrl_list);        <span class="cm">// 所有设备的 pinctrl 句柄</span>
 LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条目</span>
@@ -130,7 +130,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
   <h3>struct pinctrl（设备的 pinctrl 句柄）</h3>
   <div class="card">
     <p class="ref">drivers/pinctrl/core.h:87-94</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pinctrl</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pinctrl</span> {
     <span class="kw">struct</span> <span class="ty">list_head</span> node;        <span class="cm">// 全局 pinctrl_list 节点</span>
     <span class="kw">struct</span> <span class="ty">device</span> *dev;           <span class="cm">// 所属设备</span>
     <span class="kw">struct</span> <span class="ty">list_head</span> states;      <span class="cm">// 所有可用状态</span>
@@ -143,7 +143,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
   <h3>struct pinctrl_state（引脚状态）</h3>
   <div class="card">
     <p class="ref">drivers/pinctrl/core.h:102-106</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pinctrl_state</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pinctrl_state</span> {
     <span class="kw">struct</span> <span class="ty">list_head</span> node;       <span class="cm">// 链入 pinctrl->states</span>
     <span class="kw">const char</span> *name;            <span class="cm">// 状态名："default"、"sleep" 等</span>
     <span class="kw">struct</span> <span class="ty">list_head</span> settings;   <span class="cm">// 该状态下的配置条目列表</span>
@@ -161,7 +161,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
   <h3>struct pinctrl_setting（单条配置）</h3>
   <div class="card">
     <p class="ref">drivers/pinctrl/core.h:141-150</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pinctrl_setting</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pinctrl_setting</span> {
     <span class="kw">struct</span> <span class="ty">list_head</span> node;
     <span class="kw">enum</span> <span class="ty">pinctrl_map_type</span> type;     <span class="cm">// MUX_GROUP / CONFIGS_PIN / CONFIGS_GROUP</span>
     <span class="kw">struct</span> <span class="ty">pinctrl_dev</span> *pctldev;   <span class="cm">// 控制此引脚的控制器</span>
@@ -176,7 +176,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
   <h3>struct pinctrl_desc（控制器描述符）</h3>
   <div class="card">
     <p class="ref">include/linux/pinctrl/pinctrl.h:151-165</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pinctrl_desc</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pinctrl_desc</span> {
     <span class="kw">const char</span> *name;                    <span class="cm">// 控制器名称</span>
     <span class="kw">const struct</span> <span class="ty">pinctrl_pin_desc</span> *pins; <span class="cm">// 引脚描述数组</span>
     <span class="ty">unsigned int</span> npins;
@@ -191,7 +191,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
   <h3>struct pinctrl_map（映射表条目）</h3>
   <div class="card">
     <p class="ref">include/linux/pinctrl/machine.h:67-76</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pinctrl_map</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pinctrl_map</span> {
     <span class="kw">const char</span> *dev_name;        <span class="cm">// 目标设备名</span>
     <span class="kw">const char</span> *name;            <span class="cm">// 状态名（"default" 等）</span>
     <span class="kw">enum</span> <span class="ty">pinctrl_map_type</span> type;  <span class="cm">// 映射类型</span>
@@ -227,7 +227,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
   <h3>struct pinmux_ops</h3>
   <div class="card">
     <p class="ref">include/linux/pinctrl/pinmux.h:69-94</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pinmux_ops</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pinmux_ops</span> {
     <span class="ty">int</span> (*request)(<span class="kw">struct</span> <span class="ty">pinctrl_dev</span> *pctldev, <span class="ty">unsigned int</span> offset);
     <span class="ty">void</span> (*free)(<span class="kw">struct</span> <span class="ty">pinctrl_dev</span> *pctldev, <span class="ty">unsigned int</span> offset);
     <span class="ty">int</span> (*get_functions_count)(<span class="kw">struct</span> <span class="ty">pinctrl_dev</span> *pctldev);
@@ -273,7 +273,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
   <h3>struct pinconf_ops</h3>
   <div class="card">
     <p class="ref">include/linux/pinctrl/pinconf.h:38-65</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pinconf_ops</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pinconf_ops</span> {
 <span class="pp">#ifdef CONFIG_GENERIC_PINCONF</span>
     <span class="ty">bool</span> is_generic;    <span class="cm">// 使用通用 pinconf 接口</span>
 <span class="pp">#endif</span>
@@ -308,7 +308,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
 
   <h3>配置编码</h3>
   <div class="card">
-    <pre><code><span class="cm">// 配置值编码为 u32：参数 ID + 参数值</span>
+    <pre><code class="language-c"><span class="cm">// 配置值编码为 u32：参数 ID + 参数值</span>
 <span class="cm">// 通过 PIN_CONF_PACKED 宏打包</span>
 <span class="ty">unsigned long</span> config = <span class="fn">PIN_CONF_PACKED</span>(PIN_CONFIG_BIAS_PULL_UP, <span class="num">1</span>);
 
@@ -325,7 +325,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
   <p>pinctrl 通过设备树实现声明式的引脚配置，无需修改驱动代码。</p>
 
   <h3>设备树语法</h3>
-  <pre><code><span class="cm">// 引脚控制器节点</span>
+  <pre><code class="language-c"><span class="cm">// 引脚控制器节点</span>
 <span class="ty">pinctrl0</span>: <span class="fn">pinctrl</span>@e0000000 {
     compatible = <span class="st">"vendor,soc-pinctrl"</span>;
     reg = <span class="num">&lt;0xe0000000 0x1000&gt;</span>;
@@ -404,7 +404,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
   </div>
 
   <h3>典型使用模式</h3>
-  <pre><code><span class="kw">static int</span> <span class="fn">my_driver_probe</span>(<span class="kw">struct</span> <span class="ty">platform_device</span> *pdev)
+  <pre><code class="language-c"><span class="kw">static int</span> <span class="fn">my_driver_probe</span>(<span class="kw">struct</span> <span class="ty">platform_device</span> *pdev)
 {
     <span class="kw">struct</span> <span class="ty">pinctrl</span> *pctl;
     <span class="kw">struct</span> <span class="ty">pinctrl_state</span> *state_default, *state_sleep;
@@ -427,7 +427,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
 
   <h3>PM 集成</h3>
   <div class="card">
-    <pre><code><span class="cm">// 电源管理状态切换</span>
+    <pre><code class="language-c"><span class="cm">// 电源管理状态切换</span>
 <span class="fn">pinctrl_pm_select_default_state</span>(dev);  <span class="cm">// resume 时</span>
 <span class="fn">pinctrl_pm_select_sleep_state</span>(dev);    <span class="cm">// suspend 时</span>
 <span class="fn">pinctrl_pm_select_idle_state</span>(dev);     <span class="cm">// idle 时</span>
@@ -453,7 +453,7 @@ LIST_HEAD(pinctrl_maps);                 <span class="cm">// 所有映射表条�
   <h3>GPIO 范围</h3>
   <div class="card">
     <p class="ref">include/linux/pinctrl/pinctrl.h:79-88</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pinctrl_gpio_range</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pinctrl_gpio_range</span> {
     <span class="kw">struct</span> <span class="ty">list_head</span> node;
     <span class="kw">const char</span> *name;
     <span class="ty">unsigned int</span> id;

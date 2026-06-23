@@ -40,7 +40,7 @@
   <h3>语义分割 (Semantic Segmentation)</h3>
   <p>为图像中的每一个像素分配一个语义类别标签。同类别的不同目标被视为一体,不做区分。"所有汽车属于'car'类,不管有多少辆"。</p>
 
-  <pre><code>// 语义分割输出
+  <pre><code class="language-python">// 语义分割输出
 // 输入: (H, W, 3) RGB 图像
 // 输出: (H, W)  每个像素的类别 ID
 //      或 (H, W, C) 每个像素的类别概率
@@ -56,7 +56,7 @@
   <h3>实例分割 (Instance Segmentation)</h3>
   <p>在语义分割的基础上,进一步区分同一类别的不同个体。"这辆是 car_1,那辆是 car_2"。</p>
 
-  <pre><code>// 实例分割输出
+  <pre><code class="language-python">// 实例分割输出
 // 输入: (H, W, 3) RGB 图像
 // 输出: 每个实例单独生成一个二值 mask
 //       (N, H, W) 其中 N = 实例数量
@@ -92,7 +92,7 @@
   <p>FCN (Fully Convolutional Network) 是深度学习语义分割的开山之作。它将传统分类网络（如 VGG16）最后的全连接层替换为卷积层,使网络可以接受任意大小的输入,并输出像素级的分割图。</p>
 
   <h3>核心创新</h3>
-  <pre><code>// 传统 CNN (分类)
+  <pre><code class="language-python">// 传统 CNN (分类)
 // 输入: HxWx3 -> Conv -> FC -> FC -> 输出: 1000 (类概率)
 // 缺点: FC 层固定了输入尺寸,丢失了空间信息
 
@@ -109,7 +109,7 @@
   <h3>转置卷积 (Transposed Convolution)</h3>
   <p>FCN 使用转置卷积将低分辨率的分割预测图上采样到原图尺寸。转置卷积也称为"反卷积"或"学习型上采样",其参数（卷积核权重）也是通过训练学习的。</p>
 
-  <pre><code>// 转置卷积原理
+  <pre><code class="language-python">// 转置卷积原理
 // 普通卷积: 输入 4x4 -> 卷积 3x3 stride=1 -> 输出 2x2
 // 转置卷积: 输入 2x2 -> 转置卷积 3x3 stride=2 -> 输出 4x4
 
@@ -130,7 +130,7 @@ deconv = nn.ConvTranspose2d(
   <h3>跳跃连接 (Skip Connections)</h3>
   <p>FCN 的跳跃连接将深层语义信息（高层特征图）与浅层细节信息（低层特征图）融合,显著提升了分割精度。</p>
 
-  <pre><code>// FCN-8s 跳跃连接结构
+  <pre><code class="language-python">// FCN-8s 跳跃连接结构
 
 // 输入图像 (H, W)
 //   |
@@ -168,7 +168,7 @@ deconv = nn.ConvTranspose2d(
   <p>U-Net 因其对称的 U 形结构和高效的跳跃连接而闻名,尤其在医学图像分割领域是最广为使用的基线模型。</p>
 
   <h3>U-Net 架构</h3>
-  <pre><code>// U-Net 结构 (以 572x572 输入为例)
+  <pre><code class="language-python">// U-Net 结构 (以 572x572 输入为例)
 
 // 编码器 (下采样路径): 左半边
 // 每阶段: 2x Conv(3x3) + ReLU -> MaxPool(2x2)
@@ -187,7 +187,7 @@ deconv = nn.ConvTranspose2d(
 // 输出: 1x1 Conv, 输出 N 类分割图</code></pre>
 
   <h3>PyTorch 实现片段</h3>
-  <pre><code>import torch
+  <pre><code class="language-python">import torch
 import torch.nn as nn
 
 class DoubleConv(nn.Module):
@@ -284,7 +284,7 @@ class UNet(nn.Module):
   <p>DeepLab 系列是 Google 推出的语义分割模型,其核心创新是空洞卷积和空洞空间金字塔池化 (ASPP),在保持高分辨率特征图的同时扩大了感受野。</p>
 
   <h3>空洞卷积 (Atrous/Dilated Convolution)</h3>
-  <pre><code>// 空洞卷积 = 标准卷积 + dilation rate (膨胀率)
+  <pre><code class="language-python">// 空洞卷积 = 标准卷积 + dilation rate (膨胀率)
 // dilation rate = 1: 标准卷积,相邻像素采样
 // dilation rate = 2: 每隔一个像素采样
 // dilation rate = 4: 每隔三个像素采样
@@ -305,7 +305,7 @@ class UNet(nn.Module):
   <h3>ASPP (Atrous Spatial Pyramid Pooling)</h3>
   <p>ASPP 使用多个不同 dilation rate 的空洞卷积并行处理特征图,捕获多尺度上下文信息,对目标尺度变化有很强的鲁棒性。</p>
 
-  <pre><code>// DeepLabv3+ ASPP 结构
+  <pre><code class="language-python">// DeepLabv3+ ASPP 结构
 // 输入: 特征图 (C4, stride=16)
 
 // ASPP 模块包含 5 个并行分支:
@@ -323,7 +323,7 @@ class UNet(nn.Module):
   <h3>DeepLabv3+ 的编码-解码结构</h3>
   <p>DeepLabv3+ 在 v3 的基础上加入了轻量级的解码器,恢复了目标的边缘细节。v3 使用 ASPP + 直接 4x/8x 上采样（粗略）,v3+ 将编码器深层特征与浅层特征融合后上采样（更精细）。</p>
 
-  <pre><code>// DeepLabv3+ 网络结构
+  <pre><code class="language-python">// DeepLabv3+ 网络结构
 
 // 编码器 (Encoder):
 // 输入图像 -> 骨干网络 (Xception/ResNet)
@@ -347,7 +347,7 @@ class UNet(nn.Module):
   <h3>深度可分离卷积 (Depthwise Separable Convolution)</h3>
   <p>DeepLabv3+ 将标准卷积替换为深度可分离卷积,大幅减少了参数量和计算量。深度可分离卷积将标准卷积分解为 Depthwise Conv（逐通道卷积）和 Pointwise Conv（1x1 逐点卷积）两步。</p>
 
-  <pre><code>// 标准卷积:
+  <pre><code class="language-python">// 标准卷积:
 // 输入: (H, W, Cin), 卷积核: (K, K, Cin, Cout)
 // 计算量: HW * K^2 * Cin * Cout
 
@@ -382,7 +382,7 @@ class UNet(nn.Module):
 
   <p>RoI Align 取消了量化步骤,使用双线性插值获取浮点数坐标上的特征值,保留了亚像素级别的空间精度。</p>
 
-  <pre><code>// RoI Align 计算过程
+  <pre><code class="language-python">// RoI Align 计算过程
 // 输入: 特征图 F, 候选区域 box (x1, y1, x2, y2)
 // 输出: 固定大小 (P, P, C) 的特征
 
@@ -400,7 +400,7 @@ class UNet(nn.Module):
 // 在实例分割中,RoI Align 比 RoI Pooling 提升 10-50% 的 mask AP</code></pre>
 
   <h3>Mask 分支结构</h3>
-  <pre><code>// Mask R-CNN 整体结构
+  <pre><code class="language-python">// Mask R-CNN 整体结构
 
 // 骨干 (Backbone): ResNet-FPN
 //   -> 特征金字塔 (P2-P6)
@@ -427,7 +427,7 @@ class UNet(nn.Module):
   <h3>与检测共享特征</h3>
   <p>Mask R-CNN 的检测分支和分割分支共享骨干网络和 RPN 的特征。这种共享让分割任务受益于检测任务的定位监督,同时也让检测任务受益于分割任务的精细特征。</p>
 
-  <pre><code>// 训练损失
+  <pre><code class="language-python">// 训练损失
 L = L_cls (分类 CrossEntropy)
   + L_box (框回归 SmoothL1)
   + L_mask (分割 Binary CrossEntropy)
@@ -452,7 +452,7 @@ L = L_cls (分类 CrossEntropy)
   <p>全景分割由 FAIR 在 2019 年提出,旨在统一语义分割和实例分割。Panoptic FPN 是全景分割的经典基线模型,它将 Mask R-CNN 的实例分割输出与一个并行的语义分割分支融合。</p>
 
   <h3>Panoptic FPN 架构</h3>
-  <pre><code>// Panoptic FPN 结构
+  <pre><code class="language-python">// Panoptic FPN 结构
 // 骨干: ResNet-FPN (与 Mask R-CNN 相同)
 
 // 实例分割分支 (Mask R-CNN):
@@ -491,7 +491,7 @@ L = L_cls (分类 CrossEntropy)
   </table>
 
   <h3>Panoptic Quality (PQ) 指标</h3>
-  <pre><code>// PQ 是全景分割的标准评估指标
+  <pre><code class="language-python">// PQ 是全景分割的标准评估指标
 
 // 匹配规则:
 // 对预测结果和 GT 分别分成:
@@ -520,7 +520,7 @@ L = L_cls (分类 CrossEntropy)
   <p>分割损失函数的设计对模型性能至关重要。像素级分类和区域级重叠各有不同的损失设计方法。</p>
 
   <h3>交叉熵损失 (Cross Entropy)</h3>
-  <pre><code># 像素级交叉熵
+  <pre><code class="language-python"># 像素级交叉熵
 import torch.nn as nn
 
 # 标准交叉熵
@@ -537,7 +537,7 @@ loss = criterion_weighted(predictions, targets)</code></pre>
   <h3>Dice Loss</h3>
   <p>Dice Loss 基于 Dice 系数（Soft IOU）,衡量预测区域与真实区域的重叠程度。它在医学图像分割中非常流行,因为该类任务中前景区域往往很小（类别高度不平衡）。</p>
 
-  <pre><code># Dice Loss 实现
+  <pre><code class="language-python"># Dice Loss 实现
 def dice_loss(pred, target, smooth=1e-6):
     # pred: (B, C, H, W) 经 softmax 后的概率
     # target: (B, H, W) 类别 ID
@@ -556,7 +556,7 @@ def dice_loss(pred, target, smooth=1e-6):
   <h3>Focal Loss (分割版本)</h3>
   <p>Focal Loss 在分割任务中同样有效,尤其用于难例挖掘和处理类别不平衡。</p>
 
-  <pre><code># 分割版 Focal Loss
+  <pre><code class="language-python"># 分割版 Focal Loss
 def focal_loss_seg(pred, target, alpha=0.25, gamma=2.0):
     # pred: (B, C, H, W) raw logits
     # target: (B, H, W) 类别 ID
@@ -593,7 +593,7 @@ loss = 0.5 * cross_entropy_loss(pred, target)      + 0.5 * dice_loss(pred, targe
   <h3>mIOU (Mean Intersection over Union)</h3>
   <p>mIOU 是语义分割最核心的评估指标,计算预测分割与 GT 之间逐类别的 IOU,再取平均。</p>
 
-  <pre><code>// mIOU 计算
+  <pre><code class="language-python">// mIOU 计算
 // 对每个类别 c:
 //   IOU_c = TP_c / (TP_c + FP_c + FN_c)
 // mIOU = (1 / C) * sum(IOU_c for c in 1..C)
@@ -648,7 +648,7 @@ def compute_miou(pred, target, num_classes):
   <h3>ICNet (Image Cascade Network)</h3>
   <p>ICNet 使用级联图像金字塔 + 多分辨率分支,在不同分辨率的分支上分配不同的计算资源。低分辨率分支快速处理全局语义,高分辨率分支精细处理局部细节。</p>
 
-  <pre><code>// ICNet 结构
+  <pre><code class="language-python">// ICNet 结构
 // 输入: 三路并行的不同分辨率图像
 
 // 低分辨率分支 (1/4 原图, 快速路径):
@@ -678,7 +678,7 @@ def compute_miou(pred, target, num_classes):
   <h3>BiSeNet (Bilateral Segmentation Network)</h3>
   <p>BiSeNet 将分割任务分解为两条路径：空间路径（Spatial Path）保留空间细节、上下文路径（Context Path）捕获语义信息。</p>
 
-  <pre><code>// BiSeNet v2 架构
+  <pre><code class="language-python">// BiSeNet v2 架构
 
 // 空间路径 (Spatial Path):
 //   输入: 原图 (1x 分辨率)
@@ -706,7 +706,7 @@ def compute_miou(pred, target, num_classes):
   <h3>PP-LiteSeg</h3>
   <p>PP-LiteSeg 是百度 PaddleSeg 推出的轻量级实时分割模型,它在 BiSeNet 的基础上引入了灵活的解耦解码器和统一注意力融合模块。</p>
 
-  <pre><code>// PP-LiteSeg 特点:
+  <pre><code class="language-python">// PP-LiteSeg 特点:
 
 // 1. 灵活解耦解码器 (FDD):
 //    将标准卷积分解为深度可分离卷积

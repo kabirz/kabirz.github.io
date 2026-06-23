@@ -49,7 +49,7 @@
 
   <h3>预训练模型加载</h3>
 
-<pre><code>import torchvision.models as models
+<pre><code class="language-python">import torchvision.models as models
 
 # 加载预训练 ResNet-18
 resnet18 = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
@@ -69,7 +69,7 @@ resnet152 = models.resnet152(weights="DEFAULT")
 
   <h3>数据集快速加载</h3>
 
-<pre><code>from torchvision import datasets
+<pre><code class="language-python">from torchvision import datasets
 
 # CIFAR-10（自动下载）
 cifar10_train = datasets.CIFAR10(
@@ -93,7 +93,7 @@ fmnist = datasets.FashionMNIST(
 
   <h3>残差块设计</h3>
 
-<pre><code>import torch.nn as nn
+<pre><code class="language-python">import torch.nn as nn
 
 class BasicBlock(nn.Module):
     """ResNet-18/34 的基础残差块"""
@@ -174,7 +174,7 @@ class Bottleneck(nn.Module):
 
   <h3>ResNet 系列对比</h3>
 
-<pre><code># 各版本配置（layers 列表对应每个 stage 的残差块数）
+<pre><code class="language-python"># 各版本配置（layers 列表对应每个 stage 的残差块数）
 # ResNet-18:  [2, 2, 2, 2]   BasicBlock  → 11.7M 参数
 # ResNet-34:  [3, 4, 6, 3]   BasicBlock  → 21.8M 参数
 # ResNet-50:  [3, 4, 6, 3]   Bottleneck  → 25.6M 参数
@@ -205,7 +205,7 @@ fc: 1000                        # ImageNet 分类数
 
   <h3>数据准备</h3>
 
-<pre><code>import torch
+<pre><code class="language-python">import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms, models
@@ -251,7 +251,7 @@ test_loader = DataLoader(
 
   <h3>模型定义（适配 32x32 输入）</h3>
 
-<pre><code>def resnet18_cifar10(num_classes=10):
+<pre><code class="language-python">def resnet18_cifar10(num_classes=10):
     """调整 ResNet-18 适应 CIFAR-10 的 32x32 输入"""
     model = models.resnet18(weights=None)
 
@@ -274,7 +274,7 @@ model = model.to(device)
 
   <h3>训练与测试函数</h3>
 
-<pre><code>def train_epoch(model, loader, criterion, optimizer, device):
+<pre><code class="language-python">def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
     running_loss = 0.0
     correct = 0
@@ -320,7 +320,7 @@ def evaluate(model, loader, criterion, device):
 
   <h3>主训练循环</h3>
 
-<pre><code>criterion = nn.CrossEntropyLoss()
+<pre><code class="language-python">criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(
     model.parameters(), lr=0.1,
     momentum=0.9, weight_decay=5e-4
@@ -360,7 +360,7 @@ print(f"Best test accuracy: {best_acc:.4f}")
 
   <h3>方案一：冻结特征提取层</h3>
 
-<pre><code># 加载预训练模型
+<pre><code class="language-python"># 加载预训练模型
 model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
 
 # 冻结所有层
@@ -384,7 +384,7 @@ optimizer = optim.Adam(model.fc.parameters(), lr=1e-3)
 
   <h3>方案二：全模型微调</h3>
 
-<pre><code>model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
+<pre><code class="language-python">model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V2)
 
 # 替换分类头
 model.fc = nn.Linear(model.fc.in_features, 10)
@@ -414,7 +414,7 @@ optimizer = optim.Adam(params, weight_decay=1e-4)
 
   <h3>方案三：逐步解冻</h3>
 
-<pre><code># 阶段 1: 只训练分类头
+<pre><code class="language-python"># 阶段 1: 只训练分类头
 for param in model.parameters():
     param.requires_grad = False
 model.fc = nn.Linear(2048, 10)
@@ -450,7 +450,7 @@ optimizer = optim.Adam(model.parameters(), lr=1e-5)
 
   <h3>torchvision.transforms 增强</h3>
 
-<pre><code>from torchvision import transforms
+<pre><code class="language-python">from torchvision import transforms
 
 # 标准增强组合
 train_transform = transforms.Compose([
@@ -487,7 +487,7 @@ test_transform = transforms.Compose([
 
   <h3>进阶增强：AutoAugment / RandAugment</h3>
 
-<pre><code>from torchvision.transforms import autoaugment, augmix
+<pre><code class="language-python">from torchvision.transforms import autoaugment, augmix
 
 # AutoAugment（基于搜索策略）
 train_transform = transforms.Compose([
@@ -530,7 +530,7 @@ train_transform = transforms.Compose([
 
   <h3>Cutout / Mixup 增强</h3>
 
-<pre><code># Cutout：随机遮挡图像区域
+<pre><code class="language-python"># Cutout：随机遮挡图像区域
 class Cutout:
     def __init__(self, size=16):
         self.size = size
@@ -577,7 +577,7 @@ for images, labels in loader:
 
   <h3>常用调度器</h3>
 
-<pre><code>import torch.optim.lr_scheduler as lr_scheduler
+<pre><code class="language-python">import torch.optim.lr_scheduler as lr_scheduler
 
 optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.9)
 
@@ -617,7 +617,7 @@ for epoch in range(num_epochs):
 
   <h3>预热（Warmup）</h3>
 
-<pre><code># 自定义预热调度器
+<pre><code class="language-python"># 自定义预热调度器
 class WarmupCosineLR(lr_scheduler._LRScheduler):
     def __init__(self, optimizer, warmup_epochs, total_epochs,
                  min_lr=1e-5, last_epoch=-1):
@@ -651,7 +651,7 @@ scheduler = WarmupCosineLR(
 
   <h3>ReduceLROnPlateau（基于指标）</h3>
 
-<pre><code>scheduler = lr_scheduler.ReduceLROnPlateau(
+<pre><code class="language-python">scheduler = lr_scheduler.ReduceLROnPlateau(
     optimizer,
     mode="max",          # 监控指标增大方向（准确率）
     factor=0.5,          # 衰减倍数
@@ -683,7 +683,7 @@ for epoch in range(num_epochs):
 
   <h3>完整 AMP 训练模板</h3>
 
-<pre><code>from torch.cuda.amp import autocast, GradScaler
+<pre><code class="language-python">from torch.cuda.amp import autocast, GradScaler
 
 scaler = GradScaler()
 
@@ -721,7 +721,7 @@ for epoch in range(num_epochs):
 
   <h3>GradScaler 配置</h3>
 
-<pre><code># 默认配置
+<pre><code class="language-python"># 默认配置
 scaler = GradScaler()
 
 # 自定义参数
@@ -739,7 +739,7 @@ print(scaler.get_scale())       # 当前缩放因子
 
   <h3>AMP 与 BatchNorm</h3>
 
-<pre><code># BatchNorm 在 float16 下精度不足，autocast 自动将其保持在 float32
+<pre><code class="language-python"># BatchNorm 在 float16 下精度不足，autocast 自动将其保持在 float32
 # 可以手动设置 BatchNorm 的 dtype
 model = resnet18_cifar10()
 
@@ -764,7 +764,7 @@ for name, module in model.named_modules():
 
   <h3>混淆矩阵</h3>
 
-<pre><code>from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+<pre><code class="language-python">from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
 
 @torch.no_grad()
@@ -799,7 +799,7 @@ plt.savefig("confusion_matrix.png", dpi=150)
 
   <h3>准确率与损失曲线</h3>
 
-<pre><code>def plot_training_curves(train_losses, test_losses,
+<pre><code class="language-python">def plot_training_curves(train_losses, test_losses,
                          train_accs, test_accs):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
@@ -830,7 +830,7 @@ plt.savefig("confusion_matrix.png", dpi=150)
 
   <h3>类别准确率分析</h3>
 
-<pre><code>def class_accuracy(cm, class_names):
+<pre><code class="language-python">def class_accuracy(cm, class_names):
     """计算每个类别的准确率"""
     class_acc = {}
     for i, name in enumerate(class_names):
@@ -861,7 +861,7 @@ class_accuracy(cm, classes)
 
   <h3>错误分析</h3>
 
-<pre><code>def visualize_errors(model, dataset, class_names, device, num=16):
+<pre><code class="language-python">def visualize_errors(model, dataset, class_names, device, num=16):
     """展示分类错误的样本"""
     model.eval()
     loader = DataLoader(dataset, batch_size=256, shuffle=False)

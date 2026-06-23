@@ -69,7 +69,7 @@
 <section id="api" class="toc-link">
   <h2><span class="num">03</span> 核心 API</h2>
   <div class="card">
-    <pre><code><span class="cm">// ===== rwlock_t（自旋，不可睡眠）=====</span>
+    <pre><code class="language-c"><span class="cm">// ===== rwlock_t（自旋，不可睡眠）=====</span>
 <span class="kw">static DEFINE_RWLOCK</span>(my_rwlock);
 
 <span class="fn">read_lock</span>(&my_rwlock);          <span class="cm">// 读者获取</span>
@@ -100,7 +100,7 @@
   <p><code>rwlock_t</code> 是<strong>自旋读写锁</strong>，适用于不可睡眠的上下文。</p>
   <h3>实现原理</h3>
   <div class="card">
-    <pre><code><span class="cm">// 基于原子计数器</span>
+    <pre><code class="language-c"><span class="cm">// 基于原子计数器</span>
 <span class="cm">// 正数 = 读者数量</span>
 <span class="cm">// 负数 = 写者已获取</span>
 <span class="cm">// 0 = 空闲</span>
@@ -121,7 +121,7 @@
   <p><code>rw_semaphore</code> 是<strong>可睡眠读写信号量</strong>，适用于进程上下文。</p>
   <h3>与 mmap_lock 的关系</h3>
   <div class="card">
-    <pre><code><span class="cm">// mm->mmap_lock 就是 rw_semaphore</span>
+    <pre><code class="language-c"><span class="cm">// mm->mmap_lock 就是 rw_semaphore</span>
 <span class="cm">// 用于保护进程的虚拟地址空间</span>
 
 <span class="cm">// 遍历 VMA（读锁）</span>
@@ -144,7 +144,7 @@
 <section id="patterns" class="toc-link">
   <h2><span class="num">06</span> 使用模式</h2>
   <div class="card">
-    <pre><code><span class="cm">// 模式一：保护配置数据</span>
+    <pre><code class="language-c"><span class="cm">// 模式一：保护配置数据</span>
 <span class="kw">static DEFINE_RWSEM</span>(config_lock);
 <span class="kw">static struct</span> <span class="ty">config_data</span> *config;
 

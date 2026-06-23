@@ -68,7 +68,7 @@
 <section id="arch" class="toc-link">
   <h2><span class="num">02</span> 架构总览</h2>
 
-<pre><code>┌────────────────────────────────────┐
+<pre><code class="language-c">┌────────────────────────────────────┐
 │ 用户态 (bpftool + skeleton)        │
 │  ├─ scx_simple.bpf.o              │
 │  └─ scx_central.bpf.o             │
@@ -110,7 +110,7 @@
 
   <p>这是 BPF 调度器的核心接口——开发者实现以下回调来定义完整的调度策略：</p>
 
-<pre><code>struct sched_ext_ops {
+<pre><code class="language-c">struct sched_ext_ops {
     // 选择 CPU：为任务选择最合适的运行 CPU
     s32 (*select_cpu)(struct task_struct *p,
                       s32 prev_cpu, u64 wake_flags);
@@ -186,7 +186,7 @@
     </tr>
   </table>
 
-<pre><code>// BPF 可调用以下帮助函数
+<pre><code class="language-c">// BPF 可调用以下帮助函数
 
 // 将任务派发到指定 DSQ
 void scx_bpf_dispatch(struct task_struct *p,
@@ -208,7 +208,7 @@ s32 scx_bpf_kick_cpu(s32 cpu, u64 flags);
 </code></pre>
 
   <p>典型派发逻辑：</p>
-<pre><code>// dispatch 回调中：CPU 需要选一个任务
+<pre><code class="language-c">// dispatch 回调中：CPU 需要选一个任务
 void BPF_STRUCT_OPS(my_dispatch, s32 cpu, struct task_struct *prev)
 {
     // 优先消费全局队列
@@ -225,7 +225,7 @@ void BPF_STRUCT_OPS(my_dispatch, s32 cpu, struct task_struct *prev)
 <section id="lifecycle" class="toc-link">
   <h2><span class="num">05</span> 调度生命周期</h2>
 
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-c">┌─────────────────────────────────────────┐
 │ 任务唤醒                                  │
 │  → select_cpu()  选择目标 CPU             │
 │  → enqueue()     加入调度队列               │
@@ -267,7 +267,7 @@ void BPF_STRUCT_OPS(my_dispatch, s32 cpu, struct task_struct *prev)
 
   <p>sched_ext 使用 BPF <strong>struct_ops</strong> 机制对接 BPF 程序：</p>
 
-<pre><code>// 在 BPF C 代码中定义一个调度器
+<pre><code class="language-c">// 在 BPF C 代码中定义一个调度器
 #include "scx_common.bpf.h"
 
 // BPF 调度器 = 实现 struct sched_ext_ops
@@ -286,7 +286,7 @@ struct sched_ext_ops my_ops;
 </code></pre>
 
   <p>加载调度器：</p>
-<pre><code># 编译 BPF 调度器
+<pre><code class="language-c"># 编译 BPF 调度器
 clang -O2 -g -target bpf -c my_scheduler.bpf.c -o my_scheduler.bpf.o
 
 # 加载运行
@@ -314,7 +314,7 @@ bpftool struct_ops unregister my_ops
 <section id="flags" class="toc-link">
   <h2><span class="num">07</span> SCX_OPS 标志</h2>
 
-<pre><code>// kernel/sched/ext.h
+<pre><code class="language-c">// kernel/sched/ext.h
 enum scx_ops_flags {
     // 保持内置空闲策略
     // 不覆盖 CPU 空闲处理，轻量级调度器使用
@@ -343,7 +343,7 @@ enum scx_ops_flags {
   <p>内核源码 <code>tools/sched_ext/</code> 目录下包含多个示例调度器：</p>
 
   <h3>scx_simple — 最简单的 FIFO</h3>
-<pre><code>// tools/sched_ext/scx_simple.bpf.c
+<pre><code class="language-c">// tools/sched_ext/scx_simple.bpf.c
 // 功能：全局 FIFO 调度
 // - 所有任务排入全局 DSQ
 // - 任何空闲 CPU 从全局 DSQ 消费
@@ -359,7 +359,7 @@ void BPF_STRUCT_OPS(simple_enqueue, struct task_struct *p, u64 enq_flags)
 </code></pre>
 
   <h3>scx_central — 集中式调度</h3>
-<pre><code>// tools/sched_ext/scx_central.bpf.c
+<pre><code class="language-c">// tools/sched_ext/scx_central.bpf.c
 // 功能：一个中央 CPU 做调度决策，其他 CPU 只执行
 // - CPU 0 作为调度处理器（不接受普通任务）
 // - 其他 CPU 从 CPU 0 分配到任务
@@ -369,7 +369,7 @@ void BPF_STRUCT_OPS(simple_enqueue, struct task_struct *p, u64 enq_flags)
 </code></pre>
 
   <h3>scx_pair — 超线程协同</h3>
-<pre><code>// tools/sched_ext/scx_pair.bpf.c
+<pre><code class="language-c">// tools/sched_ext/scx_pair.bpf.c
 // 功能：成对调度（hyperthread 友好）
 // - 将物理核的两个逻辑 CPU 组成 pair
 // - 同一 pair 内避免冲突任务同时运行

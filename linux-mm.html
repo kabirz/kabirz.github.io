@@ -107,7 +107,7 @@
   <h3>struct page（页面描述符）</h3>
   <div class="card">
     <p class="ref">include/linux/mm_types.h:79-178</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">page</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">page</span> {
     <span class="ty">memdesc_flags_t</span> flags;    <span class="cm">// 状态标志（PG_locked, PG_dirty 等）</span>
     <span class="kw">union</span> {
         <span class="kw">struct</span> {  <span class="cm">// 页面缓存/匿名页</span>
@@ -134,7 +134,7 @@
   <h3>struct folio（大页描述符）</h3>
   <div class="card">
     <p class="ref">include/linux/mm_types.h:401-480</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">folio</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">folio</span> {
     <span class="ty">memdesc_flags_t</span> flags;
     <span class="kw">struct</span> <span class="ty">address_space</span> *mapping;
     <span class="ty">pgoff_t</span> index;
@@ -172,7 +172,7 @@
 
   <div class="card">
     <p class="ref">mm/page_alloc.c</p>
-    <pre><code><span class="cm">// 核心分配函数</span>
+    <pre><code class="language-c"><span class="cm">// 核心分配函数</span>
 <span class="kw">struct</span> <span class="ty">page</span> *<span class="fn">__alloc_pages</span>(gfp_t gfp, <span class="ty">unsigned int</span> order,
                          <span class="kw">struct</span> <span class="ty">alloc_nodemask</span> *nodemask);
 
@@ -187,7 +187,7 @@
   <h3>Zone 架构</h3>
   <div class="card">
     <p class="ref">include/linux/mmzone.h:879-958</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">zone</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">zone</span> {
     <span class="ty">unsigned long</span> _watermark[NR_WMARK];  <span class="cm">// 水位线</span>
     <span class="ty">long</span> lowmem_reserve[MAX_NR_ZONES];   <span class="cm">// 低内存预留</span>
     <span class="kw">struct</span> <span class="ty">pglist_data</span> *zone_pgdat;     <span class="cm">// 所属节点</span>
@@ -251,7 +251,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// SLUB 核心结构</span>
+    <pre><code class="language-c"><span class="cm">// SLUB 核心结构</span>
 <span class="kw">struct</span> <span class="ty">kmem_cache</span> {
     <span class="kw">struct</span> <span class="ty">kmem_cache_cpu</span> __percpu *cpu_slab;  <span class="cm">// per-CPU 缓存</span>
     <span class="ty">unsigned int</span> object_size;     <span class="cm">// 对象大小</span>
@@ -290,7 +290,7 @@
   <h3>struct vm_area_struct</h3>
   <div class="card">
     <p class="ref">include/linux/mm_types.h:913-1012</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">vm_area_struct</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">vm_area_struct</span> {
     <span class="ty">unsigned long</span> vm_start;       <span class="cm">// 起始地址</span>
     <span class="ty">unsigned long</span> vm_end;         <span class="cm">// 结束地址</span>
     <span class="kw">struct</span> <span class="ty">mm_struct</span> *vm_mm;     <span class="cm">// 所属进程地址空间</span>
@@ -427,7 +427,7 @@
 
   <h3>OOM 评分</h3>
   <div class="card">
-    <pre><code><span class="cm">// 基于内存使用量的评分</span>
+    <pre><code class="language-c"><span class="cm">// 基于内存使用量的评分</span>
 <span class="ty">long</span> <span class="fn">oom_badness</span>(<span class="kw">struct</span> <span class="ty">task_struct</span> *p, <span class="ty">unsigned long</span> totalpages)
 {
     <span class="ty">long</span> points;

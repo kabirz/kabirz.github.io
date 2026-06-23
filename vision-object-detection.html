@@ -39,7 +39,7 @@
   <p>目标检测的核心目标是从图像中找出所有感兴趣的目标对象,并确定它们的类别和位置。与图像分类不同,目标检测不仅要回答"这是什么",还要回答"它在哪里"。</p>
 
   <h3>检测输出的组成</h3>
-  <pre><code>// 每个检测框包含两部分:
+  <pre><code class="language-python">// 每个检测框包含两部分:
 1. 类别信息: 每个候选框对应一个类别标签 (class_id)
 2. 位置信息: 边界框 (bounding box), 通常表示为:
    - (x, y, w, h): 中心点坐标 + 宽高
@@ -86,7 +86,7 @@
   <h3>滑动窗口 (Sliding Window)</h3>
   <p>滑动窗口是最朴素的目标检测方法。用一个固定大小的窗口在图像上按步长滑动,对每个窗口区域进行图像分类。检测不同大小的目标需要多尺度图像金字塔。</p>
 
-  <pre><code>// 滑动窗口伪代码
+  <pre><code class="language-python">// 滑动窗口伪代码
 for scale in [0.5, 0.75, 1.0, 1.5, 2.0]:
     resized_img = resize(image, scale)
     for (x, y) in sliding_window(resized_img, window_size=64):
@@ -100,7 +100,7 @@ for scale in [0.5, 0.75, 1.0, 1.5, 2.0]:
   <h3>候选区域 (Region Proposal)</h3>
   <p>候选区域方法通过图像分割或边缘信息,快速生成可能包含目标的"候选框",将数千次分类减少到几百次。选择性搜索 (Selective Search) 是最经典的方法,它基于颜色、纹理、大小等相似度合并超像素,生成约 2000 个候选区域。</p>
 
-  <pre><code>// Selective Search 流程
+  <pre><code class="language-python">// Selective Search 流程
 1. 使用 Felzenszwalb 分割生成初始超像素
 2. 计算相邻区域的相似度:
    - 颜色相似度 (RGB/HSV 直方图)
@@ -125,7 +125,7 @@ for scale in [0.5, 0.75, 1.0, 1.5, 2.0]:
   <h3>R-CNN (2014)</h3>
   <p>R-CNN 是首个将 CNN 引入目标检测的工作。它对每个候选区域都做一次 CNN 特征提取,然后训练类别 SVM 分类器和框回归器。</p>
 
-  <pre><code>// R-CNN 推理流程
+  <pre><code class="language-python">// R-CNN 推理流程
 1. 输入图像
 2. Selective Search -> ~2000 个候选区域
 3. 将所有候选区域 warp 到固定大小 (227x227)
@@ -140,7 +140,7 @@ for scale in [0.5, 0.75, 1.0, 1.5, 2.0]:
   <h3>Fast R-CNN (2015)</h3>
   <p>Fast R-CNN 通过 RoI Pooling 解决了计算共享问题。它只对整张图做一次 CNN 特征提取,然后对每个候选区域,从特征图上进行 RoI Pooling,将所有大小不同的候选区域池化为固定大小的特征向量。</p>
 
-  <pre><code>// Fast R-CNN 推理流程
+  <pre><code class="language-python">// Fast R-CNN 推理流程
 1. 输入图像
 2. 整图通过 CNN 得到特征图 (一次前向)
 3. Selective Search 生成候选区域
@@ -158,7 +158,7 @@ for scale in [0.5, 0.75, 1.0, 1.5, 2.0]:
   <h3>Faster R-CNN (2016)</h3>
   <p>Faster R-CNN 引入了区域提议网络 (Region Proposal Network, RPN),彻底取代了 Selective Search,使候选区域生成也变成网络的一部分。</p>
 
-  <pre><code>// RPN 结构
+  <pre><code class="language-python">// RPN 结构
 // 输入: 共享特征图 (如 VGG16 conv5_3)
 // 在特征图上使用 3x3 滑动窗口
 // 每个滑动位置预设 k 个 anchor boxes (通常 k=9)
@@ -205,7 +205,7 @@ L = L_RPN_cls + L_RPN_reg + L_Det_cls + L_Det_reg</code></pre>
   <h3>YOLO 核心思想</h3>
   <p>YOLO 将输入图像划分为 S x S 的网格。每个网格负责检测中心落在该网格内的目标。每个网格预测 B 个边界框和 C 个类别概率。</p>
 
-  <pre><code>// YOLOv1 输出张量
+  <pre><code class="language-python">// YOLOv1 输出张量
 // 输入: 448x448
 // 划分网格: S x S = 7 x 7
 // 每个网格预测: B=2 个框, C=20 个类 (PASCAL VOC)
@@ -237,7 +237,7 @@ L_cls = sum(1_i * (p(c) - p_hat(c))^2)</code></pre>
     <li><strong>Anchor Box 聚类:</strong> 在训练集上使用 K-Means 聚类确定 anchor 尺寸,而非手动设定</li>
   </ul>
 
-  <pre><code># YOLOv3 多尺度预测结构
+  <pre><code class="language-python"># YOLOv3 多尺度预测结构
 # 输入: 416x416
 
 # 尺度 1 (大目标): 13x13 特征图
@@ -254,7 +254,7 @@ L_cls = sum(1_i * (p(c) - p_hat(c))^2)</code></pre>
   <h3>YOLOv5 / YOLOv8 实用特性</h3>
   <p>Ultralytics 实现的 YOLOv5 和 YOLOv8 成为实际部署中最流行的版本。它们包含了数据增强、自动 anchor 优化、模型缩放、导出 ONNX/TensorRT 等全套工具链。</p>
 
-  <pre><code># YOLOv8 CLI 使用
+  <pre><code class="language-python"># YOLOv8 CLI 使用
 # 训练
 yolo train model=yolov8n.pt data=coco128.yaml epochs=100
 
@@ -286,7 +286,7 @@ yolo export model=yolov8n.pt format=engine  # TensorRT
   <h3>SSD 核心设计</h3>
   <p>SSD 从网络的不同层提取特征图,浅层特征图分辨率高（细节丰富,适合小目标）,深层特征图分辨率低（语义信息强,适合大目标）。每层特征图关联一组预设的 Default Box,直接预测类别分数和偏移量。</p>
 
-  <pre><code>// SSD300 结构
+  <pre><code class="language-python">// SSD300 结构
 // 输入: 300x300
 // 骨干: VGG16 (修改版, conv4_3 作为第一个检测层)
 
@@ -337,7 +337,7 @@ yolo export model=yolov8n.pt format=engine  # TensorRT
   <p>Anchor Box（锚点框/先验框）是目标检测中最重要的先验知识之一。它通过预设一组固定大小和比例的框,在每个特征图位置进行密集采样,将检测问题转化为"锚点框的分类和回归"。</p>
 
   <h3>Anchor 的工作原理</h3>
-  <pre><code>// 以特征图 (H, W) 上的位置 (i, j) 为例:
+  <pre><code class="language-python">// 以特征图 (H, W) 上的位置 (i, j) 为例:
 // 映射回原图的中心点:
 center_x = (j + 0.5) * stride
 center_y = (i + 0.5) * stride
@@ -362,7 +362,7 @@ for scale in scales:
 // pred_h = exp(t_h) * ah</code></pre>
 
   <h3>正负样本分配策略</h3>
-  <pre><code>// 训练时的 Anchor 分配:
+  <pre><code class="language-python">// 训练时的 Anchor 分配:
 
 // 正样本 (Positive Anchor):
 // 1. 与任一 GT 框 IOU > 0.7
@@ -383,7 +383,7 @@ for scale in scales:
   <h3>Anchor 超参数调优</h3>
   <p>Anchor 的尺寸和比例对检测性能有显著影响。Faster R-CNN 使用 3 种尺度 {128, 256, 512} 和 3 种比例 {1:1, 1:2, 2:1}。YOLOv3 使用 K-Means 聚类算法从训练集标注中自动学习 anchor 尺寸。</p>
 
-  <pre><code># K-Means Anchor 聚类
+  <pre><code class="language-python"># K-Means Anchor 聚类
 import numpy as np
 from sklearn.cluster import KMeans
 
@@ -415,7 +415,7 @@ def anchor_clustering(annotations, num_anchors=9):
   <h3>CenterNet</h3>
   <p>CenterNet 将目标检测视为关键点检测——在特征图上预测每个类别的热力图 (heatmap),每个峰值对应一个目标的中心点。</p>
 
-  <pre><code>// CenterNet 输出
+  <pre><code class="language-python">// CenterNet 输出
 // 输入: 512x512
 // 输出三个分支:
 //   1. Heatmap: (C, H/4, W/4)  C=类别数
@@ -438,7 +438,7 @@ def anchor_clustering(annotations, num_anchors=9):
   <h3>FCOS (Fully Convolutional One-Stage)</h3>
   <p>FCOS 在每个位置直接预测到目标四条边的距离,同时利用多尺度特征和 Center-ness 分支来抑制低质量检测。</p>
 
-  <pre><code>// FCOS 核心设计
+  <pre><code class="language-python">// FCOS 核心设计
 // 每个位置 (x, y) 预测:
 //   1. 分类向量: (C,)   C=类别数
 //   2. 回归向量: (4,)   (l, t, r, b)
@@ -476,7 +476,7 @@ def anchor_clustering(annotations, num_anchors=9):
   <p>非极大值抑制 (Non-Maximum Suppression, NMS) 是目标检测后处理的关键步骤。由于同一个目标可能产生多个重叠的预测框,NMS 从中选择一个得分最高的框,抑制其他重叠框。</p>
 
   <h3>标准 NMS 算法</h3>
-  <pre><code>def nms(detections, iou_threshold=0.5):
+  <pre><code class="language-python">def nms(detections, iou_threshold=0.5):
     # detections: [(x1, y1, x2, y2, score, class_id)]
 
     # 按置信度降序排序
@@ -502,7 +502,7 @@ def anchor_clustering(annotations, num_anchors=9):
   <h3>Soft-NMS</h3>
   <p>标准 NMS 有一个问题：如果两个目标的 IOU 很高（如重叠的人群）,NMS 可能直接移除正确的检测框。Soft-NMS 用衰减（decay）替代硬删除。</p>
 
-  <pre><code>def soft_nms(detections, iou_threshold=0.5,
+  <pre><code class="language-python">def soft_nms(detections, iou_threshold=0.5,
              sigma=0.5, score_threshold=0.1):
     # detections: [(x1, y1, x2, y2, score, class_id)]
 
@@ -558,7 +558,7 @@ def anchor_clustering(annotations, num_anchors=9):
   <p>目标检测有一套标准化的评估指标,其中 mAP (mean Average Precision) 是最核心的评价指标。</p>
 
   <h3>IOU (Intersection over Union)</h3>
-  <pre><code>// IOU = 交集面积 / 并集面积
+  <pre><code class="language-python">// IOU = 交集面积 / 并集面积
 // 用于衡量预测框与真实框的重叠程度
 
 function compute_iou(box1, box2):
@@ -579,7 +579,7 @@ function compute_iou(box1, box2):
     return intersection / union</code></pre>
 
   <h3>mAP 计算流程</h3>
-  <pre><code>// 1. 对每个类别单独计算 AP
+  <pre><code class="language-python">// 1. 对每个类别单独计算 AP
 // 2. 对所有类别的 AP 取平均得到 mAP
 
 // 对每个类别:
@@ -633,7 +633,7 @@ function compute_iou(box1, box2):
 
   <h3>分类损失</h3>
 
-  <pre><code># 1. 交叉熵损失 (Cross Entropy)
+  <pre><code class="language-python"># 1. 交叉熵损失 (Cross Entropy)
 import torch.nn.functional as F
 ce_loss = F.cross_entropy(predictions, targets)
 
@@ -652,7 +652,7 @@ def focal_loss(pred, target, alpha=0.25, gamma=2.0):
 
   <h3>回归损失</h3>
 
-  <pre><code># 1. Smooth L1 Loss (Fast R-CNN 引入)
+  <pre><code class="language-python"># 1. Smooth L1 Loss (Fast R-CNN 引入)
 # 相比 L2 Loss,对异常值更鲁棒
 def smooth_l1_loss(pred, target, beta=1.0):
     diff = (pred - target).abs()

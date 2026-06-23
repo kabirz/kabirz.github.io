@@ -40,7 +40,7 @@
   <h3>ONNX 模型结构</h3>
   <p>一个 ONNX 模型本质上是一个 protobuf 序列化的计算图。根节点是 <code>ModelProto</code>，它包含 <code>GraphProto</code>，而图中又包含若干 <code>NodeProto</code>（算子节点）、<code>TensorProto</code>（权重张量）以及 <code>ValueInfoProto</code>（输入输出描述）。</p>
 
-  <pre><code>// ONNX Protobuf 结构示意
+  <pre><code class="language-python">// ONNX Protobuf 结构示意
 message ModelProto {
   int64 ir_version = 1;
   repeated OperatorSetIdProto opset_import = 2;
@@ -64,7 +64,7 @@ message GraphProto {
   </div>
 
   <h3>PyTorch 导出 ONNX</h3>
-  <pre><code>import torch
+  <pre><code class="language-python">import torch
 import torchvision.models as models
 
 model = models.resnet50(pretrained=True)
@@ -98,7 +98,7 @@ torch.onnx.export(
   <p>Session 加载 ONNX 模型后,首先由 Graph Optimizer 进行图优化——算子融合、常量折叠、内存复用。优化后的图被分割为多个 subgraph,按执行提供方的能力分配到对应后端。例如,支持 CUDA 的算子走 CUDA EP,不支持的回退到 CPU EP。</p>
 
   <h3>Session 创建流程</h3>
-  <pre><code>// 伪代码示意 Session 的内部流程
+  <pre><code class="language-python">// 伪代码示意 Session 的内部流程
 1. LoadModel(model_path)       // 读取 .onnx 文件
 2. CreateGraphProto()          // 解析 protobuf
 3. OptimizeGraph()             // 图优化
@@ -121,7 +121,7 @@ torch.onnx.export(
   <p>ONNX Runtime 的 C++ API 定义在 <code>onnxruntime_cxx_api.h</code> 中,核心类包括 <code>Ort::Env</code>、<code>Ort::SessionOptions</code>、<code>Ort::Session</code>、<code>Ort::Value</code> 和 <code>Ort::Run</code>。</p>
 
   <h3>基础推理示例</h3>
-  <pre><code>#include &lt;onnxruntime_cxx_api.h&gt;
+  <pre><code class="language-python">#include &lt;onnxruntime_cxx_api.h&gt;
 #include &lt;vector&gt;
 #include &lt;cassert&gt;
 
@@ -192,7 +192,7 @@ int main() {
   <p>Python API 封装在 <code>onnxruntime</code> 包中,相比 C++ API 更为简洁,适合快速原型验证。</p>
 
   <h3>基础推理示例</h3>
-  <pre><code>import onnxruntime as ort
+  <pre><code class="language-python">import onnxruntime as ort
 import numpy as np
 from PIL import Image
 
@@ -231,7 +231,7 @@ top5_idx = np.argsort(predictions[0])[::-1][:5]
 print(f"Top-5 class indices: {top5_idx}")</code></pre>
 
   <h3>Session 选项配置</h3>
-  <pre><code>options = ort.SessionOptions()
+  <pre><code class="language-python">options = ort.SessionOptions()
 options.intra_op_num_threads = 4
 options.inter_op_num_threads = 2
 options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
@@ -248,7 +248,7 @@ sess = ort.InferenceSession(
     providers=["CUDAExecutionProvider"])</code></pre>
 
   <h3>多输入输出处理</h3>
-  <pre><code># 多输入推理
+  <pre><code class="language-python"># 多输入推理
 inputs = {
     "image": input_tensor,
     "bbox": bbox_tensor,
@@ -273,7 +273,7 @@ detections, segmentations, embeddings = outputs</code></pre>
   <p>CUDA EP 让 ONNX Runtime 在 NVIDIA GPU 上执行推理。它将支持的 ONNX 算子映射到 CUDA kernel,利用 GPU 大规模并行计算加速。</p>
 
   <h3>CUDA EP 配置参数</h3>
-  <pre><code>import onnxruntime as ort
+  <pre><code class="language-python">import onnxruntime as ort
 
 cuda_options = {
     "device_id": 0,                           # GPU 设备 ID
@@ -290,7 +290,7 @@ sess = ort.InferenceSession(
     providers=[("CUDAExecutionProvider", cuda_options)])</code></pre>
 
   <h3>C++ 配置 CUDA EP</h3>
-  <pre><code>#include &lt;onnxruntime_cxx_api.h&gt;
+  <pre><code class="language-python">#include &lt;onnxruntime_cxx_api.h&gt;
 
 Ort::SessionOptions session_options;
 OrtCUDAProviderOptions cuda_options;
@@ -329,7 +329,7 @@ session_options.AppendExecutionProvider_CUDA(cuda_options);</code></pre>
   <p>TensorRT EP 将 ONNX 模型转换为 NVIDIA TensorRT 引擎,在利用 TensorRT 的高效推理优化的同时,保持 ONNX Runtime 的接口一致性。它支持 FP16、INT8 量化以及层融合等高级优化。</p>
 
   <h3>TensorRT EP 配置</h3>
-  <pre><code>tensorrt_options = {
+  <pre><code class="language-python">tensorrt_options = {
     "device_id": 0,
     "trt_max_workspace_size": 4 * 1073741824,    # 4 GB
     "trt_fp16_enable": True,                       # 启用 FP16
@@ -353,14 +353,14 @@ sess = ort.InferenceSession(
   <h3>引警构建与缓存</h3>
   <p>TensorRT EP 在首次加载模型时,会将 ONNX 图编译为 TensorRT 引擎。这个过程可能耗时数秒到数分钟(取决于模型大小)。启用 <code>trt_engine_cache_enable</code> 后,编译好的引擎会序列化到磁盘,后续加载时直接反序列化,避免重复编译。</p>
 
-  <pre><code>// 引擎缓存文件结构
+  <pre><code class="language-python">// 引擎缓存文件结构
 model_cache/
   ├── trt_serialized_engine_0.cache     # 编译后的 TensorRT 引擎
   ├── trt_serialized_engine_0.cache.gpu  # GPU ID 相关的引擎
   └── trt_timing_cache.cache             # 时间缓存</code></pre>
 
   <h3>FP16 与 INT8 量化推理</h3>
-  <pre><code># FP16 启用
+  <pre><code class="language-python"># FP16 启用
 tensorrt_options["trt_fp16_enable"] = True
 
 # INT8 启用 - 需要校准表
@@ -383,7 +383,7 @@ tensorrt_options["trt_int8_calibration_table_name"] = "calibration.table"
   <p>CV 模型经常需要处理不同尺寸的输入。ONNX Runtime 提供了一套机制来处理动态形状。</p>
 
   <h3>在 ONNX 导出时声明动态轴</h3>
-  <pre><code>torch.onnx.export(
+  <pre><code class="language-python">torch.onnx.export(
     model,
     dummy_input,
     "dynamic_model.onnx",
@@ -395,7 +395,7 @@ tensorrt_options["trt_int8_calibration_table_name"] = "calibration.table"
 )</code></pre>
 
   <h3>Session 中设置优化模型路径</h3>
-  <pre><code>sess_options = ort.SessionOptions()
+  <pre><code class="language-python">sess_options = ort.SessionOptions()
 sess_options.optimized_model_filepath = "optimized_model.onnx"
 
 # 对于每个不同的形状配置,可分别导出优化后的模型
@@ -409,7 +409,7 @@ sess = ort.InferenceSession(
   <h3>形状不变的 Session 共享</h3>
   <p>如果输入形状在一个推理周期内不变,可以复用同一个 Session。当形状变化时,ONNX Runtime 内部会触发重新编译(对于 TensorRT EP 尤其昂贵)。建议的做法是对每种常见形状维护一个 Session 池。</p>
 
-  <pre><code>class ModelSessionPool:
+  <pre><code class="language-python">class ModelSessionPool:
     def __init__(self, model_path, shape_configs):
         self.sessions = {}
         for shape_key, shape in shape_configs.items():
@@ -492,7 +492,7 @@ sess = ort.InferenceSession(
   </table>
 
   <h3>Benchmark 代码片段</h3>
-  <pre><code>import onnxruntime as ort
+  <pre><code class="language-python">import onnxruntime as ort
 import numpy as np
 import time
 
@@ -526,7 +526,7 @@ def benchmark(sess, input_name, output_name,
   <p>两种扩展策略: <code>kNextPowerOfTwo</code>（按 2 的幂扩展,减少碎片但浪费空间）和 <code>kSameAsRequested</code>（按请求大小精确扩展,节省显存但可能增加碎片）。</p>
 
   <h3>跨设备内存拷贝</h3>
-  <pre><code># 从 CPU 到 GPU 的拷贝是自动的——ONNX Runtime 会处理
+  <pre><code class="language-python"># 从 CPU 到 GPU 的拷贝是自动的——ONNX Runtime 会处理
 # 但有时需要手动控制
 
 # 创建 CPU 张量(默认)
@@ -567,7 +567,7 @@ result = io_binding.copy_outputs_to_cpu()[0]</code></pre>
     <li><strong>CUDA Stream 隔离:</strong> 高版本 ONNX Runtime 支持为每个推理指定独立的 CUDA Stream,实现真正的并行</li>
   </ul>
 
-  <pre><code>import threading
+  <pre><code class="language-python">import threading
 import onnxruntime as ort
 
 class ConcurrentInference:
@@ -613,7 +613,7 @@ for t in threads:
   <h3>常见加密方案</h3>
 
   <h4>1. 文件级加密 + 运行时解密</h4>
-  <pre><code>import os
+  <pre><code class="language-python">import os
 from cryptography.fernet import Fernet
 
 # 加密模型
@@ -645,7 +645,7 @@ class EncryptedModel:
   <h4>2. 自定义 ModelProto 序列化</h4>
   <p>通过修改 ONNX protobuf 序列化方式,加入自定义的加密或校验逻辑。可以继承 <code>ModelProto</code> 的序列化方法,在写入时加密特定 tensor 的 raw_data 字段。</p>
 
-  <pre><code>from onnx import ModelProto
+  <pre><code class="language-python">from onnx import ModelProto
 
 def encrypt_model_weights(model_path, output_path, key):
     model = ModelProto()
@@ -670,7 +670,7 @@ def encrypt_model_weights(model_path, output_path, key):
   </div>
 
   <h3>模型完整性校验</h3>
-  <pre><code>import hashlib
+  <pre><code class="language-python">import hashlib
 
 def verify_model_integrity(model_path, expected_hash):
     sha256 = hashlib.sha256()

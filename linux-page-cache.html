@@ -111,7 +111,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/fs.h:470 — 地址空间（每个 inode 一个）</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/fs.h:470 — 地址空间（每个 inode 一个）</span>
 <span class="kw">struct</span> <span class="ty">address_space</span> {
     <span class="kw">struct</span> <span class="ty">inode</span>          *host;        <span class="cm">// 所属的 inode（文件）</span>
     <span class="kw">struct</span> <span class="ty">xarray</span>          i_pages;     <span class="cm">// ★ 页面 XArray（pgoff → page）</span>
@@ -239,7 +239,7 @@
   <h2><span class="num">06</span> 调优</h2>
 
   <div class="card">
-    <pre><code><span class="cm"># 查看 Page Cache 使用情况</span>
+    <pre><code class="language-c"><span class="cm"># 查看 Page Cache 使用情况</span>
 $ free -h
 $ cat /proc/meminfo | grep -E "Cached|Buffers|Dirty|Writeback"
 

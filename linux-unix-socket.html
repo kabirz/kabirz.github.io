@@ -98,7 +98,7 @@
 
   <h3>地址结构</h3>
   <div class="card">
-    <pre><code><span class="cm">// struct sockaddr_un — UNIX Domain Socket 地址</span>
+    <pre><code class="language-c"><span class="cm">// struct sockaddr_un — UNIX Domain Socket 地址</span>
 <span class="kw">struct</span> <span class="ty">sockaddr_un</span> {
     <span class="ty">sa_family_t</span> sun_family;  <span class="cm">// AF_UNIX</span>
     <span class="ty">char</span>        sun_path[<span class="num">108</span>]; <span class="cm">// 文件系统路径（如 /var/run/docker.sock）</span>
@@ -117,7 +117,7 @@ addr.sun_family = AF_UNIX;
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/af_unix.h:36 — UNIX socket</span>
+    <pre><code class="language-c"><span class="cm">// include/net/af_unix.h:36 — UNIX socket</span>
 <span class="kw">struct</span> <span class="ty">unix_sock</span> {
     <span class="kw">struct</span> <span class="ty">sock</span>         sk;          <span class="cm">// 继承自 sock</span>
     <span class="kw">struct</span> <span class="ty">unix_address</span> *addr;       <span class="cm">// 绑定的地址（路径）</span>
@@ -220,7 +220,7 @@ addr.sun_family = AF_UNIX;
 </pre></div>
 
   <div class="card">
-    <pre><code><span class="cm">// 发送方：通过 SCM_RIGHTS 发送 fd</span>
+    <pre><code class="language-c"><span class="cm">// 发送方：通过 SCM_RIGHTS 发送 fd</span>
 <span class="kw">struct</span> <span class="ty">msghdr</span> msg = { <span class="num">0</span> };
 <span class="kw">struct</span> <span class="ty">cmsghdr</span> *cmsg;
 <span class="ty">char</span> buf[CMSG_SPACE(<span class="kw">sizeof</span>(<span class="ty">int</span>))];

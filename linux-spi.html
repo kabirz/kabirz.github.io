@@ -113,7 +113,7 @@
   <h3>struct spi_device（从设备）</h3>
   <div class="card">
     <p class="ref">include/linux/spi/spi.h:190-255</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">spi_device</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">spi_device</span> {
     <span class="kw">struct</span> <span class="ty">device</span> dev;                  <span class="cm">// 内嵌设备</span>
     <span class="kw">struct</span> <span class="ty">spi_controller</span> *controller; <span class="cm">// 所属控制器</span>
     <span class="ty">u32</span> max_speed_hz;               <span class="cm">// 最大时钟频率</span>
@@ -130,7 +130,7 @@
   <h3>struct spi_transfer（传输段）</h3>
   <div class="card">
     <p class="ref">include/linux/spi/spi.h:1099-1155</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">spi_transfer</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">spi_transfer</span> {
     <span class="kw">const void</span> *tx_buf;       <span class="cm">// 发送缓冲区</span>
     <span class="ty">void</span>       *rx_buf;       <span class="cm">// 接收缓冲区</span>
     <span class="ty">unsigned</span>    len;           <span class="cm">// 传输长度</span>
@@ -148,7 +148,7 @@
   <h3>struct spi_message（事务）</h3>
   <div class="card">
     <p class="ref">include/linux/spi/spi.h:1190+</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">spi_message</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">spi_message</span> {
     <span class="kw">struct</span> <span class="ty">list_head</span> transfers;  <span class="cm">// 传输段链表</span>
     <span class="kw">struct</span> <span class="ty">spi_device</span> *spi;     <span class="cm">// 目标设备</span>
     <span class="ty">int</span> status;                  <span class="cm">// 完成状态</span>
@@ -165,7 +165,7 @@
   <h2><span class="num">04</span> 传输机制</h2>
 
   <h3>同步传输（spi_sync）</h3>
-  <pre><code><span class="cm">// 最简单的传输方式：阻塞等待完成</span>
+  <pre><code class="language-c"><span class="cm">// 最简单的传输方式：阻塞等待完成</span>
 <span class="ty">u8</span> tx_buf[] = { <span class="num">0x9F</span> };
 <span class="ty">u8</span> rx_buf[<span class="num">3</span>];
 
@@ -252,7 +252,7 @@ MISO   ----< D7 >< D6 >< D5 >< D4 >< D3 >< D2 >< D1 >< D0 >----
 
   <h3>struct spi_mem_op</h3>
   <div class="card">
-    <pre><code><span class="cm">// spi-mem.h — SPI Flash 操作</span>
+    <pre><code class="language-c"><span class="cm">// spi-mem.h — SPI Flash 操作</span>
 <span class="kw">struct</span> <span class="ty">spi_mem_op</span> {
     <span class="kw">struct</span> <span class="ty">spi_mem_op_cmd</span> cmd;     <span class="cm">// 命令（1-4 字节）</span>
     <span class="kw">struct</span> <span class="ty">spi_mem_op_addr</span> addr;   <span class="cm">// 地址（0-4 字节）</span>
@@ -280,7 +280,7 @@ MISO   ----< D7 >< D6 >< D5 >< D4 >< D3 >< D2 >< D1 >< D0 >----
   <h2><span class="num">07</span> 设备树</h2>
 
   <h3>控制器节点</h3>
-  <pre><code><span class="ty">spi0</span>: <span class="fn">spi</span>@e0000000 {
+  <pre><code class="language-c"><span class="ty">spi0</span>: <span class="fn">spi</span>@e0000000 {
     compatible = <span class="st">"vendor,soc-spi"</span>;
     reg = <span class="num">&lt;0xe0000000 0x1000&gt;</span>;
     interrupts = <span class="num">&lt;GIC_SPI 25 IRQ_TYPE_LEVEL_HIGH&gt;</span>;
@@ -328,7 +328,7 @@ MISO   ----< D7 >< D6 >< D5 >< D4 >< D3 >< D2 >< D1 >< D0 >----
   <h2><span class="num">08</span> 编写驱动</h2>
 
   <h3>SPI 从设备驱动模板</h3>
-  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/spi/spi.h&gt;</span>
+  <pre><code class="language-c"><span class="kw">#include</span> <span class="st">&lt;linux/spi/spi.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/module.h&gt;</span>
 
 <span class="kw">struct</span> <span class="ty">my_spi_data</span> {

@@ -39,7 +39,7 @@
   <div class="grid-2">
     <div class="card">
       <div class="card-title">struct notifier_block</div>
-<pre><code>struct notifier_block {
+<pre><code class="language-c">struct notifier_block {
     notifier_fn_t notifier_call;    // 回调函数
     struct notifier_block __rcu *next; // 链表
     int priority;                   // 优先级（高者先执行）
@@ -47,7 +47,7 @@
     </div>
     <div class="card">
       <div class="card-title">回调函数签名</div>
-<pre><code>typedef int (*notifier_fn_t)(
+<pre><code class="language-c">typedef int (*notifier_fn_t)(
     struct notifier_block *nb,
     unsigned long action,   // 事件类型
     void *data              // 事件数据
@@ -99,7 +99,7 @@
     - 调用者自己处理锁 → RAW
   </div>
 
-<pre><code>// 链头定义
+<pre><code class="language-c">// 链头定义
 struct atomic_notifier_head {
     spinlock_t lock;
     struct notifier_block __rcu *head;
@@ -152,7 +152,7 @@ struct srcu_notifier_head {
     </tr>
   </table>
 
-<pre><code>// 通用通知函数签名
+<pre><code class="language-c">// 通用通知函数签名
 int atomic_notifier_call_chain(struct atomic_notifier_head *nh,
     unsigned long action, void *data);
 
@@ -161,7 +161,7 @@ int atomic_notifier_call_chain(struct atomic_notifier_head *nh,
 </code></pre>
 
   <p>帮助函数：</p>
-<pre><code>// 将 errno 编码为通知链返回值
+<pre><code class="language-c">// 将 errno 编码为通知链返回值
 #define notifier_from_errno(err) \
     (NOTIFY_STOP_MASK | (NOTIFY_OK - err))
 
@@ -204,7 +204,7 @@ int notifier_to_errno(int ret)
 <section id="prio" class="toc-link">
   <h2><span class="num">05</span> 优先级排序</h2>
 
-<pre><code>// 回调按 priority 从高到低排序
+<pre><code class="language-c">// 回调按 priority 从高到低排序
 // 同一优先级按注册时间保持 FIFO（先注册先执行）
 
 struct notifier_block nb1 = {
@@ -234,7 +234,7 @@ int atomic_notifier_chain_register_unique_prio(
   <h2><span class="num">06</span> 内核实战</h2>
 
   <h3>1. panic_notifier_list — panic 事件</h3>
-<pre><code>// kernel/panic.c
+<pre><code class="language-c">// kernel/panic.c
 ATOMIC_NOTIFIER_HEAD(panic_notifier_list);
 
 void panic(const char *fmt, ...)
@@ -261,7 +261,7 @@ atomic_notifier_chain_register(&panic_notifier_list, &my_panic_nb);
 </code></pre>
 
   <h3>2. netdev_chain — 网络设备事件</h3>
-<pre><code>// net/core/dev.c
+<pre><code class="language-c">// net/core/dev.c
 BLOCKING_NOTIFIER_HEAD(netdev_chain);
 
 // 事件类型
@@ -290,7 +290,7 @@ static int my_netdev_cb(struct notifier_block *nb,
 </code></pre>
 
   <h3>3. reboot_notifier_list — 重启事件</h3>
-<pre><code>// kernel/reboot.c
+<pre><code class="language-c">// kernel/reboot.c
 BLOCKING_NOTIFIER_HEAD(reboot_notifier_list);
 
 // 注册
@@ -299,7 +299,7 @@ register_reboot_notifier(&my_reboot_nb);
 </code></pre>
 
   <h3>4. die_chain — 内核 oops</h3>
-<pre><code>// arch/x86/kernel/cpu/mce/core.c 以及
+<pre><code class="language-c">// arch/x86/kernel/cpu/mce/core.c 以及
 // arch/x86/kernel/traps.c
 // die() 函数中调用 notify_die()
 // kdb/kgdb 使用 die_chain 捕获异常
@@ -311,7 +311,7 @@ register_reboot_notifier(&my_reboot_nb);
 
   <p>notifier_call_chain 是所有四种类型的公共内核：</p>
 
-<pre><code>// kernel/notifier.c — 核心遍历逻辑
+<pre><code class="language-c">// kernel/notifier.c — 核心遍历逻辑
 static int notifier_call_chain(
     struct notifier_block **nl,
     unsigned long action, void *data,

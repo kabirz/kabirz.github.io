@@ -61,7 +61,7 @@
   <h2><span class="num">02</span> 数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/workqueue.h:370-413</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/workqueue.h:370-413</span>
 <span class="kw">enum</span> <span class="ty">wq_flags</span> {
     WQ_BH          = <span class="num">1</span> << <span class="num">0</span>,  <span class="cm">// 在 softirq 上下文执行</span>
     WQ_UNBOUND     = <span class="num">1</span> << <span class="num">1</span>,  <span class="cm">// 不绑定 CPU</span>
@@ -75,7 +75,7 @@
 
   <h3>BH Worker Pool</h3>
   <div class="card">
-    <pre><code><span class="cm">// kernel/workqueue.c:488-489</span>
+    <pre><code class="language-c"><span class="cm">// kernel/workqueue.c:488-489</span>
 <span class="cm">// 每个 CPU 有两个 BH worker pool：普通和高优先级</span>
 <span class="kw">static DEFINE_PER_CPU_SHARED_ALIGNED</span>(
     <span class="kw">struct</span> <span class="ty">worker_pool</span> [<span class="num">NR_STD_WORKER_POOLS</span>],
@@ -92,7 +92,7 @@
   <h2><span class="num">03</span> 核心 API</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// 提交 BH 工作</span>
+    <pre><code class="language-c"><span class="cm">// 提交 BH 工作</span>
 <span class="fn">queue_work</span>(system_bh_wq, &my_work);
 
 <span class="cm">// 提交高优先级 BH 工作</span>
@@ -115,7 +115,7 @@ my_bh_wq = <span class="fn">alloc_workqueue</span>(<span class="st">"my_bh"</spa
   <p>BH worker 是在 softirq 上下文中执行工作的特殊 worker，通过 <code>workqueue_softirq_action()</code> 触发。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// kernel/workqueue.c:3649-3685</span>
+    <pre><code class="language-c"><span class="cm">// kernel/workqueue.c:3649-3685</span>
 <span class="kw">static void</span> <span class="fn">bh_worker</span>(<span class="kw">struct</span> <span class="ty">worker</span> *worker)
 {
     <span class="kw">struct</span> <span class="ty">worker_pool</span> *pool = worker->pool;
@@ -146,7 +146,7 @@ my_bh_wq = <span class="fn">alloc_workqueue</span>(<span class="st">"my_bh"</spa
   <h2><span class="num">05</span> 使用模式</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// 模式一：替代 tasklet</span>
+    <pre><code class="language-c"><span class="cm">// 模式一：替代 tasklet</span>
 <span class="cm">// 旧代码（tasklet，已废弃）：</span>
 <span class="fn">tasklet_schedule</span>(&my_tasklet);
 

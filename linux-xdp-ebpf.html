@@ -99,7 +99,7 @@
 
   <h3>BPF Map — 内核与用户态共享数据</h3>
   <div class="card">
-    <pre><code><span class="cm">// BPF Map 是内核中的共享数据结构</span>
+    <pre><code class="language-c"><span class="cm">// BPF Map 是内核中的共享数据结构</span>
 <span class="cm">// eBPF 程序和用户态程序都可以读写</span>
 
 <span class="cm">// 常用 Map 类型：</span>
@@ -167,7 +167,7 @@ bpf_map_lookup_elem(fd, &amp;key, &amp;val);      <span class="cm">// 查找</sp
   <h2><span class="num">04</span> XDP 五种动作</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/uapi/linux/bpf.h:6546</span>
+    <pre><code class="language-c"><span class="cm">// include/uapi/linux/bpf.h:6546</span>
 <span class="kw">enum</span> <span class="ty">xdp_action</span> {
     XDP_ABORTED  = <span class="num">0</span>,  <span class="cm">// 丢弃 + 触发 trace（调试用）</span>
     XDP_DROP,           <span class="cm">// 丢弃数据包</span>
@@ -192,7 +192,7 @@ bpf_map_lookup_elem(fd, &amp;key, &amp;val);      <span class="cm">// 查找</sp
   <h2><span class="num">05</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/xdp.h:86 — XDP 数据包缓冲区</span>
+    <pre><code class="language-c"><span class="cm">// include/net/xdp.h:86 — XDP 数据包缓冲区</span>
 <span class="kw">struct</span> <span class="ty">xdp_buff</span> {
     <span class="ty">void</span> *data;            <span class="cm">// 数据起始指针</span>
     <span class="ty">void</span> *data_end;        <span class="cm">// 数据结束指针</span>
@@ -283,7 +283,7 @@ XDP（内核态快速路径）：
   <div class="grid-2">
     <div class="card">
       <div class="card-title" style="color:#cf222e">DDoS 防护</div>
-      <pre><code><span class="cm">// XDP_DROP: 在驱动层直接丢弃</span>
+      <pre><code class="language-c"><span class="cm">// XDP_DROP: 在驱动层直接丢弃</span>
 <span class="cm">// 14.8M PPS 丢弃（单核）</span>
 SEC(<span class="st">"xdp"</span>)
 <span class="ty">int</span> <span class="fn">xdp_drop</span>(<span class="kw">struct</span> <span class="ty">xdp_md</span> *ctx) {
@@ -301,7 +301,7 @@ SEC(<span class="st">"xdp"</span>)
     </div>
     <div class="card">
       <div class="card-title" style="color:#1a7f37">负载均衡器</div>
-      <pre><code><span class="cm">// XDP_TX: 原路发回（DR 模式）</span>
+      <pre><code class="language-c"><span class="cm">// XDP_TX: 原路发回（DR 模式）</span>
 SEC(<span class="st">"xdp"</span>)
 <span class="ty">int</span> <span class="fn">xdp_lbal</span>(<span class="kw">struct</span> <span class="ty">xdp_md</span> *ctx) {
     <span class="kw">struct</span> <span class="ty">iphdr</span> *ip = ...;
@@ -315,7 +315,7 @@ SEC(<span class="st">"xdp"</span>)
     </div>
     <div class="card">
       <div class="card-title" style="color:#8250df">跨网卡转发</div>
-      <pre><code><span class="cm">// XDP_REDIRECT: 转发到其他网卡</span>
+      <pre><code class="language-c"><span class="cm">// XDP_REDIRECT: 转发到其他网卡</span>
 SEC(<span class="st">"xdp_fwd"</span>)
 <span class="ty">int</span> <span class="fn">xdp_forward</span>(<span class="kw">struct</span> <span class="ty">xdp_md</span> *ctx) {
     <span class="ty">u32</span> ifindex = <span class="fn">bpf_map_lookup_elem</span>(
@@ -327,7 +327,7 @@ SEC(<span class="st">"xdp_fwd"</span>)
     </div>
     <div class="card">
       <div class="card-title" style="color:#bc4c00">AF_XDP</div>
-      <pre><code><span class="cm">// AF_XDP: 用户态零拷贝收包</span>
+      <pre><code class="language-c"><span class="cm">// AF_XDP: 用户态零拷贝收包</span>
 <span class="cm">// XDP_REDIRECT + BPF_MAP_TYPE_XSKMAP</span>
 <span class="cm">// 数据包绕过内核协议栈直达用户态</span>
 <span class="cm">// 用于：高性能网络应用、用户态协议栈</span>

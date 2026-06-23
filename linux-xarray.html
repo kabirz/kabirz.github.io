@@ -37,7 +37,7 @@
   <h2><span class="num">01</span> 概述</h2>
   <p>XArray（eXtensible Array）是 2017 年由 Matthew Wilcox 引入内核的数据结构，用于取代 radix tree。虽然底层仍然是多叉树，但它提供<strong>"数组"级别的心智模型</strong>——一个可以存储任意指针的、按 <code>unsigned long</code> 索引的稀疏数组。</p>
 
-<pre><code>struct xarray {
+<pre><code class="language-c">struct xarray {
     spinlock_t xa_lock;      // 内置锁
     gfp_t xa_flags;          // 分配标志
     void __rcu *xa_head;     // 头结点（叶子指针或内部节点）
@@ -46,7 +46,7 @@
   <div class="grid-2">
     <div class="card">
       <div class="card-title">简单如数组</div>
-<pre><code>// 存、取、删 — 和使用普通数组一样简单
+<pre><code class="language-c">// 存、取、删 — 和使用普通数组一样简单
 xa_init(&amp;xa);
 xa_store(&amp;xa, 42, ptr, GFP_KERNEL);
 ptr = xa_load(&amp;xa, 42);
@@ -54,7 +54,7 @@ xa_erase(&amp;xa, 42);</code></pre>
     </div>
     <div class="card">
       <div class="card-title">强大如树</div>
-<pre><code>// 但支持稀疏存储、标记、多索引范围
+<pre><code class="language-c">// 但支持稀疏存储、标记、多索引范围
 // ULONG_MAX 个 slot
 // 内置 spinlock 保护
 // RCU 安全的读路径
@@ -71,7 +71,7 @@ xa_erase(&amp;xa, 42);</code></pre>
   <p>XArray 提供三层 API，覆盖从简单到高级的所有需求。</p>
 
   <h3>第一层：简单 API（Simple）</h3>
-<pre><code>xa_init(&amp;xa);                        // 初始化
+<pre><code class="language-c">xa_init(&amp;xa);                        // 初始化
 xa_store(&amp;xa, index, entry, gfp);    // 存入，返回旧值
 xa_load(&amp;xa, index);                 // 读取
 xa_erase(&amp;xa, index);                // 删除，返回旧值
@@ -86,7 +86,7 @@ xa_for_each_marked(&amp;xa, index, entry, mark) {
 </code></pre>
 
   <h3>第二层：高级 API（Advanced）</h3>
-<pre><code>xa_reserve(&amp;xa, index, gfp);         // 预留 slot（不会失败）
+<pre><code class="language-c">xa_reserve(&amp;xa, index, gfp);         // 预留 slot（不会失败）
 xa_alloc(&amp;xa, &amp;id, entry, limit, gfp); // 自动分配 ID
 xa_alloc_cyclic(&amp;xa, &amp;id, entry, limit, gfp); // 循环分配
 xa_get_mark(&amp;xa, index, mark);      // 读取标记
@@ -95,7 +95,7 @@ xa_clear_mark(&amp;xa, index, mark);    // 清除标记
 </code></pre>
 
   <h3>第三层：迭代器 API（Iterator / xas）</h3>
-<pre><code>// 使用 xa_state 结构体，需要手动管理锁
+<pre><code class="language-c">// 使用 xa_state 结构体，需要手动管理锁
 XA_STATE(xas, &amp;xa, first_index);
 xas_lock(&amp;xas);
 xas_for_each(&amp;xas, entry, max) {
@@ -120,7 +120,7 @@ xas_unlock(&amp;xas);
 
   <p>XArray 内部是一棵 N-叉前缀树。每个节点有 64 个 slot（6 bit 地址），树的高度取决于最大索引值。</p>
 
-<pre><code>// lib/xarray.c — 节点结构
+<pre><code class="language-c">// lib/xarray.c — 节点结构
 struct xa_node {
     unsigned char shift;     // 当前层位移（决定覆盖范围）
     unsigned char offset;    // 在父节点中的位置
@@ -158,7 +158,7 @@ struct xa_node {
   <h2><span class="num">04</span> 核心操作</h2>
 
   <h3>xa_load — 查找</h3>
-<pre><code>void *xa_load(struct xarray *xa, unsigned long index)
+<pre><code class="language-c">void *xa_load(struct xarray *xa, unsigned long index)
 {
     XA_STATE(xas, xa, index);
     void *entry;
@@ -182,7 +182,7 @@ struct xa_node {
 </code></pre>
 
   <h3>xa_store — 插入/更新</h3>
-<pre><code>void *xa_store(struct xarray *xa, unsigned long index,
+<pre><code class="language-c">void *xa_store(struct xarray *xa, unsigned long index,
                void *entry, gfp_t gfp)
 {
     XA_STATE(xas, xa, index);
@@ -230,7 +230,7 @@ struct xa_node {
     </tr>
   </table>
 
-<pre><code>// 迭代器模式下，调用者负责锁
+<pre><code class="language-c">// 迭代器模式下，调用者负责锁
 XA_STATE(xas, &amp;xa, 0);
 xas_lock(&amp;xas);
 xas_for_each(&amp;xas, entry, ULONG_MAX) {
@@ -257,7 +257,7 @@ xas_lock_bh(&amp;xas);    // 关底半部版
 
   <p>每个 XArray 条目有 3 个独立的标记位（XA_MARK_0 ~ XA_MARK_2），存储在内部节点的 <code>tags</code> 位图中。</p>
 
-<pre><code>// 标记是 per-slot 的位图
+<pre><code class="language-c">// 标记是 per-slot 的位图
 // 存在内部节点中：tags[mark][slot_index/64] & (1 << slot_index%64)
 
 // API
@@ -285,7 +285,7 @@ xa_for_each_marked(&amp;xa, index, entry, XA_MARK_0) {
 
   <p>XArray 支持用一个 entry 覆盖一段连续的索引范围——"多索引条目"，内部通过<strong>兄弟条目（sibling entry）</strong>实现。</p>
 
-<pre><code>// 示例：将 folio（4 页）存入索引 0-3
+<pre><code class="language-c">// 示例：将 folio（4 页）存入索引 0-3
 xa_store_range(&amp;mapping->i_pages,
                0, 3, folio, GFP_KERNEL);
 
@@ -329,7 +329,7 @@ xa_store_range(&amp;mapping->i_pages,
   <h2><span class="num">09</span> 内核实战</h2>
 
   <h3>1. Page Cache — 最大规模的 XArray 使用者</h3>
-<pre><code>// mm/filemap.c
+<pre><code class="language-c">// mm/filemap.c
 // address_space.i_pages 是一个 xarray
 struct address_space {
     struct xarray     i_pages;   // 存储所有 folio
@@ -355,7 +355,7 @@ xa_for_each_marked(&mapping->i_pages, index, folio,
 </code></pre>
 
   <h3>2. PID 分配 — xa_alloc 示例</h3>
-<pre><code>// kernel/pid.c
+<pre><code class="language-c">// kernel/pid.c
 static struct xarray pid_array;
 
 int alloc_pid(struct pid_namespace *ns)

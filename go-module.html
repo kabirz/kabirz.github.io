@@ -38,7 +38,7 @@
 
   <h3>go.mod 文件</h3>
   <p>每个 Module 根目录下包含一个 <code>go.mod</code> 文件，采用类似 key-value 的文本格式：</p>
-  <pre><code>module github.com/user/project
+  <pre><code class="language-go">module github.com/user/project
 
 go 1.22
 
@@ -65,7 +65,7 @@ require golang.org/x/sync v0.7.0 // indirect</code></pre>
 
   <h3>go.sum 文件</h3>
   <p><code>go.sum</code> 记录每个依赖版本的加密哈希值，确保构建可复现且未被篡改。每行格式为：</p>
-  <pre><code>github.com/gin-gonic/gin v1.9.1 h1:...SHA256...
+  <pre><code class="language-go">github.com/gin-gonic/gin v1.9.1 h1:...SHA256...
 github.com/gin-gonic/gin v1.9.1/go.mod h1:...SHA256...</code></pre>
   <p>每项包含两条记录：模块源码 zip 的哈希和 go.mod 文件的哈希。<code>go sum</code> 数据库（<code>sum.golang.org</code>）提供公共校验，确保全世界开发者下载到相同的代码。</p>
 
@@ -80,7 +80,7 @@ github.com/gin-gonic/gin v1.9.1/go.mod h1:...SHA256...</code></pre>
 
   <h3>go mod init</h3>
   <p>初始化新模块，在当前目录创建 <code>go.mod</code> 文件：</p>
-  <pre><code># 创建模块，模块路径为 github.com/user/project
+  <pre><code class="language-go"># 创建模块，模块路径为 github.com/user/project
 go mod init github.com/user/project
 
 # 如果 GOPATH 模式下在 $GOPATH/src 内，可省略参数自动推导
@@ -88,20 +88,20 @@ go mod init</code></pre>
 
   <h3>go mod tidy</h3>
   <p>清理依赖关系：移除不再需要的间接依赖、添加缺失的依赖条目、更新 <code>go.sum</code>。这是最常用的模块维护命令：</p>
-  <pre><code>go mod tidy
+  <pre><code class="language-go">go mod tidy
 
 # 同时清理测试依赖（默认已包含）
 go mod tidy -e  # 容忍部分加载错误</code></pre>
 
   <h3>go mod download</h3>
   <p>将 go.mod 中声明的所有依赖下载到模块缓存（<code>$GOPATH/pkg/mod/cache</code>）。常用于 CI 构建中预拉取依赖：</p>
-  <pre><code>go mod download
+  <pre><code class="language-go">go mod download
 go mod download -x            # 显示下载细节
 go mod download github.com/foo/bar@v1.0.0  # 下载指定模块</code></pre>
 
   <h3>go mod vendor</h3>
   <p>创建 <code>vendor/</code> 目录，将所有依赖复制到其中。适用于需要离线构建或审查第三方代码的场景：</p>
-  <pre><code>go mod vendor
+  <pre><code class="language-go">go mod vendor
 go build -mod=vendor          # 强制使用 vendor 目录而非缓存
 
 # 验证 vendor 内容与 go.mod 一致
@@ -113,7 +113,7 @@ go mod verify</code></pre>
 
   <h3>go mod verify</h3>
   <p>验证缓存的依赖与 <code>go.sum</code> 中记录的哈希值一致。如果任何文件被篡改，go 会报告不匹配：</p>
-  <pre><code>$ go mod verify
+  <pre><code class="language-go">$ go mod verify
 # 全部通过
 all modules verified
 
@@ -122,14 +122,14 @@ github.com/foo/bar@v1.0.0: dir has been modified (...)</code></pre>
 
   <h3>go mod why</h3>
   <p>解释为什么某个包被列为依赖，显示从主模块到该包的导入链：</p>
-  <pre><code>$ go mod why -m github.com/gin-gonic/gin
+  <pre><code class="language-go">$ go mod why -m github.com/gin-gonic/gin
 # github.com/gin-gonic/gin
 main.go
 import github.com/gin-gonic/gin</code></pre>
 
   <h3>go mod graph</h3>
   <p>以文本格式输出完整依赖图，每行表示一个依赖关系：</p>
-  <pre><code>$ go mod graph
+  <pre><code class="language-go">$ go mod graph
 github.com/user/project github.com/gin-gonic/gin@v1.9.1
 github.com/user/project go.uber.org/zap@v1.27.0
 github.com/gin-gonic/gin github.com/gin-contrib/sse@v0.1.0
@@ -148,7 +148,7 @@ github.com/gin-gonic/gin github.com/gin-contrib/sse@v0.1.0
 
   <h3>v1 与 v2+ 的路径处理</h3>
   <p>Go Module 对主要版本升级有特殊处理。主版本号从 v2 开始，模块路径必须包含 <code>/vN</code> 后缀：</p>
-  <pre><code>// v1 版本（无后缀）
+  <pre><code class="language-go">// v1 版本（无后缀）
 module github.com/user/project
 
 // v2 版本（必须加 /v2）
@@ -157,7 +157,7 @@ module github.com/user/project/v2
 // v3 版本（必须加 /v3）
 module github.com/user/project/v3</code></pre>
   <p>这个设计允许同一模块的不同主版本共存于同一个构建图中：</p>
-  <pre><code>import (
+  <pre><code class="language-go">import (
     "github.com/user/project"         // v1.x
     projectv2 "github.com/user/project/v2"  // v2.x
 )</code></pre>
@@ -168,7 +168,7 @@ module github.com/user/project/v3</code></pre>
 
   <h3>v2+ 兼容升级策略</h3>
   <p>将现有项目升级到 v2 时可以采取以下策略：</p>
-  <pre><code># 1. 在 go.mod 中声明 v2 模块路径
+  <pre><code class="language-go"># 1. 在 go.mod 中声明 v2 模块路径
 module github.com/user/project/v2
 
 # 2. 创建 v2 子目录或分支，保留 v1 同时开发 v2
@@ -181,7 +181,7 @@ git checkout -b v2
 
   <h3>版本标签</h3>
   <p>Go 通过 git tag 定位模块版本。标签格式必须严格匹配：</p>
-  <pre><code># v1 标签
+  <pre><code class="language-go"># v1 标签
 git tag v1.0.0
 git push origin v1.0.0
 
@@ -217,7 +217,7 @@ git tag v2.0.0  # 模块路径已含 /v2</code></pre>
 
   <h3>构建列表生成</h3>
   <p>MVS 生成的构建列表（build list）可通过以下命令查看：</p>
-  <pre><code># 查看完整构建列表
+  <pre><code class="language-go"># 查看完整构建列表
 go list -m all
 
 # 查看特定模块的选定版本
@@ -235,7 +235,7 @@ go list -m -json all</code></pre>
   </ol>
 
   <h3>MVS 示例推演</h3>
-  <pre><code>// 主模块 go.mod 要求
+  <pre><code class="language-go">// 主模块 go.mod 要求
 require A v1.2.0
 require B v1.0.0
 
@@ -258,7 +258,7 @@ require C v1.3.0
 
   <h3>replace 指令</h3>
   <p>replace 用于替换模块版本，常用于本地开发调试和 fork 替换：</p>
-  <pre><code>// go.mod
+  <pre><code class="language-go">// go.mod
 
 // 替换为本地目录（开发时）
 replace github.com/gin-gonic/gin => /home/user/local/gin
@@ -275,7 +275,7 @@ replace example.com/old => example.com/new v1.2.3</code></pre>
 
   <h3>retract 指令</h3>
   <p>retract 用于标记某个版本存在严重问题，阻止 <code>go get</code> 和 <code>go mod tidy</code> 自动选择：</p>
-  <pre><code>// go.mod
+  <pre><code class="language-go">// go.mod
 module github.com/user/library
 
 go 1.22
@@ -291,14 +291,14 @@ retract [v1.0.0, v1.1.0]
 // 严重安全漏洞 CVE-2024-XXXX
 retract v1.0.0</code></pre>
   <p>当用户尝试 <code>go get module@v1.0.0</code> 时，go 会显示撤回原因并建议升级：</p>
-  <pre><code>$ go get github.com/user/library@v1.0.0
+  <pre><code class="language-go">$ go get github.com/user/library@v1.0.0
 go: warning: github.com/user/library@v1.0.0: retracted by module author: 严重安全漏洞 CVE-2024-XXXX
 go: to switch to the latest unretracted version, run:
 go get github.com/user/library@latest</code></pre>
 
   <h3>exclude 指令</h3>
   <p>exclude 强制排除某个版本，即使 MVS 选择了它也会被忽略。这通常用于临时排除有问题的版本：</p>
-  <pre><code>// go.mod
+  <pre><code class="language-go">// go.mod
 exclude github.com/foo/bar v0.9.0
 
 // 排除后 MVS 会选择下一个可用版本</code></pre>
@@ -310,7 +310,7 @@ exclude github.com/foo/bar v0.9.0
 
   <h3>GOPROXY</h3>
   <p>控制模块下载的代理地址。默认值是 <code>https://proxy.golang.org,direct</code>：</p>
-  <pre><code># 使用私有代理
+  <pre><code class="language-go"># 使用私有代理
 export GOPROXY=https://nexus.company.com/repository/go-proxy/,direct
 
 # 完全绕过代理（仅从源代码仓库获取）
@@ -321,7 +321,7 @@ export GOPROXY=direct</code></pre>
 
   <h3>GOPRIVATE</h3>
   <p>指定哪些模块路径应绕过代理和 sum 数据库。模式支持通配符：</p>
-  <pre><code># 单个仓库
+  <pre><code class="language-go"># 单个仓库
 export GOPRIVATE=github.com/mycompany
 
 # 多个仓库
@@ -332,7 +332,7 @@ git config --global url."git@github.com:mycompany".insteadOf "https://github.com
 
   <h3>GONOSUMCHECK 与 GONOSUMDB</h3>
   <p><code>GONOSUMCHECK</code> 跳过对特定模块的 <code>go.sum</code> 校验；<code>GONOSUMDB</code> 跳过 sum 数据库查询。通常只需设置 <code>GOPRIVATE</code>，它会自动填充另外两个：</p>
-  <pre><code># 设置 GOPRIVATE 自动设置 GONOSUMCHECK 和 GONOSUMDB
+  <pre><code class="language-go"># 设置 GOPRIVATE 自动设置 GONOSUMCHECK 和 GONOSUMDB
 export GOPRIVATE=*.corp.example.com
 
 # 等价于手动设置
@@ -341,7 +341,7 @@ export GONOSUMDB=*.corp.example.com</code></pre>
 
   <h3>GitLab 私有仓库配置</h3>
   <p>以下是一个使用 GitLab 私有仓库的完整配置示例：</p>
-  <pre><code># 1. 配置 Git 认证（使用 Personal Access Token）
+  <pre><code class="language-go"># 1. 配置 Git 认证（使用 Personal Access Token）
 git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/".insteadOf "https://gitlab.com/"
 
 # 2. 设置环境变量
@@ -356,7 +356,7 @@ go mod download</code></pre>
 
   <h3>GoProxy 自建方案</h3>
   <p>企业常用自建 GoProxy 来加速和缓存依赖：</p>
-  <pre><code># Athens（开源 Go Proxy 服务器）
+  <pre><code class="language-go"># Athens（开源 Go Proxy 服务器）
 docker run -p 3000:3000 gomods/athens:v0.12.0
 
 # 客户端配置
@@ -373,7 +373,7 @@ export GOPROXY=https://gocenter.io,direct</code></pre>
 
   <h3>go.work 文件</h3>
   <p><code>go.work</code> 文件位于工作区根目录，包含 <code>use</code> 和 <code>replace</code> 指令：</p>
-  <pre><code>go 1.22
+  <pre><code class="language-go">go 1.22
 
 use (
     ./project          # 主项目
@@ -387,7 +387,7 @@ replace (
 
   <h3>use 指令</h3>
   <p><code>use</code> 将本地模块加入工作区。加入后，工作区内所有模块之间的引用会自动使用本地代码：</p>
-  <pre><code>// 项目结构
+  <pre><code class="language-go">// 项目结构
 workstation/
 ├── go.work
 ├── server/          # 主服务
@@ -411,7 +411,7 @@ use (
 
   <h3>workspace 模式下的构建</h3>
   <p>当 <code>go.work</code> 存在时，Go 工具链自动进入 workspace 模式：</p>
-  <pre><code># 构建整个工作区
+  <pre><code class="language-go"># 构建整个工作区
 go build ./...
 
 # 测试所有工作区模块
@@ -444,7 +444,7 @@ go work edit -dropuse ./old-lib</code></pre>
 
   <h3>go mod graph</h3>
   <p><code>go mod graph</code> 输出完整依赖拓扑，可用于分析循环依赖和版本冲突：</p>
-  <pre><code>$ go mod graph | head -10
+  <pre><code class="language-go">$ go mod graph | head -10
 github.com/user/app github.com/gin-gonic/gin@v1.9.1
 github.com/user/app go.uber.org/zap@v1.27.0
 github.com/gin-gonic/gin github.com/gin-contrib/sse@v0.1.0
@@ -458,7 +458,7 @@ go mod graph | dot -Tsvg -o dep-graph.svg</code></pre>
 
   <h3>依赖审计</h3>
   <p>使用 <code>go mod why</code> 追踪特定包的引入路径：</p>
-  <pre><code># 查看 why 分析的详细信息
+  <pre><code class="language-go"># 查看 why 分析的详细信息
 go mod why -m github.com/ugorji/go/codec
 
 # 查看多个模块
@@ -466,7 +466,7 @@ go mod why -m github.com/ugorji/go/codec github.com/mattn/go-isatty</code></pre>
 
   <h3>包路径查找</h3>
   <p>常用组合命令来定位依赖中的问题：</p>
-  <pre><code># 查找所有直接依赖
+  <pre><code class="language-go"># 查找所有直接依赖
 go list -m
 
 # 查找间接依赖（不含直接依赖）
@@ -487,7 +487,7 @@ go list -m -json github.com/gin-gonic/gin</code></pre>
 
   <h3>依赖图可视化工具</h3>
   <p>以下第三方工具可用于生成更直观的依赖图：</p>
-  <pre><code># 1. go-callvis（调用图）
+  <pre><code class="language-go"># 1. go-callvis（调用图）
 go install github.com/ofabry/go-callvis@latest
 go-callvis -alldeps github.com/user/project
 
@@ -504,7 +504,7 @@ go install github.com/dominikh/go-tools/cmd/staticcheck@latest</code></pre>
 
   <h3>vendor 目录结构</h3>
   <p><code>go mod vendor</code> 会创建 <code>vendor/</code> 目录并复制所有依赖源码：</p>
-  <pre><code>project/
+  <pre><code class="language-go">project/
 ├── vendor/
 │   ├── modules.txt       # 模块版本清单
 │   └── github.com/
@@ -516,7 +516,7 @@ go install github.com/dominikh/go-tools/cmd/staticcheck@latest</code></pre>
 
   <h3>modules.txt 描述文件</h3>
   <p><code>vendor/modules.txt</code> 记录每个 vendor 模块的版本和包列表：</p>
-  <pre><code># vendor/modules.txt
+  <pre><code class="language-go"># vendor/modules.txt
 # github.com/gin-gonic/gin v1.9.1
 ## explicit
 github.com/gin-gonic/gin
@@ -528,7 +528,7 @@ github.com/gin-contrib/sse</code></pre>
 
   <h3>vendor 模式构建</h3>
   <p>在 vendor 模式下，Go 编译器优先从 <code>vendor/</code> 读取依赖：</p>
-  <pre><code># 强制使用 vendor 构建
+  <pre><code class="language-go"># 强制使用 vendor 构建
 go build -mod=vendor ./...
 
 # 测试也使用 vendor
@@ -543,7 +543,7 @@ go test -mod=vendor ./...
 
   <h3>模块缓存</h3>
   <p>Go 将所有下载的模块存储在 <code>$GOPATH/pkg/mod</code> 中，缓存结构为：</p>
-  <pre><code>$GOPATH/pkg/mod/
+  <pre><code class="language-go">$GOPATH/pkg/mod/
 ├── cache/
 │   ├── download/          # 原始 zip 和元数据缓存
 │   └── vcs/               # VCS 元数据缓存
@@ -555,7 +555,7 @@ go test -mod=vendor ./...
 └── sumdb/                 # sum 数据库缓存</code></pre>
 
   <h3>缓存管理技巧</h3>
-  <pre><code># 查看模块缓存位置
+  <pre><code class="language-go"># 查看模块缓存位置
 go env GOMODCACHE
 
 # 查看模块缓存大小
@@ -579,7 +579,7 @@ export GOFLAGS=-mod=mod
 
   <h3>Go Module 代理缓存</h3>
   <p>除了本地缓存，Go Proxy（如 Athens、Artifactory）在服务器端提供缓存层：</p>
-  <pre><code># 企业 Athens 代理
+  <pre><code class="language-go"># 企业 Athens 代理
  GOPROXY=http://athens.internal:3000
 
 # 使用 GoCenter

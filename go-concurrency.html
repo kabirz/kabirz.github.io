@@ -40,7 +40,7 @@
 
   <p>在函数调用前加上 <code>go</code> 关键字即可启动一个 goroutine：</p>
 
-<pre><code>// 基本用法
+<pre><code class="language-go">// 基本用法
 go doSomething()
 
 // 匿名函数
@@ -68,7 +68,7 @@ for i := 0; i &lt; 10; i++ {
 
   <p>Goroutine 使用<strong>动态可增长栈</strong>（初始约 2KB，最大可达 1GB），由运行时管理。栈扩展通过 <code>runtime.morestack</code> 实现：</p>
 
-<pre><code>// 查看当前 goroutine 数量
+<pre><code class="language-go">// 查看当前 goroutine 数量
 import "runtime"
 
 func main() {
@@ -91,7 +91,7 @@ func main() {
 
   <p>GOMAXPROCS 控制 Go 程序可以使用的<strong>操作系统线程数</strong>，默认为 CPU 核心数。它不是 goroutine 数量的上限，而是并发执行 goroutine 的 worker 线程数。</p>
 
-<pre><code>import "runtime"
+<pre><code class="language-go">import "runtime"
 
 func main() {
     fmt.Println("默认 GOMAXPROCS:", runtime.GOMAXPROCS(0))
@@ -119,7 +119,7 @@ func main() {
 
   <h3>创建与基本操作</h3>
 
-<pre><code>// 创建（make 函数，不是 new）
+<pre><code class="language-go">// 创建（make 函数，不是 new）
 ch1 := make(chan int)          // 无缓冲 channel
 ch2 := make(chan string, 10)   // 有缓冲 channel，容量 10
 
@@ -144,7 +144,7 @@ close(ch)       // 关闭后不能再发送，但可以继续接收剩余内容
     <tr><td>典型用途</td><td>信号通知、同步</td><td>工作队列、限流</td></tr>
   </table>
 
-<pre><code>// 无缓冲 channel - 确保通知到达
+<pre><code class="language-go">// 无缓冲 channel - 确保通知到达
 func main() {
     done := make(chan struct{})
     go func() {
@@ -178,7 +178,7 @@ func main() {
 
   <p>使用 <code>range</code> 遍历 channel 直到关闭：</p>
 
-<pre><code>func producer(out chan&lt;- int) {
+<pre><code class="language-go">func producer(out chan&lt;- int) {
     for i := 0; i &lt; 10; i++ {
         out &lt;- i * 2
     }
@@ -214,7 +214,7 @@ func main() {
 
   <p>Go 类型系统支持 channel 方向约束，在编译期保证 channel 不被误用：</p>
 
-<pre><code>// 只读 channel（输入）
+<pre><code class="language-go">// 只读 channel（输入）
 func consumer(ch &lt;-chan int) {
     for v := range ch {
         fmt.Println(v)
@@ -244,7 +244,7 @@ func main() {
 
   <h3>基本 select</h3>
 
-<pre><code>func main() {
+<pre><code class="language-go">func main() {
     ch1 := make(chan string)
     ch2 := make(chan string)
 
@@ -272,7 +272,7 @@ func main() {
 
   <p><code>default</code> 分支使 select 变为非阻塞：</p>
 
-<pre><code>// 非阻塞接收
+<pre><code class="language-go">// 非阻塞接收
 select {
 case msg := &lt;-ch:
     fmt.Println("收到:", msg)
@@ -299,7 +299,7 @@ default:
 
   <h3>定时器与超时模式</h3>
 
-<pre><code>// 超时控制
+<pre><code class="language-go">// 超时控制
 func fetchWithTimeout(url string, timeout time.Duration) (string, error) {
     result := make(chan string, 1)
 
@@ -342,7 +342,7 @@ func heartbeat(ctx context.Context, interval time.Duration) &lt;-chan struct{} {
 
   <p>select 经常配合 for 循环使用以实现持续监听：</p>
 
-<pre><code>// 事件循环
+<pre><code class="language-go">// 事件循环
 func eventLoop(stop &lt;-chan struct{}) {
     for {
         select {
@@ -374,7 +374,7 @@ func eventLoop(stop &lt;-chan struct{}) {
 
   <h3>Mutex 互斥锁</h3>
 
-<pre><code>type SafeCounter struct {
+<pre><code class="language-go">type SafeCounter struct {
     mu    sync.Mutex
     value int64
 }
@@ -396,7 +396,7 @@ func (c *SafeCounter) Value() int64 {
 
   <p>RWMutex 适用于<strong>读多写少</strong>的场景。多个读操作可以同时进行，写操作是独占的：</p>
 
-<pre><code>type SafeCache struct {
+<pre><code class="language-go">type SafeCache struct {
     mu    sync.RWMutex
     data  map[string]any
 }
@@ -421,7 +421,7 @@ func (c *SafeCache) Set(key string, value any) {
 
   <p><code>sync.Mutex</code> 和 <code>sync.RWMutex</code> 的零值就是<strong>已解锁的锁</strong>，可以直接使用。不需要 <code>new</code> 或 <code>make</code>：</p>
 
-<pre><code>// 正确 — 零值可用
+<pre><code class="language-go">// 正确 — 零值可用
 type Counter struct {
     sync.Mutex       // 可以直接内嵌
     Count int
@@ -444,7 +444,7 @@ counter := new(Counter)  // Mutex 零值可用
 
   <h3>锁的常见陷阱</h3>
 
-<pre><code>// 陷阱 1: 忘记解锁（使用 defer 保证）
+<pre><code class="language-go">// 陷阱 1: 忘记解锁（使用 defer 保证）
 func (c *Counter) Bad() {
     c.Lock()
     val := c.Count
@@ -490,7 +490,7 @@ func copyStruct(s SafeMap) {  // ❌ 值传递会复制锁
 
   <h3>WaitGroup — 等待一组 goroutine</h3>
 
-<pre><code>func main() {
+<pre><code class="language-go">func main() {
     var wg sync.WaitGroup
 
     for i := 0; i &lt; 5; i++ {
@@ -520,7 +520,7 @@ wg.Wait()  // ❌ 可能在 Add 之前就执行了
 
   <h3>Once — 只执行一次</h3>
 
-<pre><code>type Singleton struct {
+<pre><code class="language-go">type Singleton struct {
     // ...
 }
 
@@ -547,7 +547,7 @@ func GetInstance() *Singleton {
 
   <p>Cond 用于 goroutine 等待特定条件变为 true。它比 channel 更灵活，也更复杂：</p>
 
-<pre><code>type Queue struct {
+<pre><code class="language-go">type Queue struct {
     items []int
     cond  *sync.Cond
 }
@@ -592,7 +592,7 @@ func (q *Queue) Dequeue() int {
 
   <p><code>sync.Pool</code> 是一个<strong>临时对象缓存池</strong>，用于减少频繁分配和 GC 的压力。它的设计目标是"临时"——池中的对象可能在任意时刻被 GC 回收，所以 Pool 适合缓存分配开销大的临时对象。</p>
 
-<pre><code>type Pool struct {
+<pre><code class="language-go">type Pool struct {
     // New 在 Get 发现池为空时调用，创建新对象
     New func() any
 }
@@ -622,7 +622,7 @@ func processData(data []byte) string {
 
   <h3>Pool 的实现细节</h3>
 
-<pre><code>// 运行时实现（简化）：
+<pre><code class="language-go">// 运行时实现（简化）：
 // 每个 P 有一个私有池和一个共享池链表
 // Get: 先尝试私有的，再尝试共享的，最后调用 New
 // Put: 放回当前 P 的共享池
@@ -653,7 +653,7 @@ func processData(data []byte) string {
 
   <h3>原子操作的基本函数</h3>
 
-<pre><code>import "sync/atomic"
+<pre><code class="language-go">import "sync/atomic"
 
 var counter atomic.Int64  // Go 1.19 引入的类型化 API
 
@@ -676,7 +676,7 @@ v2 := atomic.LoadInt64(&amp;counter2)
 
   <p><code>atomic.Value</code> 用于原子地读写<strong>任意类型</strong>的值，适用于配置热更新、安全快照等场景：</p>
 
-<pre><code>type Config struct {
+<pre><code class="language-go">type Config struct {
     Host    string
     Port    int
     Timeout time.Duration
@@ -724,7 +724,7 @@ func main() {
     <li>不使用 atomic 的共享变量访问是 data race</li>
   </ul>
 
-<pre><code>// 使用 atomic 实现无锁通知
+<pre><code class="language-go">// 使用 atomic 实现无锁通知
 var ready atomic.Bool
 
 // goroutine 1
@@ -748,7 +748,7 @@ fmt.Println("检测到 ready")
 
   <h3>Worker Pool（工作者池）</h3>
 
-<pre><code>func workerPool(numWorkers int, jobs &lt;-chan int, results chan&lt;- int) {
+<pre><code class="language-go">func workerPool(numWorkers int, jobs &lt;-chan int, results chan&lt;- int) {
     var wg sync.WaitGroup
     for i := 0; i &lt; numWorkers; i++ {
         wg.Add(1)
@@ -784,7 +784,7 @@ func main() {
 
   <p>Fan-Out：将输入分发给多个 goroutine 并行处理。Fan-In：合并多个 channel 到同一个输出 channel。</p>
 
-<pre><code>// Fan-Out：分发到多个 goroutine
+<pre><code class="language-go">// Fan-Out：分发到多个 goroutine
 func fanOut(input &lt;-chan int, workers int) []&lt;-chan int {
     channels := make([]&lt;-chan int, workers)
     for i := 0; i &lt; workers; i++ {
@@ -842,7 +842,7 @@ func main() {
 
   <p>流水线模式将一个处理阶段拆分为多个步骤，每个步骤由一个 goroutine 执行，通过 channel 连接前后阶段：</p>
 
-<pre><code>// 阶段 1: 生成数字
+<pre><code class="language-go">// 阶段 1: 生成数字
 func generate(nums ...int) &lt;-chan int {
     out := make(chan int)
     go func() {
@@ -888,7 +888,7 @@ func main() {
 
   <h3>扇出（Fan-Out Stage）</h3>
 
-<pre><code>// 在流水线中，如果一个阶段性能不够，可以扇出多个相同阶段的 goroutine：
+<pre><code class="language-go">// 在流水线中，如果一个阶段性能不够，可以扇出多个相同阶段的 goroutine：
 func fanOutStage(in &lt;-chan int, workers int) &lt;-chan int {
     out := make(chan int)
     var wg sync.WaitGroup
@@ -912,7 +912,7 @@ func fanOutStage(in &lt;-chan int, workers int) &lt;-chan int {
 
   <h3>超时控制模式</h3>
 
-<pre><code>// Or-Channel：只要任意一个 channel 完成就返回
+<pre><code class="language-go">// Or-Channel：只要任意一个 channel 完成就返回
 func or(channels ...&lt;-chan struct{}) &lt;-chan struct{} {
     switch len(channels) {
     case 0:
@@ -936,7 +936,7 @@ func or(channels ...&lt;-chan struct{}) &lt;-chan struct{} {
 
   <h3>上下文传递模式</h3>
 
-<pre><code>// 通过 context 传递取消信号和超时
+<pre><code class="language-go">// 通过 context 传递取消信号和超时
 func withTimeout(ctx context.Context, duration time.Duration) {
     ctx, cancel := context.WithTimeout(ctx, duration)
     defer cancel()

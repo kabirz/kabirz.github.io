@@ -128,7 +128,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/flow.h:68 — 路由查找键</span>
+    <pre><code class="language-c"><span class="cm">// include/net/flow.h:68 — 路由查找键</span>
 <span class="kw">struct</span> <span class="ty">flowi4</span> {
     <span class="ty">__be32</span>  saddr;      <span class="cm">// 源 IP</span>
     <span class="ty">__be32</span>  daddr;      <span class="cm">// 目的 IP（路由查找键）</span>
@@ -142,7 +142,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/route.h:57 — 路由缓存条目</span>
+    <pre><code class="language-c"><span class="cm">// include/net/route.h:57 — 路由缓存条目</span>
 <span class="kw">struct</span> <span class="ty">rtable</span> {
     <span class="kw">struct</span> <span class="ty">dst_entry</span>  dst;          <span class="cm">// 目的缓存（含邻居引用）</span>
     <span class="ty">int</span>               rt_genid;      <span class="cm">// 路由表代号</span>
@@ -157,7 +157,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/ip_fib.h:173 — FIB 查找结果</span>
+    <pre><code class="language-c"><span class="cm">// include/net/ip_fib.h:173 — FIB 查找结果</span>
 <span class="kw">struct</span> <span class="ty">fib_result</span> {
     <span class="ty">__be32</span>              prefix;      <span class="cm">// 匹配的路由前缀</span>
     <span class="ty">unsigned char</span>       prefixlen;   <span class="cm">// 前缀长度（最长匹配）</span>
@@ -177,7 +177,7 @@
 
   <h3>FIB 表结构</h3>
   <div class="card">
-    <pre><code><span class="cm">// include/net/ip_fib.h:257</span>
+    <pre><code class="language-c"><span class="cm">// include/net/ip_fib.h:257</span>
 <span class="kw">struct</span> <span class="ty">fib_table</span> {
     <span class="ty">u32</span>             tb_id;        <span class="cm">// 表 ID（255=main, 254=local, 0=unspec）</span>
     <span class="ty">int</span>             tb_num_hoists; <span class="cm">// 被引用次数</span>
@@ -301,7 +301,7 @@
 </pre></div>
 
   <div class="card">
-    <pre><code><span class="cm"># 配置策略路由</span>
+    <pre><code class="language-c"><span class="cm"># 配置策略路由</span>
 $ ip rule show
 0:	from all lookup local
 32766:	from all lookup main

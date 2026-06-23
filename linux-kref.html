@@ -36,7 +36,7 @@
 
   <p><strong>kref</strong> 是 Linux 内核的"类智能指针"机制，用约 60 行代码将 <code>refcount_t</code> 包装成一套"难以误用"的 API。</p>
 
-<pre><code>struct kref {
+<pre><code class="language-c">struct kref {
     refcount_t refcount;  // 底层就是 refcount_t
 };</code></pre>
 
@@ -64,7 +64,7 @@
     <tr><td><code>kref_sub(kref, count, release)</code></td><td>一次性减去 count（>=1），归零时调用 release。</td></tr>
   </table>
 
-<pre><code>// 典型用法：嵌入式 kref
+<pre><code class="language-c">// 典型用法：嵌入式 kref
 struct my_obj {
     struct kref ref;
     int data;
@@ -92,7 +92,7 @@ kref_put(&obj->ref, my_release);  // refcount = 0 → 调 my_release → kfree(o
   <div class="card">
     <div class="card-title">规则 1：kref_get 必须对应已知活跃的对象</div>
     <p>如果你不确定对象是否还活着，不能用 <code>kref_get()</code>。必须用 <code>kref_get_unless_zero()</code>。后者只有在 refcount > 0 时才会递增，防止在对象回收瞬间的竞态。</p>
-<pre><code>// 错误：可能 race with last put
+<pre><code class="language-c">// 错误：可能 race with last put
 struct my_obj *obj = lookup_table_find(key);
 kref_get(&obj->ref);  // 如果 obj 已从 lookup 移除但尚未释放呢？
                       // 不对——lookup 本身必须保证对象活着
@@ -110,7 +110,7 @@ if (obj &amp;&amp; kref_get_unless_zero(&obj->ref)) {
   <div class="card">
     <div class="card-title">规则 2：release 中不可持有 kref_get 路径上的锁</div>
     <p>如果你在 release 回调中获取锁 A，而某个函数在持有锁 A 的时候调用了 <code>kref_put()</code>，就会死锁。</p>
-<pre><code>// 死锁场景
+<pre><code class="language-c">// 死锁场景
 mutex_lock(&m);
 kref_put(&obj->ref, my_release);  // → my_release 试图 mutex_lock(&m)
                                   // → 死锁！
@@ -120,7 +120,7 @@ kref_put(&obj->ref, my_release);  // → my_release 试图 mutex_lock(&m)
   <div class="card">
     <div class="card-title">规则 3：kref_put 返回后对象已释放</div>
     <p><code>kref_put()</code> 返回 true 表示 release 已被调用，对象已无效。不能再访问对象的任何字段。</p>
-<pre><code>if (kref_put(&obj->ref, my_release)) {
+<pre><code class="language-c">if (kref_put(&obj->ref, my_release)) {
     // obj 已经被 kfree（或资源已释放）
     // 不能再访问 obj->anything
 }
@@ -137,7 +137,7 @@ kref_put(&obj->ref, my_release);  // → my_release 试图 mutex_lock(&m)
   <h2><span class="num">04</span> 使用模式</h2>
 
   <h3>模式一：对象查找 + 自动释放</h3>
-<pre><code>// drivers/usb/common/ulpi.c — ULPI 总线
+<pre><code class="language-c">// drivers/usb/common/ulpi.c — ULPI 总线
 static struct ulpi *ulpi_alloc(struct device *parent)
 {
     struct ulpi *ulpi;
@@ -165,7 +165,7 @@ static void ulpi_release(struct kref *kref)
 </code></pre>
 
   <h3>模式二：kref_get_unless_zero 安全查找</h3>
-<pre><code>// drivers/scsi/scsi_scan.c — SCSI target
+<pre><code class="language-c">// drivers/scsi/scsi_scan.c — SCSI target
 static struct scsi_target *__scsi_find_target(
     struct device *parent, int channel, uint id)
 {
@@ -186,7 +186,7 @@ scsi_target_reap(starget_put(starget));
 </code></pre>
 
   <h3>模式三：kref_put_mutex — 带互斥的释放</h3>
-<pre><code>// drivers/firmware/raspberrypi.c — RPi firmware
+<pre><code class="language-c">// drivers/firmware/raspberrypi.c — RPi firmware
 static void rpi_firmware_delete(struct kref *kref)
 {
     struct rpi_firmware *fw = container_of(
@@ -260,7 +260,7 @@ void rpi_firmware_put(struct rpi_firmware *fw)
 
   <p>kref 的整个实现都在 <code>include/linux/kref.h</code> 中，全是 static inline，没有单独的 .c 文件。</p>
 
-<pre><code>// include/linux/kref.h
+<pre><code class="language-c">// include/linux/kref.h
 struct kref {
     refcount_t refcount;
 };

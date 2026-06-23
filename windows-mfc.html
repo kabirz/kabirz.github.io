@@ -89,7 +89,7 @@
   <p>MFC 所有类（极少数工具类除外）派生自 <code>CObject</code>，它提供序列化、运行时类型、诊断Dump 三大基础能力。其下最重要的分支是 <code>CCmdTarget</code>——所有能接收命令/消息的对象的基类。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// MFC 核心继承链（简化）</span>
+    <pre><code class="language-cpp"><span class="cm">// MFC 核心继承链（简化）</span>
 <span class="ty">CObject</span>                         <span class="cm">// 根：序列化 + RTTI + 诊断</span>
 ├── <span class="ty">CCmdTarget</span>                  <span class="cm">// 接收消息/命令的基类</span>
 │   ├── <span class="ty">CWinThread</span>            <span class="cm">// 线程抽象（含消息循环）</span>
@@ -121,7 +121,7 @@
   <p>MFC 程序的入口不是 <code>WinMain</code>，而是<strong>全局应用对象 <code>theApp</code> 的构造</strong>。链接器把 MFC 提供的 <code>WinMain</code> 接入 CRT 启动流程，它调用 <code>AfxWinMain</code>，进而驱动应用对象的三个生命周期方法。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// app.h — 声明唯一的应用对象</span>
+    <pre><code class="language-cpp"><span class="cm">// app.h — 声明唯一的应用对象</span>
 <span class="kw">class</span> <span class="ty">CMyApp</span> : <span class="kw">public</span> <span class="ty">CWinApp</span> {
 <span class="kw">public</span>:
     <span class="kw">virtual BOOL</span> <span class="fn">InitInstance</span>();   <span class="cm">// 初始化：建窗口、显示</span>
@@ -146,7 +146,7 @@
 
   <h3>启动到退出的完整流程</h3>
   <div class="card">
-    <pre><code><span class="cm">// MFC 提供的入口（隐藏在库中，无需手写）</span>
+    <pre><code class="language-cpp"><span class="cm">// MFC 提供的入口（隐藏在库中，无需手写）</span>
 <span class="kw">int WINAPI</span> <span class="fn">WinMain</span>(...) {
     <span class="cm">// 1. theApp 全局对象已在 main 之前构造（CRT 初始化阶段）</span>
     <span class="ty">CWinThread</span>* pThread = <span class="fn">AfxGetThread</span>();
@@ -189,7 +189,7 @@
   <p>Win32 把所有事件（鼠标、键盘、定时器、命令）以<strong>消息（MSG）</strong>形式投递到 <code>WndProc</code>。MFC 用<strong>消息映射宏</strong>把每条消息绑定到一个成员函数，替代原始 <code>switch(LOWORD(wParam))</code> 的巨型回调。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// MyView.h</span>
+    <pre><code class="language-cpp"><span class="cm">// MyView.h</span>
 <span class="kw">class</span> <span class="ty">CMyView</span> : <span class="kw">public</span> <span class="ty">CView</span> {
     <span class="fn">DECLARE_DYNCREATE</span>(<span class="ty">CMyView</span>)      <span class="cm">// 动态创建（Doc/View 必需）</span>
 <span class="kw">protected</span>:
@@ -219,7 +219,7 @@
 
   <h3>消息映射的运行时结构</h3>
   <div class="card">
-    <pre><code><span class="cm">// 宏展开后的核心数据结构</span>
+    <pre><code class="language-cpp"><span class="cm">// 宏展开后的核心数据结构</span>
 <span class="kw">struct</span> <span class="ty">AFX_MSGMAP_ENTRY</span> {
     <span class="ty">UINT</span>      nMessage;    <span class="cm">// 消息号，如 WM_LBUTTONDOWN</span>
     <span class="ty">UINT</span>      nCode;       <span class="cm">// 通知码（控件通知用）</span>
@@ -267,7 +267,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// 在 CWinApp::InitInstance 中注册文档模板</span>
+    <pre><code class="language-cpp"><span class="cm">// 在 CWinApp::InitInstance 中注册文档模板</span>
 <span class="ty">CSingleDocTemplate</span>* pDocTemplate = <span class="kw">new</span> <span class="ty">CSingleDocTemplate</span>(
     <span class="ty">IDR_MAINFRAME</span>,                        <span class="cm">// 资源 ID（菜单/图标/字符串）</span>
     <span class="fn">RUNTIME_CLASS</span>(<span class="ty">CMyDoc</span>),               <span class="cm">// 文档类（动态创建）</span>
@@ -283,7 +283,7 @@
 
   <h3>文档 ↔ 视图 协作</h3>
   <div class="card">
-    <pre><code><span class="cm">// 数据改变后，文档通知所有关联视图刷新</span>
+    <pre><code class="language-cpp"><span class="cm">// 数据改变后，文档通知所有关联视图刷新</span>
 <span class="kw">void</span> <span class="ty">CMyDoc</span>::<span class="fn">ModifyData</span>(...) {
     <span class="cm">// ... 修改 m_data ...</span>
     <span class="fn">SetModifiedFlag</span>();          <span class="cm">// 标记“未保存”，标题出现 *</span>
@@ -306,7 +306,7 @@
   <h3>命令路由（Command Routing）</h3>
   <p>菜单/工具栏点击产生 <code>WM_COMMAND</code>，MFC 沿<strong>固定链</strong>逐级查找处理者，第一个匹配的就处理：</p>
   <div class="card">
-    <pre><code><span class="cm">// 视图 → 文档 → 文档模板 → 框架 → 应用</span>
+    <pre><code class="language-cpp"><span class="cm">// 视图 → 文档 → 文档模板 → 框架 → 应用</span>
 <span class="cm">// 每一级的 OnCmdMsg 依次询问本对象及其子对象</span>
 
 <span class="cm">// MDI 中框架链略复杂：</span>
@@ -322,7 +322,7 @@
   <p>MFC 在标准 C++ 还没有 RTTI 的年代，就自研了一套<strong>运行时类型信息系统（CRuntimeClass）</strong>。它支撑了 Doc/View 的动态创建、序列化时的类匹配、安全类型转换。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 三套宏（按能力递增）</span>
+    <pre><code class="language-cpp"><span class="cm">// 三套宏（按能力递增）</span>
 <span class="fn">DECLARE_DYNAMIC</span> / <span class="fn">IMPLEMENT_DYNAMIC</span>           <span class="cm">// 仅类型信息</span>
 <span class="fn">DECLARE_DYNCREATE</span> / <span class="fn">IMPLEMENT_DYNCREATE</span>     <span class="cm">// + 无参默认构造（动态创建）</span>
 <span class="fn">DECLARE_SERIAL</span> / <span class="fn">IMPLEMENT_SERIAL</span>          <span class="cm">// + 序列化支持</span>
@@ -356,7 +356,7 @@
   <p>MFC 的 <code>CArchive</code> 提供类型安全的二进制持久化，配合 <code>CObject::Serialize</code> 实现对象图（含指针、嵌套、集合）的存取。框架在“文件→打开/保存”时自动构造 <code>CArchive</code> 并调用文档的 <code>Serialize</code>。</p>
 
   <div class="card">
-    <pre><code><span class="kw">void</span> <span class="ty">CMyDoc</span>::<span class="fn">Serialize</span>(<span class="ty">CArchive</span>&amp; ar)
+    <pre><code class="language-cpp"><span class="kw">void</span> <span class="ty">CMyDoc</span>::<span class="fn">Serialize</span>(<span class="ty">CArchive</span>&amp; ar)
 {
     <span class="ty">CDocument</span>::<span class="fn">Serialize</span>(ar);          <span class="cm">// 基类先做（MFC 内部状态）</span>
     <span class="kw">if</span> (ar.<span class="fn">IsStoring</span>()) {
@@ -391,7 +391,7 @@
   <p><code>CDialog</code> 封装对话框资源（.rc 中的 <code>DIALOG</code> 模板）。MFC 的两大支柱技术让对话框开发极其简洁：<strong>DDX</strong>（Dialog Data eXchange，数据交换）与 <strong>DDV</strong>（Dialog Data Validation，数据校验）。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// MyDlg.h</span>
+    <pre><code class="language-cpp"><span class="cm">// MyDlg.h</span>
 <span class="kw">class</span> <span class="ty">CMyDlg</span> : <span class="kw">public</span> <span class="ty">CDialogEx</span> {
     <span class="fn">DECLARE_DYNAMIC</span>(<span class="ty">CMyDlg</span>)
 <span class="kw">public</span>:
@@ -450,7 +450,7 @@
   <p>所有绘制都通过<strong>设备上下文（DC）</strong>，<code>CDC</code> 封装 <code>HDC</code>。<code>CGdiObject</code> 派生类（笔、刷、字体、位图）封装 GDI 句柄。绘制只在 <code>WM_PAINT</code>（<code>OnPaint</code>/<code>OnDraw</code>）中进行——框架已用 <code>CPaintDC</code> 框定了无效区域。</p>
 
   <div class="card">
-    <pre><code><span class="kw">void</span> <span class="ty">CMyView</span>::<span class="fn">OnDraw</span>(<span class="ty">CDC</span>* pDC)
+    <pre><code class="language-cpp"><span class="kw">void</span> <span class="ty">CMyView</span>::<span class="fn">OnDraw</span>(<span class="ty">CDC</span>* pDC)
 {
     <span class="cm">// 1. 创建/选入 GDI 对象（栈对象，自动析构释放句柄）</span>
     <span class="ty">CPen</span> pen(<span class="ty">PS_SOLID</span>, <span class="num">2</span>, <span class="ty">RGB</span>(<span class="num">255</span>, <span class="num">0</span>, <span class="num">0</span>));
@@ -513,7 +513,7 @@
     </div>
   </div>
   <div class="card">
-    <pre><code><span class="ty">CString</span> s;
+    <pre><code class="language-cpp"><span class="ty">CString</span> s;
 s = <span class="st">"Hello"</span>;
 s.<span class="fn">Format</span>(_T(<span class="st">"Value = %d"</span>), <span class="num">42</span>);
 <span class="ty">CStringW</span> w = s;                          <span class="cm">// 与 std::wstring 互转方便</span>
@@ -534,7 +534,7 @@ dict[<span class="st">"key"</span>] = <span class="num">1</span>;
   <p>下面是一个最小可运行的 SDI（单文档）应用骨架，体现 MFC 各组件如何协作。用 VS“MFC 应用程序向导”生成的工程与此结构一致。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// ── MainFrm.h : 框架窗口 ──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── MainFrm.h : 框架窗口 ──</span>
 <span class="kw">class</span> <span class="ty">CMainFrame</span> : <span class="kw">public</span> <span class="ty">CFrameWnd</span> {
     <span class="fn">DECLARE_DYNCREATE</span>(<span class="ty">CMainFrame</span>)
 <span class="kw">public</span>:

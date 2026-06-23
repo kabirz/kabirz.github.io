@@ -57,7 +57,7 @@
   </ul>
 
   <p>列出当前网络：</p>
-<pre><code>$ docker network ls
+<pre><code class="language-bash">$ docker network ls
 NETWORK ID     NAME      DRIVER    SCOPE
 a1b2c3d4...    bridge    bridge    local
 e5f6g7h8...    host      host      local
@@ -85,7 +85,7 @@ $ docker network inspect bridge
   <p>bridge 是 Docker 默认网络模型。通过 Linux bridge (docker0) + veth pair + iptables 实现容器互联和外部访问。</p>
 
   <p>架构：</p>
-<pre><code>┌────────────────────────────────────────────────┐
+<pre><code class="language-bash">┌────────────────────────────────────────────────┐
 │                   Host                         │
 │                                                │
 │  ┌──────────────────────────────────────────┐  │
@@ -117,7 +117,7 @@ $ docker network inspect bridge
 </code></pre>
 
   <p>关键元素：</p>
-<pre><code># 1. Linux Bridge
+<pre><code class="language-bash"># 1. Linux Bridge
 $ ip link show type bridge
 3: docker0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 ...
     link/ether 02:42:ac:11:00:01 brd ff:ff:ff:ff:ff:ff
@@ -142,7 +142,7 @@ net.ipv4.ip_forward = 1
 </code></pre>
 
   <p>创建自定义 bridge：</p>
-<pre><code># 创建
+<pre><code class="language-bash"># 创建
 docker network create \
   --driver=bridge \
   --subnet=10.10.0.0/24 \
@@ -176,7 +176,7 @@ docker run --network=mynet alpine ping web
 
   <p>host 模式下容器<strong>不创建 network namespace</strong>，直接使用宿主网络栈：</p>
 
-<pre><code># 使用
+<pre><code class="language-bash"># 使用
 docker run --network=host nginx
 
 # 容器内：
@@ -219,7 +219,7 @@ $ docker exec -it &lt;c&gt; ss -tlnp
 
   <p>none 模式给容器<strong>独立的 net namespace 但不配置任何网络</strong>：</p>
 
-<pre><code>docker run --network=none alpine ip addr
+<pre><code class="language-bash">docker run --network=none alpine ip addr
 # 1: lo  ← 仅 loopback
 # 没有任何其他接口
 
@@ -243,7 +243,7 @@ ip link set eth0 up
 
   <p>overlay 网络通过<strong>VXLAN 隧道</strong>跨主机互联容器，是 Docker Swarm / Kubernetes（部分场景）的核心。</p>
 
-<pre><code>┌──────────────────────────────────────────┐
+<pre><code class="language-bash">┌──────────────────────────────────────────┐
 │              Host 1                       │
 │  ┌────────────────────────────────────┐  │
 │  │ eth0  192.168.1.10                 │  │
@@ -279,7 +279,7 @@ ip link set eth0 up
 </code></pre>
 
   <p>VXLAN 封装：</p>
-<pre><code>// VXLAN (Virtual eXtensible LAN):
+<pre><code class="language-bash">// VXLAN (Virtual eXtensible LAN):
 //   - 在 UDP 包中封装 L2 帧
 //   - 端口 4789
 //   - VXLAN ID (VNI) 24 bit
@@ -302,7 +302,7 @@ docker network create \
 </code></pre>
 
   <p>overlay 的关键组件：</p>
-<pre><code>// 1. 控制平面（control plane）
+<pre><code class="language-bash">// 1. 控制平面（control plane）
 //    - Docker Swarm gossip 协议
 //    - 容器 ↔ IP/MAC 映射分发
 //    - 通过 7946/TCP+UDP（serf）
@@ -331,7 +331,7 @@ docker network create \
 
   <p>macvlan 让容器<strong>直接出现在物理网络中</strong>，每个容器有独立 MAC 地址：</p>
 
-<pre><code># 创建 macvlan 网络
+<pre><code class="language-bash"># 创建 macvlan 网络
 docker network create -d macvlan \
   --subnet=192.168.1.0/24 \
   --gateway=192.168.1.1 \
@@ -354,7 +354,7 @@ docker run --network=macvlan_net -d nginx
 </code></pre>
 
   <p>ipvlan（共享 MAC）：</p>
-<pre><code># ipvlan 有两种模式：
+<pre><code class="language-bash"># ipvlan 有两种模式：
 # L2 (默认): 容器共享父接口 MAC，独立 IP
 # L3: 容器独立 IP，路由在内核中
 
@@ -391,7 +391,7 @@ docker network create -d ipvlan \
 
   <p>bridge 网络中，外部访问容器需要<strong>端口映射</strong>：</p>
 
-<pre><code># 1. 指定 host:container
+<pre><code class="language-bash"># 1. 指定 host:container
 docker run -p 8080:80 nginx
 # 宿主 8080 → 容器 80
 
@@ -413,7 +413,7 @@ docker run -P nginx
 </code></pre>
 
   <p>实现机制（两种）：</p>
-<pre><code>// 方式 1: iptables DNAT（默认，性能好）
+<pre><code class="language-bash">// 方式 1: iptables DNAT（默认，性能好）
 iptables -t nat -A DOCKER \
   -p tcp --dport 8080 \
   -j DNAT --to-destination 172.17.0.2:80
@@ -445,7 +445,7 @@ iptables -t nat -A POSTROUTING \
 
   <p>Docker 为每个容器配置<strong>嵌入式 DNS 服务器</strong>，让容器间通过名字访问。</p>
 
-<pre><code>// 1. 嵌入式 DNS 地址：127.0.0.11
+<pre><code class="language-bash">// 1. 嵌入式 DNS 地址：127.0.0.11
 $ docker exec container cat /etc/resolv.conf
 nameserver 127.0.0.11
 options ndots:0
@@ -473,7 +473,7 @@ PING foo (10.10.0.3): 56 data bytes
 </code></pre>
 
   <p>DNS 实现细节：</p>
-<pre><code>// dockerd 内置 DNS server
+<pre><code class="language-bash">// dockerd 内置 DNS server
 // 监听 127.0.0.11:53（在容器内通过 iptables 重定向）
 
 // 简化流程：
@@ -494,7 +494,7 @@ PING foo (10.10.0.3): 56 data bytes
 
   <p>Docker 通过 libnetwork plugin 支持第三方网络驱动：</p>
 
-<pre><code>// 网络驱动插件接口（CNM - Container Network Model）：
+<pre><code class="language-bash">// 网络驱动插件接口（CNM - Container Network Model）：
 type Driver interface {
     // 创建网络
     CreateNetwork(req NetworkRequest) error

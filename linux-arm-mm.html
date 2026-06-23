@@ -94,7 +94,7 @@
   <h3>关键地址常量</h3>
   <p class="ref">arch/arm64/include/asm/memory.h:43-64</p>
   <div class="card">
-    <pre><code><span class="cm">// arch/arm64/include/asm/memory.h</span>
+    <pre><code class="language-c"><span class="cm">// arch/arm64/include/asm/memory.h</span>
 <span class="kw">#define</span> VA_BITS          CONFIG_ARM64_VA_BITS   <span class="cm">// 48 或 57</span>
 <span class="kw">#define</span> PAGE_OFFSET      (-(<span class="num">1</span>UL << VA_BITS))    <span class="cm">// 线性映射起始</span>
 <span class="kw">#define</span> KIMAGE_VADDR     MODULES_END             <span class="cm">// 内核镜像</span>
@@ -128,7 +128,7 @@
 
   <h3>ARM64 页表格式</h3>
   <div class="card">
-    <pre><code><span class="cm">// 页表条目格式（64 位）</span>
+    <pre><code class="language-c"><span class="cm">// 页表条目格式（64 位）</span>
 <span class="cm">// [63:59] PBHA (Page-Based Hardware Attributes)</span>
 <span class="cm">// [58]    XN (Execute Never)</span>
 <span class="cm">// [54]    Contiguous hint</span>
@@ -150,7 +150,7 @@
 
   <h3>MAIR（内存属性间接寄存器）</h3>
   <div class="card">
-    <pre><code><span class="cm">// 8 个内存属性槽，每个 8 位</span>
+    <pre><code class="language-c"><span class="cm">// 8 个内存属性槽，每个 8 位</span>
 <span class="cm">// Linux 使用的默认映射：</span>
 <span class="cm">// AttrIndx 0: Normal, Write-Back (默认)</span>
 <span class="cm">// AttrIndx 1: Normal, Non-Cacheable</span>
@@ -215,7 +215,7 @@
 
   <h3>ESR（异常综合寄存器）解码</h3>
   <div class="card">
-    <pre><code><span class="cm">// ESR_ELx 关键字段</span>
+    <pre><code class="language-c"><span class="cm">// ESR_ELx 关键字段</span>
 ESR_ELx_ISS       <span class="cm">// 规范实施特定信息</span>
 ESR_ELx_ISV       <span class="cm">// 指令特定信息有效</span>
 ESR_ELx_SAS       <span class="cm">// 访问大小（1/2/4/8 字节）</span>
@@ -258,7 +258,7 @@ ESR_ELx_ESC       <span class="cm">// 异常分类（故障类型）</span></cod
   </table>
 
   <h3>TLB 刷新流程</h3>
-  <pre><code><span class="cm">// ARM64 TLB 刷新宏（arch/arm64/include/asm/tlbflush.h）</span>
+  <pre><code class="language-c"><span class="cm">// ARM64 TLB 刷新宏（arch/arm64/include/asm/tlbflush.h）</span>
 
 <span class="cm">// 刷新当前 CPU</span>
 <span class="kw">#define</span> __flush_tlb_local() \
@@ -296,7 +296,7 @@ ESR_ELx_ESC       <span class="cm">// 异常分类（故障类型）</span></cod
 
   <h3>ARM64 缓存模型</h3>
   <div class="card">
-    <pre><code><span class="cm">// 典型 ARM64 缓存层级</span>
+    <pre><code class="language-c"><span class="cm">// 典型 ARM64 缓存层级</span>
 L1 I-Cache (32-64KB, 4-8 way)
 L1 D-Cache (32-64KB, 4-8 way)
 L2 Cache   (256KB-1MB, 8-16 way)
@@ -343,7 +343,7 @@ L3 Cache   (共享, 可选)
   <h3>MTE（Memory Tagging Extension）</h3>
   <div class="card">
     <p>MTE 是 ARMv8.5 引入的<strong>内存标记</strong>机制，为每个 16 字节内存粒度分配 4 位标签，用于检测缓冲区溢出和 use-after-free。</p>
-    <pre><code><span class="cm">// MTE 工作原理：</span>
+    <pre><code class="language-c"><span class="cm">// MTE 工作原理：</span>
 <span class="cm">// 1. 分配内存时生成随机标签（存储在页表扩展位）</span>
 <span class="cm">// 2. 分配时将标签存入指针的高位</span>
 <span class="cm">// 3. 访问时硬件检查指针标签 vs 内存标签</span>

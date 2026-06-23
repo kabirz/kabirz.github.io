@@ -60,7 +60,7 @@
         <li><strong>BBR</strong>：Google 开发，基于带宽-延迟模型</li>
         <li><strong>Reno</strong>：经典 AIMD（加性增/乘性减）</li>
       </ul>
-      <pre><code><span class="cm"># 查看当前拥塞控制算法</span>
+      <pre><code class="language-c"><span class="cm"># 查看当前拥塞控制算法</span>
 $ sysctl net.ipv4.tcp_congestion_control
 net.ipv4.tcp_congestion_control = cubic
 
@@ -265,7 +265,7 @@ TCP_NEW_SYN_RECV = 12   <span style="color:#656d76">新 SYN 到达 LISTEN socket
   <h2><span class="num">05</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/tcp.h:197 — TCP 协议私有数据</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/tcp.h:197 — TCP 协议私有数据</span>
 <span class="kw">struct</span> <span class="ty">tcp_sock</span> {
     <span class="cm">// 继承自 inet_connection_sock → inet_sock → sock</span>
     <span class="kw">struct</span> <span class="ty">inet_connection_sock</span> inet_conn;
@@ -318,7 +318,7 @@ TCP_NEW_SYN_RECV = 12   <span style="color:#656d76">新 SYN 到达 LISTEN socket
 
   <h3>拥塞控制算法框架</h3>
   <div class="card">
-    <pre><code><span class="cm">// include/net/tcp.h:1276 — 拥塞控制算法接口</span>
+    <pre><code class="language-c"><span class="cm">// include/net/tcp.h:1276 — 拥塞控制算法接口</span>
 <span class="kw">struct</span> <span class="ty">tcp_congestion_ops</span> {
     <span class="cm">// 经典算法接口（Reno/CUBIC）</span>
     <span class="ty">void</span> (*cong_avoid)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, <span class="ty">u32</span> ack, <span class="ty">u32</span> acked);
@@ -427,7 +427,7 @@ TCP_NEW_SYN_RECV = 12   <span style="color:#656d76">新 SYN 到达 LISTEN socket
 
   <h3>RTO 计算</h3>
   <div class="card">
-    <pre><code><span class="cm">// RTO = SRTT + 4 × RTTVAR</span>
+    <pre><code class="language-c"><span class="cm">// RTO = SRTT + 4 × RTTVAR</span>
 <span class="cm">// SRTT  = 平滑 RTT（指数加权移动平均）</span>
 <span class="cm">// RTTVAR = RTT 方差</span>
 <span class="cm">//</span>

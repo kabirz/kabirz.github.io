@@ -71,7 +71,7 @@
   <p>UWP 的底层是 <strong>Windows Runtime（WinRT）</strong>——一组以 <strong>原生 COM</strong>（<code>IUnknown</code>、注册表元数据、<code>.winmd</code>）为基底的二进制 API，所有 Windows 设备家族共享。各语言通过<strong>语言投影（Language Projection）</strong>把 WinRT 投射为本地惯用法：C# 看到 .NET 风格类型，C++/WinRT 看到 Modern C++ 类，JavaScript 看到Promise。上层 <strong>Windows.UI.Xaml</strong> 提供 XAML 框架，应用运行在 <strong>AppContainer</strong> 进程内。</p>
 
   <div class="card">
-    <pre><code><span class="cm">┌──────────────────────────────────────────────────────────┐</span>
+    <pre><code class="language-cpp"><span class="cm">┌──────────────────────────────────────────────────────────┐</span>
 <span class="cm">│  你的应用（C# / C++/WinRT / JavaScript / VB）              │</span>
 <span class="cm">│        XAML（Windows.UI.Xaml）+ 业务逻辑                    │</span>
 <span class="cm">├──────────────────────────────────────────────────────────┤</span>
@@ -128,7 +128,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// App.xaml.cs — 应用入口与启动导航</span>
+    <pre><code class="language-cpp"><span class="cm">// App.xaml.cs — 应用入口与启动导航</span>
 <span class="kw">sealed partial class</span> <span class="ty">App</span> : <span class="ty">Application</span>
 {
     <span class="kw">public</span> <span class="ty">App</span>() {
@@ -229,7 +229,7 @@
 
   <h3>自适应布局：AdaptiveTrigger + VisualStateManager</h3>
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- MainPage.xaml: 窄屏单列、宽屏两列 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- MainPage.xaml: 窄屏单列、宽屏两列 --&gt;</span>
 <span class="kw">&lt;Page</span> <span class="pp">x:Class</span>=<span class="st">"App.MainPage"</span>
       <span class="pp">xmlns</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml/presentation"</span>
       <span class="pp">xmlns:x</span>=<span class="st">"http://schemas.microsoft.com/winfx/2006/xaml"</span><span class="kw">&gt;</span>
@@ -293,7 +293,7 @@
   </table>
 
   <div class="card">
-    <pre><code><span class="cm">// ViewModel.cs —— INotifyPropertyChanged + ObservableCollection</span>
+    <pre><code class="language-cpp"><span class="cm">// ViewModel.cs —— INotifyPropertyChanged + ObservableCollection</span>
 <span class="kw">public class</span> <span class="ty">MainViewModel</span> : <span class="ty">INotifyPropertyChanged</span>
 {
     <span class="kw">private</span> <span class="ty">TodoItem</span> _selected;
@@ -331,7 +331,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- MainPage.xaml —— x:Bind 绑定到 page 上的成员/方法 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- MainPage.xaml —— x:Bind 绑定到 page 上的成员/方法 --&gt;</span>
 <span class="kw">&lt;Page</span> ...<span class="kw">&gt;</span>
   <span class="kw">&lt;Grid&gt;</span>
     <span class="kw">&lt;Grid.RowDefinitions&gt;</span>
@@ -399,7 +399,7 @@
   </table>
 
   <div class="card">
-    <pre><code><span class="cm">// 文件读取：StorageFile.OpenAsync → IAsyncOperation&lt;IRandomAccessStream&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">// 文件读取：StorageFile.OpenAsync → IAsyncOperation&lt;IRandomAccessStream&gt;</span>
 <span class="kw">private async void</span> <span class="fn">OnOpenFileClick</span>(<span class="kw">object</span> sender, <span class="ty">RoutedEventArgs</span> e)
 {
     <span class="ty">FileOpenPicker</span> picker = <span class="kw">new</span> <span class="ty">FileOpenPicker</span>();
@@ -481,7 +481,7 @@
   </table>
 
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- Package.appxmanifest —— 声明能力（静态授权） --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- Package.appxmanifest —— 声明能力（静态授权） --&gt;</span>
 <span class="kw">&lt;Package</span> ...<span class="kw">&gt;</span>
   <span class="kw">&lt;Capabilities&gt;</span>
     <span class="cm">&lt;!-- 常规能力 --&gt;</span>
@@ -555,7 +555,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// 后台任务入口（运行在独立进程，无 UI）</span>
+    <pre><code class="language-cpp"><span class="cm">// 后台任务入口（运行在独立进程，无 UI）</span>
 <span class="kw">public sealed class</span> <span class="ty">SyncTask</span> : <span class="ty">IBackgroundTask</span>
 {
     <span class="kw">public async void</span> <span class="fn">Run</span>(<span class="ty">IBackgroundTaskInstance</span> taskInstance) {
@@ -586,7 +586,7 @@
 
   <h3>Toast 通知：自适应 XML 模板</h3>
   <div class="card">
-    <pre><code><span class="cm">// ToastNotificationManager 加载 XML 模板并弹出</span>
+    <pre><code class="language-cpp"><span class="cm">// ToastNotificationManager 加载 XML 模板并弹出</span>
 <span class="kw">public static void</span> <span class="fn">ShowToast</span>(<span class="ty">string</span> message) {
     <span class="ty">string</span> xml = <span class="st">$@"</span>
 <span class="st">&lt;toast&gt;</span>
@@ -635,7 +635,7 @@
   </table>
 
   <div class="card">
-    <pre><code><span class="cm">&lt;!-- Package.appxmanifest —— 关键节点 --&gt;</span>
+    <pre><code class="language-cpp"><span class="cm">&lt;!-- Package.appxmanifest —— 关键节点 --&gt;</span>
 <span class="kw">&lt;Package</span>
   <span class="pp">xmlns</span>=<span class="st">"http://schemas.microsoft.com/appx/manifest/foundation/windows10"</span>
   <span class="pp">xmlns:mp</span>=<span class="st">"http://schemas.microsoft.com/appx/2014/phone/manifest"</span>
@@ -722,7 +722,7 @@
   </table>
 
   <div class="card">
-    <pre><code><span class="cm">// UWP 命名空间</span>
+    <pre><code class="language-cpp"><span class="cm">// UWP 命名空间</span>
 <span class="kw">using</span> <span class="ty">Windows.UI.Xaml</span>;
 <span class="kw">using</span> <span class="ty">Windows.UI.Xaml.Controls</span>;
 <span class="kw">using</span> <span class="ty">Windows.UI.Core</span>;              <span class="cm">// CoreDispatcher</span>

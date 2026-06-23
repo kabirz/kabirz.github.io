@@ -78,7 +78,7 @@
 
   <h3>Linux CAS API</h3>
   <div class="card">
-    <pre><code><span class="cm">// 基本 CAS — 返回旧值</span>
+    <pre><code class="language-c"><span class="cm">// 基本 CAS — 返回旧值</span>
 <span class="ty">int</span> old = <span class="fn">atomic_cmpxchg</span>(&counter, expected, new);
 
 <span class="cm">// 安全 CAS — 推荐使用</span>
@@ -181,7 +181,7 @@
 
   <h3>低竞争场景（单 CPU）</h3>
   <div class="card">
-    <pre><code><span class="cm">// CAS：几乎无开销</span>
+    <pre><code class="language-c"><span class="cm">// CAS：几乎无开销</span>
 <span class="fn">atomic_add</span>(<span class="num">1</span>, &counter);  <span class="cm">// 一条指令</span>
 
 <span class="cm">// Spinlock：有开销</span>
@@ -194,7 +194,7 @@ counter++;               <span class="cm">// 修改</span>
 
   <h3>高竞争场景（多 CPU）</h3>
   <div class="card">
-    <pre><code><span class="cm">// CAS：自旋循环</span>
+    <pre><code class="language-c"><span class="cm">// CAS：自旋循环</span>
 <span class="kw">do</span> {
     old = <span class="fn">atomic_read</span>(&counter);
 } <span class="kw">while</span> (!<span class="fn">atomic_try_cmpxchg</span>(&counter, &old, old + <span class="num">1</span>));
@@ -226,7 +226,7 @@ counter++;
 
   <h3>CAS：无锁计数器</h3>
   <div class="card">
-    <pre><code><span class="cm">// 无锁引用计数</span>
+    <pre><code class="language-c"><span class="cm">// 无锁引用计数</span>
 <span class="ty">int</span> old;
 <span class="kw">do</span> {
     old = <span class="fn">atomic_read</span>(&refcount);
@@ -241,7 +241,7 @@ counter++;
 
   <h3>CAS：无锁链表插入</h3>
   <div class="card">
-    <pre><code><span class="cm">// 无锁 LIFO 栈</span>
+    <pre><code class="language-c"><span class="cm">// 无锁 LIFO 栈</span>
 <span class="kw">void</span> <span class="fn">push</span>(<span class="kw">struct</span> <span class="ty">node</span> *n, <span class="kw">struct</span> <span class="ty">node</span> **top) {
     <span class="kw">struct</span> <span class="ty">node</span> *old;
     <span class="kw">do</span> {
@@ -253,7 +253,7 @@ counter++;
 
   <h3>Spinlock：保护复杂状态</h3>
   <div class="card">
-    <pre><code><span class="cm">// 保护多步操作</span>
+    <pre><code class="language-c"><span class="cm">// 保护多步操作</span>
 <span class="fn">spin_lock</span>(&dev->lock);
 <span class="cm">// 1. 读取状态</span>
 status = dev->status;
@@ -273,7 +273,7 @@ dev->error = <span class="num">0</span>;
 
   <h3>混合使用：CAS + Spinlock</h3>
   <div class="card">
-    <pre><code><span class="cm">// 快速路径用 CAS，慢速路径用 spinlock</span>
+    <pre><code class="language-c"><span class="cm">// 快速路径用 CAS，慢速路径用 spinlock</span>
 <span class="ty">int</span> old;
 <span class="kw">if</span> (<span class="fn">atomic_try_cmpxchg</span>(&counter, &old, old + <span class="num">1</span>)) {
     <span class="kw">return</span>;  <span class="cm">// 快速路径成功</span>

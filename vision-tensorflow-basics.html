@@ -42,7 +42,7 @@
 
   <h3>安装</h3>
 
-<pre><code># CPU 版本
+<pre><code class="language-python"># CPU 版本
 pip install tensorflow
 
 # GPU 版本（CUDA 12.x）
@@ -82,7 +82,7 @@ with tf.device("/GPU:0"):
 
   <h3>Tensor 创建</h3>
 
-<pre><code>import tensorflow as tf
+<pre><code class="language-python">import tensorflow as tf
 
 # 常量
 a = tf.constant([[1, 2], [3, 4]], dtype=tf.float32)
@@ -109,7 +109,7 @@ arr2 = t.numpy()                # Tensor -> ndarray
 
   <h3>Tensor 属性与操作</h3>
 
-<pre><code>x = tf.random.normal([3, 4, 5])
+<pre><code class="language-python">x = tf.random.normal([3, 4, 5])
 
 print(x.shape)       # (3, 4, 5)
 print(x.dtype)       # tf.float32
@@ -142,7 +142,7 @@ tf.tile(x, [2, 1])          # 复制张量
 
   <h3>自动微分（GradientTape）</h3>
 
-<pre><code>x = tf.Variable(3.0)
+<pre><code class="language-python">x = tf.Variable(3.0)
 w = tf.Variable(2.0)
 b = tf.Variable(1.0)
 
@@ -169,7 +169,7 @@ del tape  # 手动释放持久化 tape
 
   <p><code>@tf.function</code> 装饰器将 Python 函数编译为 TensorFlow 计算图，在保留 Eager 调试便利性的同时获得静态图的性能优势。AutoGraph 机制会自动将 Python 控制流转换为 TensorFlow 图操作。</p>
 
-<pre><code>@tf.function
+<pre><code class="language-python">@tf.function
 def compute(a, b):
     """编译为计算图，加速重复调用"""
     c = tf.matmul(a, b)
@@ -192,7 +192,7 @@ print(compute.get_concrete_function(
 
   <h3>AutoGraph 控制流</h3>
 
-<pre><code>@tf.function
+<pre><code class="language-python">@tf.function
 def dynamic_sum(x, n):
     """Python 控制流自动转为图操作"""
     total = tf.constant(0)
@@ -212,7 +212,7 @@ def conditional(x):
 
   <h3>输入签名</h3>
 
-<pre><code>@tf.function(
+<pre><code class="language-python">@tf.function(
     input_signature=[
         tf.TensorSpec([None, 28, 28, 1], tf.float32),
         tf.TensorSpec([None], tf.int32),
@@ -236,7 +236,7 @@ def predict(model, x, y):
 
   <p>Sequential API 是 Keras 中最简单的模型构建方式，适用于层按顺序堆叠的网络结构。</p>
 
-<pre><code>import tensorflow as tf
+<pre><code class="language-python">import tensorflow as tf
 from tensorflow import keras
 
 # 方式一：直接传入层列表
@@ -287,7 +287,7 @@ predicted_classes = tf.argmax(predictions, axis=1)
 
   <h3>常用层</h3>
 
-<pre><code># 卷积层
+<pre><code class="language-python"># 卷积层
 keras.layers.Conv2D(filters=64, kernel_size=3, strides=1,
                     padding="same", activation="relu")
 keras.layers.DepthwiseConv2D(kernel_size=3)
@@ -316,7 +316,7 @@ keras.layers.MultiHeadAttention(num_heads=8, key_dim=64)
 
   <p>Functional API 支持非顺序拓扑结构：多输入、多输出、残差连接、共享层。它适用于需要分支和拼接的复杂网络。</p>
 
-<pre><code>inputs = keras.Input(shape=(32, 32, 3))
+<pre><code class="language-python">inputs = keras.Input(shape=(32, 32, 3))
 
 # 卷积块
 x = keras.layers.Conv2D(32, 3, activation="relu", padding="same")(inputs)
@@ -341,7 +341,7 @@ model.summary()
 
   <h3>残差连接示例</h3>
 
-<pre><code>def residual_block(x, filters, kernel_size=3):
+<pre><code class="language-python">def residual_block(x, filters, kernel_size=3):
     shortcut = x
 
     x = keras.layers.Conv2D(filters, kernel_size,
@@ -378,7 +378,7 @@ model = keras.Model(inputs=inputs, outputs=outputs)
 
   <h3>多输入多输出</h3>
 
-<pre><code># 两个输入
+<pre><code class="language-python"># 两个输入
 input_text = keras.Input(shape=(512,), name="text")
 input_image = keras.Input(shape=(224, 224, 3), name="image")
 
@@ -418,7 +418,7 @@ model.compile(
 
   <h3>自定义层</h3>
 
-<pre><code>class MyDense(keras.layers.Layer):
+<pre><code class="language-python">class MyDense(keras.layers.Layer):
     def __init__(self, units, activation=None, **kwargs):
         super().__init__(**kwargs)
         self.units = units
@@ -462,7 +462,7 @@ layer = MyDense(128, activation="relu")
 
   <h3>自定义模型（子类化）</h3>
 
-<pre><code>class MLP(keras.Model):
+<pre><code class="language-python">class MLP(keras.Model):
     def __init__(self, hidden_dims=[256, 128], num_classes=10, **kwargs):
         super().__init__(**kwargs)
         self.flatten = keras.layers.Flatten()
@@ -493,7 +493,7 @@ model.fit(x_train, y_train, epochs=10)
 
   <h3>自定义训练循环</h3>
 
-<pre><code>model = MLP()
+<pre><code class="language-python">model = MLP()
 optimizer = keras.optimizers.Adam(1e-3)
 loss_fn = keras.losses.SparseCategoricalCrossentropy()
 train_acc = keras.metrics.SparseCategoricalAccuracy()
@@ -527,7 +527,7 @@ for epoch in range(10):
 
   <h3>创建 Dataset</h3>
 
-<pre><code>import tensorflow as tf
+<pre><code class="language-python">import tensorflow as tf
 
 # 从内存数组创建
 dataset = tf.data.Dataset.from_tensor_slices(
@@ -559,7 +559,7 @@ dataset = dataset.map(parse_image, num_parallel_calls=tf.data.AUTOTUNE)
 
   <h3>数据流水线编排</h3>
 
-<pre><code># 完整流水线
+<pre><code class="language-python"># 完整流水线
 dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train))
 dataset = dataset.shuffle(buffer_size=10000)   # 打乱
 dataset = dataset.batch(batch_size=64)          # 分批
@@ -586,7 +586,7 @@ val_ds = val_ds.prefetch(tf.data.AUTOTUNE)
 
   <h3>数据增强流水线</h3>
 
-<pre><code>def augment_image(image, label):
+<pre><code class="language-python">def augment_image(image, label):
     """在 tf.data 流水线中进行数据增强"""
     image = tf.image.random_flip_left_right(image)
     image = tf.image.random_brightness(image, max_delta=0.2)
@@ -631,7 +631,7 @@ train_ds = keras.preprocessing.image_dataset_from_directory(
 
   <h3>model.fit 高级 API</h3>
 
-<pre><code>model.compile(
+<pre><code class="language-python">model.compile(
     optimizer=keras.optimizers.Adam(learning_rate=1e-3),
     loss=keras.losses.CategoricalCrossentropy(),
     metrics=[
@@ -659,7 +659,7 @@ print(history.history.keys())
 
   <h3>自定义训练循环</h3>
 
-<pre><code>@tf.function
+<pre><code class="language-python">@tf.function
 def train_step(x, y):
     with tf.GradientTape() as tape:
         logits = model(x, training=True)
@@ -696,7 +696,7 @@ for epoch in range(num_epochs):
 
   <h3>分布式训练</h3>
 
-<pre><code># MirroredStrategy（多 GPU 同步训练）
+<pre><code class="language-python"># MirroredStrategy（多 GPU 同步训练）
 strategy = tf.distribute.MirroredStrategy()
 print(f"Number of devices: {strategy.num_replicas_in_sync}")
 
@@ -719,7 +719,7 @@ model.fit(train_ds, epochs=10)
 
   <p>Keras 回调在训练的不同阶段（epoch 开始/结束、batch 结束）被调用，用于模型检查点、早停、学习率调整和日志记录。</p>
 
-<pre><code>callbacks = [
+<pre><code class="language-python">callbacks = [
     # 模型检查点
     keras.callbacks.ModelCheckpoint(
         filepath="best_model.weights.h5",
@@ -784,7 +784,7 @@ history = model.fit(
 
   <h3>CSVLogger 与 ProgbarLogger</h3>
 
-<pre><code># CSV 日志
+<pre><code class="language-python"># CSV 日志
 csv_logger = keras.callbacks.CSVLogger(
     filename="training_log.csv",
     separator=",",
@@ -811,7 +811,7 @@ terminate_nan = keras.callbacks.TerminateOnNaN()
 
   <h3>SavedModel 格式（推荐）</h3>
 
-<pre><code># 保存
+<pre><code class="language-python"># 保存
 model.save("saved_model/my_model")
 # 生成目录:
 #   saved_model/my_model/
@@ -833,7 +833,7 @@ result = infer(tf.constant(x_test[:10]))
 
   <h3>HDF5 格式</h3>
 
-<pre><code># 保存完整模型（架构 + 权重 + 优化器状态）
+<pre><code class="language-python"># 保存完整模型（架构 + 权重 + 优化器状态）
 model.save("model.h5")
 
 # 仅保存权重
@@ -849,7 +849,7 @@ loaded = keras.models.load_model("model.h5")
 
   <h3>导出为 TensorFlow Lite</h3>
 
-<pre><code># 转换模型
+<pre><code class="language-python"># 转换模型
 converter = tf.lite.TFLiteConverter.from_saved_model(
     "saved_model/my_model"
 )
@@ -882,7 +882,7 @@ output = interpreter.get_tensor(output_details[0]["index"])
 
   <h3>TensorFlow Serving</h3>
 
-<pre><code># 启动 Serving（Docker）
+<pre><code class="language-python"># 启动 Serving（Docker）
 docker pull tensorflow/serving
 docker run -p 8501:8501 \
   -v $(pwd)/saved_model/my_model:/models/my_model/1 \

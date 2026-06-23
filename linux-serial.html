@@ -98,7 +98,7 @@
   <h3>struct uart_port（端口）</h3>
   <div class="card">
     <p class="ref">include/linux/serial_core.h:442-550</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">uart_port</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">uart_port</span> {
     <span class="ty">spinlock_t</span> lock;              <span class="cm">// 端口锁</span>
     <span class="ty">unsigned long</span> iobase;         <span class="cm">// I/O 端口地址</span>
     <span class="ty">unsigned char</span> __iomem *membase; <span class="cm">// MMIO 基地址</span>
@@ -125,7 +125,7 @@
   <h3>struct uart_driver（驱动）</h3>
   <div class="card">
     <p class="ref">include/linux/serial_core.h:888-903</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">uart_driver</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">uart_driver</span> {
     <span class="kw">struct</span> <span class="ty">module</span> *owner;
     <span class="kw">const char</span> *driver_name;   <span class="cm">// 驱动名</span>
     <span class="kw">const char</span> *dev_name;      <span class="cm">// 设备名前缀（"ttyS"）</span>
@@ -203,7 +203,7 @@
   <p>串口控制台是 Linux 内核最早期的输出方式，在系统启动早期即可使用。</p>
 
   <h3>配置方式</h3>
-  <pre><code><span class="cm">// 内核命令行参数</span>
+  <pre><code class="language-c"><span class="cm">// 内核命令行参数</span>
 console=ttyS0,115200
 
 <span class="cm">// 内核配置（.config）</span>
@@ -231,12 +231,12 @@ CONFIG_SERIAL_8250_CONSOLE=y</code></pre>
   <p>earlycon 提供<strong>最早期的串口输出</strong>，在内核完全初始化之前即可使用。</p>
 
   <h3>配置方式</h3>
-  <pre><code><span class="cm">// 内核命令行</span>
+  <pre><code class="language-c"><span class="cm">// 内核命令行</span>
 earlycon=uart8250,io,0x3f8,115200n8
 earlycon=msm_serial,0x78b0000,115200n8</code></pre>
 
   <h3>earlycon 注册</h3>
-  <pre><code><span class="cm">// 驱动中注册 earlycon</span>
+  <pre><code class="language-c"><span class="cm">// 驱动中注册 earlycon</span>
 <span class="kw">static void</span> <span class="fn">my_earlycon_init</span>(<span class="kw">struct</span> <span class="ty">earlycon_id</span> *id,
                               <span class="ty">unsigned long</span> addr)
 {
@@ -255,7 +255,7 @@ earlycon=msm_serial,0x78b0000,115200n8</code></pre>
   <h2><span class="num">07</span> 设备树</h2>
 
   <h3>串口节点</h3>
-  <pre><code><span class="ty">uart0</span>: <span class="fn">serial</span>@e0000000 {
+  <pre><code class="language-c"><span class="ty">uart0</span>: <span class="fn">serial</span>@e0000000 {
     compatible = <span class="st">"ns16550a"</span>, <span class="st">"ns16550"</span>;
     reg = <span class="num">&lt;0xe0000000 0x1000&gt;</span>;
     interrupts = <span class="num">&lt;GIC_SPI 20 IRQ_TYPE_LEVEL_HIGH&gt;</span>;
@@ -287,7 +287,7 @@ earlycon=msm_serial,0x78b0000,115200n8</code></pre>
   <h2><span class="num">08</span> 编写驱动</h2>
 
   <h3>UART 驱动模板</h3>
-  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/serial_core.h&gt;</span>
+  <pre><code class="language-c"><span class="kw">#include</span> <span class="st">&lt;linux/serial_core.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/module.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/platform_device.h&gt;</span>
 

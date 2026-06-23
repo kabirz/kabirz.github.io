@@ -67,7 +67,7 @@
 <section id="data" class="toc-link">
   <h2><span class="num">02</span> 核心数据结构</h2>
   <div class="card">
-    <pre><code><span class="cm">// net_bridge — Bridge 核心结构</span>
+    <pre><code class="language-c"><span class="cm">// net_bridge — Bridge 核心结构</span>
 <span class="kw">struct</span> <span class="ty">net_bridge</span> {
     <span class="kw">struct</span> <span class="ty">net_device</span>     *dev;          <span class="cm">// bridge 虚拟网卡（可配 IP）</span>
     <span class="kw">struct</span> <span class="ty">list_head</span>     port_list;     <span class="cm">// 所有端口链表</span>
@@ -156,7 +156,7 @@
 <section id="mac" class="toc-link">
   <h2><span class="num">04</span> MAC 学习</h2>
   <div class="card">
-    <pre><code><span class="cm">// MAC 地址学习算法</span>
+    <pre><code class="language-c"><span class="cm">// MAC 地址学习算法</span>
 <span class="cm">// 1. 数据帧从端口 P 进入 bridge</span>
 <span class="cm">// 2. 提取源 MAC 地址 S</span>
 <span class="cm">// 3. 在 FDB 中查找 S：</span>
@@ -179,12 +179,12 @@
 <section id="setup" class="toc-link">
   <h2><span class="num">05</span> 实战搭建</h2>
   <h3>步骤一：创建 Bridge</h3>
-  <pre><code>$ sudo ip link add name br0 type bridge
+  <pre><code class="language-c">$ sudo ip link add name br0 type bridge
 $ sudo ip link set br0 up
 $ bridge link    <span class="cm"># 查看当前状态（空）</span></code></pre>
 
   <h3>步骤二：创建 veth 并连接</h3>
-  <pre><code>$ sudo ip link add veth0 type veth peer name veth1
+  <pre><code class="language-c">$ sudo ip link add veth0 type veth peer name veth1
 $ sudo ip addr add 192.168.3.101/24 dev veth0
 $ sudo ip addr add 192.168.3.102/24 dev veth1
 $ sudo ip link set veth0 up
@@ -195,14 +195,14 @@ $ bridge link
 6: veth0 state UP master br0 state forwarding</code></pre>
 
   <h3>步骤三：配置 IP</h3>
-  <pre><code>$ sudo ip addr del 192.168.3.101/24 dev veth0
+  <pre><code class="language-c">$ sudo ip addr del 192.168.3.101/24 dev veth0
 $ sudo ip addr add 192.168.3.101/24 dev br0
 
 $ ping -c 1 -I br0 192.168.3.102
 64 bytes from 192.168.3.102: icmp_seq=1 ttl=64 time=0.121 ms  <span class="cm"># 成功</span></code></pre>
 
   <h3>步骤四：连接物理网卡</h3>
-  <pre><code>$ sudo ip link set dev eth0 master br0
+  <pre><code class="language-c">$ sudo ip link set dev eth0 master br0
 $ sudo ip addr del 192.168.3.21/24 dev eth0
 $ sudo ip route add default via 192.168.3.1
 
@@ -242,7 +242,7 @@ $ ping -c 1 -I br0 192.168.3.1
   <h3>双 ARP 应答</h3>
   <div class="card">
     <p>当 br0 和 veth1 都配置了同一网段 IP，外面的 ARP 请求会得到<strong>两个 ARP 应答</strong>，导致外部设备的 ARP 表不稳定。</p>
-    <pre><code><span class="cm"># 抓包可见两个应答：</span>
+    <pre><code class="language-c"><span class="cm"># 抓包可见两个应答：</span>
 <span class="cm"># Reply 192.168.3.102 is-at xx:xx:xx:xx:xx:xx (br0)</span>
 <span class="cm"># Reply 192.168.3.102 is-at yy:yy:yy:yy:yy:yy (veth1)</span></code></pre>
   </div>
@@ -332,7 +332,7 @@ $ ping -c 1 -I br0 192.168.3.1
 <section id="cli" class="toc-link">
   <h2><span class="num">09</span> 配置命令</h2>
   <div class="card">
-    <pre><code><span class="cm"># 创建/删除 bridge</span>
+    <pre><code class="language-c"><span class="cm"># 创建/删除 bridge</span>
 $ sudo ip link add name br0 type bridge
 $ sudo ip link set br0 up
 $ sudo ip link del br0

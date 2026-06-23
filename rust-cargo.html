@@ -67,7 +67,7 @@
 <section id="manifest" class="toc-link">
   <h2><span class="num">02</span> Cargo.toml 清单</h2>
 
-<pre><code>[package]
+<pre><code class="language-rust">[package]
 name = "myapp"
 version = "0.1.0"
 edition = "2021"          # Rust 版本（2015/2018/2021/2024）
@@ -121,7 +121,7 @@ debug = 0
 </code></pre>
 
   <p>版本号语义化：</p>
-<pre><code>// 语义化版本 (SemVer):
+<pre><code class="language-rust">// 语义化版本 (SemVer):
 // MAJOR.MINOR.PATCH
 // 1.4.2
 //  ↑ ↑ ↑
@@ -151,7 +151,7 @@ foo = { version = "1.0", registry = "myreg" } # 自定义 registry
 <section id="deps" class="toc-link">
   <h2><span class="num">03</span> 依赖管理</h2>
 
-<pre><code>// Cargo.lock：
+<pre><code class="language-rust">// Cargo.lock：
 //   锁定所有依赖的精确版本
 //   保证构建可重现
 //
@@ -191,7 +191,7 @@ cargo outdated
 </code></pre>
 
   <p>依赖类型：</p>
-<pre><code>[dependencies]
+<pre><code class="language-rust">[dependencies]
 # 普通依赖
 serde = "1"
 
@@ -218,7 +218,7 @@ serde.workspace = true
 <section id="features" class="toc-link">
   <h2><span class="num">04</span> Feature Flags</h2>
 
-<pre><code>// Features 是条件编译开关
+<pre><code class="language-rust">// Features 是条件编译开关
 [features]
 default = ["std"]
 std = []
@@ -253,7 +253,7 @@ tls = []   # 隐式启用 rustls（如果有 optional dep）
 </code></pre>
 
   <p>Feature Unification（重要）</p>
-<pre><code>// Cargo 把所有 features 合并
+<pre><code class="language-rust">// Cargo 把所有 features 合并
 // 即使只在某依赖中用，最终都启用
 
 // 例子：
@@ -276,7 +276,7 @@ tls = []   # 隐式启用 rustls（如果有 optional dep）
 <section id="workspace" class="toc-link">
   <h2><span class="num">05</span> Workspace</h2>
 
-<pre><code>// Workspace: 多个 crate 共享 Cargo.lock + target
+<pre><code class="language-rust">// Workspace: 多个 crate 共享 Cargo.lock + target
 // 
 // myproject/
 // ├── Cargo.toml          # workspace 根
@@ -327,7 +327,7 @@ myproject-utils = { path = "../utils" }
 <section id="build" class="toc-link">
   <h2><span class="num">06</span> 构建系统</h2>
 
-<pre><code>// 编译流程：
+<pre><code class="language-rust">// 编译流程：
 // 1. 解析 Cargo.toml
 // 2. 下载依赖到 ~/.cargo
 // 3. 解析依赖图
@@ -377,7 +377,7 @@ include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 </code></pre>
 
   <p>交叉编译：</p>
-<pre><code>// 目标三元组：arch-vendor-os-env
+<pre><code class="language-rust">// 目标三元组：arch-vendor-os-env
 // 例：x86_64-unknown-linux-gnu
 
 // 添加 target：
@@ -403,7 +403,7 @@ linker = "aarch64-linux-gnu-gcc"
 <section id="testing" class="toc-link">
   <h2><span class="num">07</span> 测试</h2>
 
-<pre><code>// 1. 单元测试（同模块内）
+<pre><code class="language-rust">// 1. 单元测试（同模块内）
 pub fn add(a: i32, b: i32) -> i32 { a + b }
 
 #[cfg(test)]
@@ -494,7 +494,7 @@ cargo bench
 <section id="publishing" class="toc-link">
   <h2><span class="num">08</span> 发布</h2>
 
-<pre><code>// 发布到 crates.io：
+<pre><code class="language-rust">// 发布到 crates.io：
 // 1. 注册：https://crates.io
 // 2. 获取 API token
 // 3. cargo login &lt;token&gt;
@@ -538,7 +538,7 @@ cargo publish --registry myreg
 </code></pre>
 
   <p>CI/CD 集成：</p>
-<pre><code>// GitHub Actions：
+<pre><code class="language-rust">// GitHub Actions：
 // .github/workflows/ci.yml
 name: CI
 on: [push, pull_request]
@@ -568,7 +568,7 @@ strategy:
 <section id="profiles" class="toc-link">
   <h2><span class="num">09</span> Profiles</h2>
 
-<pre><code>// Profile：控制构建配置
+<pre><code class="language-rust">// Profile：控制构建配置
 [profile.dev]
 opt-level = 0
 debug = true
@@ -619,7 +619,7 @@ opt-level = 3   # 依赖在 dev 下用 opt 3（快运行）
 </code></pre>
 
   <p>条件编译：</p>
-<pre><code>// cfg 属性：
+<pre><code class="language-rust">// cfg 属性：
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -657,7 +657,7 @@ cfg_if::cfg_if! {
 <section id="advanced" class="toc-link">
   <h2><span class="num">10</span> 高级用法</h2>
 
-<pre><code>// 1. .cargo/config.toml — 项目级配置
+<pre><code class="language-rust">// 1. .cargo/config.toml — 项目级配置
 [build]
 target = "x86_64-unknown-linux-gnu"
 jobs = 8
@@ -724,7 +724,7 @@ cargo run --bin client
 </code></pre>
 
   <p>常见 cargo 命令组合：</p>
-<pre><code># 开发循环
+<pre><code class="language-rust"># 开发循环
 cargo check                 # 最快反馈
 cargo clippy --all-targets  # lint
 cargo test                  # 测试
@@ -752,7 +752,7 @@ cargo fix --clippy
 </code></pre>
 
   <p>性能优化提示：</p>
-<pre><code>// 1. 增量编译
+<pre><code class="language-rust">// 1. 增量编译
 //   开发时 incremental = true（默认）
 //   关闭：cargo build --release
 

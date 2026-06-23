@@ -128,7 +128,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/mm_types.h:913 — 虚拟内存区域</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/mm_types.h:913 — 虚拟内存区域</span>
 <span class="kw">struct</span> <span class="ty">vm_area_struct</span> {
     <span class="ty">unsigned long</span>  vm_start;       <span class="cm">// 映射起始地址</span>
     <span class="ty">unsigned long</span>  vm_end;         <span class="cm">// 映射结束地址</span>
@@ -279,7 +279,7 @@
   <div class="grid-2">
     <div class="card">
       <div class="card-title" style="color:#cf222e">共享内存（IPC）</div>
-      <pre><code><span class="cm">// POSIX 共享内存</span>
+      <pre><code class="language-c"><span class="cm">// POSIX 共享内存</span>
 <span class="ty">int</span> fd = <span class="fn">shm_open</span>(<span class="st">"/myshm"</span>, O_RDWR|O_CREAT, <span class="num">0666</span>);
 <span class="fn">ftruncate</span>(fd, <span class="num">4096</span>);
 <span class="ty">void</span> *ptr = <span class="fn">mmap</span>(NULL, <span class="num">4096</span>,
@@ -289,7 +289,7 @@
     </div>
     <div class="card">
       <div class="card-title" style="color:#1a7f37">TCP Zero-Copy Send</div>
-      <pre><code><span class="cm">// sendfile / MSG_ZEROCOPY</span>
+      <pre><code class="language-c"><span class="cm">// sendfile / MSG_ZEROCOPY</span>
 <span class="cm">// 文件 → page cache → mmap</span>
 <span class="cm">// → NIC DMA 读取页面</span>
 <span class="cm">// 无 memcpy！</span>
@@ -297,14 +297,14 @@
     </div>
     <div class="card">
       <div class="card-title" style="color:#8250df">pipe splice</div>
-      <pre><code><span class="cm">// splice(fd_in, ..., pipe, ..., SPLICE_F_MOVE)</span>
+      <pre><code class="language-c"><span class="cm">// splice(fd_in, ..., pipe, ..., SPLICE_F_MOVE)</span>
 <span class="cm">// 仅修改页面引用计数</span>
 <span class="cm">// 不复制实际数据</span>
 <span class="cm">// 依赖 mmap 的页面管理机制</span></code></pre>
     </div>
     <div class="card">
       <div class="card-title" style="color:#bc4c00">动态链接库</div>
-      <pre><code><span class="cm">// libc.so 被 mmap 到进程地址空间</span>
+      <pre><code class="language-c"><span class="cm">// libc.so 被 mmap 到进程地址空间</span>
 <span class="cm">// .text 段共享（多个进程共享同一份）</span>
 <span class="cm">// .data 段私有（COW 各自独立）</span>
 <span class="cm">// 节省内存 + 加快加载</span></code></pre>

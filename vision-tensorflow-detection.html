@@ -76,7 +76,7 @@
 
   <p>TF Object Detection API 的安装需要从源码编译 protobuf 文件和安装依赖包。推荐使用虚拟环境进行隔离。</p>
 
-<pre><code># 1. 创建虚拟环境
+<pre><code class="language-python"># 1. 创建虚拟环境
 python3 -m venv tfod_env
 source tfod_env/bin/activate
 
@@ -109,7 +109,7 @@ python object_detection/builders/model_builder_tf2_test.py
     确保 <code>PYTHONPATH</code> 包含 <code>research</code> 和 <code>research/slim</code> 目录。
   </div>
 
-<pre><code># 设置 PYTHONPATH
+<pre><code class="language-python"># 设置 PYTHONPATH
 export PYTHONPATH=$PYTHONPATH:$(pwd)/research:$(pwd)/research/slim
 
 # 测试 GPU 可用性
@@ -125,7 +125,7 @@ python -c "import tensorflow as tf; \
 
   <h3>模型系列对比</h3>
 
-<pre><code># SSD MobileNet -- 轻量级，适合移动端
+<pre><code class="language-python"># SSD MobileNet -- 轻量级，适合移动端
 #   ssd_mobilenet_v2_fpnlite_320x320    22 mAP
 #   ssd_mobilenet_v2_fpnlite_640x640    28 mAP
 
@@ -153,7 +153,7 @@ python -c "import tensorflow as tf; \
 
   <p>选择标准取决于部署环境和精度要求。部署环境决定速度需求，目标特征决定模型复杂度。</p>
 
-<pre><code># 选择标准：
+<pre><code class="language-python"># 选择标准：
 # 1. 部署环境：移动端 SSD MobileNet
 #              Web/边缘 EfficientDet-D0~D2
 #              服务器 Faster R-CNN / EfficientDet-D4+
@@ -188,7 +188,7 @@ tar -xzf ssd_mobilenet_v2_fpnlite_320x320_coco17_tpu-8.tar.gz
 
   <h3>模型配置</h3>
 
-<pre><code>model {
+<pre><code class="language-python">model {
   ssd {
     feature_extractor {
       type: "ssd_mobilenet_v2_fpn_keras"
@@ -249,7 +249,7 @@ tar -xzf ssd_mobilenet_v2_fpnlite_320x320_coco17_tpu-8.tar.gz
 
   <h3>训练配置</h3>
 
-<pre><code>train_config {
+<pre><code class="language-python">train_config {
   optimizer {
     momentum_optimizer {
       learning_rate {
@@ -296,7 +296,7 @@ tar -xzf ssd_mobilenet_v2_fpnlite_320x320_coco17_tpu-8.tar.gz
 
   <h3>数据输入配置</h3>
 
-<pre><code>train_input_reader {
+<pre><code class="language-python">train_input_reader {
   label_map_path: "data/label_map.pbtxt"
   tf_record_input_reader {
     input_path: "data/train.record"
@@ -337,7 +337,7 @@ eval_config {
 
   <h3>数据准备</h3>
 
-<pre><code># 下载 COCO 2017 数据集
+<pre><code class="language-python"># 下载 COCO 2017 数据集
 wget http://images.cocodataset.org/zips/train2017.zip
 wget http://images.cocodataset.org/zips/val2017.zip
 wget http://images.cocodataset.org/annotations/\
@@ -361,7 +361,7 @@ create_coco_tf_record.py \
 
   <h3>Label Map 文件</h3>
 
-<pre><code># label_map.pbtxt
+<pre><code class="language-python"># label_map.pbtxt
 item {
   id: 1
   name: "person"
@@ -379,7 +379,7 @@ item {
 
   <h3>启动训练</h3>
 
-<pre><code># 单 GPU 训练
+<pre><code class="language-python"># 单 GPU 训练
 python models/research/object_detection/model_main_tf2.py \
   --pipeline_config_path=configs/ssd_mobilenet_v2.config \
   --model_dir=training/ \
@@ -400,7 +400,7 @@ tensorboard --logdir=training/
 
   <h3>恢复训练</h3>
 
-<pre><code># 自动加载 model_dir 中的最新 checkpoint
+<pre><code class="language-python"># 自动加载 model_dir 中的最新 checkpoint
 python models/research/object_detection/model_main_tf2.py \
   --pipeline_config_path=configs/ssd_mobilenet_v2.config \
   --model_dir=training/ \
@@ -424,7 +424,7 @@ python models/research/object_detection/model_main_tf2.py \
 
   <h3>微调配置</h3>
 
-<pre><code># pipeline.config 关键修改：
+<pre><code class="language-python"># pipeline.config 关键修改：
 
 # 1. 修改类别数
 model {
@@ -461,7 +461,7 @@ train_config {
 
   <h3>微调策略</h3>
 
-<pre><code># 策略一：冻结特征提取器
+<pre><code class="language-python"># 策略一：冻结特征提取器
 train_config {
   freeze_variables: "FeatureExtractor"
 }
@@ -477,7 +477,7 @@ train_config {
 
   <h3>自定义数据集 TFRecord 生成</h3>
 
-<pre><code># 使用脚本生成 TFRecord
+<pre><code class="language-python"># 使用脚本生成 TFRecord
 python generate_tfrecord.py \
   --csv_input=data/train_labels.csv \
   --output_path=data/train.record \
@@ -503,7 +503,7 @@ python generate_tfrecord.py \
 
   <h3>运行评估</h3>
 
-<pre><code># 评估模式
+<pre><code class="language-python"># 评估模式
 python models/research/object_detection/model_main_tf2.py \
   --pipeline_config_path=configs/pipeline.config \
   --model_dir=training/ \
@@ -514,7 +514,7 @@ python models/research/object_detection/model_main_tf2.py \
 
   <h3>COCO 评估指标详解</h3>
 
-<pre><code># 主要指标：
+<pre><code class="language-python"># 主要指标：
 #   Average Precision (AP) -- IoU=0.50:0.95 的均值
 #   AP_50 -- IoU=0.50 时的 AP
 #   AP_75 -- IoU=0.75 时的 AP（更严格）
@@ -539,7 +539,7 @@ python models/research/object_detection/model_main_tf2.py \
 
   <h3>评估结果解读</h3>
 
-<pre><code># TensorBoard 指标
+<pre><code class="language-python"># TensorBoard 指标
 # DetectionBoxes_Precision/mAP
 # DetectionBoxes_Precision/mAP@.50IOU
 # DetectionBoxes_Precision/mAP@.75IOU
@@ -559,7 +559,7 @@ python models/research/object_detection/model_main_tf2.py \
 
   <h3>可视化评估结果</h3>
 
-<pre><code>import matplotlib.pyplot as plt
+<pre><code class="language-python">import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 def visualize_detections(image, boxes, scores, classes,
@@ -598,7 +598,7 @@ def visualize_detections(image, boxes, scores, classes,
 
   <h3>导出 SavedModel</h3>
 
-<pre><code># 导出标准 SavedModel（用于 TensorFlow Serving）
+<pre><code class="language-python"># 导出标准 SavedModel（用于 TensorFlow Serving）
 python models/research/object_detection/exporter_main_v2.py \
   --input_type="image_tensor" \
   --pipeline_config_path=configs/pipeline.config \
@@ -617,7 +617,7 @@ python models/research/object_detection/exporter_main_v2.py \
 
   <h3>导出 TF Lite</h3>
 
-<pre><code># 导出 TFLite 图
+<pre><code class="language-python"># 导出 TFLite 图
 python models/research/object_detection/exporter_main_v2.py \
   --input_type="image_tensor" \
   --pipeline_config_path=configs/pipeline.config \
@@ -644,7 +644,7 @@ with open("detect.tflite", "wb") as f:
 
   <h3>TensorFlow Serving 部署</h3>
 
-<pre><code># 启动 Serving
+<pre><code class="language-python"># 启动 Serving
 docker pull tensorflow/serving
 docker run -p 8501:8501 \
   -v $(pwd)/exported_model/saved_model:/models/detector/1 \
@@ -676,7 +676,7 @@ request.model_spec.signature_name = "serving_default"
 
   <h3>推理代码</h3>
 
-<pre><code>import numpy as np
+<pre><code class="language-python">import numpy as np
 import tensorflow as tf
 
 class ObjectDetector:

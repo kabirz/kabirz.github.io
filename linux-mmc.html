@@ -98,7 +98,7 @@
   <h3>struct mmc_host（主机控制器）</h3>
   <div class="card">
     <p class="ref">include/linux/mmc/host.h</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">mmc_host</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">mmc_host</span> {
     <span class="kw">const struct</span> <span class="ty">mmc_host_ops</span> *ops;  <span class="cm">// 主机操作回调</span>
     <span class="kw">struct</span> <span class="ty">mmc_ios</span> ios;              <span class="cm">// 当前 I/O 状态</span>
     <span class="ty">u32</span> caps;                        <span class="cm">// 主机能力标志</span>
@@ -119,7 +119,7 @@
   <h3>struct mmc_ios（I/O 状态）</h3>
   <div class="card">
     <p class="ref">include/linux/mmc/host.h:22-90</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">mmc_ios</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">mmc_ios</span> {
     <span class="ty">unsigned int</span> clock;          <span class="cm">// 时钟频率</span>
     <span class="ty">unsigned short</span> vdd;          <span class="cm">// 电压</span>
     <span class="ty">unsigned char</span> bus_mode;       <span class="cm">// MMC_BUSMODE_OPENDRAIN / PUSHPULL</span>
@@ -135,7 +135,7 @@
   <h3>struct mmc_card（卡片）</h3>
   <div class="card">
     <p class="ref">include/linux/mmc/card.h</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">mmc_card</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">mmc_card</span> {
     <span class="kw">struct</span> <span class="ty">mmc_host</span> *host;      <span class="cm">// 所属主机</span>
     <span class="ty">unsigned int</span> type;           <span class="cm">// MMC_TYPE_MMC / _SD / _SDIO</span>
     <span class="ty">unsigned int</span> state;          <span class="cm">// MMC_STATE_* 状态</span>
@@ -240,7 +240,7 @@
   <h2><span class="num">06</span> 设备树</h2>
 
   <h3>SDHCI 控制器节点</h3>
-  <pre><code><span class="ty">sdhci0</span>: <span class="fn">mmc</span>@e0000000 {
+  <pre><code class="language-c"><span class="ty">sdhci0</span>: <span class="fn">mmc</span>@e0000000 {
     compatible = <span class="st">"sdhci,tegra20"</span>, <span class="st">"sdhci,tegra"</span>, <span class="st">"simple-mfd"</span>;
     reg = <span class="num">&lt;0xe0000000 0x200&gt;</span>;
     interrupts = <span class="num">&lt;GIC_SPI 30 IRQ_TYPE_LEVEL_HIGH&gt;</span>;
@@ -282,7 +282,7 @@
   <h2><span class="num">07</span> 编写驱动</h2>
 
   <h3>SDHCI 主机驱动模板</h3>
-  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/mmc/host.h&gt;</span>
+  <pre><code class="language-c"><span class="kw">#include</span> <span class="st">&lt;linux/mmc/host.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/sdhci/pltfm.h&gt;</span>
 
 <span class="kw">static int</span> <span class="fn">my_sdhci_request</span>(<span class="kw">struct</span> <span class="ty">mmc_host</span> *mmc,

@@ -60,7 +60,7 @@
 
   <p>Tauri 用<strong>系统 WebView</strong> 渲染 HTML/CSS/JS，Rust 作为后端。体积小、内存省（相比 Electron）。</p>
 
-<pre><code>// Cargo.toml + tauri.conf.json
+<pre><code class="language-rust">// Cargo.toml + tauri.conf.json
 // [dependencies]
 // tauri = { version = "2", features = [] }
 
@@ -99,7 +99,7 @@ fn main() {
   </ul>
 
   <p>Tauri 2.0 新特性：</p>
-<pre><code>// 移动端支持（iOS + Android）
+<pre><code class="language-rust">// 移动端支持（iOS + Android）
 tauri android init
 tauri android dev
 tauri android build
@@ -132,7 +132,7 @@ tauri-plugin-updater
 
   <p>Iced 是<strong>The Elm Architecture</strong> (MVU) 的 Rust 实现。纯 Rust，无 JavaScript。</p>
 
-<pre><code>// [dependencies]
+<pre><code class="language-rust">// [dependencies]
 // iced = "0.12"
 
 use iced::widget::{button, column, text};
@@ -186,7 +186,7 @@ impl App {
   </ul>
 
   <p>典型应用：</p>
-<pre><code>// 复杂状态：
+<pre><code class="language-rust">// 复杂状态：
 struct AppState {
     todos: Vec&lt;Todo&gt;,
     filter: Filter,
@@ -232,7 +232,7 @@ fn load_data() -> Task&lt;Message&gt; {
 
   <p>egui 是<strong>立即模式 GUI</strong>，每帧重新绘制所有 UI。极简、极快、极适合工具应用。</p>
 
-<pre><code>// [dependencies]
+<pre><code class="language-rust">// [dependencies]
 // eframe = "0.27"
 
 use eframe::egui;
@@ -288,7 +288,7 @@ fn main() {
   </ul>
 
   <p>高级控件：</p>
-<pre><code>ui.text_edit_singleline(&amp;mut self.name);
+<pre><code class="language-rust">ui.text_edit_singleline(&amp;mut self.name);
 ui.checkbox(&amp;mut self.option, "Enable");
 ui.slider(&amp;mut self.value, 0..=100);
 ui.color_picker_button_rgb(&amp;mut self.color);
@@ -317,7 +317,7 @@ ui.painter().rect_filled(rect, 5.0, egui::Color32::RED);
 
   <p>Slint 用<strong>声明式 DSL</strong>（类似 QML）描述 UI，Rust 作为后端逻辑。适合嵌入式。</p>
 
-<pre><code>// main.rs
+<pre><code class="language-rust">// main.rs
 slint::slint! {
     export component App inherits Window {
         in property &lt;int&gt; counter: 0;
@@ -340,7 +340,7 @@ fn main() {
 </code></pre>
 
   <p>外部 .slint 文件：</p>
-<pre><code>// main.rs
+<pre><code class="language-rust">// main.rs
 slint::include_modules!();
 
 fn main() {
@@ -375,7 +375,7 @@ fn main() {
 
   <p>Dioxus 是<strong>React for Rust</strong>。RSX 宏、Virtual DOM、Hooks。已有专门文档（rust-dioxus.html）。</p>
 
-<pre><code>// [dependencies]
+<pre><code class="language-rust">// [dependencies]
 // dioxus = { version = "0.5", features = ["desktop"] }
 
 use dioxus::prelude::*;
@@ -429,7 +429,7 @@ fn app() -> Element {
   </table>
 
   <p>常见控件支持：</p>
-<pre><code>// 评级（1-5）：
+<pre><code class="language-rust">// 评级（1-5）：
 //                Tauri   Iced   egui   Slint  Dioxus
 // Button         5       5      5      5      5
 // Text           5       5      5      5      5
@@ -452,7 +452,7 @@ fn app() -> Element {
 
   <p>纯 Rust GUI 框架多基于 wgpu（WebGPU API）：</p>
 
-<pre><code>// wgpu 抽象：
+<pre><code class="language-rust">// wgpu 抽象：
 //   - 基于 WebGPU 规范
 //   - 后端：Vulkan, Metal, DX12, Browser
 //   - 现代图形 API 抽象
@@ -473,7 +473,7 @@ fn app() -> Element {
 </code></pre>
 
   <p>字体与文本：</p>
-<pre><code>// Rust GUI 普遍用：
+<pre><code class="language-rust">// Rust GUI 普遍用：
 //   cosmic-text  (System76 的文本布局)
 //   rusttype     (基础 TrueType)
 //   ab_glyph     (rusttype 替代)
@@ -487,7 +487,7 @@ fn app() -> Element {
 <section id="state" class="toc-link">
   <h2><span class="num">09</span> 状态管理</h2>
 
-<pre><code>// 1. MVU (Iced)：
+<pre><code class="language-rust">// 1. MVU (Iced)：
 struct State { count: i32 }
 enum Message { Increment }
 fn update(state: &amp;mut State, msg: Message) { ... }
@@ -510,7 +510,7 @@ use_signal / use_resource / use_effect
 </code></pre>
 
   <p>跨组件状态：</p>
-<pre><code>// Iced：通过 update 链
+<pre><code class="language-rust">// Iced：通过 update 链
 // Dioxus：use_context_provider / use_context
 // egui：内存 storage
 // Slint：global singletons
@@ -526,7 +526,7 @@ use_signal / use_resource / use_effect
   <h2><span class="num">10</span> 选型指南</h2>
 
   <p>决策树：</p>
-<pre><code>需要现代 UI？
+<pre><code class="language-rust">需要现代 UI？
 ├─ Web 技术栈 → Tauri
 │       - 前端团队熟悉
 │       - 跨端一致

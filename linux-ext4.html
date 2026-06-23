@@ -69,7 +69,7 @@ ext4 磁盘布局：
 <section id="data" class="toc-link">
   <h2><span class="num">03</span> 核心数据结构</h2>
   <div class="card">
-    <pre><code><span class="cm">// 磁盘上的 inode 结构（128 字节）</span>
+    <pre><code class="language-c"><span class="cm">// 磁盘上的 inode 结构（128 字节）</span>
 <span class="kw">struct</span> <span class="ty">ext4_inode</span> {
     <span class="ty">__le16</span>   i_mode;       <span class="cm">// 文件类型 + 权限</span>
     <span class="ty">__le16</span>   i_uid;        <span class="cm">// 所有者 UID</span>

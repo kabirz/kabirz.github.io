@@ -60,7 +60,7 @@
 <section id="def" class="toc-link">
   <h2><span class="num">02</span> Trait 定义与实现</h2>
 
-<pre><code>// 定义
+<pre><code class="language-rust">// 定义
 pub trait Draw {
     fn draw(&amp;self);
     
@@ -123,7 +123,7 @@ trait Dog: Animal {
 </code></pre>
 
   <p>孤儿规则 (Orphan Rule)：</p>
-<pre><code>// 规则：impl Trait for Type 必须满足
+<pre><code class="language-rust">// 规则：impl Trait for Type 必须满足
 //   - Trait 在当前 crate 定义，或
 //   - Type 在当前 crate 定义
 
@@ -142,7 +142,7 @@ impl Display for MyType { ... }       // MyType 是 crate A 的
 <section id="bounds" class="toc-link">
   <h2><span class="num">03</span> Trait Bounds</h2>
 
-<pre><code>// 泛型函数 + bound
+<pre><code class="language-rust">// 泛型函数 + bound
 fn print&lt;T: Display&gt;(x: T) {
     println!("{}", x);
 }
@@ -190,7 +190,7 @@ where
 </code></pre>
 
   <p>impl Trait 语法（位置 trait）：</p>
-<pre><code>// 函数参数（匿名 trait bound）
+<pre><code class="language-rust">// 函数参数（匿名 trait bound）
 fn print(x: impl Display) {
     println!("{}", x);
 }
@@ -219,7 +219,7 @@ fn make(flag: bool) -> impl Iterator&lt;Item=i32&gt; {
 
   <p>泛型 + Trait bound = <strong>静态分发（单态化）</strong>，每个具体类型生成一份代码：</p>
 
-<pre><code>// 源代码：
+<pre><code class="language-rust">// 源代码：
 fn print&lt;T: Display&gt;(x: T) {
     println!("{}", x);
 }
@@ -250,7 +250,7 @@ fn process_all&lt;T: Process&gt;(items: &amp;[T]) {
 </code></pre>
 
   <p>代码膨胀与去重：</p>
-<pre><code>// 共享泛型代码：所有 T 相同大小用同一份代码
+<pre><code class="language-rust">// 共享泛型代码：所有 T 相同大小用同一份代码
 // LLVM 通过 GVN 去重
 
 // 实际策略：
@@ -267,7 +267,7 @@ fn process_all&lt;T: Process&gt;(items: &amp;[T]) {
 <section id="dynamic-dispatch" class="toc-link">
   <h2><span class="num">05</span> 动态分发 (dyn)</h2>
 
-<pre><code>// dyn Trait 是 trait 对象（动态分发）
+<pre><code class="language-rust">// dyn Trait 是 trait 对象（动态分发）
 fn print(x: &amp;dyn Display) {
     println!("{}", x);
 }
@@ -338,7 +338,7 @@ trait Draw {
 <section id="associated" class="toc-link">
   <h2><span class="num">06</span> 关联类型 vs 泛型</h2>
 
-<pre><code>// 关联类型（推荐）
+<pre><code class="language-rust">// 关联类型（推荐）
 trait Iterator {
     type Item;
     fn next(&amp;mut self) -> Option&lt;Self::Item&gt;;
@@ -382,7 +382,7 @@ fn shortest_path&lt;G: Graph&gt;(g: &amp;G, from: G::Node, to: G::Node)
 </code></pre>
 
   <p>Generic Associated Types (GAT)：</p>
-<pre><code>// 1.65+ 稳定：trait 中的泛型关联类型
+<pre><code class="language-rust">// 1.65+ 稳定：trait 中的泛型关联类型
 trait LendingIterator {
     type Item&lt;'a&gt; where Self: 'a;
     fn next(&amp;mut self) -> Option&lt;Self::Item&lt;'_&gt;&gt;;
@@ -409,7 +409,7 @@ impl LendingIterator for Buffer {
 <section id="auto-traits" class="toc-link">
   <h2><span class="num">07</span> Auto Trait 与 Send/Sync</h2>
 
-<pre><code>// Auto Trait：编译器自动实现
+<pre><code class="language-rust">// Auto Trait：编译器自动实现
 // 不需要 impl 块，根据字段自动派生
 
 // Send: 可在线程间转移所有权
@@ -448,7 +448,7 @@ unsafe impl Sync for MyUnsafe {}
 <section id="sized" class="toc-link">
   <h2><span class="num">08</span> Sized 与 ?Sized</h2>
 
-<pre><code>// Sized 类型（编译期已知大小）：
+<pre><code class="language-rust">// Sized 类型（编译期已知大小）：
 //   i32, f64, struct, enum, Box, Vec
 let x: i32 = 5;
 
@@ -495,7 +495,7 @@ trait UnsizedTrait: !Sized {
 <section id="specialized" class="toc-link">
   <h2><span class="num">09</span> Specialization（待稳定）</h2>
 
-<pre><code>//#![feature(min_specialization)]
+<pre><code class="language-rust">//#![feature(min_specialization)]
 
 // Specialization：trait 实现可以针对具体类型覆盖通用实现
 trait Example {
@@ -532,7 +532,7 @@ impl Example for i32 {
 <section id="patterns" class="toc-link">
   <h2><span class="num">10</span> 设计模式</h2>
 
-<pre><code>// 1. Newtype 模式（封装外部类型）
+<pre><code class="language-rust">// 1. Newtype 模式（封装外部类型）
 struct Meters(u32);
 struct Kilometers(u32);
 // 不同类型，编译期防止混淆

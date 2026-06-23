@@ -41,7 +41,7 @@
   <div class="grid-2">
     <div class="card">
       <div class="card-title">传统文件系统</div>
-<pre><code>/data
+<pre><code class="language-bash">/data
 ├── file1
 ├── file2
 └── dir/
@@ -50,7 +50,7 @@
     </div>
     <div class="card">
       <div class="card-title">OverlayFS</div>
-<pre><code>upper (rw): /upper
+<pre><code class="language-bash">upper (rw): /upper
   └── file1
 lower (ro): /lower
   ├── file1 (旧)
@@ -78,7 +78,7 @@ view:        /merged
 
   <p>OverlayFS 的基本概念：</p>
 
-<pre><code>// mount -t overlay overlay \
+<pre><code class="language-bash">// mount -t overlay overlay \
 //   -o lowerdir=L1:L2:L3,upperdir=U,workdir=W \
 //   /merged
 
@@ -101,7 +101,7 @@ view:        /merged
 </code></pre>
 
   <p>Docker 的镜像分层结构：</p>
-<pre><code>docker pull nginx
+<pre><code class="language-bash">docker pull nginx
 // 下载：
 //   layer 1: base os (debian)
 //   layer 2: nginx binary
@@ -121,7 +121,7 @@ view:        /merged
 </code></pre>
 
   <p>OverlayFS 内部数据结构：</p>
-<pre><code>// fs/overlayfs/ovl_entry.h
+<pre><code class="language-bash">// fs/overlayfs/ovl_entry.h
 struct ovl_fs {
     struct vfsmount       *__upper_mnt;
     struct vfsmount       **lower_mnts;        // 多个 lower mounts
@@ -173,7 +173,7 @@ struct ovl_layer {
 
   <p>当用户访问 <code>/merged/some/path</code> 时，OverlayFS 决定从哪一层读取：</p>
 
-<pre><code>// fs/overlayfs/super.c
+<pre><code class="language-bash">// fs/overlayfs/super.c
 static struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
                                    unsigned int flags)
 {
@@ -218,7 +218,7 @@ static struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 </code></pre>
 
   <p>文件的"来源"标识：</p>
-<pre><code>// include/uapi/linux/linux/fs.h
+<pre><code class="language-bash">// include/uapi/linux/linux/fs.h
 #define OVL_TYPE_UPPER(t)   (t &amp; (1 &lt;&lt; 0))
 #define OVL_TYPE_MERGE(t)   (t &amp; (1 &lt;&lt; 1))
 #define OVL_TYPE_ORIGIN(t)  (t &amp; (1 &lt;&lt; 2))
@@ -237,7 +237,7 @@ static struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 
   <p>当用户修改一个来自 lower 层的文件时，OverlayFS 会<strong>先把它复制到 upper 层</strong>，再修改副本。这就是写时复制 (Copy-Up, COW)。</p>
 
-<pre><code>// fs/overlayfs/copy_up.c
+<pre><code class="language-bash">// fs/overlayfs/copy_up.c
 int ovl_copy_up(struct dentry *dentry)
 {
     int err;
@@ -294,7 +294,7 @@ static int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 </code></pre>
 
   <p>Copy-Up 的性能影响：</p>
-<pre><code>// 1. 第一次修改大文件代价高
+<pre><code class="language-bash">// 1. 第一次修改大文件代价高
 //    $ time docker exec container sh -c "echo x >> /usr/bin/file"
 //    若 /usr/bin/file 是 100MB（在 lower），需要复制 100MB
 
@@ -326,7 +326,7 @@ strace -e copy_file_range -p &lt;container_pid&gt;
 
   <p>OverlayFS 提供两个性能优化的扩展属性：</p>
 
-<pre><code>// 1. redirect dir（重定向目录）
+<pre><code class="language-bash">// 1. redirect dir（重定向目录）
 //    -o redirect_dir=on
 //    当重命名一个目录时，不复制目录内容
 //    而是在 upper 创建一个 redirect 文件，指向原位置
@@ -360,7 +360,7 @@ getfattr -d -m overlay /var/lib/docker/overlay2/.../diff/file
 </code></pre>
 
   <p>安全考虑：</p>
-<pre><code>// redirect_dir 和 metacopy 有安全风险：
+<pre><code class="language-bash">// redirect_dir 和 metacopy 有安全风险：
 //   - 攻击者可绕过某些检查
 //   - 跨 mount 的 redirect 可能导致信息泄漏
 // 因此需要明确的 mount 选项开启
@@ -382,7 +382,7 @@ getfattr -d -m overlay /var/lib/docker/overlay2/.../diff/file
 
   <p>如何"删除" lower 层的文件？OverlayFS 用 <strong>whiteout</strong> 机制。</p>
 
-<pre><code>// 用户：rm /merged/somefile  (somefile 在 lower)
+<pre><code class="language-bash">// 用户：rm /merged/somefile  (somefile 在 lower)
 
 // OverlayFS 创建 whiteout 标记在 upper
 //   upper/.wh.somefile  (字符设备 0/0)
@@ -414,7 +414,7 @@ getfattr -d -m overlay /var/lib/docker/overlay2/.../diff/file
 </code></pre>
 
   <p>Linux 5.11+ 的改进：</p>
-<pre><code>// 旧方式：mknod .wh.* 字符设备
+<pre><code class="language-bash">// 旧方式：mknod .wh.* 字符设备
 //   问题：依赖 mknod，部分文件系统不支持
 
 // 新方式：xattr
@@ -433,7 +433,7 @@ getfattr -d -m overlay /var/lib/docker/overlay2/.../diff/file
 
   <p>OverlayFS 的 inode 处理有微妙之处：</p>
 
-<pre><code>// 每个文件实际上有两套 inode：
+<pre><code class="language-bash">// 每个文件实际上有两套 inode：
 //   - 底层文件系统的 inode（ext4/xfs/...）
 //   - overlayfs 虚拟 inode（合成）
 
@@ -470,7 +470,7 @@ $ stat /upper/file
 </code></pre>
 
   <p>导出 (export)：</p>
-<pre><code>// OverlayFS 默认不支持 NFS export
+<pre><code class="language-bash">// OverlayFS 默认不支持 NFS export
 // -o nfs_export=on  (5.x+)
 //   支持但需要 index=on
 //   性能损失明显
@@ -486,7 +486,7 @@ $ stat /upper/file
 
   <p>Docker 的 overlay2 存储驱动（基于 OverlayFS）：</p>
 
-<pre><code># 查看存储驱动
+<pre><code class="language-bash"># 查看存储驱动
 $ docker info | grep "Storage Driver"
  Storage Driver: overlay2
 
@@ -535,7 +535,7 @@ mount -t overlay overlay \
   </table>
 
   <p>OverlayFS 文件系统挂载：</p>
-<pre><code># 手动挂载 overlayfs（理解原理）
+<pre><code class="language-bash"># 手动挂载 overlayfs（理解原理）
 mkdir lower upper work merged
 
 # 创建 lower 内容

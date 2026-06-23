@@ -109,7 +109,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/sch_generic.h:66 — Qdisc（队列规则）</span>
+    <pre><code class="language-c"><span class="cm">// include/net/sch_generic.h:66 — Qdisc（队列规则）</span>
 <span class="kw">struct</span> <span class="ty">Qdisc</span> {
     <span class="ty">int</span>             (*enqueue)(<span class="kw">struct</span> <span class="ty">sk_buff</span> *skb,
                                <span class="kw">struct</span> <span class="ty">Qdisc</span> *sch,
@@ -125,7 +125,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// Qdisc 操作表（不同调度器实现不同的 ops）</span>
+    <pre><code class="language-c"><span class="cm">// Qdisc 操作表（不同调度器实现不同的 ops）</span>
 <span class="kw">struct</span> <span class="ty">Qdisc_ops</span> {
     <span class="kw">const struct</span> <span class="ty">Qdisc_class_ops</span> *cl_ops;
     <span class="ty">int</span>             (*enqueue)(<span class="kw">struct</span> <span class="ty">sk_buff</span> *skb, ...);
@@ -246,13 +246,13 @@
   <div class="grid-2">
     <div class="card">
       <div class="card-title" style="color:#cf222e">带宽限制</div>
-      <pre><code><span class="cm"># 限制 eth0 下行 100Mbps</span>
+      <pre><code class="language-c"><span class="cm"># 限制 eth0 下行 100Mbps</span>
 tc qdisc add dev eth0 root tbf \
   rate 100mbit burst 64kb latency 50ms</code></pre>
     </div>
     <div class="card">
       <div class="card-title" style="color:#1a7f37">优先级队列</div>
-      <pre><code><span class="cm"># SSH 优先，HTTP 次之，其他最低</span>
+      <pre><code class="language-c"><span class="cm"># SSH 优先，HTTP 次之，其他最低</span>
 tc qdisc add dev eth0 root handle 1: prio
 tc filter add dev eth0 parent 1:0 protocol ip u32 \
   match ip dport 22 0xffff flowid 1:1
@@ -261,14 +261,14 @@ tc filter add dev eth0 parent 1:0 protocol ip u32 \
     </div>
     <div class="card">
       <div class="card-title" style="color:#8250df">抗 Bufferbloat</div>
-      <pre><code><span class="cm"># 使用 fq_codel 替代默认 qdisc</span>
+      <pre><code class="language-c"><span class="cm"># 使用 fq_codel 替代默认 qdisc</span>
 tc qdisc replace dev eth0 root fq_codel
 <span class="cm"># fq_codel 主动管理队列深度</span>
 <span class="cm"># 防止缓冲区膨胀导致的高延迟</span></code></pre>
     </div>
     <div class="card">
       <div class="card-title" style="color:#bc4c00">流量镜像</div>
-      <pre><code><span class="cm"># 镜像所有流量到 tap0（抓包）</span>
+      <pre><code class="language-c"><span class="cm"># 镜像所有流量到 tap0（抓包）</span>
 tc qdisc add dev eth0 ingress
 tc filter add dev eth0 parent ffff: \
   protocol all u32 match u32 0 0 \
@@ -282,7 +282,7 @@ tc filter add dev eth0 parent ffff: \
   <h2><span class="num">07</span> 配置命令</h2>
 
   <div class="card">
-    <pre><code><span class="cm"># 查看 qdisc</span>
+    <pre><code class="language-c"><span class="cm"># 查看 qdisc</span>
 $ tc qdisc show dev eth0
 
 <span class="cm"># 查看 filter</span>

@@ -101,7 +101,7 @@
   <h3>struct gpio_chip</h3>
   <div class="card">
     <p class="ref">include/linux/gpio/driver.h:402-443</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">gpio_chip</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">gpio_chip</span> {
     <span class="kw">const char</span>        *label;      <span class="cm">// 芯片名（如 "gpio-pca953x"）</span>
     <span class="kw">struct</span> <span class="ty">device</span>     *parent;     <span class="cm">// 父设备</span>
     <span class="kw">struct</span> <span class="ty">fwnode_handle</span> *fwnode;
@@ -150,7 +150,7 @@
   <p>gpiolib 是 GPIO 子系统的<strong>核心库</strong>，管理所有 GPIO 控制器的注册、描述符分配和请求处理。</p>
 
   <h3>控制器注册</h3>
-  <pre><code><span class="cm">// 注册 GPIO 控制器</span>
+  <pre><code class="language-c"><span class="cm">// 注册 GPIO 控制器</span>
 <span class="fn">gpiochip_add_data</span>(&my_chip, private_data);
 
 <span class="cm">// 设备管理版本（设备移除时自动注销）</span>
@@ -161,7 +161,7 @@
 
   <h3>gpio_device</h3>
   <div class="card">
-    <pre><code><span class="cm">// 内部结构，gpiolib 为每个 gpio_chip 创建</span>
+    <pre><code class="language-c"><span class="cm">// 内部结构，gpiolib 为每个 gpio_chip 创建</span>
 <span class="kw">struct</span> <span class="ty">gpio_device</span> {
     <span class="kw">struct</span> <span class="ty">gpio_chip</span> *chip;
     <span class="kw">struct</span> <span class="ty">device</span> dev;
@@ -178,7 +178,7 @@
 
   <h3>gpio_desc（GPIO 描述符）</h3>
   <div class="card">
-    <pre><code><span class="cm">// 内部结构，代表一根 GPIO 线</span>
+    <pre><code class="language-c"><span class="cm">// 内部结构，代表一根 GPIO 线</span>
 <span class="kw">struct</span> <span class="ty">gpio_desc</span> {
     <span class="kw">struct</span> <span class="ty">gpio_device</span> *gdev;
     <span class="kw">const char</span> *label;
@@ -197,7 +197,7 @@
   <p>消费者 API（<code>gpiod_*</code>）是设备驱动获取 GPIO 的<strong>标准方式</strong>，基于设备树/ACPI/固件属性。</p>
 
   <h3>获取 GPIO</h3>
-  <pre><code><span class="cm">// 获取单个 GPIO</span>
+  <pre><code class="language-c"><span class="cm">// 获取单个 GPIO</span>
 <span class="kw">struct</span> <span class="ty">gpio_desc</span> *desc;
 desc = <span class="fn">devm_gpiod_get</span>(&dev, <span class="st">"enable"</span>, GPIOD_OUT_LOW);
 
@@ -210,7 +210,7 @@ desc = <span class="fn">devm_gpiod_get_optional</span>(&dev, <span class="st">"r
 
   <h3>方向与读写</h3>
   <div class="card">
-    <pre><code><span class="cm">// 方向设置</span>
+    <pre><code class="language-c"><span class="cm">// 方向设置</span>
 <span class="fn">gpiod_direction_input</span>(desc);
 <span class="fn">gpiod_direction_output</span>(desc, value);
 
@@ -266,7 +266,7 @@ desc = <span class="fn">devm_gpiod_get_optional</span>(&dev, <span class="st">"r
   <h3>gpio_irq_chip</h3>
   <div class="card">
     <p class="ref">include/linux/gpio/driver.h:51-322</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">gpio_irq_chip</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">gpio_irq_chip</span> {
     <span class="kw">struct</span> <span class="ty">irq_chip</span> *chip;           <span class="cm">// IRQ 芯片实现</span>
     <span class="kw">struct</span> <span class="ty">irq_domain</span> *domain;       <span class="cm">// IRQ 域</span>
     <span class="kw">struct</span> <span class="ty">irq_domain</span> *parent_domain; <span class="cm">// 父 IRQ 域（层级中断）</span>
@@ -301,7 +301,7 @@ desc = <span class="fn">devm_gpiod_get_optional</span>(&dev, <span class="st">"r
   <h2><span class="num">07</span> 设备树</h2>
 
   <h3>控制器节点</h3>
-  <pre><code><span class="ty">gpio0</span>: <span class="fn">gpio</span>@e0000000 {
+  <pre><code class="language-c"><span class="ty">gpio0</span>: <span class="fn">gpio</span>@e0000000 {
     compatible = <span class="st">"vendor,soc-gpio"</span>;
     reg = <span class="num">&lt;0xe0000000 0x1000&gt;</span>;
     <span class="st">gpio-controller</span>;
@@ -357,7 +357,7 @@ desc = <span class="fn">devm_gpiod_get_optional</span>(&dev, <span class="st">"r
   </table>
 
   <h3>字符设备接口（推荐）</h3>
-  <pre><code><span class="cm">// 通过 /dev/gpiochipN 操作</span>
+  <pre><code class="language-c"><span class="cm">// 通过 /dev/gpiochipN 操作</span>
 $ ls -la /dev/gpiochip*
 crw-rw---- 1 root gpio 254, 0 Jan  1 00:00 /dev/gpiochip0
 crw-rw---- 1 root gpio 254, 1 Jan  1 00:00 /dev/gpiochip1
@@ -379,7 +379,7 @@ $ gpiomon gpiochip0 12          <span class="cm">// 监控 GPIO 12 事件</span>
   <h2><span class="num">09</span> 编写驱动</h2>
 
   <h3>GPIO 控制器驱动模板</h3>
-  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/gpio/driver.h&gt;</span>
+  <pre><code class="language-c"><span class="kw">#include</span> <span class="st">&lt;linux/gpio/driver.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/module.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/platform_device.h&gt;</span>
 

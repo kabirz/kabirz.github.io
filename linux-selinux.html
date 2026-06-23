@@ -100,7 +100,7 @@
 <section id="policy" class="toc-link">
   <h2><span class="num">04</span> 策略语言</h2>
   <div class="card">
-    <pre><code><span class="cm"># SELinux 策略规则示例</span>
+    <pre><code class="language-c"><span class="cm"># SELinux 策略规则示例</span>
 
 <span class="cm"># 允许 httpd 读取 web 内容文件</span>
 <span class="kw">allow</span> httpd_t httpd_sys_content_t:file { read open getattr };
@@ -123,7 +123,7 @@
 <section id="tuning" class="toc-link">
   <h2><span class="num">05</span> 管理与调优</h2>
   <div class="card">
-    <pre><code><span class="cm"># 查看 SELinux 状态</span>
+    <pre><code class="language-c"><span class="cm"># 查看 SELinux 状态</span>
 $ getenforce
 Enforcing
 

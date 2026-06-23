@@ -264,7 +264,7 @@
   <h2><span class="num">06</span> 应用层接收</h2>
   <div class="card">
     <p>应用层有两种接收数据的方式：</p>
-    <pre><code><span class="cm">// 方式 1：阻塞式 recvfrom</span>
+    <pre><code class="language-c"><span class="cm">// 方式 1：阻塞式 recvfrom</span>
 nread = <span class="fn">recvfrom</span>(sockfd, buffer, MAXLINE, <span class="num">0</span>, NULL, NULL);
 <span class="cm">// 进程阻塞 → sk_data_ready 唤醒 → 从 receive_skb 队列读取数据</span>
 

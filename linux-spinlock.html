@@ -90,7 +90,7 @@
 
   <h3>rwlock_t（读写锁）</h3>
   <div class="card">
-    <pre><code><span class="cm">// 读写锁：多个读者可同时持有，写者独占</span>
+    <pre><code class="language-c"><span class="cm">// 读写锁：多个读者可同时持有，写者独占</span>
 <span class="kw">static</span> <span class="ty">DEFINE_RWLOCK</span>(my_rwlock);
 
 <span class="cm">// 读者</span>
@@ -116,7 +116,7 @@
 
   <h3>spinlock_t API</h3>
   <div class="card">
-    <pre><code><span class="cm">// 初始化</span>
+    <pre><code class="language-c"><span class="cm">// 初始化</span>
 <span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(my_lock);     <span class="cm">// 编译时初始化</span>
 <span class="fn">spin_lock_init</span>(&my_lock);            <span class="cm">// 运行时初始化</span>
 
@@ -180,7 +180,7 @@
 
   <h3>local_lock_t</h3>
   <div class="card">
-    <pre><code><span class="cm">// local_lock：保护 per-CPU 数据的轻量级锁</span>
+    <pre><code class="language-c"><span class="cm">// local_lock：保护 per-CPU 数据的轻量级锁</span>
 <span class="cm">// 在非 RT 内核中仅禁用抢占（无原子操作）</span>
 <span class="kw">static</span> <span class="ty">DEFINE_LOCAL_LOCK</span>(my_local_lock);
 
@@ -244,7 +244,7 @@ val = <span class="fn">this_cpu_read</span>(my_counter);
 
   <h3>模式一：保护共享数据</h3>
   <div class="card">
-    <pre><code><span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(data_lock);
+    <pre><code class="language-c"><span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(data_lock);
 <span class="kw">static</span> <span class="ty">int</span> shared_data;
 
 <span class="cm">// 更新（写者）</span>
@@ -260,7 +260,7 @@ val = shared_data;
 
   <h3>模式二：中断安全的锁</h3>
   <div class="card">
-    <pre><code><span class="cm">// 中断处理函数中获取锁</span>
+    <pre><code class="language-c"><span class="cm">// 中断处理函数中获取锁</span>
 <span class="ty">irqreturn_t</span> <span class="fn">my_irq_handler</span>(<span class="ty">int</span> irq, <span class="ty">void</span> *dev_id)
 {
     <span class="fn">spin_lock</span>(&my_lock);  <span class="cm">// 中断中不需要 irqsave（已在中断中）</span>
@@ -277,7 +277,7 @@ val = shared_data;
 
   <h3>模式三：嵌套锁</h3>
   <div class="card">
-    <pre><code><span class="cm">// 嵌套锁：必须按固定顺序获取</span>
+    <pre><code class="language-c"><span class="cm">// 嵌套锁：必须按固定顺序获取</span>
 <span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(lock_a);
 <span class="kw">static</span> <span class="ty">DEFINE_SPINLOCK</span>(lock_b);
 

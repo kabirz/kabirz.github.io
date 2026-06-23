@@ -80,7 +80,7 @@
 
   <h3>DMA 地址空间</h3>
   <div class="card">
-    <pre><code><span class="cm">// 三种地址概念</span>
+    <pre><code class="language-c"><span class="cm">// 三种地址概念</span>
 <span class="cm">// 1. CPU 物理地址（phys_addr_t）— CPU 看到的物理地址</span>
 <span class="cm">// 2. DMA 总线地址（dma_addr_t）— 设备看到的地址</span>
 <span class="cm">// 3. 虚拟地址（void *）— 内核映射的虚拟地址</span>
@@ -146,7 +146,7 @@
   </div>
 
   <h3>典型使用模式</h3>
-  <pre><code><span class="cm">// 一致性 DMA（DMA 读写频繁，如 descriptor ring）</span>
+  <pre><code class="language-c"><span class="cm">// 一致性 DMA（DMA 读写频繁，如 descriptor ring）</span>
 <span class="ty">dma_addr_t</span> dma_handle;
 <span class="ty">void</span> *vaddr;
 vaddr = <span class="fn">dma_alloc_coherent</span>(&pdev->dev, <span class="num">4096</span>, &dma_handle, GFP_KERNEL);
@@ -230,7 +230,7 @@ dma_addr = <span class="fn">dma_map_single</span>(&pdev->dev, skb->data, skb->le
   </div>
 
   <h3>scatterlist DMA</h3>
-  <pre><code><span class="cm">// 散列表 DMA：映射多个不连续的页面</span>
+  <pre><code class="language-c"><span class="cm">// 散列表 DMA：映射多个不连续的页面</span>
 <span class="kw">struct</span> <span class="ty">scatterlist</span> sg[<span class="num">NR_PAGES</span>];
 
 <span class="cm">// 设置 scatterlist</span>
@@ -307,7 +307,7 @@ dma_addr = <span class="fn">dma_map_single</span>(&pdev->dev, skb->data, skb->le
   <h3>ARM SMMU（System MMU）</h3>
   <div class="card">
     <p class="ref">drivers/iommu/arm/</p>
-    <pre><code><span class="cm">// ARM SMMU 是 ARM 平台的标准 IOMMU</span>
+    <pre><code class="language-c"><span class="cm">// ARM SMMU 是 ARM 平台的标准 IOMMU</span>
 <span class="cm">// 支持：DMA 重映射、SVA、IOVA 分配</span>
 
 <span class="cm">// SMMU 工作流程：</span>
@@ -332,7 +332,7 @@ dma_addr = <span class="fn">dma_map_single</span>(&pdev->dev, skb->data, skb->le
   <h2><span class="num">08</span> 调试</h2>
 
   <h3>DMA API Debug</h3>
-  <pre><code><span class="cm">// 启用 DMA 调试</span>
+  <pre><code class="language-c"><span class="cm">// 启用 DMA 调试</span>
 <span class="cm">// 编译时：CONFIG_DMA_API_DEBUG=y</span>
 <span class="cm">// 运行时：</span>
 echo <span class="num">1</span> > /sys/kernel/debug/dma/debug/enable

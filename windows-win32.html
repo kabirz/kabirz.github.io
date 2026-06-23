@@ -77,7 +77,7 @@
   <h3>窗口类 WNDCLASSEX</h3>
   <p>窗口类是创建窗口的<strong>蓝图</strong>，描述了该类窗口共有的属性：图标、光标、背景画刷、窗口过程地址等。注册后所有据此创建的窗口共享同一 WndProc。</p>
   <div class="card">
-    <pre><code><span class="kw">typedef struct</span> <span class="ty">tagWNDCLASSEXW</span> {
+    <pre><code class="language-cpp"><span class="kw">typedef struct</span> <span class="ty">tagWNDCLASSEXW</span> {
     <span class="ty">UINT</span>        cbSize;           <span class="cm">// sizeof(WNDCLASSEX)，必填</span>
     <span class="ty">UINT</span>        style;            <span class="cm">// 类风格：CS_HREDRAW | CS_VREDRAW</span>
     <span class="ty">WNDPROC</span>     lpfnWndProc;      <span class="cm">// ★窗口过程函数指针（核心）</span>
@@ -98,7 +98,7 @@
 
   <h3>消息结构 MSG</h3>
   <div class="card">
-    <pre><code><span class="kw">typedef struct</span> <span class="ty">tagMSG</span> {
+    <pre><code class="language-cpp"><span class="kw">typedef struct</span> <span class="ty">tagMSG</span> {
     <span class="ty">HWND</span>    hwnd;      <span class="cm">// 目标窗口</span>
     <span class="ty">UINT</span>    message;   <span class="cm">// ★消息号：WM_PAINT / WM_COMMAND 等</span>
     <span class="ty">WPARAM</span>  wParam;    <span class="cm">// 参数1：消息相关（如按键虚拟码）</span>
@@ -121,7 +121,7 @@
   <p>Win32 GUI 程序的入口是 <code>WinMain</code>（而非 <code>main</code>），它由 C 运行时启动代码调用。一个完整的 GUI 程序只需五步：注册窗口类 → 创建窗口 → 显示 → 消息循环 → 窗口过程处理消息。</p>
 
   <div class="card">
-    <pre><code><span class="pp">#include</span> <span class="st">&lt;windows.h&gt;</span>
+    <pre><code class="language-cpp"><span class="pp">#include</span> <span class="st">&lt;windows.h&gt;</span>
 
 <span class="cm">// 窗口过程：处理发往该窗口的所有消息</span>
 <span class="ty">LRESULT CALLBACK</span> <span class="fn">WndProc</span>(<span class="ty">HWND</span> hWnd, <span class="ty">UINT</span> msg,
@@ -242,7 +242,7 @@
 
   <h3>消息流向</h3>
   <div class="card">
-    <pre><code><span class="cm">// 一次鼠标点击的完整链路：</span>
+    <pre><code class="language-cpp"><span class="cm">// 一次鼠标点击的完整链路：</span>
 用户鼠标点击
    ↓
 输入子系统（驱动 + 系统服务）
@@ -263,7 +263,7 @@ User32 把事件转为 WM_LBUTTONDOWN
   <h3>WM_PAINT 处理</h3>
   <p><code>WM_PAINT</code> 是<strong>最特殊的消息</strong>——它只在窗口存在"无效区域"时由系统投递，且合并多个无效区以减少重绘。处理它必须用 <code>BeginPaint</code>/<code>EndPaint</code> 对，这对函数会清除无效区，否则会陷入死循环。</p>
   <div class="card">
-    <pre><code><span class="kw">case</span> <span class="ty">WM_PAINT</span>: {
+    <pre><code class="language-cpp"><span class="kw">case</span> <span class="ty">WM_PAINT</span>: {
     <span class="ty">PAINTSTRUCT</span> ps;
     <span class="ty">HDC</span> hdc = <span class="fn">BeginPaint</span>(hWnd, &amp;ps);   <span class="cm">// 标记无效区为有效</span>
     <span class="cm">// 只画 ps.rcPaint 范围即可（裁剪已由系统设置）</span>
@@ -313,7 +313,7 @@ User32 把事件转为 WM_LBUTTONDOWN
 
   <h3>绘图原语</h3>
   <div class="card">
-    <pre><code><span class="cm">// 文本</span>
+    <pre><code class="language-cpp"><span class="cm">// 文本</span>
 <span class="fn">TextOut</span>(hdc, <span class="num">10</span>, <span class="num">10</span>, <span class="st">L"Hello"</span>, <span class="num">5</span>);
 <span class="fn">DrawText</span>(hdc, <span class="st">L"多行</span>\n<span class="st">文本"</span>, -<span class="num">1</span>, &amp;rc, <span class="ty">DT_CENTER</span> | <span class="ty">DT_WORDBREAK</span>);
 
@@ -333,7 +333,7 @@ User32 把事件转为 WM_LBUTTONDOWN
   <h3>GDI 对象与选入流程</h3>
   <p>GDI 笔、刷、字体、位图、区域都是<strong>GDI 对象</strong>，有自己的句柄（HPEN/HBRUSH/HFONT/HBITMAP/HRGN，统称 HGDIOBJ）。把对象"画到 DC"的流程是<strong>四步黄金法则</strong>：</p>
   <div class="card">
-    <pre><code><span class="cm">// 1. 创建对象</span>
+    <pre><code class="language-cpp"><span class="cm">// 1. 创建对象</span>
 <span class="ty">HPEN</span> hPen = <span class="fn">CreatePen</span>(<span class="ty">PS_SOLID</span>, <span class="num">2</span>, <span class="ty">RGB</span>(<span class="num">255</span>, <span class="num">0</span>, <span class="num">0</span>));
 <span class="ty">HBRUSH</span> hBrush = <span class="fn">CreateSolidBrush</span>(<span class="ty">RGB</span>(<span class="num">0</span>, <span class="num">200</span>, <span class="num">0</span>));
 
@@ -358,7 +358,7 @@ User32 把事件转为 WM_LBUTTONDOWN
   <h3>双缓冲避免闪烁</h3>
   <p>直接画到屏幕 DC 时，每条绘图指令都会立即可见，复杂的绘制会出现<strong>明显的闪烁</strong>。解决方案：在内存 DC 上画完整帧，再一次性 <code>BitBlt</code> 到屏幕。</p>
   <div class="card">
-    <pre><code><span class="kw">case</span> <span class="ty">WM_PAINT</span>: {
+    <pre><code class="language-cpp"><span class="kw">case</span> <span class="ty">WM_PAINT</span>: {
     <span class="ty">PAINTSTRUCT</span> ps;
     <span class="ty">HDC</span> hdc = <span class="fn">BeginPaint</span>(hWnd, &amp;ps);
 
@@ -396,7 +396,7 @@ User32 把事件转为 WM_LBUTTONDOWN
 
   <h3>初始化控件</h3>
   <div class="card">
-    <pre><code><span class="pp">#include</span> <span class="st">&lt;commctrl.h&gt;</span>
+    <pre><code class="language-cpp"><span class="pp">#include</span> <span class="st">&lt;commctrl.h&gt;</span>
 <span class="pp">#pragma comment</span>(lib, <span class="st">"comctl32.lib"</span>)
 
 <span class="cm">// 在 WinMain 开头显式初始化（注册公共控件类）</span>
@@ -407,7 +407,7 @@ icc.dwICC = <span class="ty">ICC_WIN95_CLASSES</span> | <span class="ty">ICC_BAR
 
   <h3>创建控件</h3>
   <div class="card">
-    <pre><code><span class="cm">// 创建一个按钮（子窗口）</span>
+    <pre><code class="language-cpp"><span class="cm">// 创建一个按钮（子窗口）</span>
 <span class="ty">HWND</span> hBtn = <span class="fn">CreateWindow</span>(
     <span class="st">L"button"</span>,                        <span class="cm">// ★系统预定义类名</span>
     <span class="st">L"Click Me"</span>,
@@ -432,7 +432,7 @@ icc.dwICC = <span class="ty">ICC_WIN95_CLASSES</span> | <span class="ty">ICC_BAR
   <h3>控件通知父窗口</h3>
   <p>控件事件通过 <code>WM_COMMAND</code>（旧式）或 <code>WM_NOTIFY</code>（新式，带结构体指针）通知父窗口。父窗口在 WndProc 中解码 wParam/lParam 路由到对应处理。</p>
   <div class="card">
-    <pre><code><span class="kw">case</span> <span class="ty">WM_COMMAND</span>: {
+    <pre><code class="language-cpp"><span class="kw">case</span> <span class="ty">WM_COMMAND</span>: {
     <span class="ty">WORD</span> id     = <span class="fn">LOWORD</span>(wParam);   <span class="cm">// 控件 ID</span>
     <span class="ty">WORD</span> code   = <span class="fn">HIWORD</span>(wParam);   <span class="cm">// 通知码</span>
     <span class="ty">HWND</span> hCtrl  = (<span class="ty">HWND</span>) lParam;      <span class="cm">// 控件 HWND</span>
@@ -465,7 +465,7 @@ icc.dwICC = <span class="ty">ICC_WIN95_CLASSES</span> | <span class="ty">ICC_BAR
 
   <h3>控件消息（向控件发命令）</h3>
   <div class="card">
-    <pre><code><span class="cm">// 取编辑框文本</span>
+    <pre><code class="language-cpp"><span class="cm">// 取编辑框文本</span>
 <span class="ty">wchar_t</span> buf[<span class="num">256</span>];
 <span class="fn">GetWindowText</span>(hEdit, buf, <span class="num">256</span>);
 <span class="cm">// 或用通用 SendMessage</span>
@@ -516,7 +516,7 @@ icc.dwICC = <span class="ty">ICC_WIN95_CLASSES</span> | <span class="ty">ICC_BAR
   <h3>对话框过程 DlgProc</h3>
   <p>DlgProc 与 WndProc 形似而神不同：<strong>返回 INT_PTR</strong>，处理消息后返回 <code>TRUE</code> 表示"已处理"，返回 <code>FALSE</code> 让系统做默认处理——这与 WndProc 的 LRESULT 返回约定完全相反。</p>
   <div class="card">
-    <pre><code><span class="ty">INT_PTR CALLBACK</span> <span class="fn">MyDlgProc</span>(<span class="ty">HWND</span> hDlg, <span class="ty">UINT</span> msg,
+    <pre><code class="language-cpp"><span class="ty">INT_PTR CALLBACK</span> <span class="fn">MyDlgProc</span>(<span class="ty">HWND</span> hDlg, <span class="ty">UINT</span> msg,
                                 <span class="ty">WPARAM</span> wParam, <span class="ty">LPARAM</span> lParam)
 {
     <span class="kw">switch</span> (msg) {
@@ -544,7 +544,7 @@ icc.dwICC = <span class="ty">ICC_WIN95_CLASSES</span> | <span class="ty">ICC_BAR
 
   <h3>控件操作</h3>
   <div class="card">
-    <pre><code><span class="cm">// 取控件 HWND</span>
+    <pre><code class="language-cpp"><span class="cm">// 取控件 HWND</span>
 <span class="ty">HWND</span> hEdit = <span class="fn">GetDlgItem</span>(hDlg, <span class="ty">IDC_NAME</span>);
 
 <span class="cm">// 给控件发消息（封装版，无需先取 HWND）</span>
@@ -568,7 +568,7 @@ icc.dwICC = <span class="ty">ICC_WIN95_CLASSES</span> | <span class="ty">ICC_BAR
 
   <h3>.rc 资源脚本</h3>
   <div class="card">
-    <pre><code><span class="cm">// app.rc — 由 rc.exe 编译为 .res，链接进 exe</span>
+    <pre><code class="language-cpp"><span class="cm">// app.rc — 由 rc.exe 编译为 .res，链接进 exe</span>
 
 <span class="pp">#include</span> <span class="st">"resource.h"</span>
 
@@ -617,7 +617,7 @@ icc.dwICC = <span class="ty">ICC_WIN95_CLASSES</span> | <span class="ty">ICC_BAR
 
   <h3>resource.h 与加载 API</h3>
   <div class="card">
-    <pre><code><span class="cm">// resource.h — 资源 ID 定义（rc 与 cpp 共享）</span>
+    <pre><code class="language-cpp"><span class="cm">// resource.h — 资源 ID 定义（rc 与 cpp 共享）</span>
 <span class="pp">#define</span> <span class="ty">IDR_MAINMENU</span>    <span class="num">100</span>
 <span class="pp">#define</span> <span class="ty">IDR_ACCEL</span>       <span class="num">101</span>
 <span class="pp">#define</span> <span class="ty">IDD_ABOUT</span>        <span class="num">102</span>
@@ -682,7 +682,7 @@ icc.dwICC = <span class="ty">ICC_WIN95_CLASSES</span> | <span class="ty">ICC_BAR
   </table>
 
   <div class="card">
-    <pre><code><span class="cm">// 文件 I/O 完整示例</span>
+    <pre><code class="language-cpp"><span class="cm">// 文件 I/O 完整示例</span>
 <span class="ty">HANDLE</span> hFile = <span class="fn">CreateFile</span>(<span class="st">L"data.txt"</span>, <span class="ty">GENERIC_WRITE</span>, <span class="num">0</span>,
     <span class="kw">NULL</span>, <span class="ty">CREATE_ALWAYS</span>, <span class="ty">FILE_ATTRIBUTE_NORMAL</span>, <span class="kw">NULL</span>);
 <span class="kw">if</span> (hFile != <span class="ty">INVALID_HANDLE_VALUE</span>) {
@@ -713,7 +713,7 @@ icc.dwICC = <span class="ty">ICC_WIN95_CLASSES</span> | <span class="ty">ICC_BAR
   <h3>子类化（Subclassing）</h3>
   <p>子类化是<strong>替换窗口的窗口过程</strong>，从而改变其行为。这是 Win32 中"派生一个新控件类"的等价做法。通过 <code>SetWindowLongPtr(GWLP_WNDPROC)</code> 实现（64 位必须用 LongPtr 版本，不能用旧的 SetWindowLong）。</p>
   <div class="card">
-    <pre><code><span class="ty">WNDPROC</span> g_pOldProc;   <span class="cm">// 保存原始 WndProc</span>
+    <pre><code class="language-cpp"><span class="ty">WNDPROC</span> g_pOldProc;   <span class="cm">// 保存原始 WndProc</span>
 
 <span class="ty">LRESULT CALLBACK</span> <span class="fn">MyEditProc</span>(<span class="ty">HWND</span> hWnd, <span class="ty">UINT</span> msg,
                                  <span class="ty">WPARAM</span> wp, <span class="ty">LPARAM</span> lp) {
@@ -753,7 +753,7 @@ g_pOldProc = (<span class="ty">WNDPROC</span>)<span class="fn">SetWindowLongPtr<
   <h3>Unicode 与 TCHAR</h3>
   <p>Windows NT 内核原生 UTF-16，所有 USER/GDI 函数都有 W（Wide）与 A（ANSI）两个版本（如 <code>CreateWindowW</code> 与 <code>CreateWindowA</code>）。宏 <code>CreateWindow</code> 在 UNICODE 定义时展开为 W 版，否则为 A 版。</p>
   <div class="card">
-    <pre><code><span class="cm">// TCHAR/_T 宏让代码在 ANSI/Unicode 间切换</span>
+    <pre><code class="language-cpp"><span class="cm">// TCHAR/_T 宏让代码在 ANSI/Unicode 间切换</span>
 <span class="ty">TCHAR</span> buf[<span class="num">256</span>];
 <span class="fn">_tcscpy</span>(buf, <span class="st">_T("Hello")</span>);    <span class="cm">// 编译期决定是 char 还是 wchar_t</span>
 
@@ -769,7 +769,7 @@ g_pOldProc = (<span class="ty">WNDPROC</span>)<span class="fn">SetWindowLongPtr<
   <h3>COM 初始化</h3>
   <p>许多 Windows API（Shell、Windows Ribbon、DirectX、现代对话框）基于 COM。使用前必须初始化 COM 公寓。</p>
   <div class="card">
-    <pre><code><span class="cm">// 在 WinMain 开头（在创建窗口前）</span>
+    <pre><code class="language-cpp"><span class="cm">// 在 WinMain 开头（在创建窗口前）</span>
 <span class="ty">HRESULT</span> hr = <span class="fn">CoInitializeEx</span>(<span class="kw">NULL</span>, <span class="ty">COINIT_APARTMENTTHREADED</span>);
 <span class="cm">// COINIT_APARTMENTTHREADED (STA) — GUI 线程推荐</span>
 <span class="cm">// COINIT_MULTITHREADED     (MTA) — 后台/服务线程</span>
@@ -784,7 +784,7 @@ g_pOldProc = (<span class="ty">WNDPROC</span>)<span class="fn">SetWindowLongPtr<
   <p>下面是一个<strong>完整可编译</strong>的 Win32 程序：带菜单、可在客户区画矩形、关闭时弹出确认对话框。它综合运用了窗口类、消息循环、GDI 绘图、菜单命令、对话框与资源加载。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// main.cpp — 完整 Win32 GUI 程序</span>
+    <pre><code class="language-cpp"><span class="cm">// main.cpp — 完整 Win32 GUI 程序</span>
 <span class="pp">#include</span> <span class="st">&lt;windows.h&gt;</span>
 <span class="pp">#include</span> <span class="st">"resource.h"</span>
 

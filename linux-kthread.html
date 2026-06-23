@@ -58,7 +58,7 @@
 <section id="api" class="toc-link">
   <h2><span class="num">03</span> 创建 API</h2>
   <div class="card">
-    <pre><code><span class="cm">// 创建内核线程（推荐方式）</span>
+    <pre><code class="language-c"><span class="cm">// 创建内核线程（推荐方式）</span>
 <span class="kw">struct</span> <span class="ty">task_struct</span> *<span class="fn">kthread_create</span>(
     <span class="ty">int</span> (*threadfn)(<span class="ty">void</span> *data),  <span class="cm">// 线程函数</span>
     <span class="ty">void</span> *data,                    <span class="cm">// 参数</span>
@@ -118,7 +118,7 @@
 <section id="usecases" class="toc-link">
   <h2><span class="num">05</span> 典型内核线程</h2>
   <div class="card">
-    <pre><code><span class="cm"># 查看所有内核线程</span>
+    <pre><code class="language-c"><span class="cm"># 查看所有内核线程</span>
 $ ps -ef | grep '\['
 root       2  0  0 Jun10 ?    00:00:00 [kthreadd]
 root       3  2  0 Jun10 ?    00:00:00 [pool_workqueue_release]

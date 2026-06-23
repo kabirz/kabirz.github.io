@@ -55,7 +55,7 @@
   </ul>
 
   <p>演进时间线：</p>
-<pre><code>2013  Docker 引入容器概念（私有 API）
+<pre><code class="language-bash">2013  Docker 引入容器概念（私有 API）
 2014  CoreOS 推出 rkt（竞争）
 2015  OCI 成立，统一标准
 2016  Runtime Spec v1.0
@@ -66,7 +66,7 @@
 </code></pre>
 
   <p>OCI 与 CNCF 的关系：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-bash">┌─────────────────────────────────────────┐
 │   OCI (Linux Foundation)                 │
 │   - 规范制定                              │
 │   - 工具：runtime-spec/image-spec         │
@@ -94,7 +94,7 @@
 
   <p>Runtime Spec 定义了<strong>容器运行时的行为</strong>：什么是容器、如何创建、操作、终止。</p>
 
-<pre><code>// runtime-spec/schema/config-schema.json
+<pre><code class="language-bash">// runtime-spec/schema/config-schema.json
 // 一个 bundle（容器包）的目录结构：
 ./mycontainer/
 ├── config.json   ← runtime spec 配置
@@ -106,7 +106,7 @@ $ runc create mycontainer
 </code></pre>
 
   <p>顶层 spec 结构：</p>
-<pre><code>// config.json 顶层结构（伪 JSON）
+<pre><code class="language-bash">// config.json 顶层结构（伪 JSON）
 {
   "ociVersion": "1.1.0",
   
@@ -201,7 +201,7 @@ $ runc create mycontainer
 
   <p>Runtime Spec 定义容器的<strong>状态</strong>和<strong>状态转换</strong>：</p>
 
-<pre><code>// 容器状态：
+<pre><code class="language-bash">// 容器状态：
 //   creating     - 创建中（spec 已解析，namespace 还没切换）
 //   created      - 已创建（用户进程未启动）
 //   running      - 运行中
@@ -243,7 +243,7 @@ $ runc create mycontainer
 
   <p>Runtime Spec 规定了 runtime CLI 必须支持的操作：</p>
 
-<pre><code>// CLI 命令格式：runtime &lt;command&gt; &lt;id&gt;
+<pre><code class="language-bash">// CLI 命令格式：runtime &lt;command&gt; &lt;id&gt;
 
 // 1. create — 创建容器（不启动）
 runc create my-container
@@ -286,7 +286,7 @@ runc spec
 </code></pre>
 
   <p>Hooks（钩子）：runtime 在特定时刻执行用户脚本</p>
-<pre><code>// Runtime Spec 定义三种 hooks：
+<pre><code class="language-bash">// Runtime Spec 定义三种 hooks：
 
 // 1. Prestart（已废弃，被三个钩子替代）
 // 2. CreateRuntime    - create 之后、start 之前（在容器 ns 中）
@@ -317,7 +317,7 @@ runc spec
 
   <p>config.json 的关键字段详解：</p>
 
-<pre><code>// Linux 特定扩展（linux 字段）：
+<pre><code class="language-bash">// Linux 特定扩展（linux 字段）：
 
 "linux": {
   // UID/GID 映射（user namespace）
@@ -445,7 +445,7 @@ runc spec
 
   <p>OCI Image Spec 定义<strong>镜像格式</strong>。一个镜像由 manifest + config + layers 组成：</p>
 
-<pre><code>// 镜像文件组成：
+<pre><code class="language-bash">// 镜像文件组成：
 // 1. Manifest         — 入口清单
 // 2. Config           — 镜像配置（环境、cmd、entrypoint、layer 顺序）
 // 3. Layer            — 文件系统层（tar+gzip）
@@ -484,7 +484,7 @@ runc spec
 </code></pre>
 
   <p>Image Manifest 示例：</p>
-<pre><code>// manifest.json
+<pre><code class="language-bash">// manifest.json
 {
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.manifest.v1+json",
@@ -512,7 +512,7 @@ runc spec
 </code></pre>
 
   <p>Image Config 示例：</p>
-<pre><code>// config JSON 内容：
+<pre><code class="language-bash">// config JSON 内容：
 {
   "created": "2024-01-01T00:00:00Z",
   "author": "Maintainer",
@@ -549,7 +549,7 @@ runc spec
 
   <p>多平台镜像通过 Image Index 支持：</p>
 
-<pre><code>// Image Index (类比 Docker Manifest List)
+<pre><code class="language-bash">// Image Index (类比 Docker Manifest List)
 {
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.index.v1+json",
@@ -592,7 +592,7 @@ runc spec
 </code></pre>
 
   <p>Layer 格式：</p>
-<pre><code>// 1. 标准格式：tar.gz
+<pre><code class="language-bash">// 1. 标准格式：tar.gz
 //    mediaType: application/vnd.oci.image.layer.v1.tar+gzip
 
 // 2. 无压缩：tar
@@ -617,7 +617,7 @@ runc spec
 
   <p>Distribution Spec 定义镜像仓库的<strong>HTTP API</strong>：</p>
 
-<pre><code>// 基础 URL: https://registry/v2/
+<pre><code class="language-bash">// 基础 URL: https://registry/v2/
 
 // 1. 版本检查
 GET /v2/
@@ -659,7 +659,7 @@ GET /v2/_catalog
 </code></pre>
 
   <p>认证流程：</p>
-<pre><code>// 1. 客户端请求
+<pre><code class="language-bash">// 1. 客户端请求
 GET /v2/library/nginx/manifests/latest
 
 // 2. 服务器返回 401 + WWW-Authenticate header
@@ -679,7 +679,7 @@ Authorization: Bearer &lt;token&gt;
 </code></pre>
 
   <p>内容寻址：</p>
-<pre><code>// 所有数据用 SHA256 摘要标识
+<pre><code class="language-bash">// 所有数据用 SHA256 摘要标识
 // manifest digest = sha256(manifest 内容)
 // blob digest = sha256(blob 内容)
 // 引用通过 digest 完全可重现

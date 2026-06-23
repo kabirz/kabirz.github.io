@@ -104,7 +104,7 @@
 
   <h3>struct super_block（超级块）</h3>
   <div class="card">
-    <pre><code><span class="cm">// 代表一个挂载的文件系统实例</span>
+    <pre><code class="language-c"><span class="cm">// 代表一个挂载的文件系统实例</span>
 <span class="kw">struct</span> <span class="ty">super_block</span> {
     <span class="kw">struct</span> <span class="ty">list_head</span> s_list;          <span class="cm">// 全局超级块链表</span>
     <span class="ty">dev_t</span> s_dev;                       <span class="cm">// 设备号</span>
@@ -124,7 +124,7 @@
   <h3>struct inode（索引节点）</h3>
   <div class="card">
     <p class="ref">include/linux/fs.h:766-875</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">inode</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">inode</span> {
     <span class="ty">umode_t</span> i_mode;                    <span class="cm">// 文件类型+权限</span>
     <span class="ty">kuid_t</span> i_uid;                      <span class="cm">// 所有者</span>
     <span class="ty">kgid_t</span> i_gid;
@@ -148,7 +148,7 @@
   <h3>struct dentry（目录项）</h3>
   <div class="card">
     <p class="ref">include/linux/dcache.h:92-132</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">dentry</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">dentry</span> {
     <span class="ty">unsigned int</span> d_flags;
     <span class="kw">struct</span> <span class="ty">hlist_bl_node</span> d_hash;     <span class="cm">// 哈希表节点</span>
     <span class="kw">struct</span> <span class="ty">dentry</span> *d_parent;         <span class="cm">// 父目录</span>
@@ -163,7 +163,7 @@
 
   <h3>struct file（打开的文件）</h3>
   <div class="card">
-    <pre><code><span class="cm">// 每次 open() 创建一个 file 实例</span>
+    <pre><code class="language-c"><span class="cm">// 每次 open() 创建一个 file 实例</span>
 <span class="kw">struct</span> <span class="ty">file</span> {
     <span class="kw">union</span> {
         <span class="kw">struct</span> <span class="ty">path</span> f_path;            <span class="cm">// 路径（dentry + vfsmount）</span>
@@ -236,7 +236,7 @@
   <h2><span class="num">05</span> 路径查找</h2>
 
   <h3>link_path_walk()</h3>
-  <pre><code><span class="cm">// fs/namei.c — 路径查找核心</span>
+  <pre><code class="language-c"><span class="cm">// fs/namei.c — 路径查找核心</span>
 <span class="cm">// 逐级解析路径中的每个分量</span>
 
 <span class="kw">static int</span> <span class="fn">link_path_walk</span>(<span class="kw">const char</span> *name, <span class="kw">struct</span> <span class="ty">nameidata</span> *nd)
@@ -296,7 +296,7 @@
   <h3>关键操作表</h3>
   <div class="card">
     <p class="ref">include/linux/fs.h:1926-1970</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">file_operations</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">file_operations</span> {
     <span class="ty">loff_t</span> (*llseek)(<span class="kw">struct</span> <span class="ty">file</span> *, <span class="ty">loff_t</span>, <span class="ty">int</span>);
     <span class="ty">ssize_t</span> (*read)(<span class="kw">struct</span> <span class="ty">file</span> *, <span class="ty">char</span> __user *, <span class="ty">size_t</span>, <span class="ty">loff_t</span> *);
     <span class="ty">ssize_t</span> (*write)(<span class="kw">struct</span> <span class="ty">file</span> *, <span class="kw">const</span> <span class="ty">char</span> __user *, <span class="ty">size_t</span>, <span class="ty">loff_t</span> *);
@@ -322,7 +322,7 @@
   <h3>file_system_type</h3>
   <div class="card">
     <p class="ref">include/linux/fs.h:2269-2298</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">file_system_type</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">file_system_type</span> {
     <span class="kw">const char</span> *name;           <span class="cm">// "ext4"、"proc"、"sysfs"</span>
     <span class="ty">int</span> fs_flags;               <span class="cm">// FS_REQUIRES_DEV 等</span>
     <span class="ty">int</span> (*init_fs_context)(<span class="kw">struct</span> <span class="ty">fs_context</span> *);
@@ -361,7 +361,7 @@
   <div class="grid-2">
     <div class="card">
       <div class="card-title">sysfs (/sys)</div>
-      <pre><code><span class="cm">// 设备属性</span>
+      <pre><code class="language-c"><span class="cm">// 设备属性</span>
 <span class="ty">DEVICE_ATTR_RO</span>(my_attr);
 <span class="fn">device_create_file</span>(&dev, &dev_attr_my_attr);
 
@@ -373,7 +373,7 @@
     </div>
     <div class="card">
       <div class="card-title">procfs (/proc)</div>
-      <pre><code><span class="cm">// seq_file 模式</span>
+      <pre><code class="language-c"><span class="cm">// seq_file 模式</span>
 <span class="fn">proc_create_single</span>(<span class="st">"info"</span>, <span class="num">0644</span>,
     NULL, my_show);
 

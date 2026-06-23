@@ -48,7 +48,7 @@
   </table>
 
   <p>底层栈：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-rust">┌─────────────────────────────────────────┐
 │   应用代码                                │
 ├─────────────────────────────────────────┤
 │   Axum / Actix / Rocket / Warp           │
@@ -71,7 +71,7 @@
 
   <p>Axum 是 Tokio 团队官方维护的 Web 框架，强调<strong>类型安全和组合性</strong>。</p>
 
-<pre><code>// Cargo.toml:
+<pre><code class="language-rust">// Cargo.toml:
 // [dependencies]
 // axum = "0.7"
 // tokio = { version = "1", features = ["full"] }
@@ -116,7 +116,7 @@ async fn create_user(Json(payload): Json&lt;CreateUser&gt;) -> (StatusCode, Json
   </ul>
 
   <p>Extractor 示例：</p>
-<pre><code>use axum::extract::{Path, Query, State, ConnectInfo};
+<pre><code class="language-rust">use axum::extract::{Path, Query, State, ConnectInfo};
 use std::net::SocketAddr;
 
 // 自定义 extractor
@@ -152,7 +152,7 @@ async fn handler(
 
   <p>Actix-web 基于 Actor 模型，<strong>性能基准测试长期第一</strong>。</p>
 
-<pre><code>// [dependencies]
+<pre><code class="language-rust">// [dependencies]
 // actix-web = "4"
 
 use actix_web::{web, App, HttpServer, Responder, HttpResponse};
@@ -188,7 +188,7 @@ async fn main() -> std::io::Result&lt;()&gt; {
   </ul>
 
   <p>State via Actor：</p>
-<pre><code>use actix::prelude::*;
+<pre><code class="language-rust">use actix::prelude::*;
 use actix_web::web::Data;
 
 struct DbActor { pool: Pool }
@@ -227,7 +227,7 @@ HttpServer::new(|| {
 
   <p>Rocket 是最早的 Rust Web 框架之一，强调<strong>开发者体验和宏</strong>。</p>
 
-<pre><code>// [dependencies]
+<pre><code class="language-rust">// [dependencies]
 // rocket = { version = "0.5", features = ["json"] }
 
 #[macro_use] extern crate rocket;
@@ -260,7 +260,7 @@ fn rocket() -> _ {
   </ul>
 
   <p>Request Guard 示例：</p>
-<pre><code>use rocket::request::{FromRequest, Outcome, Request};
+<pre><code class="language-rust">use rocket::request::{FromRequest, Outcome, Request};
 
 struct AdminUser(User);
 
@@ -305,7 +305,7 @@ fn admin_panel(admin: AdminUser) -> Json&lt;AdminData&gt; {
   </table>
 
   <p>性能基准（参考，2024，TechEmpower）：</p>
-<pre><code>// 综合排序（不同场景排名变化）：
+<pre><code class="language-rust">// 综合排序（不同场景排名变化）：
 // 1. actix-web          ~ 700k req/s
 // 2. axum              ~ 650k req/s
 // 3. rocket            ~ 500k req/s
@@ -329,7 +329,7 @@ fn admin_panel(admin: AdminUser) -> Json&lt;AdminData&gt; {
 
   <p>Hyper 是 Rust 最成熟的 HTTP 实现，被所有主流框架使用。</p>
 
-<pre><code>// Hyper 提供底层 HTTP/1/2
+<pre><code class="language-rust">// Hyper 提供底层 HTTP/1/2
 // [dependencies]
 // hyper = { version = "1", features = ["full"] }
 // tokio = { version = "1", features = ["full"] }
@@ -367,7 +367,7 @@ async fn main() {
 </code></pre>
 
   <p>reqwest — HTTP 客户端（基于 Hyper）：</p>
-<pre><code>// [dependencies]
+<pre><code class="language-rust">// [dependencies]
 // reqwest = { version = "0.12", features = ["json"] }
 
 #[tokio::main]
@@ -396,7 +396,7 @@ async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
 
   <p>三种主流中间件模式：</p>
 
-<pre><code>// 1. Axum + Tower Layer
+<pre><code class="language-rust">// 1. Axum + Tower Layer
 use axum::middleware::{self, Next};
 use tower::ServiceBuilder;
 use tower_http::{trace::TraceLayer, compression::CompressionLayer};
@@ -472,7 +472,7 @@ rocket::build().attach(Counter);
 
   <p>Extractor 是<strong>从 Request 提取数据</strong>的统一抽象。所有主流框架都支持。</p>
 
-<pre><code>// Axum 内置 extractor：
+<pre><code class="language-rust">// Axum 内置 extractor：
 async fn handler(
     Method(method): Method,                // GET/POST/...
     Uri(uri): Uri,                          // 完整 URI
@@ -517,7 +517,7 @@ async fn protected(api_key: ApiKey) -> Json&lt;Data&gt; {
 </code></pre>
 
   <p>类型安全的路由：</p>
-<pre><code>// Axum 通过泛型约束检查
+<pre><code class="language-rust">// Axum 通过泛型约束检查
 // 如果 handler 期望 u32，但路由参数不是数字 → 编译错误
 
 #[derive(FromRequestParts)]   // 不存在，但概念
@@ -594,7 +594,7 @@ async fn bad_handler(Path(id): Path&lt;String&gt;) -> ...
   <h2><span class="num">10</span> 选型指南</h2>
 
   <p>决策树：</p>
-<pre><code>新项目？
+<pre><code class="language-rust">新项目？
 ├─ 是 → Axum
 │       - Tokio 官方维护
 │       - 类型安全

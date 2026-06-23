@@ -82,7 +82,7 @@
   <h2><span class="num">02</span> 所有权规则</h2>
 
   <p>Rust 所有权三大规则：</p>
-<pre><code>// 规则 1: 每个值有所有者（变量）
+<pre><code class="language-rust">// 规则 1: 每个值有所有者（变量）
 let s = String::from("hello");
 // s 拥有 String 的内存
 
@@ -104,7 +104,7 @@ fn example() {
 </code></pre>
 
   <p>Copy 与 Drop 类型：</p>
-<pre><code>// Copy 类型（栈上复制，不需要所有权转移）：
+<pre><code class="language-rust">// Copy 类型（栈上复制，不需要所有权转移）：
 // - 所有整数/浮点（i32, f64）
 // - bool, char
 // - 不含堆数据的 tuple
@@ -134,7 +134,7 @@ let s3 = s2.clone();
 
   <p>Move 是<strong>所有权转移</strong>，不是内存复制：</p>
 
-<pre><code>// 函数参数：move 进函数
+<pre><code class="language-rust">// 函数参数：move 进函数
 fn take(s: String) {
     println!("{}", s);
 }   // s 在这里 drop
@@ -164,7 +164,7 @@ fn first_word(s: &amp;str) -> &amp;str {
 </code></pre>
 
   <p>Move 在集合中的影响：</p>
-<pre><code>// Vec 内部是堆指针 + 长度 + 容量
+<pre><code class="language-rust">// Vec 内部是堆指针 + 长度 + 容量
 let v1 = vec![1, 2, 3];
 let v2 = v1;   // v1 整体 move
 // v1 完全失效（不只是数据，连指针都失效）
@@ -182,7 +182,7 @@ println!("{}", p.1);  // ✅ 未移动的部分仍可用
 </code></pre>
 
   <p>Move 在闭包中：</p>
-<pre><code>let s = String::from("hello");
+<pre><code class="language-rust">let s = String::from("hello");
 let f = move || {           // move 关键字强制捕获所有权
     println!("{}", s);
 };
@@ -202,7 +202,7 @@ f();
 
   <p>借用 (Borrow) 通过引用 (&amp;) 临时访问数据，不获取所有权：</p>
 
-<pre><code>// 不可变引用 &T
+<pre><code class="language-rust">// 不可变引用 &T
 fn length(s: &amp;String) -> usize { s.len() }
 let s = String::from("hello");
 let n = length(&amp;s);   // 借用
@@ -239,7 +239,7 @@ let r3 = &amp;mut s;             // ✅ NLL 知道 r1/r2 不再使用
 </code></pre>
 
   <p>解引用与 Deref：</p>
-<pre><code>// * 操作符：解引用
+<pre><code class="language-rust">// * 操作符：解引用
 let x = 5;
 let r = &amp;x;
 assert_eq!(*r, 5);
@@ -270,7 +270,7 @@ impl&lt;T&gt; DerefMut for MyBox&lt;T&gt; {
 
   <p>生命周期 (Lifetime) 是<strong>编译期对引用有效范围的标注</strong>，防止悬垂引用：</p>
 
-<pre><code>// 悬垂引用示例：
+<pre><code class="language-rust">// 悬垂引用示例：
 {
     let r;
     {
@@ -307,7 +307,7 @@ fn static_fn() -> &amp;'static str { "hello" }
 </code></pre>
 
   <p>生命周期可视化：</p>
-<pre><code>// 函数签名：
+<pre><code class="language-rust">// 函数签名：
 // fn foo&lt;'a, 'b&gt;(x: &amp;'a i32, y: &amp;'b i32) -> &amp;'a i32
 //     │          │              │              │
 //     │          │              │              └─ 返回值寿命 &gt;= a
@@ -331,7 +331,7 @@ fn static_fn() -> &amp;'static str { "hello" }
 
   <p>为减少样板代码，编译器在三种规则下自动推导生命周期：</p>
 
-<pre><code>// 三条省略规则：
+<pre><code class="language-rust">// 三条省略规则：
 
 // 规则 1: 每个引用参数自动获得独立 lifetime
 fn foo(x: &amp;i32)  ⟶  fn foo&lt;'a&gt;(x: &amp;'a i32)
@@ -357,7 +357,7 @@ impl Parser {
 </code></pre>
 
   <p>Lifetime in HRTB（Higher-Ranked Trait Bounds）：</p>
-<pre><code>// for&lt;'a&gt; 表示"对所有 lifetime 'a"
+<pre><code class="language-rust">// for&lt;'a&gt; 表示"对所有 lifetime 'a"
 // 常见于闭包类型：
 
 // 等价：
@@ -378,7 +378,7 @@ apply(f);
 
   <p>Variance 决定生命周期之间的<strong>子类型关系</strong>：</p>
 
-<pre><code>// 'static: 'a (static 是任何 'a 的子类型)
+<pre><code class="language-rust">// 'static: 'a (static 是任何 'a 的子类型)
 // 即：'static 可以替代任何 'a
 
 // 三种 Variance：
@@ -421,7 +421,7 @@ fn invariant() {
 
   <p>正常规则：不可变引用 → 不能改数据。<strong>内部可变性</strong>模式打破此规则，通过运行时检查实现安全修改：</p>
 
-<pre><code>// RefCell&lt;T&gt; — 单线程内部可变性
+<pre><code class="language-rust">// RefCell&lt;T&gt; — 单线程内部可变性
 use std::cell::RefCell;
 
 let cell = RefCell::new(5);
@@ -478,7 +478,7 @@ let lock = RwLock::new(5);
 
   <p>Rust 智能指针通过 Deref + Drop 实现 RAII 资源管理：</p>
 
-<pre><code>// Box&lt;T&gt; — 堆分配
+<pre><code class="language-rust">// Box&lt;T&gt; — 堆分配
 let b = Box::new(5);   // 在堆上分配
 // 适合：
 //   - 递归类型（链表、树）
@@ -543,7 +543,7 @@ fn process(input: &amp;str) -> Cow&lt;str&gt; {
 
   <p>所有权在底层生成什么代码？</p>
 
-<pre><code>// 编译期 Rust：
+<pre><code class="language-rust">// 编译期 Rust：
 //   源代码 → HIR → MIR → LLVM IR → 机器码
 
 // MIR (Mid-level IR) 是 borrow checker 工作的 IR
@@ -595,7 +595,7 @@ fn example() {
 </code></pre>
 
   <p>借用检查器演进：</p>
-<pre><code>// 2015 (1.0): 词法 lifetime（按作用域）
+<pre><code class="language-rust">// 2015 (1.0): 词法 lifetime（按作用域）
 //   fn example() {
 //       let mut s = String::from("a");
 //       let r = &amp;s;

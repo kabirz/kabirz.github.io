@@ -38,7 +38,7 @@
   <div class="grid-2">
     <div class="card">
       <div class="card-title">传统 goto error 模式</div>
-<pre><code>p = kzalloc(...);
+<pre><code class="language-c">p = kzalloc(...);
 if (!p) goto out;
 r = devm_request_irq(..., handler, ...);
 if (r &lt; 0) goto free_p;
@@ -53,7 +53,7 @@ out: return -ENOMEM;</code></pre>
     </div>
     <div class="card">
       <div class="card-title">cleanup 模式</div>
-<pre><code>struct my *p __free(kfree) = kzalloc(...);
+<pre><code class="language-c">struct my *p __free(kfree) = kzalloc(...);
 if (!p) return -ENOMEM;
 r = devm_request_irq(..., handler, ...);
 if (r &lt; 0) return r;
@@ -80,14 +80,14 @@ return 0;
   <h2><span class="num">02</span> 核心宏 API</h2>
 
   <h3>DEFINE_FREE / __free</h3>
-<pre><code>// 定义释放函数：free_expr 在变量出作用域时执行
+<pre><code class="language-c">// 定义释放函数：free_expr 在变量出作用域时执行
 DEFINE_FREE(name, type, free_expr)
 
 // 声明变量：value 出作用域时自动调用 DEFINE_FREE 指定的表达式
 type var __free(name) = value;</code></pre>
 
   <h3>no_free_ptr / return_ptr</h3>
-<pre><code>// 释放所有权，不释放资源（从 cleanup 托管中取出）
+<pre><code class="language-c">// 释放所有权，不释放资源（从 cleanup 托管中取出）
 type *no_free_ptr(var)
 
 // 释放所有权并返回指针
@@ -95,7 +95,7 @@ return_ptr(var)
 </code></pre>
 
   <h3>DEFINE_GUARD / guard</h3>
-<pre><code>// 定义锁的类型：
+<pre><code class="language-c">// 定义锁的类型：
 // lock_expr 获取锁，unlock_expr 释放锁
 DEFINE_GUARD(name, type, lock_expr, unlock_expr)
 
@@ -104,7 +104,7 @@ guard(name)(lock_var)
 </code></pre>
 
   <h3>DEFINE_GUARD_COND / ACQUIRE</h3>
-<pre><code>// 条件锁（如 trylock）
+<pre><code class="language-c">// 条件锁（如 trylock）
 DEFINE_GUARD_COND(name, ext, condlock_expr)
 
 // 获取条件锁，失败时跳转到 scope_err
@@ -115,7 +115,7 @@ ACQUIRE_ERR(name, lock_var)
 </code></pre>
 
   <h3>scoped_guard</h3>
-<pre><code>// 块级作用域锁，锁仅在该块内持有
+<pre><code class="language-c">// 块级作用域锁，锁仅在该块内持有
 scoped_guard(name, lock_var) {
     // 在此块中持有锁
     // 块结束时自动释放
@@ -123,7 +123,7 @@ scoped_guard(name, lock_var) {
 </code></pre>
 
   <h3>CLASS</h3>
-<pre><code>// 声明一个带有 init/exit 作用域的类实例
+<pre><code class="language-c">// 声明一个带有 init/exit 作用域的类实例
 CLASS(name, var) { ... }
 </code></pre>
 </section>
@@ -167,7 +167,7 @@ CLASS(name, var) { ... }
   <h2><span class="num">04</span> 使用模式</h2>
 
   <h3>模式一：自动释放 kmalloc</h3>
-<pre><code>struct foo *p __free(kfree) = kzalloc(sizeof(*p), GFP_KERNEL);
+<pre><code class="language-c">struct foo *p __free(kfree) = kzalloc(sizeof(*p), GFP_KERNEL);
 if (!p)
     return -ENOMEM;
 // 使用 p... 无需手动 kfree
@@ -177,7 +177,7 @@ return 0;            // p 自动释放
 </code></pre>
 
   <h3>模式二：作用域锁</h3>
-<pre><code>// 在整个函数作用域持有锁
+<pre><code class="language-c">// 在整个函数作用域持有锁
 int my_func(struct my *m)
 {
     guard(mutex)(&m->lock);
@@ -188,7 +188,7 @@ int my_func(struct my *m)
 </code></pre>
 
   <h3>模式三：块级锁</h3>
-<pre><code>// 锁仅在 if 块内持有
+<pre><code class="language-c">// 锁仅在 if 块内持有
 if (need_lock) {
     scoped_guard(mutex, &m->lock) {
         // 锁在此块中
@@ -199,7 +199,7 @@ if (need_lock) {
 </code></pre>
 
   <h3>模式四：嵌套锁</h3>
-<pre><code>void nested(void)
+<pre><code class="language-c">void nested(void)
 {
     guard(mutex)(&outer);
     guard(spinlock_irqsave)(&inner);
@@ -213,7 +213,7 @@ if (need_lock) {
   <h2><span class="num">05</span> 高级用法</h2>
 
   <h3>return_ptr — 转移所有权</h3>
-<pre><code>struct obj *create_obj(void)
+<pre><code class="language-c">struct obj *create_obj(void)
 {
     struct obj *o __free(kfree) = kzalloc(sizeof(*o), GFP_KERNEL);
     if (!o)
@@ -229,14 +229,14 @@ if (need_lock) {
 </code></pre>
 
   <h3>ACQUIRE — trylock 模式</h3>
-<pre><code>// 尝试获取锁，失败则退出
+<pre><code class="language-c">// 尝试获取锁，失败则退出
 ACQUIRE(mutex_try, &m->lock);
 // 成功获取锁
 // 作用域结束时自动释放
 </code></pre>
 
   <h3>scoped_guard 的 trylock 变体</h3>
-<pre><code>// 尝试获取锁，锁可用才进入块
+<pre><code class="language-c">// 尝试获取锁，锁可用才进入块
 scoped_guard(mutex_try, &m->lock) {
     // 成功获取锁
 } else {
@@ -254,7 +254,7 @@ scoped_guard(mutex_try, &m->lock) {
   <div class="grid-2">
     <div class="card">
       <div class="card-title">传统写法（冗长）</div>
-<pre><code>static int my_probe(struct platform_device *pdev)
+<pre><code class="language-c">static int my_probe(struct platform_device *pdev)
 {
     struct my *m;
     int r;
@@ -283,7 +283,7 @@ out: return r;
     </div>
     <div class="card">
       <div class="card-title">cleanup 写法（简洁）</div>
-<pre><code>static int my_probe(struct platform_device *pdev)
+<pre><code class="language-c">static int my_probe(struct platform_device *pdev)
 {
     struct my *m __free(kfree) = kzalloc(...);
     if (!m) return -ENOMEM;
@@ -317,7 +317,7 @@ out: return r;
   <h2><span class="num">07</span> 实现原理</h2>
 
   <h3>编译器基础：__attribute__((__cleanup__))</h3>
-<pre><code>// GCC/Clang 内置特性
+<pre><code class="language-c">// GCC/Clang 内置特性
 void cleanup_func(void *ptr) { kfree(*(void **)ptr); }
 
 int test(void)
@@ -329,7 +329,7 @@ int test(void)
 </code></pre>
 
   <h3>__free 的实现</h3>
-<pre><code>// cleanup.h
+<pre><code class="language-c">// cleanup.h
 #define __free(name) \
     __attribute__((__cleanup__(__free_##name)))
 
@@ -338,7 +338,7 @@ int test(void)
 </code></pre>
 
   <h3>guard 的实现</h3>
-<pre><code>// guard(mutex)(&m) 展开为：
+<pre><code class="language-c">// guard(mutex)(&m) 展开为：
 // 1. 在栈上创建一个匿名变量，类型为 guard_mutex
 // 2. 初始化时调用 mutex_lock(&m)
 // 3. 析构时调用 mutex_unlock(&m)
@@ -354,7 +354,7 @@ int test(void)
 </code></pre>
 
   <h3>scoped_guard 的 for 循环技巧</h3>
-<pre><code>// scoped_guard(mutex, &m)
+<pre><code class="language-c">// scoped_guard(mutex, &m)
 // 展开为利用 for 循环创建块级作用域：
 for (guard(mutex)(&m), *done = 0; done == 0; done = 1)
     // 块只执行一次

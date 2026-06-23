@@ -67,7 +67,7 @@
 <section id="future" class="toc-link">
   <h2><span class="num">02</span> Future trait</h2>
 
-<pre><code>// std::future::Future
+<pre><code class="language-rust">// std::future::Future
 // trait 核心定义
 pub trait Future {
     type Output;
@@ -85,7 +85,7 @@ pub enum Poll&lt;T&gt; {
 </code></pre>
 
   <p>手动实现 Future：</p>
-<pre><code>use std::future::Future;
+<pre><code class="language-rust">use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -125,7 +125,7 @@ let d = Delay { when: Instant::now() + Duration::from_secs(1) };
 <section id="poll" class="toc-link">
   <h2><span class="num">03</span> Poll 与 Waker</h2>
 
-<pre><code>// Poll 的语义：
+<pre><code class="language-rust">// Poll 的语义：
 //   Ready(v) - 计算完成，返回 v
 //   Pending  - 还没好，会通过 waker 通知
 
@@ -168,7 +168,7 @@ fn block_on&lt;F: Future&lt;Output=T&gt;, T&gt;(mut future: F) -> T {
 <section id="async-fn" class="toc-link">
   <h2><span class="num">04</span> async fn 语法</h2>
 
-<pre><code>// async fn：定义异步函数
+<pre><code class="language-rust">// async fn：定义异步函数
 async fn fetch_data() -> String {
     // 函数体返回 impl Future&lt;Output = String&gt;
     do_async_op().await
@@ -208,7 +208,7 @@ tokio::select! {
 <section id="state-machine" class="toc-link">
   <h2><span class="num">05</span> 状态机生成</h2>
 
-<pre><code>// async fn 编译为状态机
+<pre><code class="language-rust">// async fn 编译为状态机
 // 
 // 源代码：
 async fn example() -> u32 {
@@ -262,7 +262,7 @@ impl Future for ExampleFuture {
 </code></pre>
 
   <p>async fn 的大小：</p>
-<pre><code>// 函数越大，状态越多，Future 越大
+<pre><code class="language-rust">// 函数越大，状态越多，Future 越大
 async fn small() -> i32 { 1 }
 async fn large(db: &amp;Db) -> Vec&lt;User&gt; {
     let a = db.get(1).await;
@@ -286,7 +286,7 @@ println!("{}", std::mem::size_of::&lt;_&gt;());   // 不直接 work
 <section id="pin" class="toc-link">
   <h2><span class="num">06</span> Pin 与自引用</h2>
 
-<pre><code>// Pin&lt;P&gt; 保证 P 指向的对象不会被 move
+<pre><code class="language-rust">// Pin&lt;P&gt; 保证 P 指向的对象不会被 move
 // 这对自引用 Future 必需
 
 // 自引用问题：
@@ -336,7 +336,7 @@ my_future.as_mut().poll(&amp;mut cx);
 <section id="cancel" class="toc-link">
   <h2><span class="num">07</span> 取消与 drop</h2>
 
-<pre><code>// Rust Future 取消 = drop
+<pre><code class="language-rust">// Rust Future 取消 = drop
 // 简单粗暴但符合所有权语义
 
 // 例子：
@@ -399,7 +399,7 @@ async fn listen(rx: Receiver&lt;Event&gt;) {
 <section id="traits" class="toc-link">
   <h2><span class="num">08</span> 关键 Async Trait</h2>
 
-<pre><code>// 1. AsyncRead / AsyncWrite（tokio/async-std）
+<pre><code class="language-rust">// 1. AsyncRead / AsyncWrite（tokio/async-std）
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn read_all&lt;R: AsyncRead + Unpin&gt;(r: &amp;mut R) -> std::io::Result&lt;Vec&lt;u8&gt;&gt; {
@@ -446,7 +446,7 @@ impl Repository for DbRepository {
 <section id="run-without-tokio" class="toc-link">
   <h2><span class="num">09</span> 无 Tokio 的运行</h2>
 
-<pre><code>// Rust 标准库提供 async 抽象，但不提供 executor
+<pre><code class="language-rust">// Rust 标准库提供 async 抽象，但不提供 executor
 // 必须用第三方 runtime
 
 // 主要 runtime：
@@ -495,7 +495,7 @@ let result = block_on(my_async_fn());
 <section id="pitfalls" class="toc-link">
   <h2><span class="num">10</span> 常见陷阱</h2>
 
-<pre><code>// 1. 忘记 await
+<pre><code class="language-rust">// 1. 忘记 await
 async fn wrong() {
     tokio::time::sleep(Duration::from_secs(1));   // ❌ 不执行！
     println!("immediately");

@@ -105,7 +105,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/neighbour.h:209 — 邻居表（ARP 表）</span>
+    <pre><code class="language-c"><span class="cm">// include/net/neighbour.h:209 — 邻居表（ARP 表）</span>
 <span class="kw">struct</span> <span class="ty">neigh_table</span> {
     <span class="ty">int</span>              family;       <span class="cm">// AF_INET (ARP) / AF_INET6 (NDP)</span>
     <span class="ty">unsigned int</span>     entry_size;   <span class="cm">// 条目大小</span>
@@ -126,7 +126,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/neighbour.h:140 — 单个邻居条目</span>
+    <pre><code class="language-c"><span class="cm">// include/net/neighbour.h:140 — 单个邻居条目</span>
 <span class="kw">struct</span> <span class="ty">neighbour</span> {
     <span class="kw">struct</span> <span class="ty">hlist_node</span>  hash;          <span class="cm">// 哈希表节点</span>
     <span class="kw">struct</span> <span class="ty">neigh_table</span> *tbl;           <span class="cm">// 所属邻居表</span>
@@ -317,7 +317,7 @@
 </pre></div>
 
   <div class="card">
-    <pre><code><span class="cm"># 启用 Proxy ARP</span>
+    <pre><code class="language-c"><span class="cm"># 启用 Proxy ARP</span>
 $ sysctl -w net.ipv4.conf.eth0.proxy_arp=1
 
 <span class="cm"># 等效于</span>

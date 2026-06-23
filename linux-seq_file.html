@@ -40,7 +40,7 @@
   <div class="grid-2">
     <div class="card">
       <div class="card-title">struct seq_operations</div>
-<pre><code>struct seq_operations {
+<pre><code class="language-c">struct seq_operations {
     void * (*start)(struct seq_file *m,
                     loff_t *pos);
     void   (*stop) (struct seq_file *m,
@@ -53,7 +53,7 @@
     </div>
     <div class="card">
       <div class="card-title">struct seq_file</div>
-<pre><code>struct seq_file {
+<pre><code class="language-c">struct seq_file {
     char *buf;             // 内部缓冲区
     size_t size;           // 缓冲区大小
     size_t count;          // 已写入字节数
@@ -138,7 +138,7 @@
   <h2><span class="num">04</span> 遍历模式</h2>
 
   <p>seq_file 的核心伪代码：</p>
-<pre><code>// seq_read() 内部逻辑
+<pre><code class="language-c">// seq_read() 内部逻辑
 ssize_t seq_read(struct file *file, char __user *buf,
                  size_t size, loff_t *ppos)
 {
@@ -185,7 +185,7 @@ ssize_t seq_read(struct file *file, char __user *buf,
 
   <p>对于"一次性输出"的单条目文件，不需要 start/next/stop 的完整迭代逻辑：</p>
 
-<pre><code>// include/linux/seq_file.h
+<pre><code class="language-c">// include/linux/seq_file.h
 int single_open(struct file *file,
                 int (*show)(struct seq_file *, void *),
                 void *data);
@@ -208,7 +208,7 @@ static int __init proc_version_init(void)
 
   <p>对于驱动程序，还有更方便的 <code>DEFINE_SHOW_ATTRIBUTE</code> 宏：</p>
 
-<pre><code>// include/linux/seq_file.h
+<pre><code class="language-c">// include/linux/seq_file.h
 #define DEFINE_SHOW_ATTRIBUTE(__name)                   \
 static int __name ## _open(struct inode *inode,          \
                            struct file *file)            \
@@ -230,7 +230,7 @@ static const struct proc_ops __name ## _proc_ops = {     \
   <h2><span class="num">06</span> procfs 实战</h2>
 
   <h3>/proc/cpuinfo — 完整迭代模式</h3>
-<pre><code>// arch/x86/kernel/cpu/proc.c
+<pre><code class="language-c">// arch/x86/kernel/cpu/proc.c
 static struct seq_operations cpuinfo_op = {
     .start = c_start,    // 定位到第 n 个 CPU
     .next  = c_next,     // 移动到下一个在线 CPU
@@ -261,7 +261,7 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 </code></pre>
 
   <h3>/proc/meminfo — single_open 模式</h3>
-<pre><code>// fs/proc/meminfo.c
+<pre><code class="language-c">// fs/proc/meminfo.c
 static int meminfo_proc_show(struct seq_file *m, void *v)
 {
     unsigned long pages[NR_LRU_LISTS];
@@ -286,7 +286,7 @@ static int __init proc_meminfo_init(void)
   <h2><span class="num">07</span> 实现原理</h2>
 
   <h3>seq_read — 读取循环</h3>
-<pre><code>ssize_t seq_read(struct file *file, char __user *buf,
+<pre><code class="language-c">ssize_t seq_read(struct file *file, char __user *buf,
                  size_t size, loff_t *ppos)
 {
     struct seq_file *m = file->private_data;
@@ -329,7 +329,7 @@ static int __init proc_meminfo_init(void)
   <p>每次 seek 操作会重置内部状态（index = 0, count = 0），下次 read 从 start 开始重新遍历。</p>
 
   <h3>SEQ_SKIP 返回值</h3>
-<pre><code>// 在 show 回调中返回 SEQ_SKIP 可以跳过当前对象
+<pre><code class="language-c">// 在 show 回调中返回 SEQ_SKIP 可以跳过当前对象
 // 框架会立即调用 next() 前进到下一个
 #define SEQ_SKIP 1
 </code></pre>

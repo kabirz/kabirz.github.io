@@ -81,7 +81,7 @@
 
   <h3>Header 结构</h3>
   <div class="card">
-    <pre><code><span class="cm">// include/linux/libfdt.h</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/libfdt.h</span>
 <span class="kw">struct</span> <span class="ty">fdt_header</span> {
     <span class="ty">uint32_t</span> magic;              <span class="cm">// 0xD00DFEED</span>
     <span class="ty">uint32_t</span> totalsize;           <span class="cm">// DTB 总大小</span>
@@ -112,7 +112,7 @@
   <h2><span class="num">03</span> 语法基础</h2>
 
   <h3>完整 DTS 示例</h3>
-  <pre><code><span class="cm">// 设备树源文件 (DTS)</span>
+  <pre><code class="language-c"><span class="cm">// 设备树源文件 (DTS)</span>
 <span class="ty">/dts-v1/</span>;
 <span class="ty">/plugin/</span>;  <span class="cm">// 可选：Overlay</span>
 
@@ -184,7 +184,7 @@
   </table>
 
   <h3>引用与覆盖</h3>
-  <pre><code><span class="cm">// 节点标签（label）</span>
+  <pre><code class="language-c"><span class="cm">// 节点标签（label）</span>
 <span class="ty">uart0</span>: <span class="fn">serial</span>@<span class="num">0x10000000</span> { ... };
 
 <span class="cm">// 引用标签</span>
@@ -218,7 +218,7 @@ pinctrl-0 = <span class="fn">&amp;uart0_pins</span>;
   <h2><span class="num">04</span> 内核 API</h2>
 
   <h3>节点查找</h3>
-  <pre><code><span class="cm">// 按完整路径查找</span>
+  <pre><code class="language-c"><span class="cm">// 按完整路径查找</span>
 <span class="kw">struct</span> <span class="ty">device_node</span> *np = <span class="fn">of_find_node_by_path</span>(<span class="st">"/soc/uart0"</span>);
 
 <span class="cm">// 按 compatible 查找</span>
@@ -242,7 +242,7 @@ np = <span class="fn">of_find_node_by_phandle</span>(phandle);
 <span class="fn">for_each_matching_node</span>(np, table) { ... }</code></pre>
 
   <h3>属性读取</h3>
-  <pre><code><span class="cm">// 读取 u32 属性</span>
+  <pre><code class="language-c"><span class="cm">// 读取 u32 属性</span>
 <span class="ty">u32</span> val;
 <span class="fn">of_property_read_u32</span>(np, <span class="st">"clock-frequency"</span>, &val);
 
@@ -308,14 +308,14 @@ clk = <span class="fn">devm_clk_get</span>(dev, <span class="st">"core"</span>);
   </div>
 
   <h3>手动创建</h3>
-  <pre><code><span class="cm">// 从 DT 节点创建 platform_device</span>
+  <pre><code class="language-c"><span class="cm">// 从 DT 节点创建 platform_device</span>
 <span class="kw">struct</span> <span class="ty">platform_device</span> *pdev = <span class="fn">of_platform_device_create_pdata</span>(np, NULL, &pdata, dev);
 
 <span class="cm">// 遍历所有子节点创建</span>
 <span class="fn">of_platform_populate</span>(np, <span class="kw">NULL</span>, NULL, dev);</code></pre>
 
   <h3>驱动匹配</h3>
-  <pre><code><span class="cm">// 驱动中匹配设备树</span>
+  <pre><code class="language-c"><span class="cm">// 驱动中匹配设备树</span>
 <span class="kw">static const struct</span> <span class="ty">of_device_id</span> my_of_match[] = {
     { .compatible = <span class="st">"vendor,soc-uart"</span>, },
     { .compatible = <span class="st">"vendor,soc-uart-v2"</span>, },
@@ -340,7 +340,7 @@ clk = <span class="fn">devm_clk_get</span>(dev, <span class="st">"core"</span>);
   <p>设备树绑定（Binding）定义了每个设备节点的属性格式，是设备树的"接口文档"。</p>
 
   <h3>绑定文档结构</h3>
-  <pre><code><span class="cm">// Documentation/devicetree/bindings/serial/ns16550.yaml</span>
+  <pre><code class="language-c"><span class="cm">// Documentation/devicetree/bindings/serial/ns16550.yaml</span>
 <span class="cm">%YAML 1.2</span>
 <span class="cm">---</span>
 <span class="ty">$id</span>: http://devicetree.org/schemas/serial/ns16550.yaml#
@@ -399,7 +399,7 @@ clk = <span class="fn">devm_clk_get</span>(dev, <span class="st">"core"</span>);
   </div>
 
   <h3>Overlay DTSO 格式</h3>
-  <pre><code><span class="cm">// overlay.dtso — Raspberry Pi HAT 示例</span>
+  <pre><code class="language-c"><span class="cm">// overlay.dtso — Raspberry Pi HAT 示例</span>
 <span class="ty">/dts-v1/</span>;
 <span class="ty">/plugin/</span>;
 
@@ -429,7 +429,7 @@ clk = <span class="fn">devm_clk_get</span>(dev, <span class="st">"core"</span>);
 };</code></pre>
 
   <h3>内核 API</h3>
-  <pre><code><span class="cm">// 应用 Overlay</span>
+  <pre><code class="language-c"><span class="cm">// 应用 Overlay</span>
 <span class="kw">struct</span> <span class="ty">of_overlay_fdt_arg</span> arg = { .fdt = overlay_fdt };
 <span class="ty">struct</span> <span class="ty">of_overlay_id</span> id;
 <span class="fn">of_overlay_fdt_apply</span>(arg.fdt, arg.size, &id, NULL);

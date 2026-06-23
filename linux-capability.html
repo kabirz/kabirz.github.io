@@ -83,7 +83,7 @@
 <section id="data" class="toc-link">
   <h2><span class="num">03</span> 核心数据结构</h2>
   <div class="card">
-    <pre><code><span class="cm">// include/linux/cred.h:113 — 进程凭证</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/cred.h:113 — 进程凭证</span>
 <span class="kw">struct</span> <span class="ty">cred</span> {
     <span class="ty">kuid_t</span>           uid;         <span class="cm">// 真实 UID</span>
     <span class="ty">kuid_t</span>           euid;        <span class="cm">// 有效 UID</span>
@@ -140,7 +140,7 @@
 <section id="usecases" class="toc-link">
   <h2><span class="num">05</span> 应用场景</h2>
   <div class="card">
-    <pre><code><span class="cm"># 查看进程的 capabilities</span>
+    <pre><code class="language-c"><span class="cm"># 查看进程的 capabilities</span>
 $ cat /proc/self/status | grep Cap
 CapPrm: 0000003fffffffff  <span class="cm"># permitted（64位掩码）</span>
 CapEff: 0000003fffffffff  <span class="cm"># effective</span>

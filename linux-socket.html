@@ -133,7 +133,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/net.h:116 — BSD Socket（用户态可见）</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/net.h:116 — BSD Socket（用户态可见）</span>
 <span class="kw">struct</span> <span class="ty">socket</span> {
     <span class="ty">socket_state</span>    state;      <span class="cm">// SS_UNCONNECTED / SS_CONNECTING / SS_CONNECTED</span>
     <span class="ty">short</span>           type;       <span class="cm">// SOCK_STREAM / SOCK_DGRAM / SOCK_RAW</span>
@@ -146,7 +146,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/sock.h:1286 — 协议操作表（多态关键）</span>
+    <pre><code class="language-c"><span class="cm">// include/net/sock.h:1286 — 协议操作表（多态关键）</span>
 <span class="kw">struct</span> <span class="ty">proto_ops</span> {
     <span class="ty">int</span> family;
     <span class="ty">int</span> (*bind)(<span class="kw">struct</span> <span class="ty">socket</span> *sock, <span class="kw">struct</span> <span class="ty">sockaddr</span> *myaddr, <span class="ty">int</span> sockaddr_len);
@@ -164,7 +164,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/sock.h:1286 — 协议操作表（协议级多态）</span>
+    <pre><code class="language-c"><span class="cm">// include/net/sock.h:1286 — 协议操作表（协议级多态）</span>
 <span class="kw">struct</span> <span class="ty">proto</span> {
     <span class="ty">void</span> (*close)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, <span class="ty">long</span> timeout);
     <span class="ty">int</span>  (*connect)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, ...);
@@ -317,14 +317,14 @@
   <div class="grid-2">
     <div class="card">
       <div class="card-title" style="color:#cf222e">阻塞模式（默认）</div>
-      <pre><code><span class="cm">// 数据未就绪时，进程睡眠等待</span>
+      <pre><code class="language-c"><span class="cm">// 数据未就绪时，进程睡眠等待</span>
 n = recv(fd, buf, len, <span class="num">0</span>);
 <span class="cm">// 进程在此处阻塞</span>
 <span class="cm">// 直到 sk_data_ready() 唤醒</span></code></pre>
     </div>
     <div class="card">
       <div class="card-title" style="color:#1a7f37">非阻塞模式</div>
-      <pre><code><span class="cm">// 设置 O_NONBLOCK 后</span>
+      <pre><code class="language-c"><span class="cm">// 设置 O_NONBLOCK 后</span>
 fcntl(fd, F_SETFL, O_NONBLOCK);
 n = recv(fd, buf, len, <span class="num">0</span>);
 <span class="cm">// 无数据时立即返回 -1</span>
@@ -352,7 +352,7 @@ n = recv(fd, buf, len, <span class="num">0</span>);
 
   <h3>协议注册机制</h3>
   <div class="card">
-    <pre><code><span class="cm">// net/ipv4/af_inet.c — 协议族注册</span>
+    <pre><code class="language-c"><span class="cm">// net/ipv4/af_inet.c — 协议族注册</span>
 <span class="kw">static struct</span> <span class="ty">list_head</span> inetsw[SOCK_MAX];  <span class="cm">// 按 socket 类型索引</span>
 
 <span class="kw">static const struct</span> <span class="ty">inet_protosw</span> inetsw_array[] = {

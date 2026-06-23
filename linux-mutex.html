@@ -70,7 +70,7 @@
 <section id="api" class="toc-link">
   <h2><span class="num">03</span> 核心 API</h2>
   <div class="card">
-    <pre><code><span class="cm">// 静态初始化</span>
+    <pre><code class="language-c"><span class="cm">// 静态初始化</span>
 <span class="kw">static DEFINE_MUTEX</span>(my_mutex);
 
 <span class="cm">// 运行时初始化</span>
@@ -93,7 +93,7 @@
 <section id="internals" class="toc-link">
   <h2><span class="num">04</span> 内部实现</h2>
   <div class="card">
-    <pre><code><span class="kw">struct</span> <span class="ty">mutex</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">mutex</span> {
     <span class="kw">atomic_long_t</span> owner;         <span class="cm">// 持有者 task_struct 指针</span>
     <span class="kw">raw_spinlock_t</span> wait_lock;     <span class="cm">// 保护等待队列</span>
     <span class="kw">struct</span> <span class="ty">list_head</span> wait_list;  <span class="cm">// 等待者链表</span>
@@ -115,7 +115,7 @@
 <section id="patterns" class="toc-link">
   <h2><span class="num">05</span> 使用模式</h2>
   <div class="card">
-    <pre><code><span class="cm">// 标准模式</span>
+    <pre><code class="language-c"><span class="cm">// 标准模式</span>
 <span class="fn">mutex_lock</span>(&dev->mutex);
 <span class="cm">// ... 可睡眠操作 ...</span>
 <span class="fn">mutex_unlock</span>(&dev->mutex);

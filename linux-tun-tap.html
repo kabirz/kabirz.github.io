@@ -67,7 +67,7 @@
 <section id="data" class="toc-link">
   <h2><span class="num">02</span> 核心数据结构</h2>
   <div class="card">
-    <pre><code><span class="cm">// drivers/net/tun.c</span>
+    <pre><code class="language-c"><span class="cm">// drivers/net/tun.c</span>
 <span class="kw">struct</span> <span class="ty">tun_struct</span> {
     <span class="kw">struct</span> <span class="ty">net_device</span>        *dev;          <span class="cm">// 关联的网络设备</span>
     <span class="kw">struct</span> <span class="ty">file</span>              *file;         <span class="cm">// 用户态 fd</span>
@@ -149,7 +149,7 @@
   </div>
 
   <h3>tun 设备打开流程</h3>
-  <pre><code><span class="cm">// 用户态程序打开 /dev/net/tun</span>
+  <pre><code class="language-c"><span class="cm">// 用户态程序打开 /dev/net/tun</span>
 <span class="ty">int</span> fd = <span class="fn">open</span>(<span class="st">"/dev/net/tun"</span>, O_RDWR);
 
 <span class="cm">// 通过 ioctl 配置 tun 设备</span>
@@ -213,7 +213,7 @@ nread = <span class="fn">read</span>(fd, buffer, sizeof(buffer)); <span class="c
 
   <h3>示例程序</h3>
   <div class="card">
-    <pre><code><span class="cm">// tun_test.c — 简单的 tun 设备测试程序</span>
+    <pre><code class="language-c"><span class="cm">// tun_test.c — 简单的 tun 设备测试程序</span>
 <span class="kw">#include</span> <span class="st">&lt;net/if.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;sys/ioctl.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;fcntl.h&gt;</span>
@@ -254,7 +254,7 @@ nread = <span class="fn">read</span>(fd, buffer, sizeof(buffer)); <span class="c
   </div>
 
   <h3>运行演示</h3>
-  <pre><code><span class="cm"># 窗口 1：启动 tun 程序</span>
+  <pre><code class="language-c"><span class="cm"># 窗口 1：启动 tun 程序</span>
 $ gcc tun.c -o tun && sudo ./tun
 Open tun/tap device tun1 for reading...
 Read 84 bytes from tun/tap device    <span class="cm"># 收到 ICMP echo request</span>

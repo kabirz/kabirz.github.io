@@ -112,7 +112,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// net/packet/internal.h:104 — AF_PACKET socket</span>
+    <pre><code class="language-c"><span class="cm">// net/packet/internal.h:104 — AF_PACKET socket</span>
 <span class="kw">struct</span> <span class="ty">packet_sock</span> {
     <span class="kw">struct</span> <span class="ty">sock</span>          sk;             <span class="cm">// 继承自 sock</span>
     <span class="kw">struct</span> <span class="ty">packet_fanout</span> *fanout;        <span class="cm">// FANOUT 负载均衡</span>
@@ -239,7 +239,7 @@
   </table>
 
   <div class="card">
-    <pre><code><span class="cm">// 用户态代码示例</span>
+    <pre><code class="language-c"><span class="cm">// 用户态代码示例</span>
 <span class="ty">int</span> fd = <span class="fn">socket</span>(AF_PACKET, SOCK_RAW, <span class="fn">htons</span>(ETH_P_ALL));
 
 <span class="cm">// 设置 TPACKET_V3</span>

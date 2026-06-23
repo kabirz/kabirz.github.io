@@ -82,7 +82,7 @@
   <p>YOLOv1（You Only Look Once）由 Joseph Redmon 在 2016 年提出。它将输入图像划分为 SxS 网格（通常 S=7），每个网格负责检测中心落在该网格内的物体。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// YOLOv1 的网格预测设计</span>
+    <pre><code class="language-python"><span class="cm">// YOLOv1 的网格预测设计</span>
 <span class="cm">// 输入：448x448x3 图像</span>
 <span class="cm">// 网格：7x7（S=7）</span>
 <span class="cm">// 每个网格预测：</span>
@@ -104,7 +104,7 @@
   <h3>2.3 损失函数</h3>
   <p>YOLOv1 使用多部分加权损失函数：</p>
   <div class="card">
-    <pre><code>Loss = λ_coord * Σ 坐标误差
+    <pre><code class="language-python">Loss = λ_coord * Σ 坐标误差
      + λ_coord * Σ 尺寸误差（使用平方根缩小大框影响）
      + Σ 含物体的置信度误差
      + λ_noobj * Σ 不含物体的置信度误差
@@ -148,7 +148,7 @@
   </table>
 
   <div class="card">
-    <pre><code><span class="cm">// YOLOv2 的 Anchor Box 聚类</span>
+    <pre><code class="language-python"><span class="cm">// YOLOv2 的 Anchor Box 聚类</span>
 <span class="cm">// 在训练集边界框上运行 K-Means</span>
 <span class="cm">// 距离度量：d(box, centroid) = 1 - IoU(box, centroid)</span>
 <span class="cm">// 聚类得到的 5 个锚点框尺寸示例：</span>
@@ -190,7 +190,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// YOLOv3 的输出张量结构</span>
+    <pre><code class="language-python"><span class="cm">// YOLOv3 的输出张量结构</span>
 <span class="cm">// 以 416x416 输入为例：</span>
 
 <span class="cm">// 尺度 1（大物体）：13x13 特征图</span>
@@ -220,7 +220,7 @@
   <p>YOLOv4 由 Alexey Bochkovskiy（原 darknet 维护者）在 2020 年发布。它的核心贡献是系统性地验证了大量训练技巧和架构设计，在保持实时速度的同时达到当时最先进的精度。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// YOLOv4 架构（"Bag of Freebies" + "Bag of Specials"）</span>
+    <pre><code class="language-python"><span class="cm">// YOLOv4 架构（"Bag of Freebies" + "Bag of Specials"）</span>
 
 <span class="cm">// Backbone: CSPDarknet-53</span>
 <span class="cm">//   — CSP（Cross Stage Partial）减少计算量</span>
@@ -257,7 +257,7 @@
   <p>YOLOv5 由 Ultralytics 发布，严格来说不是原始 YOLO 论文的延续，而是基于 PyTorch 的现代化实现。它迅速成为工业界最广泛使用的 YOLO 版本。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// YOLOv5 的关键特性</span>
+    <pre><code class="language-python"><span class="cm">// YOLOv5 的关键特性</span>
 
 <span class="cm">// 模型家族（按尺寸）：</span>
 <span class="cm">// YOLOv5n (nano)   — 1.9M params, 最佳终端设备</span>
@@ -313,7 +313,7 @@
 
   <h3>5.2 解耦检测头</h3>
   <div class="card">
-    <pre><code><span class="cm">// YOLOX 的解耦头设计</span>
+    <pre><code class="language-python"><span class="cm">// YOLOX 的解耦头设计</span>
 
 <span class="cm">// 传统 YOLO 检测头（耦合）：</span>
 <span class="cm">// 特征 → Conv → 输出（分类+回归一起）</span>
@@ -351,7 +351,7 @@
   <p>YOLOv6 由美团在 2022 年发布，专注于工业部署场景，特别是对硬件友好的设计：</p>
 
   <div class="card">
-    <pre><code><span class="cm">// YOLOv6 架构亮点</span>
+    <pre><code class="language-python"><span class="cm">// YOLOv6 架构亮点</span>
 
 <span class="cm">// Backbone: EfficientRep</span>
 <span class="cm">//   — 多分支重参数化（RepVGG 风格）</span>
@@ -406,7 +406,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// YOLOv7 的训练技巧</span>
+    <pre><code class="language-python"><span class="cm">// YOLOv7 的训练技巧</span>
 
 <span class="cm">// 辅助检测头训练：</span>
 <span class="cm">// — 主检测头（精细标签）+ 辅助检测头（粗标签）</span>
@@ -428,7 +428,7 @@
   <p>YOLOv8 由 Ultralytics 在 2023 年初发布，是 YOLOv5 的官方继任者。它吸收前代精华，整合了 Anchor-Free、解耦头、Mosaic 增强等最佳实践，同时引入了多项创新：</p>
 
   <div class="card">
-    <pre><code><span class="cm">// YOLOv8 架构总览</span>
+    <pre><code class="language-python"><span class="cm">// YOLOv8 架构总览</span>
 
 <span class="cm">// Backbone: CSPDarknet-53 改进版</span>
 <span class="cm">//   — 保留 CSP 结构</span>
@@ -467,7 +467,7 @@
 
   <p><strong>C2f 模块：</strong>是 YOLOv8 骨干网络的核心构建块，相比 YOLOv5 的 C3 模块增加了跨层连接：</p>
   <div class="card">
-    <pre><code><span class="cm">// C3 (YOLOv5):          C2f (YOLOv8):</span>
+    <pre><code class="language-python"><span class="cm">// C3 (YOLOv5):          C2f (YOLOv8):</span>
 <span class="cm">//   Input                Input</span>
 <span class="cm">//     |                    |</span>
 <span class="cm">//   Conv                 Conv</span>
@@ -485,7 +485,7 @@
 
   <p><strong>DFL (Distribution Focal Loss)：</strong>将边界框回归从狄拉克 delta 分布推广到一般分布：</p>
   <div class="card">
-    <pre><code><span class="cm">// DFL 损失函数</span>
+    <pre><code class="language-python"><span class="cm">// DFL 损失函数</span>
 <span class="cm">// 传统回归：预测一个值 → 框坐标</span>
 <span class="cm">// DFL 回归：预测一个概率分布 → 框坐标的期望</span>
 <span class="cm">// 每个边界框边用 16 个离散值表示概率分布</span>

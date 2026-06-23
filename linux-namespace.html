@@ -74,7 +74,7 @@ Docker 容器使用全部 7 种命名空间：
 <section id="data" class="toc-link">
   <h2><span class="num">03</span> 核心数据结构</h2>
   <div class="card">
-    <pre><code><span class="cm">// 命名空间代理 — 进程的命名空间视图</span>
+    <pre><code class="language-c"><span class="cm">// 命名空间代理 — 进程的命名空间视图</span>
 <span class="kw">struct</span> <span class="ty">nsproxy</span> {
     <span class="ty">atomic_t</span>          count;     <span class="cm">// 引用计数</span>
     <span class="kw">struct</span> <span class="ty">uts_namespace</span>  *uts_ns;  <span class="cm">// UTS（主机名）</span>

@@ -116,7 +116,7 @@
   <h3>struct sk_buff</h3>
   <div class="card">
     <p class="ref">include/linux/skbuff.h:886</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">sk_buff</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">sk_buff</span> {
     <span class="cm">// 链表/树节点</span>
     <span class="kw">union</span> {
         <span class="kw">struct</span> { <span class="kw">struct</span> <span class="ty">sk_buff</span> *next, *prev;
@@ -193,7 +193,7 @@
   <h3>struct net_device</h3>
   <div class="card">
     <p class="ref">include/linux/netdevice.h:2109</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">net_device</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">net_device</span> {
     <span class="cm">// TX 热路径（缓存行优化）</span>
     <span class="kw">const struct</span> <span class="ty">net_device_ops</span> *netdev_ops;  <span class="cm">// 设备操作集</span>
     <span class="kw">struct</span> <span class="ty">netdev_queue</span> *_tx;                 <span class="cm">// TX 队列数组</span>
@@ -219,7 +219,7 @@
   <h3>struct net_device_ops</h3>
   <div class="card">
     <p class="ref">include/linux/netdevice.h:1426</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">net_device_ops</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">net_device_ops</span> {
     <span class="ty">int</span> (*ndo_init)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev);
     <span class="ty">int</span> (*ndo_open)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev);       <span class="cm">// ifconfig up</span>
     <span class="ty">int</span> (*ndo_stop)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev);      <span class="cm">// ifconfig down</span>
@@ -237,7 +237,7 @@
   </div>
 
   <h3>设备注册</h3>
-  <pre><code><span class="cm">// 分配 net_device</span>
+  <pre><code class="language-c"><span class="cm">// 分配 net_device</span>
 dev = <span class="fn">alloc_etherdev_mqs</span>(priv_size, tx_queues, rx_queues);
 
 <span class="cm">// 填充 netdev_ops</span>
@@ -261,7 +261,7 @@ dev->netdev_ops = &my_netdev_ops;
   <div class="grid-2">
     <div class="card">
       <div class="card-title">struct socket（BSD 层）</div>
-      <pre><code><span class="kw">struct</span> <span class="ty">socket</span> {
+      <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">socket</span> {
     <span class="ty">socket_state</span>    state;   <span class="cm">// SS_FREE/UNCONNECTED/...</span>
     <span class="ty">short</span>           type;    <span class="cm">// SOCK_STREAM/DGRAM/RAW</span>
     <span class="ty">unsigned long</span>   flags;
@@ -272,7 +272,7 @@ dev->netdev_ops = &my_netdev_ops;
     </div>
     <div class="card">
       <div class="card-title">struct sock（传输层）</div>
-      <pre><code><span class="kw">struct</span> <span class="ty">sock</span> {
+      <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">sock</span> {
     <span class="kw">struct</span> <span class="ty">sock_common</span> __sk_common;
     <span class="cm">// __sk_common 包含：</span>
     <span class="cm">//   skc_state, skc_family</span>
@@ -324,7 +324,7 @@ dev->netdev_ops = &my_netdev_ops;
   <h3>NAPI（New API）</h3>
   <div class="card">
     <p>NAPI 是 Linux 的<strong>混合中断/轮询</strong>收包机制：</p>
-    <pre><code><span class="cm">// 中断驱动模式：每个包触发中断 → 高负载时中断风暴</span>
+    <pre><code class="language-c"><span class="cm">// 中断驱动模式：每个包触发中断 → 高负载时中断风暴</span>
 <span class="cm">// 纯轮询模式：CPU 持续轮询 → 低负载时浪费 CPU</span>
 <span class="cm">// NAPI：中断后切换到轮询，处理完一批包后恢复中断</span>
 
@@ -376,7 +376,7 @@ dev->netdev_ops = &my_netdev_ops;
 
   <h3>GSO（Generic Segmentation Offload）</h3>
   <div class="card">
-    <pre><code><span class="cm">// 发送前不分段，由网卡硬件或软件在最后时刻分段</span>
+    <pre><code class="language-c"><span class="cm">// 发送前不分段，由网卡硬件或软件在最后时刻分段</span>
 <span class="cm">// 减少协议栈中的分段开销</span>
 
 <span class="cm">// SKB_GSO_* 标志：</span>
@@ -498,7 +498,7 @@ skb->gso_type = SKB_GSO_TCPV4;
   </table>
 
   <h3>核心数据结构</h3>
-  <pre><code><span class="kw">struct</span> <span class="ty">net</span> {
+  <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">net</span> {
     <span class="kw">struct</span> <span class="ty">list_head</span> list;         <span class="cm">// 全局命名空间链表</span>
     <span class="kw">struct</span> <span class="ty">list_head</span> dev_base_head; <span class="cm">// 该 ns 的设备列表</span>
     <span class="kw">struct</span> <span class="ty">net_device</span> *loopback_dev; <span class="cm">// loopback 设备</span>
@@ -511,7 +511,7 @@ skb->gso_type = SKB_GSO_TCPV4;
 
   <h3>容器网络</h3>
   <div class="card">
-    <pre><code><span class="cm"># 容器网络典型配置</span>
+    <pre><code class="language-c"><span class="cm"># 容器网络典型配置</span>
 $ ip netns add container1
 $ ip link add veth-host type veth peer name veth-ctr
 $ ip link set veth-ctr netns container1

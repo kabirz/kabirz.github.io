@@ -35,7 +35,7 @@
   <h2><span class="num">01</span> 概述</h2>
   <p>Linux 电源管理 (PM) 是一个分层系统，覆盖四个层面：</p>
 
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-c">┌─────────────────────────────────────────┐
 │  系统级 PM (System-wide PM)              │
 │  ┌─────────────────────────────────┐    │
 │  │  Suspend-to-Idle (s2idle)        │    │
@@ -87,7 +87,7 @@
 
   <p>每个设备实现一组 PM 回调，定义在 <code>struct dev_pm_ops</code> 中：</p>
 
-<pre><code>// include/linux/pm.h
+<pre><code class="language-c">// include/linux/pm.h
 struct dev_pm_ops {
     int (*prepare)(struct device *dev);
     void (*complete)(struct device *dev);
@@ -133,7 +133,7 @@ struct dev_pm_ops {
   </table>
 
   <p>PM 域：</p>
-<pre><code>// include/linux/pm_domain.h
+<pre><code class="language-c">// include/linux/pm_domain.h
 struct generic_pm_domain {
     struct device          domain;
     struct list_head       gpd_list_node;
@@ -170,7 +170,7 @@ struct generic_pm_domain {
 
   <p>Runtime PM 让设备在<strong>空闲时自动进入低功耗状态</strong>，活动时再唤醒。核心是引用计数状态机：</p>
 
-<pre><code>// drivers/base/power/runtime.c
+<pre><code class="language-c">// drivers/base/power/runtime.c
 
 // 设备 PM 状态：
 enum rpm_status {
@@ -216,7 +216,7 @@ pm_runtime_set_autosuspend_delay(dev, 100);
 </code></pre>
 
   <p>状态转移图：</p>
-<pre><code>            get_sync
+<pre><code class="language-c">            get_sync
    ┌──────────────────────────┐
    │                          ▼
 ┌──┴───────┐               ┌─────────┐
@@ -242,7 +242,7 @@ pm_runtime_set_autosuspend_delay(dev, 100);
 <section id="suspend" class="toc-link">
   <h2><span class="num">04</span> 系统休眠与唤醒</h2>
 
-<pre><code>// kernel/power/suspend.c
+<pre><code class="language-c">// kernel/power/suspend.c
 
 // 主要入口：state_store() / sysfs /sys/power/state
 // 用户态：echo mem > /sys/power/state
@@ -345,7 +345,7 @@ struct wakeup_source {
 </code></pre>
 
   <p>Hibernation（Suspend-to-Disk）：</p>
-<pre><code>// kernel/power/hibernate.c
+<pre><code class="language-c">// kernel/power/hibernate.c
 // 流程不同：将内存内容写入 swap 文件/分区，然后断电
 // 恢复时从 swap 读回内存内容
 
@@ -364,7 +364,7 @@ struct wakeup_source {
 
   <p>cpufreq 框架管理 CPU 核心电压和频率的<strong>动态调整</strong>（DVFS）。</p>
 
-<pre><code>// drivers/cpufreq/cpufreq.c
+<pre><code class="language-c">// drivers/cpufreq/cpufreq.c
 
 // 驱动接口：
 struct cpufreq_driver {
@@ -450,7 +450,7 @@ struct cpufreq_policy {
     <tr><td><code>schedutil</code></td><td>调度器集成（CFS/EEVDF）</td><td>现代默认</td></tr>
   </table>
 
-<pre><code>// schedutil（最现代）：
+<pre><code class="language-c">// schedutil（最现代）：
 // drivers/cpufreq/cpufreq_schedutil.c
 // 利用调度器的 util_est 预测
 // 在调度 tick 中通过 fast_switch 更新频率
@@ -472,7 +472,7 @@ struct cpufreq_policy {
 
   <p>cpuidle 管理 CPU 在 idle 时进入的<strong>不同深度睡眠状态</strong>（C-states）。</p>
 
-<pre><code>// drivers/cpuidle/cpuidle.c
+<pre><code class="language-c">// drivers/cpuidle/cpuidle.c
 
 struct cpuidle_driver {
     const char              *name;
@@ -548,7 +548,7 @@ void cpu_startup_entry(enum cpuhp_state state)
 
   <p>PM QoS (Quality of Service) 让<strong>需求方表达对延迟的约束</strong>，PM 框架据此决策。</p>
 
-<pre><code>// include/linux/pm_qos.h
+<pre><code class="language-c">// include/linux/pm_qos.h
 
 enum pm_qos_flags_status {
     PM_QOS_FLAGS_UNDEFINED = -1,
@@ -601,7 +601,7 @@ dev_pm_qos_add_request(cpu_dev, &min_freq, DEV_PM_QOS_MIN_FREQUENCY, 1000000);
 </code></pre>
 
   <p>电源域集成：</p>
-<pre><code>// drivers/base/power/domain.c
+<pre><code class="language-c">// drivers/base/power/domain.c
 // genpd (Generic Power Domain) 框架
 // 关键概念：
 //   - 一个域包含多个设备

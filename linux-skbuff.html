@@ -112,7 +112,7 @@ sk_buff 的数据区域使用四个指针管理：
   <h2><span class="num">03</span> 核心字段</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/skbuff.h:886 — sk_buff 核心字段</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/skbuff.h:886 — sk_buff 核心字段</span>
 <span class="kw">struct</span> <span class="ty">sk_buff</span> {
     <span class="cm">/* ──── 链表 / 树节点 ──── */</span>
     <span class="kw">union</span> {
@@ -219,7 +219,7 @@ sk_buff 的数据区域使用四个指针管理：
   <h2><span class="num">05</span> 常用操作</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// 头部操作 — 逐层剥离协议头</span>
+    <pre><code class="language-c"><span class="cm">// 头部操作 — 逐层剥离协议头</span>
 
 <span class="cm">// 收包：从 L2 到 L4</span>
 skb->protocol = eth_type_trans(skb, dev); <span class="cm">// 剥离以太网头，设置协议</span>

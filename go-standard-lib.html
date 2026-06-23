@@ -48,7 +48,7 @@
 
   <h3>组合接口</h3>
   <div class="card">
-    <pre><code><span class="cm">// 标准库预定义的组合接口</span>
+    <pre><code class="language-go"><span class="cm">// 标准库预定义的组合接口</span>
 <span class="kw">type</span> ReadWriter <span class="kw">interface</span> {
     Reader
     Writer
@@ -74,7 +74,7 @@
   <p><code>io.Copy</code> 是 I/O 操作中最常用的函数，它将数据从 Reader 复制到 Writer，直到 EOF。其内部有值得一提的优化路径：</p>
 
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">Copy</span>(dst Writer, src Reader) (<span class="ty">int64</span>, <span class="ty">error</span>) {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">Copy</span>(dst Writer, src Reader) (<span class="ty">int64</span>, <span class="ty">error</span>) {
     <span class="cm">// 优化路径 1: 如果 src 实现了 WriterTo，直接调用</span>
     <span class="kw">if</span> wt, ok := src.(WriterTo); ok {
         <span class="kw">return</span> wt.WriteTo(dst)
@@ -98,7 +98,7 @@
   <p><code>io.Pipe</code> 创建一对 Reader/Writer，写入 Writer 的数据可以立即从 Reader 读出。它是内存中的管道，常用于连接不同的 I/O 处理链。</p>
 
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">pipeExample</span>() {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">pipeExample</span>() {
     pr, pw := io.Pipe()
     
     <span class="cm">// 写入端在 goroutine 中进行</span>
@@ -123,7 +123,7 @@
 
   <h3>实用工具函数</h3>
   <div class="card">
-    <pre><code><span class="cm">// io.ReadAll - 读取所有数据到内存</span>
+    <pre><code class="language-go"><span class="cm">// io.ReadAll - 读取所有数据到内存</span>
 data, err := io.ReadAll(resp.Body)
 
 <span class="cm">// io.ReadFull - 精确读取指定字节数</span>
@@ -155,7 +155,7 @@ rc := io.NopCloser(bytes.NewReader(data))</code></pre>
   <p><code>context.Context</code> 是 Go 中跨 API 和 goroutine 传递超时、取消信号和请求范围数据的标准方式。它自 Go 1.7 起成为标准库的一部分，现已成为 Go 并发编程的基础设施。</p>
 
   <div class="card">
-    <pre><code><span class="kw">type</span> Context <span class="kw">interface</span> {
+    <pre><code class="language-go"><span class="kw">type</span> Context <span class="kw">interface</span> {
     <span class="cm">// Deadline 返回 context 被取消的时间</span>
     Deadline() (deadline time.Time, ok <span class="ty">bool</span>)
     
@@ -178,7 +178,7 @@ ctx := context.TODO()         <span class="cm">// 占位符，表示将来要使
   <p>Context 最强大的特性是取消信号的自动传播。当父 context 被取消，所有派生的子 context 都会被级联取消。</p>
 
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">cancellationChain</span>() {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">cancellationChain</span>() {
     ctx := context.Background()
     
     <span class="cm">// 创建可取消的 context</span>
@@ -207,7 +207,7 @@ ctx := context.TODO()         <span class="cm">// 占位符，表示将来要使
 
   <h3>WithDeadline 与 WithTimeout</h3>
   <div class="card">
-    <pre><code><span class="cm">// 绝对时间截止</span>
+    <pre><code class="language-go"><span class="cm">// 绝对时间截止</span>
 deadline := time.Now().Add(<span class="num">5</span> * time.Second)
 ctx, cancel := context.WithDeadline(context.Background(), deadline)
 <span class="kw">defer</span> cancel()
@@ -241,7 +241,7 @@ ctx, cancel := context.WithTimeoutCause(
 
   <h3>WithValue 与键类型</h3>
   <div class="card">
-    <pre><code><span class="cm">// 使用自定义类型作为 key 避免冲突</span>
+    <pre><code class="language-go"><span class="cm">// 使用自定义类型作为 key 避免冲突</span>
 <span class="kw">type</span> ctxKey <span class="ty">string</span>
 
 <span class="kw">const</span> (
@@ -276,7 +276,7 @@ ctx, cancel := context.WithTimeoutCause(
   <p><code>encoding/json</code> 是 Go 最常用的序列化库。它通过结构体标签（struct tag）控制 JSON 字段的映射行为。</p>
 
   <div class="card">
-    <pre><code><span class="kw">type</span> User <span class="kw">struct</span> {
+    <pre><code class="language-go"><span class="kw">type</span> User <span class="kw">struct</span> {
     ID        <span class="ty">int</span>       `json:<span class="s">"id"</span>`
     Name      <span class="ty">string</span>    `json:<span class="s">"name"</span>`
     Email     <span class="ty">string</span>    `json:<span class="s">"email,omitempty"</span>`
@@ -298,7 +298,7 @@ err := json.Unmarshal(data, &amp;u)</code></pre>
   <p>当默认的 JSON 编码行为不满足需求时，可以实现自定义的序列化方法。</p>
 
   <div class="card">
-    <pre><code><span class="kw">type</span> DateTime time.Time
+    <pre><code class="language-go"><span class="kw">type</span> DateTime time.Time
 
 <span class="kw">func</span> (dt DateTime) <span class="fn">MarshalJSON</span>() ([]<span class="kw">byte</span>, <span class="ty">error</span>) {
     t := time.Time(dt)
@@ -334,7 +334,7 @@ err := json.Unmarshal(data, &amp;u)</code></pre>
 
   <h3>流式编码与解码</h3>
   <div class="card">
-    <pre><code><span class="cm">// Decoder - 从 Reader 流式读取 JSON</span>
+    <pre><code class="language-go"><span class="cm">// Decoder - 从 Reader 流式读取 JSON</span>
 file, _ := os.Open(<span class="s">"large.json"</span>)
 <span class="kw">defer</span> file.Close()
 
@@ -365,7 +365,7 @@ encoder.Encode(data)
 
   <h3>Decoder 的高级配置</h3>
   <div class="card">
-    <pre><code>decoder := json.NewDecoder(reader)
+    <pre><code class="language-go">decoder := json.NewDecoder(reader)
 
 <span class="cm">// 拒绝未知字段（默认忽略）</span>
 decoder.DisallowUnknownFields()
@@ -405,7 +405,7 @@ json.Unmarshal(data, &amp;resp)
   <p>表格驱动测试（Table-Driven Tests）是 Go 社区最推崇的测试风格。它通过定义输入/期望值的数据表来减少重复代码。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 被测试函数</span>
+    <pre><code class="language-go"><span class="cm">// 被测试函数</span>
 <span class="kw">func</span> <span class="fn">Divide</span>(a, b <span class="ty">int</span>) (<span class="ty">int</span>, <span class="ty">error</span>) {
     <span class="kw">if</span> b == <span class="num">0</span> {
         <span class="kw">return</span> <span class="num">0</span>, fmt.Errorf(<span class="s">"division by zero"</span>)
@@ -449,7 +449,7 @@ json.Unmarshal(data, &amp;resp)
   <p><code>t.Run()</code> 创建的子测试具有独立的生命周期，可以单独运行。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 只运行特定子测试</span>
+    <pre><code class="language-go"><span class="cm">// 只运行特定子测试</span>
 <span class="cm">// $ go test -run TestDivide/positive</span>
 <span class="cm">// $ go test -run TestDivide/negative</span>
 
@@ -475,7 +475,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
 
   <h3>t.Helper 与测试辅助函数</h3>
   <div class="card">
-    <pre><code><span class="cm">// t.Helper() 标记辅助函数，错误报告时跳过该帧</span>
+    <pre><code class="language-go"><span class="cm">// t.Helper() 标记辅助函数，错误报告时跳过该帧</span>
 <span class="kw">func</span> <span class="fn">assertEqual</span>(t *<span class="ty">testing</span>.T, got, want <span class="ty">interface</span>{}) {
     t.Helper()  <span class="cm">// 错误行号会指向调用者而非本函数</span>
     <span class="kw">if</span> got != want {
@@ -499,7 +499,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
 
   <h3>基准测试</h3>
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">BenchmarkDivide</span>(b *<span class="ty">testing</span>.B) {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">BenchmarkDivide</span>(b *<span class="ty">testing</span>.B) {
     <span class="kw">for</span> i := <span class="num">0</span>; i &lt; b.N; i++ {
         Divide(<span class="num">1000</span>, <span class="num">3</span>)
     }
@@ -528,7 +528,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
   <p>Go 1.18 引入了原生 fuzzing 支持。Fuzzing 通过自动生成随机输入来发现边界条件和安全漏洞。</p>
 
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">FuzzReverse</span>(f *<span class="ty">testing</span>.F) {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">FuzzReverse</span>(f *<span class="ty">testing</span>.F) {
     <span class="cm">// 添加种子语料库</span>
     testcases := []<span class="ty">string</span>{<span class="s">"Hello, world"</span>, <span class="s">" " </span>, <span class="s">"!12345"</span>}
     <span class="kw">for</span> _, tc := <span class="kw">range</span> testcases {
@@ -554,7 +554,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
 
   <h3>覆盖率</h3>
   <div class="card">
-    <pre><code><span class="cm">// 生成覆盖率报告</span>
+    <pre><code class="language-go"><span class="cm">// 生成覆盖率报告</span>
 <span class="cm">// $ go test -cover -coverprofile=coverage.out</span>
 <span class="cm">// $ go tool cover -html=coverage.out -o coverage.html</span>
 
@@ -572,7 +572,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
 
   <h3>Test Main 与测试生命周期</h3>
   <div class="card">
-    <pre><code><span class="kw">func</span> <span class="fn">TestMain</span>(m *<span class="ty">testing</span>.M) {
+    <pre><code class="language-go"><span class="kw">func</span> <span class="fn">TestMain</span>(m *<span class="ty">testing</span>.M) {
     <span class="cm">// 测试前的全局设置</span>
     setup()
     
@@ -605,7 +605,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
   <p>自 Go 1.16 起，<code>//go:embed</code> 指令允许在编译时将静态文件嵌入到 Go 二进制文件中。这消除了运行时将配置文件、模板等与二进制文件一起分发的问题。</p>
 
   <div class="card">
-    <pre><code><span class="kw">import</span> <span class="s">"embed"</span>
+    <pre><code class="language-go"><span class="kw">import</span> <span class="s">"embed"</span>
 
 <span class="cm">// 嵌入单个文件</span>
 <span class="cm">//go:embed config.yaml</span>
@@ -627,7 +627,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
 
   <h3>模式匹配嵌入</h3>
   <div class="card">
-    <pre><code><span class="cm">// 嵌入整个目录</span>
+    <pre><code class="language-go"><span class="cm">// 嵌入整个目录</span>
 <span class="cm">//go:embed static/*</span>
 <span class="kw">var</span> staticFS embed.FS
 
@@ -660,7 +660,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
 
   <h3>embed 的实际应用场景</h3>
   <div class="card">
-    <pre><code><span class="cm">// 场景 1: 嵌入 HTTP 静态文件</span>
+    <pre><code class="language-go"><span class="cm">// 场景 1: 嵌入 HTTP 静态文件</span>
 <span class="cm">//go:embed static</span>
 <span class="kw">var</span> staticFiles embed.FS
 
@@ -709,7 +709,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
   <p>构建约束（Build Constraints）通过 <code>//go:build</code> 指令控制特定文件在哪些平台或条件下被编译。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 仅在 Linux 平台编译</span>
+    <pre><code class="language-go"><span class="cm">// 仅在 Linux 平台编译</span>
 <span class="cm">//go:build linux</span>
 
 <span class="kw">package</span> main
@@ -748,7 +748,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
   <p>Go 还支持通过文件名后缀自动推断构建约束，这种方式不需要显式的 <code>//go:build</code> 指令。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// 文件名约定（在 _test.go 之前匹配）</span>
+    <pre><code class="language-go"><span class="cm">// 文件名约定（在 _test.go 之前匹配）</span>
 <span class="cm">//</span>
 <span class="cm">// *\_GOOS\_GOARCH  - 指定 OS 和架构</span>
 <span class="cm">// *\_GOOS         - 指定 OS</span>
@@ -771,7 +771,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
 
   <h3>条件标签的工程实践</h3>
   <div class="card">
-    <pre><code><span class="cm">// 1. 生产 vs 调试代码</span>
+    <pre><code class="language-go"><span class="cm">// 1. 生产 vs 调试代码</span>
 <span class="cm">//go:build debug</span>
 <span class="kw">package</span> main
 <span class="kw">var</span> debugMode = <span class="kw">true</span>
@@ -800,7 +800,7 @@ t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span clas
 
   <h3>构建约束组合示例</h3>
   <div class="card">
-    <pre><code><span class="cm">// 文件: util.go - 所有平台通用</span>
+    <pre><code class="language-go"><span class="cm">// 文件: util.go - 所有平台通用</span>
 <span class="kw">package</span> util
 
 <span class="kw">func</span> <span class="fn">DefaultPath</span>() <span class="ty">string</span> { <span class="kw">return</span> <span class="s">"/var/data"</span> }

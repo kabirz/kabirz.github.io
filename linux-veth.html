@@ -64,7 +64,7 @@
 <section id="data" class="toc-link">
   <h2><span class="num">02</span> 核心数据结构</h2>
   <div class="card">
-    <pre><code><span class="cm">// drivers/net/veth.c</span>
+    <pre><code class="language-c"><span class="cm">// drivers/net/veth.c</span>
 <span class="kw">struct</span> <span class="ty">veth_priv</span> {
     <span class="kw">struct</span> <span class="ty">net_device</span> *peer;        <span class="cm">// 配对的 veth 设备</span>
     <span class="ty">u64</span>                 xdp_progs;   <span class="cm">// XDP 程序统计</span>
@@ -132,7 +132,7 @@
 
   <h3>源码核心路径</h3>
   <div class="card">
-    <pre><code><span class="cm">// drivers/net/veth.c — 发送路径</span>
+    <pre><code class="language-c"><span class="cm">// drivers/net/veth.c — 发送路径</span>
 <span class="kw">static netdev_tx_t</span> <span class="fn">veth_xmit</span>(<span class="kw">struct</span> <span class="ty">sk_buff</span> *skb,
                                <span class="kw">struct</span> <span class="ty">net_device</span> *dev)
 {
@@ -156,7 +156,7 @@
 <section id="example" class="toc-link">
   <h2><span class="num">04</span> 实验演示</h2>
   <h3>场景一：veth1 无 IP，ping 失败</h3>
-  <pre><code><span class="cm"># 创建 veth 对</span>
+  <pre><code class="language-c"><span class="cm"># 创建 veth 对</span>
 $ sudo ip link add veth0 type veth peer name veth1
 $ sudo ip addr add 192.168.2.11/24 dev veth0
 $ sudo ip link set veth0 up
@@ -169,7 +169,7 @@ From 192.168.2.11 icmp_seq=1 Destination Host Unreachable</code></pre>
   <p><strong>原因分析</strong>：veth0 发送 ARP 请求，通过 veth1 传递到 veth1 的协议栈。但 veth1 没有 192.168.2.1 这个 IP，协议栈丢弃了 ARP 请求，所以没有 ARP 应答。</p>
 
   <h3>场景二：veth1 有 IP，ping 本地成功</h3>
-  <pre><code><span class="cm"># 给 veth1 配置 IP</span>
+  <pre><code class="language-c"><span class="cm"># 给 veth1 配置 IP</span>
 $ sudo ip addr add 192.168.2.1/24 dev veth1
 
 <span class="cm"># 指定走 veth0 ping veth1</span>
@@ -203,7 +203,7 @@ $ ping -c 4 192.168.2.1 -I veth0
 </pre></div>
 
   <h3>场景三：ping 外部地址失败</h3>
-  <pre><code><span class="cm"># ping 网段外的地址</span>
+  <pre><code class="language-c"><span class="cm"># ping 网段外的地址</span>
 $ ping -c 1 -I veth0 192.168.2.2
 From 192.168.2.11 icmp_seq=1 Destination Host Unreachable
 

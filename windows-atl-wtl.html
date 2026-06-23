@@ -72,7 +72,7 @@
   <h2><span class="num">02</span> ATL 基础与 COM</h2>
   <p>ATL 的根基是 <code>CComObjectRootBase</code> 与线程模型模板 <code>CComObjectRootEx&lt;ThreadModel&gt;</code>。它们为每个 COM 对象提供<strong>引用计数</strong>与<strong>接口映射表</strong>。所有非聚合对象的最终派生类由 <code>CComObject&lt;T&gt;</code> 包装，由它实现 <code>IUnknown</code> 的三个方法。</p>
   <div class="card">
-    <pre><code><span class="cm">// IMath.h —— 简单 COM 对象</span>
+    <pre><code class="language-cpp"><span class="cm">// IMath.h —— 简单 COM 对象</span>
 <span class="pp">#include &lt;atlbase.h&gt;</span>
 <span class="pp">#include &lt;atlcom.h&gt;</span>
 
@@ -104,7 +104,7 @@
   </div>
   <h3>服务器模块与 IUnknown</h3>
   <div class="card">
-    <pre><code><span class="cm">// DLL 服务器入口</span>
+    <pre><code class="language-cpp"><span class="cm">// DLL 服务器入口</span>
 <span class="kw">class</span> <span class="ty">CMathModule</span> : <span class="kw">public</span> <span class="ty">CAtlDllModuleT</span>&lt;<span class="ty">CMathModule</span>&gt; {
 <span class="kw">public</span>:
     <span class="kw">DECLARE_LIBID</span>(<span class="ty">LIBID_MathLib</span>)
@@ -131,7 +131,7 @@
   <h2><span class="num">03</span> ATL 窗口支持</h2>
   <p>ATL 提供<strong>最小化的窗口封装</strong>。<code>CWindow</code> 直接包装一个 <code>HWND</code>（成员 <code>m_hWnd</code>），重载 <code>operator HWND()</code> 实现到句柄的隐式转换——这意味着任何 Win32 API 都能直接接受 <code>CWindow</code> 对象。<code>CWindowImpl&lt;T&gt;</code> 用 <strong>CRTP（奇异递归模板）</strong>让派生类把 WndProc 路由到自己的消息映射表。</p>
   <div class="card">
-    <pre><code><span class="pp">#include &lt;atlbase.h&gt;</span>
+    <pre><code class="language-cpp"><span class="pp">#include &lt;atlbase.h&gt;</span>
 <span class="pp">#include &lt;atlwin.h&gt;</span>
 
 <span class="cm">// CWindow：薄到只有 m_hWnd 一个成员</span>
@@ -192,7 +192,7 @@
   <h2><span class="num">04</span> WTL 应用框架</h2>
   <p>WTL 在 ATL 之上扩展出完整的 GUI 框架。<code>CAppModule</code>（继承自 <code>CMessageModule</code>）管理全局消息循环，<code>CFrameWindowImpl</code> 提供带菜单/工具栏/状态栏的框架窗口，<code>CMessageLoop</code> 抽象出可被多线程共享的消息泵。<code>CUpdateUI</code> 实现菜单/工具栏命令的<strong>状态自动更新</strong>（启用、选中、复选）。</p>
   <div class="card">
-    <pre><code><span class="pp">#include &lt;atlbase.h&gt;</span>
+    <pre><code class="language-cpp"><span class="pp">#include &lt;atlbase.h&gt;</span>
 <span class="pp">#include &lt;atlapp.h&gt;</span>          <span class="cm">// CAppModule / CMessageLoop</span>
 <span class="pp">#include &lt;atlframe.h&gt;</span>        <span class="cm">// CFrameWindowImpl</span>
 <span class="pp">#include &lt;atlctrls.h&gt;</span>        <span class="cm">// 控件封装</span>
@@ -271,7 +271,7 @@
     <tr><td><code>FORWARD_NOTIFICATIONS</code></td><td>把 WM_NOTIFY 转发给父窗口</td><td>子控件包装类</td></tr>
   </table>
   <div class="card">
-    <pre><code><span class="fn">BEGIN_MSG_MAP</span>(<span class="ty">CMyView</span>)
+    <pre><code class="language-cpp"><span class="fn">BEGIN_MSG_MAP</span>(<span class="ty">CMyView</span>)
     <span class="cm">// 窗口消息</span>
     <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_SIZE</span>,    <span class="fn">OnSize</span>)
     <span class="fn">MESSAGE_HANDLER</span>(<span class="ty">WM_ERASEBKGND</span>, <span class="fn">OnEraseBkgnd</span>)
@@ -323,7 +323,7 @@
     </div>
   </div>
   <div class="card">
-    <pre><code><span class="cm">// 创建工具栏 + 状态栏 + 列表视图（框架窗口 OnCreate 中）</span>
+    <pre><code class="language-cpp"><span class="cm">// 创建工具栏 + 状态栏 + 列表视图（框架窗口 OnCreate 中）</span>
 <span class="ty">LRESULT</span> <span class="ty">CMainFrame</span>::<span class="fn">OnCreate</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp;) {
     <span class="fn">CreateSimpleToolBar</span>(<span class="ty">IDR_MAINFRAME</span>);          <span class="cm">// 从资源建工具栏</span>
     <span class="fn">CreateSimpleStatusBar</span>();                       <span class="cm">// 默认状态栏</span>
@@ -353,7 +353,7 @@
   <h2><span class="num">07</span> WTL 对话框</h2>
   <p>WTL 对话框由 <code>CDialogImpl&lt;T&gt;</code> 模板提供，每个派生类需声明一个 <code>enum { IDD = IDD_XXX }</code> 关联对话框资源。<code>CSimpleDialog</code> 是无消息映射的最简包装（一行代码弹消息框式对话框）。数据交换通过 <code>CWinDataExchange</code> 模板与 <code>DDX_*</code>/<code>DDV_*</code> 宏实现，API 与 MFC 高度一致但体积小得多。</p>
   <div class="card">
-    <pre><code><span class="kw">class</span> <span class="ty">CSettingsDlg</span> :
+    <pre><code class="language-cpp"><span class="kw">class</span> <span class="ty">CSettingsDlg</span> :
     <span class="kw">public</span> <span class="ty">CDialogImpl</span>&lt;<span class="ty">CSettingsDlg</span>&gt;,
     <span class="kw">public</span> <span class="ty">CWinDataExchange</span>&lt;<span class="ty">CSettingsDlg</span>&gt;
 {
@@ -427,7 +427,7 @@
   <h2><span class="num">08</span> WTL GDI 绘图</h2>
   <p>WTL 的 GDI 封装与 MFC 概念相似但更精简。<code>CDC</code> 包装 <code>HDC</code>，<code>CGdiObject</code> 是 GDI 对象基类，<code>CPen</code>/<code>CBrush</code>/<code>CFont</code>/<code>CBitmap</code>/<code>CRegion</code> 派生自它。所有这些类都是<strong>栈对象</strong>，析构时自动 <code>DeleteObject</code>。<code>CClientDC</code>、<code>CWindowDC</code>、<code>CPaintDC</code> 是作用域守卫——构造时获取 DC，析构时释放。</p>
   <div class="card">
-    <pre><code><span class="cm">// 视图窗口的 OnPaint 绘制</span>
+    <pre><code class="language-cpp"><span class="cm">// 视图窗口的 OnPaint 绘制</span>
 <span class="ty">LRESULT</span> <span class="ty">CMyView</span>::<span class="fn">OnPaint</span>(<span class="ty">UINT</span>, <span class="ty">WPARAM</span>, <span class="ty">LPARAM</span>, <span class="ty">BOOL</span>&amp; bHandled) {
     <span class="ty">CPaintDC</span> dc(m_hWnd);                    <span class="cm">// 构造=BeginPaint，析构=EndPaint</span>
 
@@ -473,7 +473,7 @@
   <h2><span class="num">09</span> GDI+ 与现代特性</h2>
   <p>WTL 10 与 GDI+ 完全兼容——只需在 <code>stdafx.h</code> 包含 <code>&lt;gdiplus.h&gt;</code> 并链接 <code>gdiplus.lib</code>，即可在 WTL 窗口中混合使用 GDI 与 GDI+。<strong>UxTheme</strong> API 让控件呈现 Windows 视觉主题（Aero、Fluent）。WTL 也积极跟进 C++ 标准：C++11 的 <code>override</code>/<code>final</code>、C++14 的 <code>make_unique</code>、C++17 的 <code>string_view</code>、C++20 的 <code>concepts</code> 均可无缝集成。</p>
   <div class="card">
-    <pre><code><span class="pp">#include &lt;atlbase.h&gt;</span>
+    <pre><code class="language-cpp"><span class="pp">#include &lt;atlbase.h&gt;</span>
 <span class="pp">#include &lt;gdiplus.h&gt;</span>
 <span class="pp">#pragma comment(lib, "gdiplus.lib")</span>
 <span class="kw">using namespace</span> <span class="ty">Gdiplus</span>;
@@ -534,7 +534,7 @@
   <h2><span class="num">10</span> 完整 SDI 示例</h2>
   <p>下面是一个最小可运行的 WTL SDI 应用骨架：应用对象 + 主框架 + 自定义视图 + 消息映射 + 菜单命令 + GDI 绘图。它体现了 WTL 各组件如何协作——典型工程结构如此，省略资源文件（.rc）。</p>
   <div class="card">
-    <pre><code><span class="cm">// stdafx.h</span>
+    <pre><code class="language-cpp"><span class="cm">// stdafx.h</span>
 <span class="pp">#pragma once</span>
 <span class="pp">#include &lt;atlbase.h&gt;</span>
 <span class="pp">#include &lt;atlstr.h&gt;</span>          <span class="cm">// CString</span>

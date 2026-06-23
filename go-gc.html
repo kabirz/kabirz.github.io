@@ -46,7 +46,7 @@
     <tr><td>mheap</td><td>堆</td><td>全局</td><td>管理所有 span 和虚拟地址空间，大对象（>32KB）直接分配</td></tr>
   </table>
 
-<pre><code>// runtime/mcache.go — 每个 P 的本地缓存
+<pre><code class="language-go">// runtime/mcache.go — 每个 P 的本地缓存
 type mcache struct {
     // 小对象分配：每个 size class 的 span 链表（无需加锁）
     alloc [numSpanClasses]*mspan
@@ -79,7 +79,7 @@ type mheap struct {
 
   <p>Go 将小对象分为 <strong>~70 种 size class</strong>，每种 class 处理特定大小的对象，最大 32KB。分配时会向上取整到最近的 size class，减少内存碎片。</p>
 
-<pre><code>// runtime/sizeclasses.go — 核心 size classes
+<pre><code class="language-go">// runtime/sizeclasses.go — 核心 size classes
 // class  bytes/obj  bytes/span  objects  waste
 //     1          8        8192     1024     0
 //     2         16        8192      512     0
@@ -102,7 +102,7 @@ type mheap struct {
 
   <h3>Span 与 Bitmap</h3>
 
-<pre><code>// runtime/mheap.go — Span 结构
+<pre><code class="language-go">// runtime/mheap.go — Span 结构
 type mspan struct {
     next        *mspan     // 双向链表
     prev        *mspan
@@ -180,7 +180,7 @@ type mspan struct {
 
   <h3>标记流程</h3>
 
-<pre><code>// 三色标记过程：
+<pre><code class="language-go">// 三色标记过程：
 //
 // 1. 初始状态：所有对象都是白色
 // 2. GC Roots 着色：从根（栈、全局变量、寄存器）开始
@@ -240,7 +240,7 @@ func triColorMark() {
 
   <p>如果用户 goroutine 分配内存的速度超过了 GC 标记的速度，GC 就无法"追上"分配。辅助标记机制强制分配内存的 goroutine 多做一些标记工作：</p>
 
-<pre><code>// 辅助标记流程：
+<pre><code class="language-go">// 辅助标记流程：
 // 1. 用户 goroutine 尝试分配内存
 // 2. 发现当前 GC 标记工作滞后（剩余标记量 > 阈值）
 // 3. 该 goroutine 在继续分配前必须先执行一些标记工作
@@ -259,7 +259,7 @@ func triColorMark() {
 
   <h3>清扫（Sweep）</h3>
 
-<pre><code>// 标记阶段结束后，所有白色对象就是垃圾。
+<pre><code class="language-go">// 标记阶段结束后，所有白色对象就是垃圾。
 // 清扫阶段回收这些对象的内存供后续分配使用。
 
 // 清扫是懒执行的（lazy sweep）：
@@ -294,7 +294,7 @@ func (s *mspan) sweep() bool {
 
   <h3>阶段 1: Sweep Termination（清扫终止）</h3>
 
-<pre><code>// runtime/mgc.go — GC 启动
+<pre><code class="language-go">// runtime/mgc.go — GC 启动
 func gcStart(trigger gcTrigger) {
     // ... 检查是否应该触发 GC
 
@@ -324,7 +324,7 @@ func gcStart(trigger gcTrigger) {
 
   <p>这是 GC 最主要的工作阶段：</p>
 
-<pre><code>// 并发标记期间：
+<pre><code class="language-go">// 并发标记期间：
 // 1. 后台标记 worker（gcBgMarkWorker）在空闲 P 上运行
 // 2. 所有 goroutine 栈被扫描（初始标记）
 // 3. 三色标记主循环（Dijkstra 扫描）
@@ -352,7 +352,7 @@ func gcBgMarkWorker() {
 
   <h3>阶段 3: 标记终止（Mark Termination）</h3>
 
-<pre><code>// 当灰色队列为空时，所有可达对象都已被标记
+<pre><code class="language-go">// 当灰色队列为空时，所有可达对象都已被标记
 // 此时需要再次 STW 来完成标记终止
 
 func gcMarkTermination() {
@@ -382,7 +382,7 @@ func gcMarkTermination() {
 
   <p>清扫是<strong>懒惰的</strong>（lazy sweep），不集中执行：</p>
 
-<pre><code>// 清扫过程被分摊到分配路径中
+<pre><code class="language-go">// 清扫过程被分摊到分配路径中
 // 每次分配前检查是否有未清扫的 span
 
 // runtime/malloc.go
@@ -415,7 +415,7 @@ func mallocgc(size uintptr, typ *_type, needZero bool) unsafe.Pointer {
 
   <p>并发标记期间，用户 goroutine 可能<strong>修改指针</strong>，导致黑色对象引用了一个之前扫描时未访问到的白色对象。如果不加保护，这个白色对象会被误判为垃圾。</p>
 
-<pre><code>// 并发标记的危险场景：
+<pre><code class="language-go">// 并发标记的危险场景：
 //
 // 初始：A（黑）→ B（灰）→ C（白）
 //       D（白）
@@ -444,7 +444,7 @@ func writeBarrier(src, ptr *Object) {
 
   <p>当<strong>写入指针</strong>时，将被引用的对象（新指向的对象）标记为灰色：</p>
 
-<pre><code>// Dijkstra 插入写屏障
+<pre><code class="language-go">// Dijkstra 插入写屏障
 // 时机：赋值操作（如 *ptr = newObj）
 // 动作：令 newObj 变灰
 //
@@ -460,7 +460,7 @@ func writeBarrier(src, ptr *Object) {
 
   <p>当<strong>覆盖指针</strong>时，将被覆盖的对象（旧指向的对象）标记为灰色：</p>
 
-<pre><code>// Yuasa 删除写屏障
+<pre><code class="language-go">// Yuasa 删除写屏障
 // 时机：赋值操作
 // 动作：令旧对象变灰
 //
@@ -473,7 +473,7 @@ func writeBarrier(src, ptr *Object) {
 
   <p>Go 1.8 的混合写屏障精巧地结合了两种屏障：</p>
 
-<pre><code>// Go 的混合写屏障：
+<pre><code class="language-go">// Go 的混合写屏障：
 // 写入时：将新指向的对象标记为灰色（Dijkstra）
 //         + 如果写入发生在 STW 之外，将旧指向的对象也标记为灰色（Yuasa）
 //
@@ -509,7 +509,7 @@ func gcWriteBarrier(dst *uintptr, src uintptr) {
 
   <p>并非所有指针操作都需要写屏障，编译器会做大量优化：</p>
 
-<pre><code>// 以下场景屏障被消除（不需要写屏障）：
+<pre><code class="language-go">// 以下场景屏障被消除（不需要写屏障）：
 //
 // 1. 写入 nil
 //    ptr = nil  // 新值是 nil，不需要标记
@@ -537,7 +537,7 @@ func gcWriteBarrier(dst *uintptr, src uintptr) {
 
   <h3>GOGC — 触发频率控制</h3>
 
-<pre><code>// GOGC 控制 GC 的触发频率
+<pre><code class="language-go">// GOGC 控制 GC 的触发频率
 // 默认值: 100（百分比）
 // 含义: 堆内存增长 100% 时触发 GC
 //
@@ -557,7 +557,7 @@ func gcWriteBarrier(dst *uintptr, src uintptr) {
 
   <h3>GOMEMLIMIT — 软内存限制</h3>
 
-<pre><code>// Go 1.19 引入，设置堆内存的软上限
+<pre><code class="language-go">// Go 1.19 引入，设置堆内存的软上限
 // 当堆接近限制时，GC 会更激进地运行
 
 // 设置方式
@@ -580,7 +580,7 @@ debug.SetMemoryLimit(512 * 1024 * 1024)
 
   <h3>GODEBUG=gctrace — GC Trace</h3>
 
-<pre><code>// 启用 GC trace（不需要代码改动）
+<pre><code class="language-go">// 启用 GC trace（不需要代码改动）
 //  GODEBUG=gctrace=1 ./myprogram
 
 // 输出格式：
@@ -615,7 +615,7 @@ func printGCMetrics() {
 
   <h3>/debug/pprof 监控</h3>
 
-<pre><code>import (
+<pre><code class="language-go">import (
     "net/http"
     _ "net/http/pprof"
 )
@@ -654,7 +654,7 @@ func main() {
 
   <h3>调优建议</h3>
 
-<pre><code>// 1. 先测量，再调优
+<pre><code class="language-go">// 1. 先测量，再调优
 // 不要凭感觉调整 GOGC。先用 pprof 和 trace 定位问题。
 // 80% 的"GC 问题"实际上是不必要的对象分配。
 
@@ -688,7 +688,7 @@ func main() {
 
   <h3>逃逸分析的基本规则</h3>
 
-<pre><code>// 如果一个函数返回了一个指向局部变量的指针，
+<pre><code class="language-go">// 如果一个函数返回了一个指向局部变量的指针，
 // 该变量必须逃逸到堆上（因为函数返回后栈帧已销毁）
 
 // 逃逸到堆
@@ -724,7 +724,7 @@ func f() {
 
   <h3>查看逃逸分析结果</h3>
 
-<pre><code>// 使用 -gcflags 查看逃逸分析
+<pre><code class="language-go">// 使用 -gcflags 查看逃逸分析
 // go build -gcflags="-m" main.go
 
 // 输出示例：
@@ -740,7 +740,7 @@ func f() {
 
   <h3>常见导致逃逸的场景</h3>
 
-<pre><code>// 1. 返回指针（最直接的逃逸）
+<pre><code class="language-go">// 1. 返回指针（最直接的逃逸）
 func getPtr() *int {
     i := 42
     return &amp;i  // ✅ 必须逃逸
@@ -785,7 +785,7 @@ func grow() []int {
 
   <p>逃逸分析的结果直接影响 GC 压力：</p>
 
-<pre><code>// 案例对比：
+<pre><code class="language-go">// 案例对比：
 
 // 版本 A：栈分配（GC 友好）
 func Sum(nums []int) int {

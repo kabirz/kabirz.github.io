@@ -223,6 +223,8 @@
     localStorage.setItem(STORAGE_KEY, t);
     var b = document.getElementById('theme-toggle');
     if (b) { b.textContent = t === 'dark' ? '\u2600' : '\u263E'; b.title = t === 'dark' ? '切换到亮色' : '切换到暗色'; }
+    var pt = document.getElementById('prism-theme');
+    if (pt) pt.href = 'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/' + (t === 'dark' ? 'prism-tomorrow.min.css' : 'prism.min.css');
   }
   setTheme(getPreferredTheme());
   if (window.matchMedia) {
@@ -457,6 +459,36 @@
     overlay.addEventListener('click', function() {
       sidebar.classList.remove('open');
       overlay.classList.remove('visible');
+    });
+  });
+})();
+
+(function() {
+  var cdn = 'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0';
+  var add = ['c', 'rust', 'go', 'python', 'bash', 'cpp'];
+
+  var css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.id = 'prism-theme';
+  var initTheme = document.documentElement.getAttribute('data-theme') || 'light';
+  css.href = cdn + '/themes/' + (initTheme === 'dark' ? 'prism-tomorrow.min.css' : 'prism.min.css');
+  document.head.appendChild(css);
+
+  function load(src, cb) {
+    var s = document.createElement('script');
+    s.src = src;
+    s.onload = cb;
+    s.async = false;
+    document.body.appendChild(s);
+  }
+
+  load(cdn + '/prism.min.js', function() {
+    var n = 0;
+    add.forEach(function(l) {
+      load(cdn + '/components/prism-' + l + '.min.js', function() {
+        n++;
+        if (n === add.length) Prism.highlightAll();
+      });
     });
   });
 })();

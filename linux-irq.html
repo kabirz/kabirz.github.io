@@ -48,7 +48,7 @@
   </ul>
 
   <p>核心架构关系：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-c">┌─────────────────────────────────────────┐
 │            设备驱动                        │
 │  request_irq() / request_threaded_irq() │
 └────────────────┬────────────────────────┘
@@ -80,7 +80,7 @@
 
   <p>每个 Linux IRQ 编号对应一个 <code>irq_desc</code>，它是 genirq 的核心数据结构：</p>
 
-<pre><code>// kernel/irq/internals.h
+<pre><code class="language-c">// kernel/irq/internals.h
 struct irq_desc {
     struct irq_common_data   irq_common_data;
     struct irq_data          irq_data;
@@ -111,7 +111,7 @@ struct irq_desc {
 
   <p>中断处理函数链表 <code>struct irqaction</code>：</p>
 
-<pre><code>struct irqaction {
+<pre><code class="language-c">struct irqaction {
     irq_handler_t           handler;       // 主处理函数
     unsigned long           flags;         // IRQF_TRIGGER_* / IRQF_SHARED / …
     const char             *name;
@@ -130,7 +130,7 @@ struct irq_desc {
 
   <p><code>irq_chip</code> 是硬件中断控制器的软件抽象。每个中断控制器（GIC、APIC、PLIC、GPIO 控制器等）都实现这个接口：</p>
 
-<pre><code>// include/linux/irq.h
+<pre><code class="language-c">// include/linux/irq.h
 struct irq_chip {
     const char      *name;
 
@@ -160,7 +160,7 @@ struct irq_chip {
 
   <p>实际案例 — ARM GIC-400 的实现：</p>
 
-<pre><code>// drivers/irqchip/irq-gic.c
+<pre><code class="language-c">// drivers/irqchip/irq-gic.c
 static struct irq_chip gic_chip = {
     .name           = "GIC",
     .irq_mask       = gic_mask_irq,
@@ -191,7 +191,7 @@ static void gic_eoi_irq(struct irq_data *d)
 
   <p><code>irq_domain</code> 负责将 <strong>硬件中断号 (hwirq)</strong> 映射到 <strong>Linux IRQ 编号 (virq)</strong>。这是设备树时代的关键抽象——硬件中断号是平台相关的，Linux IRQ 编号是软件全局的。</p>
 
-<pre><code>// include/linux/irqdomain.h
+<pre><code class="language-c">// include/linux/irqdomain.h
 struct irq_domain {
     const char              *name;
     const struct irq_domain_ops *ops;
@@ -242,7 +242,7 @@ struct irq_domain_ops {
 </code></pre>
 
   <p>中断域形成了<strong>层级结构</strong>（级联中断控制器）：</p>
-<pre><code>// 典型 ARM 平台的 irq_domain 层级
+<pre><code class="language-c">// 典型 ARM 平台的 irq_domain 层级
 // GIC (root) → GPIO (child) → 外设中断
 
 // 级联中断处理流程：
@@ -263,7 +263,7 @@ struct irq_domain_ops {
 
   <p>四种标准流控处理器：</p>
 
-<pre><code>// 1. handle_level_irq() — 电平触发
+<pre><code class="language-c">// 1. handle_level_irq() — 电平触发
 //    适合：IRQF_TRIGGER_HIGH / LOW
 //    行为：mask → 处理 → unmask
 //    注意：如果处理慢，长时间屏蔽同电平中断
@@ -356,7 +356,7 @@ out:
 
   <p>从驱动调用 <code>request_irq()</code> 到中断最终出现在处理函数中的完整生命周期：</p>
 
-<pre><code>// 驱动入口：
+<pre><code class="language-c">// 驱动入口：
 static int my_probe(struct platform_device *pdev)
 {
     int irq = platform_get_irq(pdev, 0);
@@ -409,7 +409,7 @@ static int my_probe(struct platform_device *pdev)
 
   <p>线程化中断是 genirq 的关键特性——将中断处理函数放到内核线程中执行，使中断处理可被调度、可被实时优先级管理。</p>
 
-<pre><code>// 线程化中断的注册方式：
+<pre><code class="language-c">// 线程化中断的注册方式：
 // request_threaded_irq(irq, handler, thread_fn, flags, name, dev);
 //     handler 在中断上下文中执行（atomic）
 //     如果 handler 返回 IRQ_WAKE_THREAD
@@ -466,7 +466,7 @@ static int irq_thread(void *data)
 
   <p>MSI (Message Signaled Interrupt) 和 MSI-X 是 PCIe 设备使用的中断机制——通过向特定地址写入数据来触发中断，而不是使用专用中断引脚。</p>
 
-<pre><code>// MSI 的核心数据结构
+<pre><code class="language-c">// MSI 的核心数据结构
 struct msi_desc {
     struct list_head        list;
     unsigned long           irq;        // Linux IRQ 号
@@ -518,7 +518,7 @@ struct msi_desc {
 
   <p>中断亲和性 (IRQ affinity) 控制哪个 CPU 处理某个中断。genirq 提供了完整的亲和性管理框架。</p>
 
-<pre><code>// 用户态设置亲和性：
+<pre><code class="language-c">// 用户态设置亲和性：
 // echo 2 > /proc/irq/123/smp_affinity
 //      → 写入 cpumask（十六进制）
 // echo 1 > /proc/irq/123/smp_affinity_list
@@ -561,7 +561,7 @@ struct msi_desc {
 
   <p>genirq 在现代系统中的关键优化路径：</p>
 
-<pre><code>// 1. 热点路径 — 中断处理最频繁的代码路径
+<pre><code class="language-c">// 1. 热点路径 — 中断处理最频繁的代码路径
 // 从 do_IRQ() 到 handler 调用之间只有 ~200 条指令
 
 // x86 上的完整路径：

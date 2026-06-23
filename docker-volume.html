@@ -46,7 +46,7 @@
   </table>
 
   <p>挂载示意图：</p>
-<pre><code>┌─────────────────────────────────────────────┐
+<pre><code class="language-bash">┌─────────────────────────────────────────────┐
 │  Host                                       │
 │  ┌─────────────────────────────────────┐   │
 │  │ /var/lib/docker/volumes/myvol/_data │   │
@@ -89,7 +89,7 @@
   </table>
 
   <p>命令对比：</p>
-<pre><code># 1. Volume（命名卷）
+<pre><code class="language-bash"># 1. Volume（命名卷）
 docker run -v myvol:/data nginx
 docker run --mount type=volume,src=myvol,dst=/data nginx
 
@@ -109,7 +109,7 @@ docker run --mount type=tmpfs,dst=/cache nginx
 <section id="volume" class="toc-link">
   <h2><span class="num">03</span> Volume（命名卷）</h2>
 
-<pre><code># 创建
+<pre><code class="language-bash"># 创建
 docker volume create myvol
 
 # 列表
@@ -139,7 +139,7 @@ docker volume prune
 </code></pre>
 
   <p>使用：</p>
-<pre><code># 1. 显式使用
+<pre><code class="language-bash"># 1. 显式使用
 docker run -d \
   --name db \
   -v myvol:/var/lib/mysql \
@@ -162,7 +162,7 @@ docker run -d --volumes-from app1 --name app2 nginx
 </code></pre>
 
   <p>Volume Driver：</p>
-<pre><code>// 默认 driver: local
+<pre><code class="language-bash">// 默认 driver: local
 // 卷存在 /var/lib/docker/volumes/&lt;name&gt;/_data
 
 // 其他 driver（通过 plugin）：
@@ -191,7 +191,7 @@ docker volume create \
 <section id="bind" class="toc-link">
   <h2><span class="num">04</span> Bind Mount</h2>
 
-<pre><code># 1. 基本用法
+<pre><code class="language-bash"># 1. 基本用法
 docker run -v /home/me/app:/app nginx
 docker run --mount type=bind,src=/home/me/app,dst=/app nginx
 
@@ -219,7 +219,7 @@ docker run -v /home/me/nginx.conf:/etc/nginx/nginx.conf:ro nginx
   </div>
 
   <p>典型开发场景：</p>
-<pre><code># Web 开发：源代码挂载到容器
+<pre><code class="language-bash"># Web 开发：源代码挂载到容器
 docker run -d \
   -v $(pwd)/src:/app/src \
   -v $(pwd)/config:/app/config \
@@ -235,7 +235,7 @@ docker run -d \
 <section id="tmpfs" class="toc-link">
   <h2><span class="num">05</span> tmpfs Mount</h2>
 
-<pre><code># 基本用法
+<pre><code class="language-bash"># 基本用法
 docker run -d --tmpfs /cache nginx
 docker run -d --mount type=tmpfs,dst=/cache nginx
 
@@ -268,7 +268,7 @@ docker run -d \
 
   <p>Docker 26+ / BuildKit 引入的新特性：<strong>从镜像中打包卷</strong>：</p>
 
-<pre><code># 卷创建时从镜像复制内容
+<pre><code class="language-bash"># 卷创建时从镜像复制内容
 docker volume create myvol --opt type=image --opt o=subpath=/data --opt device=myimage:latest
 
 # 用途：
@@ -291,7 +291,7 @@ docker volume create myvol --opt type=image --opt o=subpath=/data --opt device=m
 
   <p>跨主机的卷（Swarm 或 K8s）：</p>
 
-<pre><code>// Docker Swarm：
+<pre><code class="language-bash">// Docker Swarm：
 //   集群卷通过 driver 实现
 //   例：使用 NFS / GlusterFS / Ceph
 
@@ -328,7 +328,7 @@ docker service create --mount type=volume,src=shared,dst=/data web
 <section id="plugins" class="toc-link">
   <h2><span class="num">08</span> Volume Plugins</a></h2>
 
-<pre><code>// Volume plugin 接口（HTTP API）：
+<pre><code class="language-bash">// Volume plugin 接口（HTTP API）：
 // 路径：/VolumeDriver.{Action}
 
 // 主要 action：
@@ -373,7 +373,7 @@ POST /VolumeDriver.Capabilities
 </code></pre>
 
   <p>CSI（Container Storage Interface）：</p>
-<pre><code>// CSI 是 K8s/CRI-O/Containerd 共同的标准
+<pre><code class="language-bash">// CSI 是 K8s/CRI-O/Containerd 共同的标准
 // 三种 gRPC 服务：
 //   IdentityServer  - 插件信息
 //   ControllerServer - 卷管理（create/delete/attach）

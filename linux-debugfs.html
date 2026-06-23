@@ -53,7 +53,7 @@
 <section id="api" class="toc-link">
   <h2><span class="num">03</span> API 与使用</h2>
   <div class="card">
-    <pre><code><span class="cm">// debugfs API</span>
+    <pre><code class="language-c"><span class="cm">// debugfs API</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/debugfs.h&gt;</span>
 
 <span class="cm">// 创建目录</span>
@@ -84,7 +84,7 @@
 <section id="usecases" class="toc-link">
   <h2><span class="num">04</span> 应用场景</h2>
   <div class="card">
-    <pre><code><span class="cm"># 查看 debugfs 内容</span>
+    <pre><code class="language-c"><span class="cm"># 查看 debugfs 内容</span>
 $ sudo mount -t debugfs none /sys/kernel/debug
 $ ls /sys/kernel/debug/
 $ ls /sys/kernel/debug/dri/      <span class="cm"># GPU 驱动调试</span>

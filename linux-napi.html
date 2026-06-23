@@ -106,7 +106,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/netdevice.h:381 — NAPI 结构</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/netdevice.h:381 — NAPI 结构</span>
 <span class="kw">struct</span> <span class="ty">napi_struct</span> {
     <span class="ty">unsigned long</span>         state;         <span class="cm">// 状态位图（SCHED/MISSED/DISABLE）</span>
     <span class="kw">struct</span> <span class="ty">list_head</span>      poll_list;     <span class="cm">// 等待轮询的 NAPI 列表</span>
@@ -123,7 +123,7 @@
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/netdevice.h:3516 — 每 CPU 软中断数据</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/netdevice.h:3516 — 每 CPU 软中断数据</span>
 <span class="kw">struct</span> <span class="ty">softnet_data</span> {
     <span class="kw">struct</span> <span class="ty">list_head</span>      poll_list;      <span class="cm">// 本 CPU 的 NAPI 轮询列表</span>
     <span class="kw">struct</span> <span class="ty">sk_buff_head</span>   process_queue;  <span class="cm">// 待处理的 backlog 队列</span>
@@ -286,7 +286,7 @@
 </pre></div>
 
   <div class="card">
-    <pre><code><span class="cm"># 配置 RPS（为 eth0 启用 4 个 CPU）</span>
+    <pre><code class="language-c"><span class="cm"># 配置 RPS（为 eth0 启用 4 个 CPU）</span>
 $ echo "f" > /sys/class/net/eth0/queues/rx-0/rps_cpus
 <span class="cm"># f = 0xf = 二进制 1111 = CPU 0-3</span>
 

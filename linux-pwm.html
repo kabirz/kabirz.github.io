@@ -114,7 +114,7 @@
   <h3>struct pwm_device（PWM 通道）</h3>
   <div class="card">
     <p class="ref">include/linux/pwm.h:108-117</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pwm_device</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pwm_device</span> {
     <span class="kw">const char</span> *label;        <span class="cm">// PWM 设备名</span>
     <span class="ty">unsigned long</span> flags;      <span class="cm">// 标志（REQUESTED/EXPORTED）</span>
     <span class="ty">unsigned int</span> hwpwm;       <span class="cm">// 芯片内的通道编号</span>
@@ -127,7 +127,7 @@
   <h3>struct pwm_state（PWM 状态）</h3>
   <div class="card">
     <p class="ref">include/linux/pwm.h:90-96</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pwm_state</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pwm_state</span> {
     <span class="ty">u64</span> period;              <span class="cm">// 周期（纳秒）</span>
     <span class="ty">u64</span> duty_cycle;          <span class="cm">// 占空比（纳秒）</span>
     <span class="kw">enum</span> <span class="ty">pwm_polarity</span> polarity;  <span class="cm">// 极性</span>
@@ -139,7 +139,7 @@
   <h3>struct pwm_chip（PWM 芯片）</h3>
   <div class="card">
     <p class="ref">include/linux/pwm.h:332-358</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">pwm_chip</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pwm_chip</span> {
     <span class="kw">struct</span> <span class="ty">device</span> dev;            <span class="cm">// 内嵌设备</span>
     <span class="kw">struct</span> <span class="ty">cdev</span> cdev;             <span class="cm">// 字符设备</span>
     <span class="kw">const struct</span> <span class="ty">pwm_ops</span> *ops;   <span class="cm">// 操作回调</span>
@@ -154,7 +154,7 @@
 
   <h3>PWM 波形表示</h3>
   <div class="card">
-    <pre><code><span class="cm">// 新增的波形结构（支持偏移）</span>
+    <pre><code class="language-c"><span class="cm">// 新增的波形结构（支持偏移）</span>
 <span class="kw">struct</span> <span class="ty">pwm_waveform</span> {
     <span class="ty">u64</span> period_length_ns;   <span class="cm">// 周期</span>
     <span class="ty">u64</span> duty_length_ns;     <span class="cm">// 占空比</span>
@@ -201,7 +201,7 @@
   <h2><span class="num">05</span> 消费者 API</h2>
 
   <h3>获取 PWM</h3>
-  <pre><code><span class="cm">// 通过设备树获取</span>
+  <pre><code class="language-c"><span class="cm">// 通过设备树获取</span>
 <span class="kw">struct</span> <span class="ty">pwm_device</span> *pwm;
 pwm = <span class="fn">devm_pwm_get</span>(&dev, <span class="st">"backlight"</span>);
 
@@ -212,7 +212,7 @@ pwm = <span class="fn">pwm_get</span>(&dev, <span class="st">"backlight"</span>)
 pwm = <span class="fn">devm_pwm_get_optional</span>(&dev, <span class="st">"fan"</span>);</code></pre>
 
   <h3>配置与应用</h3>
-  <pre><code><span class="kw">struct</span> <span class="ty">pwm_state</span> state;
+  <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">pwm_state</span> state;
 
 <span class="cm">// 初始化状态</span>
 <span class="fn">pwm_init_state</span>(pwm, &state);
@@ -248,7 +248,7 @@ state.enabled = <span class="kw">true</span>;
   <h2><span class="num">06</span> 设备树</h2>
 
   <h3>PWM 节点</h3>
-  <pre><code><span class="cm">// PWM 控制器节点</span>
+  <pre><code class="language-c"><span class="cm">// PWM 控制器节点</span>
 <span class="ty">pwm0</span>: <span class="fn">pwm</span>@e0000000 {
     compatible = <span class="st">"vendor,soc-pwm"</span>;
     reg = <span class="num">&lt;0xe0000000 0x1000&gt;</span>;
@@ -294,7 +294,7 @@ state.enabled = <span class="kw">true</span>;
   <h2><span class="num">07</span> 编写驱动</h2>
 
   <h3>PWM 控制器驱动模板</h3>
-  <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/pwm.h&gt;</span>
+  <pre><code class="language-c"><span class="kw">#include</span> <span class="st">&lt;linux/pwm.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/module.h&gt;</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/platform_device.h&gt;</span>
 

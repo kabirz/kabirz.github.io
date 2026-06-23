@@ -124,7 +124,7 @@
   <h2><span class="num">03</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/net_namespace.h:62 — 网络命名空间核心结构</span>
+    <pre><code class="language-c"><span class="cm">// include/net/net_namespace.h:62 — 网络命名空间核心结构</span>
 <span class="kw">struct</span> <span class="ty">net</span> {
     <span class="ty">refcount_t</span>     passive;          <span class="cm">// 引用计数（决定何时释放）</span>
     <span class="kw">struct</span> <span class="ty">ns_common</span>  ns;            <span class="cm">// 命名空间公共结构（含 ns_ops）</span>
@@ -226,7 +226,7 @@
 
   <h3>关键 API</h3>
   <div class="card">
-    <pre><code><span class="cm">// 创建（内核态）</span>
+    <pre><code class="language-c"><span class="cm">// 创建（内核态）</span>
 <span class="kw">struct</span> <span class="ty">net</span> *<span class="fn">copy_net_ns</span>(<span class="ty">unsigned int</span> flags,
                        <span class="kw">struct</span> <span class="ty">user_namespace</span> *user_ns);
 
@@ -344,7 +344,7 @@
   <h2><span class="num">07</span> 配置命令</h2>
 
   <div class="card">
-    <pre><code><span class="cm"># 创建命名空间</span>
+    <pre><code class="language-c"><span class="cm"># 创建命名空间</span>
 $ ip netns add myns
 
 <span class="cm"># 列出所有命名空间</span>

@@ -37,7 +37,7 @@
   <p>Linux 安全模块 (Linux Security Modules, LSM) 框架是一个<strong>可堆叠的钩子系统</strong>，允许不同的安全策略（MAC、能力、沙箱）共存并依次执行。</p>
 
   <p>架构定位：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-c">┌─────────────────────────────────────────┐
 │  用户态：进程、文件操作                    │
 └────────────────┬────────────────────────┘
                  │ syscall
@@ -93,7 +93,7 @@
 <section id="framework" class="toc-link">
   <h2><span class="num">02</span> LSM 框架核心</h2>
 
-<pre><code>// include/linux/lsm_hooks.h
+<pre><code class="language-c">// include/linux/lsm_hooks.h
 
 // 每个 LSM 通过结构体声明自己的 hooks
 // 例如 capabilities 模块：
@@ -169,7 +169,7 @@ static struct lsm_info __lsm_info_selinux __used __section("lsm_info") = {
 </code></pre>
 
   <p>Blob (安全上下文数据)：</p>
-<pre><code>// 每个需要保存安全状态的内核对象（task、cred、file、inode...）
+<pre><code class="language-c">// 每个需要保存安全状态的内核对象（task、cred、file、inode...）
 // 都有额外的 blob 数据，由各 LSM 共享空间
 struct lsm_blob_sizes {
     int lbs_cred;
@@ -199,7 +199,7 @@ void *selinux_cred(struct cred *cred) {
 <section id="init" class="toc-link">
   <h2><span class="num">03</span> 初始化与 LSM 栈</h2>
 
-<pre><code>// security/security.c
+<pre><code class="language-c">// security/security.c
 
 // 启动早期调用：
 int __init security_init(void)
@@ -249,7 +249,7 @@ void __init security_add_hooks(struct security_hook_list *hooks, int count,
 </code></pre>
 
   <p>启动时序：</p>
-<pre><code>// 1. early LSM init
+<pre><code class="language-c">// 1. early LSM init
 //    (capabilities 必须 early，因为后续都需要它)
 //
 // 2. 内核主体初始化完成
@@ -268,7 +268,7 @@ void __init security_add_hooks(struct security_hook_list *hooks, int count,
 <section id="hooks" class="toc-link">
   <h2><span class="num">04</span> 关键安全钩子</h2>
 
-<pre><code>// security/security.c 中分发器的例子
+<pre><code class="language-c">// security/security.c 中分发器的例子
 int security_file_open(struct file *file, const struct cred *cred)
 {
     int ret;
@@ -356,7 +356,7 @@ int security_socket_connect(struct socket *sock, struct sockaddr *address, int a
 
   <p>seccomp (Secure Computing Mode) 限制进程可调用的系统调用。常用于沙箱（Docker、Chrome renderer、Android zygote）。</p>
 
-<pre><code>// kernel/seccomp.c
+<pre><code class="language-c">// kernel/seccomp.c
 
 // 模式
 #define SECCOMP_MODE_DISABLED    0
@@ -460,7 +460,7 @@ int __secure_computing(const struct seccomp_data *sd)
 </code></pre>
 
   <p>典型用法（应用开发者）：</p>
-<pre><code>// 1. 用 SECCOMP_SET_MODE_FILTER + BPF 程序
+<pre><code class="language-c">// 1. 用 SECCOMP_SET_MODE_FILTER + BPF 程序
 // 2. 推荐 libseccomp：
 #include &lt;seccomp.h&gt;
 
@@ -481,7 +481,7 @@ seccomp_load(ctx);
 
   <p>SELinux (Security-Enhanced Linux) 是 NSA 主导的强制访问控制 (MAC) 实现，采用 Type Enforcement 模型。</p>
 
-<pre><code>// security/selinux/hooks.c
+<pre><code class="language-c">// security/selinux/hooks.c
 static struct security_hook_list selinux_hooks[] __ro_after_init = {
     LSM_HOOK_INIT(bprm_creds_for_exec, selinux_bprm_creds_for_exec),
     LSM_HOOK_INIT(bprm_committing_creds, selinux_bprm_committing_creds),
@@ -576,7 +576,7 @@ struct avc_entry {
 
   <p>AppArmor 是基于<strong>路径名</strong>的 MAC 实现，比 SELinux 简单易用，Ubuntu/SUSE 默认。</p>
 
-<pre><code>// security/apparmor/lsm.c
+<pre><code class="language-c">// security/apparmor/lsm.c
 static struct security_hook_list apparmor_hooks[] __ro_after_init = {
     LSM_HOOK_INIT(bprm_creds_for_exec, aa_bprm_creds_for_exec),
     LSM_HOOK_INIT(bprm_committing_creds, aa_bprm_committing_creds),
@@ -682,7 +682,7 @@ struct aa_profile {
 
   <p>Landlock 是 Linux 5.13+ 引入的<strong>非特权沙箱</strong>机制，普通进程可以限制自己的访问权限。</p>
 
-<pre><code>// security/landlock/
+<pre><code class="language-c">// security/landlock/
 
 // 与 SELinux/AppArmor 的区别：
 //   - 不需要 root/CAP_SYS_ADMIN

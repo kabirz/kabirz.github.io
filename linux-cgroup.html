@@ -167,7 +167,7 @@
   </div>
 
   <h3>控制器启用机制</h3>
-  <pre><code><span class="cm">// 启用子树的 cpu 和 memory 控制器</span>
+  <pre><code class="language-c"><span class="cm">// 启用子树的 cpu 和 memory 控制器</span>
 $ echo <span class="st">"+cpu +memory"</span> > /sys/fs/cgroup/cgroup.subtree_control
 
 <span class="cm">// 内核实现：cgroup_subtree_control_enable()</span>
@@ -187,7 +187,7 @@ $ echo <span class="st">"+cpu +memory"</span> > /sys/fs/cgroup/cgroup.subtree_co
   <h3>struct cgroup（控制组核心）</h3>
   <div class="card">
     <p class="ref">include/linux/cgroup-defs.h:472-639</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">cgroup</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">cgroup</span> {
     <span class="kw">struct</span> <span class="ty">cgroup_subsys_state</span> self;  <span class="cm">// 自身 CSS（ss=NULL）</span>
     <span class="ty">unsigned long</span> flags;              <span class="cm">// CGRP_FREEZE 等标志</span>
     <span class="ty">int</span> level;                        <span class="cm">// 层级深度（root=0）</span>
@@ -211,7 +211,7 @@ $ echo <span class="st">"+cpu +memory"</span> > /sys/fs/cgroup/cgroup.subtree_co
   <h3>struct cgroup_subsys_state（控制器状态）</h3>
   <div class="card">
     <p class="ref">include/linux/cgroup-defs.h:179-263</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">cgroup_subsys_state</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">cgroup_subsys_state</span> {
     <span class="kw">struct</span> <span class="ty">cgroup</span> *cgroup;           <span class="cm">// 所属 cgroup</span>
     <span class="kw">struct</span> <span class="ty">cgroup_subsys</span> *ss;       <span class="cm">// 所属子系统</span>
     <span class="kw">struct</span> <span class="ty">percpu_ref</span> refcnt;        <span class="cm">// 引用计数（percpu）</span>
@@ -229,7 +229,7 @@ $ echo <span class="st">"+cpu +memory"</span> > /sys/fs/cgroup/cgroup.subtree_co
   <h3>struct css_set（任务-控制器绑定）</h3>
   <div class="card">
     <p class="ref">include/linux/cgroup-defs.h:272-360</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">css_set</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">css_set</span> {
     <span class="kw">struct</span> <span class="ty">cgroup_subsys_state</span> *subsys[CGROUP_SUBSYS_COUNT];  <span class="cm">// 每个子系统的 CSS</span>
     <span class="ty">refcount_t</span> refcount;
     <span class="kw">struct</span> <span class="ty">css_set</span> *dom_cset;        <span class="cm">// 域 cset（线程模式）</span>
@@ -250,7 +250,7 @@ $ echo <span class="st">"+cpu +memory"</span> > /sys/fs/cgroup/cgroup.subtree_co
   <h3>struct cgroup_subsys（控制器定义）</h3>
   <div class="card">
     <p class="ref">include/linux/cgroup-defs.h:810-920</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">cgroup_subsys</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">cgroup_subsys</span> {
     <span class="kw">struct</span> <span class="ty">cgroup_subsys_state</span> *(*css_alloc)(<span class="kw">struct</span> <span class="ty">cgroup_subsys_state</span> *parent);
     <span class="ty">void</span> (*css_free)(<span class="kw">struct</span> <span class="ty">cgroup_subsys_state</span> *css);
     <span class="ty">int</span> (*css_online)(<span class="kw">struct</span> <span class="ty">cgroup_subsys_state</span> *css);
@@ -275,7 +275,7 @@ $ echo <span class="st">"+cpu +memory"</span> > /sys/fs/cgroup/cgroup.subtree_co
   <h3>struct cgroup_root（层级根）</h3>
   <div class="card">
     <p class="ref">include/linux/cgroup-defs.h:646-677</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">cgroup_root</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">cgroup_root</span> {
     <span class="kw">struct</span> <span class="ty">kernfs_root</span> *kf_root;     <span class="cm">// kernfs 根</span>
     <span class="ty">unsigned int</span> subsys_mask;         <span class="cm">// 挂载的控制器掩码</span>
     <span class="ty">int</span> hierarchy_id;                 <span class="cm">// 层级唯一 ID</span>
@@ -349,7 +349,7 @@ $ echo <span class="st">"+cpu +memory"</span> > /sys/fs/cgroup/cgroup.subtree_co
   <h3>控制文件（cftype）</h3>
   <div class="card">
     <p class="ref">include/linux/cgroup-defs.h:686-750</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">cftype</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">cftype</span> {
     <span class="kw">char</span> name[MAX_CFTYPE_NAME];       <span class="cm">// 文件名</span>
     <span class="ty">size_t</span> max_write_len;
     <span class="ty">unsigned int</span> flags;               <span class="cm">// CFTYPE_ONLY_ON_ROOT 等</span>
@@ -372,7 +372,7 @@ $ echo <span class="st">"+cpu +memory"</span> > /sys/fs/cgroup/cgroup.subtree_co
   <h2><span class="num">06</span> 生命周期</h2>
 
   <h3>系统初始化</h3>
-  <pre><code><span class="cm">// kernel/cgroup/cgroup.c</span>
+  <pre><code class="language-c"><span class="cm">// kernel/cgroup/cgroup.c</span>
 <span class="cm">// cgroup 初始化在 start_kernel() 期间完成</span>
 <span class="cm">// 1. 注册 kernfs</span>
 <span class="cm">// 2. 创建默认层级 cgrp_dfl_root</span>
@@ -411,7 +411,7 @@ $ echo <span class="st">"+cpu +memory"</span> > /sys/fs/cgroup/cgroup.subtree_co
   </div>
 
   <h3>任务迁移流程</h3>
-  <pre><code><span class="cm">// echo PID > /sys/fs/cgroup/mygroup/cgroup.procs</span>
+  <pre><code class="language-c"><span class="cm">// echo PID > /sys/fs/cgroup/mygroup/cgroup.procs</span>
 <span class="cm">// 触发 cgroup_procs_write()</span>
 
 cgroup_procs_write_start(buf)
@@ -433,7 +433,7 @@ cgroup_migrate_execute()
   <h3>冻结操作</h3>
   <div class="card">
     <p class="ref">kernel/cgroup/freezer.c</p>
-    <pre><code><span class="cm">// 冻结 cgroup 中的所有任务</span>
+    <pre><code class="language-c"><span class="cm">// 冻结 cgroup 中的所有任务</span>
 $ echo 1 > /sys/fs/cgroup/mygroup/cgroup.freeze
 
 <span class="cm">// 内核实现：</span>
@@ -465,7 +465,7 @@ cgroup_freeze_write()
 
   <h3>cgroup BPF 数据结构</h3>
   <div class="card">
-    <pre><code><span class="cm">// include/linux/bpf-cgroup-defs.h</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/bpf-cgroup-defs.h</span>
 <span class="kw">struct</span> <span class="ty">cgroup_bpf</span> {
     <span class="kw">struct</span> <span class="ty">bpf_prog_array</span> __rcu *effective[MAX_CGROUP_ATTACH_TYPE];
     <span class="kw">struct</span> <span class="ty">list_head</span> progs[MAX_CGROUP_ATTACH_TYPE];
@@ -487,7 +487,7 @@ cgroup_freeze_write()
   <h3>cgroup 命名空间</h3>
   <p>cgroup 命名空间为容器提供了 <code>/proc/self/cgroup</code> 的虚拟化视图，使容器内的进程只能看到自己的 cgroup 子树。</p>
 
-  <pre><code><span class="cm">// 宿主机视图</span>
+  <pre><code class="language-c"><span class="cm">// 宿主机视图</span>
 $ cat /proc/1/cgroup
 0::/system.slice/docker-abc123.scope
 
@@ -498,7 +498,7 @@ $ cat /proc/self/cgroup
   <h3>namespace 结构</h3>
   <div class="card">
     <p class="ref">include/linux/cgroup_namespace.h</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">cgroup_namespace</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">cgroup_namespace</span> {
     <span class="kw">struct</span> <span class="ty">ns_common</span>    ns;
     <span class="kw">struct</span> <span class="ty">user_namespace</span> *user_ns;
     <span class="kw">struct</span> <span class="ty">u32</span>          level;    <span class="cm">// 命名空间层级</span>
@@ -512,7 +512,7 @@ $ cat /proc/self/cgroup
   </div>
 
   <h3>CLONE_INTO_CGROUP</h3>
-  <pre><code><span class="cm">// 新进程直接进入指定 cgroup（无需迁移）</span>
+  <pre><code class="language-c"><span class="cm">// 新进程直接进入指定 cgroup（无需迁移）</span>
 <span class="ty">int</span> fd = <span class="fn">open</span>(<span class="st">"/sys/fs/cgroup/mygroup"</span>, O_RDONLY);
 <span class="fn">clone3</span>(&(struct kernel_clone_args) {
     .flags = CLONE_INTO_CGROUP,

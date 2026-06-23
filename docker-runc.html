@@ -46,7 +46,7 @@
   </ul>
 
   <p>runc 是<strong>命令行工具</strong>，不是 daemon：</p>
-<pre><code># 在 bundle 目录（包含 config.json + rootfs/）
+<pre><code class="language-bash"># 在 bundle 目录（包含 config.json + rootfs/）
 $ runc create my-container
 $ runc start my-container
 $ runc list
@@ -79,7 +79,7 @@ $ runc delete my-container
 <section id="architecture" class="toc-link">
   <h2><span class="num">02</span> 架构总览</h2>
 
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-bash">┌─────────────────────────────────────────┐
 │  runc CLI (cmd/runc/main.go)            │
 │  runc create | start | kill | exec ... │
 └────────────────┬────────────────────────┘
@@ -109,7 +109,7 @@ $ runc delete my-container
 </code></pre>
 
   <p>runc 的进程模型（关键的"两阶段"）：</p>
-<pre><code>// 启动容器涉及三个进程：
+<pre><code class="language-bash">// 启动容器涉及三个进程：
 
 // 1. runc 主进程（用户调用）
 $ runc create my-container
@@ -135,7 +135,7 @@ $ runc create my-container
 <section id="create" class="toc-link">
   <h2><span class="num">03</span> create 流程</h2>
 
-<pre><code>// runc create my-container
+<pre><code class="language-bash">// runc create my-container
 
 // 1. CLI 解析
 // cmd/runc/create.go
@@ -240,7 +240,7 @@ func getCloneFlags(namespaces []configs.Namespace) uintptr {
 <section id="start" class="toc-link">
   <h2><span class="num">04</span> start 流程</h2>
 
-<pre><code>// runc start my-container
+<pre><code class="language-bash">// runc start my-container
 
 // libcontainer/container_linux.go
 func (c *linuxContainer) exec() error {
@@ -326,7 +326,7 @@ func (l *linuxStandardInit) Init() error {
 
   <p>runc init 是关键的<strong>过渡进程</strong>：</p>
 
-<pre><code>// runc init 必须做的事：
+<pre><code class="language-bash">// runc init 必须做的事：
 //   1. 在新 namespace 中
 //   2. 设置 cgroup
 //   3. 准备 rootfs（mount）
@@ -364,7 +364,7 @@ const (
 </code></pre>
 
   <p>pivot_root 关键操作：</p>
-<pre><code>// libcontainer/rootfs_linux.go
+<pre><code class="language-bash">// libcontainer/rootfs_linux.go
 func pivotRoot(rootfs string, pivotBaseDir string) error {
     // pivot_root 系统调用：
     // 把当前 root 移到 put_old
@@ -404,7 +404,7 @@ func pivotRoot(rootfs string, pivotBaseDir string) error {
 <section id="cgroup" class="toc-link">
   <h2><span class="num">06</span> cgroup 配置</h2>
 
-<pre><code>// libcontainer/cgroups/fs2/fs2.go (cgroup v2)
+<pre><code class="language-bash">// libcontainer/cgroups/fs2/fs2.go (cgroup v2)
 // libcontainer/cgroups/fs/...   (cgroup v1)
 
 // cgroup 路径：
@@ -489,7 +489,7 @@ func (m *Manager) setResources() error {
 <section id="rootfs" class="toc-link">
   <h2><span class="num">07</span> rootfs 准备</h2>
 
-<pre><code>// libcontainer/rootfs_linux.go
+<pre><code class="language-bash">// libcontainer/rootfs_linux.go
 
 func prepareRootfs(pipe *os.File, config *configs.Config) error {
     // 1. mount rootfs (来自 spec.rootfs)
@@ -574,7 +574,7 @@ defaultMounts = []*Mount{
 <section id="kill" class="toc-link">
   <h2><span class="num">08</span> kill / signal</a></h2>
 
-<pre><code>// runc kill my-container [SIGTERM]
+<pre><code class="language-bash">// runc kill my-container [SIGTERM]
 
 // libcontainer/container_linux.go
 func (c *linuxContainer) Signal(process *Process, sig os.Signal, all bool) error {
@@ -652,7 +652,7 @@ for _, fd := range nsFds {
 </pre></code>
 
   <p>exec 命令的常见用途：</p>
-<pre><code># 调试
+<pre><code class="language-bash"># 调试
 docker exec -it &lt;c&gt; bash
 kubectl exec -it &lt;pod&gt; -c &lt;c&gt; -- bash
 

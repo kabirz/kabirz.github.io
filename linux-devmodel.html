@@ -74,7 +74,7 @@
   <h3>struct kobject</h3>
   <div class="card">
     <p class="ref">include/linux/kobject.h:64-82</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">kobject</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">kobject</span> {
     <span class="kw">const char</span>        *name;           <span class="cm">// 对象名称</span>
     <span class="kw">struct</span> <span class="ty">list_head</span>   entry;           <span class="cm">// 链入 kset 链表</span>
     <span class="kw">struct</span> <span class="ty">kobject</span>     *parent;         <span class="cm">// 父对象</span>
@@ -117,7 +117,7 @@
   <h3>struct bus_type</h3>
   <div class="card">
     <p class="ref">include/linux/device/bus.h:83-114</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">bus_type</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">bus_type</span> {
     <span class="kw">const char</span> *name;              <span class="cm">// 总线名（"pci"、"usb"、"platform"）</span>
     <span class="kw">const char</span> *dev_name;
     <span class="kw">const struct</span> <span class="ty">attribute_group</span> **bus_groups;
@@ -148,7 +148,7 @@
   </table>
 
   <h3>总线注册</h3>
-  <pre><code><span class="cm">// 总线注册</span>
+  <pre><code class="language-c"><span class="cm">// 总线注册</span>
 <span class="fn">bus_register</span>(&my_bus_type);
 
 <span class="cm">// 设备注册到总线</span>
@@ -168,7 +168,7 @@ bus_type.match(dev, drv)  <span class="cm">// 总线特定的匹配逻辑</span>
   <h3>struct device</h3>
   <div class="card">
     <p class="ref">include/linux/device.h:582-661</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">device</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">device</span> {
     <span class="kw">struct</span> <span class="ty">kobject</span> kobj;              <span class="cm">// 基础对象</span>
     <span class="kw">struct</span> <span class="ty">device</span>   *parent;           <span class="cm">// 父设备</span>
     <span class="kw">struct</span> <span class="ty">device_private</span> *p;          <span class="cm">// 驱动核心私有数据</span>
@@ -204,7 +204,7 @@ bus_type.match(dev, drv)  <span class="cm">// 总线特定的匹配逻辑</span>
 
   <h3>设备号</h3>
   <div class="card">
-    <pre><code><span class="cm">// dev_t = MAJOR(dev) | MINOR(dev)</span>
+    <pre><code class="language-c"><span class="cm">// dev_t = MAJOR(dev) | MINOR(dev)</span>
 <span class="cm">// /dev/ 下的设备文件通过 dev_t 映射到内核设备</span>
 <span class="fn">MKDEV</span>(major, minor)   <span class="cm">// 创建 dev_t</span>
 <span class="fn">MAJOR</span>(dev_t)          <span class="cm">// 提取主设备号</span>
@@ -224,7 +224,7 @@ bus_type.match(dev, drv)  <span class="cm">// 总线特定的匹配逻辑</span>
   <h3>struct device_driver</h3>
   <div class="card">
     <p class="ref">include/linux/device/driver.h:98-120</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">device_driver</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">device_driver</span> {
     <span class="kw">const char</span>        *name;           <span class="cm">// 驱动名</span>
     <span class="kw">const struct</span> <span class="ty">bus_type</span> *bus;       <span class="cm">// 所属总线</span>
     <span class="kw">struct</span> <span class="ty">module</span>     *owner;
@@ -273,7 +273,7 @@ bus_type.match(dev, drv)  <span class="cm">// 总线特定的匹配逻辑</span>
   <h3>struct class</h3>
   <div class="card">
     <p class="ref">include/linux/device/class.h:50-70</p>
-    <pre><code><span class="kw">struct</span> <span class="ty">class</span> {
+    <pre><code class="language-c"><span class="kw">struct</span> <span class="ty">class</span> {
     <span class="kw">const char</span> *name;                  <span class="cm">// 类名（"block"、"net"、"tty"）</span>
     <span class="kw">const struct</span> <span class="ty">attribute_group</span> **class_groups;
     <span class="kw">const struct</span> <span class="ty">attribute_group</span> **dev_groups;
@@ -324,7 +324,7 @@ bus_type.match(dev, drv)  <span class="cm">// 总线特定的匹配逻辑</span>
   <h3>Deferred Probe（延迟探测）</h3>
   <div class="card">
     <p class="ref">drivers/base/dd.c:37-59</p>
-    <pre><code><span class="cm">// 当依赖的资源尚未就绪时</span>
+    <pre><code class="language-c"><span class="cm">// 当依赖的资源尚未就绪时</span>
 <span class="kw">static int</span> <span class="fn">my_probe</span>(<span class="kw">struct</span> <span class="ty">device</span> *dev)
 {
     <span class="kw">struct</span> <span class="ty">regulator</span> *vcc;
@@ -370,7 +370,7 @@ bus_type.match(dev, drv)  <span class="cm">// 总线特定的匹配逻辑</span>
   </table>
 
   <h3>属性导出</h3>
-  <pre><code><span class="cm">// 设备属性</span>
+  <pre><code class="language-c"><span class="cm">// 设备属性</span>
 <span class="kw">static</span> <span class="ty">DEVICE_ATTR_RO</span>(my_status);   <span class="cm">// /sys/devices/.../my_status</span>
 <span class="kw">static</span> <span class="ty">DEVICE_ATTR_RW</span>(my_config);  <span class="cm">// 可读写</span>
 <span class="kw">static</span> <span class="ty">DEVICE_ATTR_WO</span>(my_reset);   <span class="cm">// 只写</span>
@@ -408,7 +408,7 @@ bus_type.match(dev, drv)  <span class="cm">// 总线特定的匹配逻辑</span>
 
   <h3>Runtime PM</h3>
   <div class="card">
-    <pre><code><span class="cm">// 运行时 PM：设备空闲时自动挂起</span>
+    <pre><code class="language-c"><span class="cm">// 运行时 PM：设备空闲时自动挂起</span>
 <span class="fn">pm_runtime_set_autosuspend_delay</span>(&dev, <span class="num">500</span>); <span class="cm">// 500ms 延迟</span>
 <span class="fn">pm_runtime_use_autosuspend</span>(&dev);
 <span class="fn">pm_runtime_enable</span>(&dev);

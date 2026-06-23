@@ -74,7 +74,7 @@
   <p>WinForms 的所有可视元素都派生自 <code>System.Windows.Forms.Control</code>，它封装一个 <strong>HWND</strong>（窗口句柄），并把 Win32 消息循环映射到 .NET 事件。最外层的入口是 <code>System.Windows.Forms.Application</code>，它托管了消息泵（<code>GetMessage/TranslateMessage/DispatchMessage</code>）。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// WinForms 核心继承链（简化）</span>
+    <pre><code class="language-cpp"><span class="cm">// WinForms 核心继承链（简化）</span>
 <span class="ty">System.Object</span>
 └── <span class="ty">MarshalByRefObject</span>                  <span class="cm">// 跨 AppDomain 边界</span>
     └── <span class="ty">System.ComponentModel.Component</span>   <span class="cm">// 实现 IComponent，支持站点/容器</span>
@@ -101,7 +101,7 @@
 
   <h3>Control 类——一切的基类</h3>
   <div class="card">
-    <pre><code><span class="kw">public class</span> <span class="ty">Control</span> : <span class="ty">Component</span>, ..., <span class="ty">IDropTarget</span>, <span class="ty">ISynchronizeInvoke</span>
+    <pre><code class="language-cpp"><span class="kw">public class</span> <span class="ty">Control</span> : <span class="ty">Component</span>, ..., <span class="ty">IDropTarget</span>, <span class="ty">ISynchronizeInvoke</span>
 {
     <span class="cm">// —— 句柄与创建 ——</span>
     <span class="kw">public IntPtr</span> Handle { <span class="kw">get</span>; }        <span class="cm">// 按需创建 HWND（懒加载）</span>
@@ -159,7 +159,7 @@
   <p>WinForms 应用的入口是 <code>static void Main()</code>，必须标注 <code>[STAThread]</code>——这是 OLE/COM 公共对话框、剪贴板、拖放子系统的硬性要求。<code>Application.Run</code> 启动消息循环直到主窗体关闭；<code>ApplicationConfiguration.Initialize()</code>（.NET 6+ 的自动生成入口）负责高 DPI、默认字体、应用程序级设置。</p>
 
   <div class="card">
-    <pre><code><span class="kw">using</span> <span class="ty">System</span>;
+    <pre><code class="language-cpp"><span class="kw">using</span> <span class="ty">System</span>;
 <span class="kw">using</span> <span class="ty">System.Windows.Forms</span>;
 
 <span class="kw">internal static class</span> <span class="ty">Program</span>
@@ -179,7 +179,7 @@
   <h3>ApplicationContext：自定义生命周期</h3>
   <p><code>Application.Run</code> 有一个重载接受 <code>ApplicationContext</code>。当应用<strong>没有主窗体</strong>（如纯托盘程序、单实例守护进程）时，可继承 <code>ApplicationContext</code> 并在合适时机调用 <code>ExitThread</code>。</p>
   <div class="card">
-    <pre><code><span class="kw">class</span> <span class="ty">TrayContext</span> : <span class="ty">ApplicationContext</span>
+    <pre><code class="language-cpp"><span class="kw">class</span> <span class="ty">TrayContext</span> : <span class="ty">ApplicationContext</span>
 {
     <span class="kw">private readonly</span> <span class="ty">NotifyIcon</span> _tray;
 
@@ -278,7 +278,7 @@
 
   <h3>示例：一个简单的录入窗体</h3>
   <div class="card">
-    <pre><code><span class="kw">public partial class</span> <span class="ty">EditForm</span> : <span class="ty">Form</span>
+    <pre><code class="language-cpp"><span class="kw">public partial class</span> <span class="ty">EditForm</span> : <span class="ty">Form</span>
 {
     <span class="kw">private readonly</span> <span class="ty">Label</span>      _lblName;
     <span class="kw">private readonly</span> <span class="ty">TextBox</span>    _txtName;
@@ -339,7 +339,7 @@
 
   <h3>Anchor 与 Dock</h3>
   <div class="card">
-    <pre><code><span class="cm">// Anchor：到父容器四条边的距离在父调整时保持不变</span>
+    <pre><code class="language-cpp"><span class="cm">// Anchor：到父容器四条边的距离在父调整时保持不变</span>
 <span class="cm">// 默认是 Top|Left，即“贴左上角”</span>
 _txtName.Anchor = <span class="ty">AnchorStyles</span>.Top | <span class="ty">AnchorStyles</span>.Left | <span class="ty">AnchorStyles</span>.Right;
 <span class="cm">// 父宽度变大 → 文本框右侧跟随扩展，左侧固定</span>
@@ -363,7 +363,7 @@ _grid.<span class="fn">Dock</span> = <span class="ty">DockStyle</span>.Fill;    
 
   <h3>TableLayoutPanel：WinForms 的网格布局利器</h3>
   <div class="card">
-    <pre><code><span class="kw">var</span> table = <span class="kw">new</span> <span class="ty">TableLayoutPanel</span>
+    <pre><code class="language-cpp"><span class="kw">var</span> table = <span class="kw">new</span> <span class="ty">TableLayoutPanel</span>
 {
     Dock = <span class="ty">DockStyle</span>.Fill,
     ColumnCount = <span class="num">2</span>,
@@ -405,7 +405,7 @@ table.<span class="fn">SetColumnSpan</span>(_btnPanel, <span class="num">2</span
 
   <h3>标准事件签名</h3>
   <div class="card">
-    <pre><code><span class="cm">// 最基础的事件委托</span>
+    <pre><code class="language-cpp"><span class="cm">// 最基础的事件委托</span>
 <span class="kw">public delegate void</span> <span class="ty">EventHandler</span>(<span class="kw">object</span>? sender, <span class="ty">EventArgs</span> e);
 
 <span class="cm">// 泛型版本：e 是 EventArgs 的派生</span>
@@ -420,7 +420,7 @@ table.<span class="fn">SetColumnSpan</span>(_btnPanel, <span class="num">2</span
 
   <h3>订阅与取消订阅</h3>
   <div class="card">
-    <pre><code><span class="cm">// 订阅：+= 把委托加入事件的多播调用列表</span>
+    <pre><code class="language-cpp"><span class="cm">// 订阅：+= 把委托加入事件的多播调用列表</span>
 _btnOK.<span class="fn">Click</span> += <span class="ty">BtnOK_Click</span>;
 
 <span class="cm">// 简写：lambda 表达式</span>
@@ -452,7 +452,7 @@ _grid.<span class="fn">CellDoubleClick</span> += (s, e) =&gt;
 
   <h3>自定义事件的标准模式</h3>
   <div class="card">
-    <pre><code><span class="kw">public class</span> <span class="ty">Scanner</span> : <span class="ty">Component</span>
+    <pre><code class="language-cpp"><span class="kw">public class</span> <span class="ty">Scanner</span> : <span class="ty">Component</span>
 {
     <span class="cm">// 1. 声明事件（event 关键字保证外部只能 += / -=，不能直接赋值/调用）</span>
     <span class="kw">public event</span> <span class="ty">EventHandler</span>&lt;<span class="ty">BarcodeReadEventArgs</span>&gt;? BarcodeRead;
@@ -492,7 +492,7 @@ _scanner.BarcodeRead += (s, e) =&gt; _txtCode.Text = e.Barcode;</code></pre>
 
   <h3>一对 partial 文件</h3>
   <div class="card">
-    <pre><code><span class="cm">// ── MainForm.Designer.cs（设计器自动维护，禁止手改）──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── MainForm.Designer.cs（设计器自动维护，禁止手改）──</span>
 <span class="kw">namespace</span> <span class="ty">App</span>;
 
 <span class="kw">partial class</span> <span class="ty">MainForm</span>
@@ -596,7 +596,7 @@ _scanner.BarcodeRead += (s, e) =&gt; _txtCode.Text = e.Barcode;</code></pre>
 
   <h3>简单绑定 vs 复杂绑定</h3>
   <div class="card">
-    <pre><code><span class="cm">// ── 简单绑定：控件.属性 ⇄ 对象.属性 ──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── 简单绑定：控件.属性 ⇄ 对象.属性 ──</span>
 <span class="kw">public class</span> <span class="ty">Customer</span> : <span class="ty">INotifyPropertyChanged</span>
 {
     <span class="kw">private string</span> _name = <span class="st">""</span>;
@@ -628,7 +628,7 @@ _combo.DataSource    = customers;</code></pre>
 
   <h3>BindingSource 中介</h3>
   <div class="card">
-    <pre><code><span class="cm">// ★ 推荐用法：所有绑定都过 BindingSource</span>
+    <pre><code class="language-cpp"><span class="cm">// ★ 推荐用法：所有绑定都过 BindingSource</span>
 <span class="kw">private readonly</span> <span class="ty">BindingSource</span> _bs = <span class="kw">new</span>();
 <span class="kw">private readonly</span> <span class="ty">BindingList</span>&lt;<span class="ty">Customer</span>&gt; _list;
 
@@ -694,7 +694,7 @@ _combo.DataSource    = customers;</code></pre>
 
   <h3>获取 Graphics 的两种方式</h3>
   <div class="card">
-    <pre><code><span class="cm">// 1. OnPaint 的 e.Graphics（推荐，自动成对，自动失效区裁剪）</span>
+    <pre><code class="language-cpp"><span class="cm">// 1. OnPaint 的 e.Graphics（推荐，自动成对，自动失效区裁剪）</span>
 <span class="kw">protected override void</span> <span class="fn">OnPaint</span>(<span class="ty">PaintEventArgs</span> e)
 {
     <span class="kw">base</span>.<span class="fn">OnPaint</span>(e);
@@ -724,7 +724,7 @@ g.<span class="fn">DrawRectangle</span>(<span class="ty">Pens</span>.Red, <span 
 
   <h3>自绘控件示例：仪表盘</h3>
   <div class="card">
-    <pre><code><span class="kw">public class</span> <span class="ty">Gauge</span> : <span class="ty">Control</span>
+    <pre><code class="language-cpp"><span class="kw">public class</span> <span class="ty">Gauge</span> : <span class="ty">Control</span>
 {
     <span class="kw">private float</span> _value = <span class="num">50f</span>;
     <span class="kw">public float</span> Value
@@ -803,7 +803,7 @@ g.<span class="fn">DrawRectangle</span>(<span class="ty">Pens</span>.Red, <span 
 
   <h3>Invoke / BeginInvoke</h3>
   <div class="card">
-    <pre><code><span class="cm">// ❌ 错误：后台线程直接更新 UI</span>
+    <pre><code class="language-cpp"><span class="cm">// ❌ 错误：后台线程直接更新 UI</span>
 <span class="ty">Task</span>.<span class="fn">Run</span>(() =&gt;
 {
     <span class="ty">Thread</span>.<span class="fn">Sleep</span>(<span class="num">1000</span>);
@@ -826,7 +826,7 @@ _lblStatus.<span class="fn">BeginInvoke</span>(<span class="kw">new</span> <span
 
   <h3>SynchronizationContext 捕获上下文</h3>
   <div class="card">
-    <pre><code><span class="cm">// 在 UI 线程捕获上下文（含 UI 线程的同步语义）</span>
+    <pre><code class="language-cpp"><span class="cm">// 在 UI 线程捕获上下文（含 UI 线程的同步语义）</span>
 <span class="kw">var</span> ui = <span class="ty">SynchronizationContext</span>.Current!;   <span class="cm">// 必须在 UI 线程调用</span>
 
 <span class="ty">Task</span>.<span class="fn">Run</span>(() =&gt;
@@ -843,7 +843,7 @@ _lblStatus.<span class="fn">BeginInvoke</span>(<span class="kw">new</span> <span
 
   <h3>async/await：现代推荐写法</h3>
   <div class="card">
-    <pre><code><span class="kw">private async void</span> <span class="fn">btnLoad_Click</span>(<span class="kw">object</span> sender, <span class="ty">EventArgs</span> e)
+    <pre><code class="language-cpp"><span class="kw">private async void</span> <span class="fn">btnLoad_Click</span>(<span class="kw">object</span> sender, <span class="ty">EventArgs</span> e)
 {
     _btnLoad.<span class="fn">Enabled</span> = <span class="kw">false</span>;
     <span class="kw">try</span>
@@ -888,7 +888,7 @@ _lblStatus.<span class="fn">BeginInvoke</span>(<span class="kw">new</span> <span
 
   <h3>BackgroundWorker（遗留 API，仍可用）</h3>
   <div class="card">
-    <pre><code><span class="kw">var</span> worker = <span class="kw">new</span> <span class="ty">BackgroundWorker</span>
+    <pre><code class="language-cpp"><span class="kw">var</span> worker = <span class="kw">new</span> <span class="ty">BackgroundWorker</span>
 {
     WorkerReportsProgress      = <span class="kw">true</span>,
     WorkerSupportsCancellation = <span class="kw">true</span>,
@@ -919,7 +919,7 @@ worker.<span class="fn">RunWorkerAsync</span>();</code></pre>
   <p>下面是一个完整可运行的用户管理窗体：基于 <code>BindingList&lt;Customer&gt;</code> + <code>BindingSource</code> + <code>DataGridView</code>，支持增删改查、保存到 JSON 文件、异步加载。体现了控件树、布局、绑定、事件、异步的全部要点。</p>
 
   <div class="card">
-    <pre><code><span class="cm">// ── Model.cs ──</span>
+    <pre><code class="language-cpp"><span class="cm">// ── Model.cs ──</span>
 <span class="kw">using</span> <span class="ty">System.ComponentModel</span>;
 <span class="kw">using</span> <span class="ty">System.Runtime.CompilerServices</span>;
 

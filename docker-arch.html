@@ -36,7 +36,7 @@
   <h2><span class="num">01</span> 概述</h2>
   <p>Docker 不是单一进程，而是一组协作的组件。从 Docker 1.11（2016）开始架构演进为<strong>三层模型</strong>：</p>
 
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-bash">┌─────────────────────────────────────────┐
 │   docker CLI                            │
 │   /usr/bin/docker                       │
 └────────────────┬────────────────────────┘
@@ -88,7 +88,7 @@
 <section id="components" class="toc-link">
   <h2><span class="num">02</span> 组件分工</h2>
 
-<pre><code>// 1. dockerd（moby/daemon）
+<pre><code class="language-bash">// 1. dockerd（moby/daemon）
 //    二进制：/usr/bin/dockerd
 //    Socket：/var/run/docker.sock
 //    工作目录：/var/lib/docker/
@@ -141,7 +141,7 @@
 </code></pre>
 
   <p>进程拓扑：</p>
-<pre><code>$ ps -ef | grep -E "docker|containerd|shim|runc"
+<pre><code class="language-bash">$ ps -ef | grep -E "docker|containerd|shim|runc"
 
 # 守护进程
 root   1234  /usr/bin/dockerd -H fd://
@@ -168,7 +168,7 @@ root   2350  nginx -g "daemon off;"
 
   <p>用户从 <code>docker run</code> 到 dockerd 的路径：</p>
 
-<pre><code>// CLI 命令：
+<pre><code class="language-bash">// CLI 命令：
 $ docker run -d --name web -p 80:80 nginx
 
 // CLI 解析步骤：
@@ -224,7 +224,7 @@ GET    /_ping
 <section id="gRPC" class="toc-link">
   <h2><span class="num">04</span> containerd gRPC 接口</h2>
 
-<pre><code>// dockerd 通过 gRPC 调用 containerd
+<pre><code class="language-bash">// dockerd 通过 gRPC 调用 containerd
 // Socket: /run/containerd/containerd.sock
 // Protocol: gRPC over Unix socket
 // API version: v1 (containerd.v1.*)
@@ -280,7 +280,7 @@ rpc Create(CreateLeaseRequest) returns (CreateLeaseResponse);
 <section id="create" class="toc-link">
   <h2><span class="num">05</span> 创建容器全链路</h2>
 
-<pre><code>// docker run nginx
+<pre><code class="language-bash">// docker run nginx
 
 // 1. CLI 调用 dockerd HTTP API
 //    POST /v1.45/containers/create
@@ -367,7 +367,7 @@ rpc Create(CreateLeaseRequest) returns (CreateLeaseResponse);
 <section id="start" class="toc-link">
   <h2><span class="num">06</span> 启动容器全链路</h2>
 
-<pre><code>// 深入看 containerd → shim → runc
+<pre><code class="language-bash">// 深入看 containerd → shim → runc
 
 // 1. dockerd 调用 containerd.Create (Task)
 //    containerd/internal/oci/task.go
@@ -443,7 +443,7 @@ func (c *linuxContainer) Start(process *Process) error {
 <section id="image-pull" class="toc-link">
   <h2><span class="num">07</span> 镜像拉取链路</h2>
 
-<pre><code>// docker pull nginx
+<pre><code class="language-bash">// docker pull nginx
 
 // 1. dockerd 接收
 POST /images/create?fromImage=nginx&amp;tag=latest
@@ -501,7 +501,7 @@ POST /images/create?fromImage=nginx&amp;tag=latest
 
   <p>containerd-shim 是<strong>每容器独立守护进程</strong>，承担关键角色：</p>
 
-<pre><code>// 为什么需要 shim？
+<pre><code class="language-bash">// 为什么需要 shim？
 
 // runc 设计：runc 是"一次性"工具
 //   1. runc create → 创建容器进程，runc 立即退出

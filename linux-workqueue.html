@@ -64,7 +64,7 @@
   <h2><span class="num">02</span> 数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/linux/workqueue.h:114-130</span>
+    <pre><code class="language-c"><span class="cm">// include/linux/workqueue.h:114-130</span>
 <span class="kw">struct</span> <span class="ty">work_struct</span> {
     <span class="kw">atomic_long_t</span> data;       <span class="cm">// 状态位 + pool 指针</span>
     <span class="kw">struct</span> <span class="ty">list_head</span> entry;   <span class="cm">// 链表节点</span>
@@ -92,7 +92,7 @@
 
   <h3>声明与初始化</h3>
   <div class="card">
-    <pre><code><span class="cm">// 静态声明</span>
+    <pre><code class="language-c"><span class="cm">// 静态声明</span>
 <span class="kw">DECLARE_WORK</span>(my_work, my_func);              <span class="cm">// 立即工作</span>
 <span class="kw">DECLARE_DELAYED_WORK</span>(my_dwork, my_func);     <span class="cm">// 延迟工作</span>
 
@@ -147,7 +147,7 @@
 
   <h3>自定义工作队列</h3>
   <div class="card">
-    <pre><code><span class="cm">// 创建自定义工作队列</span>
+    <pre><code class="language-c"><span class="cm">// 创建自定义工作队列</span>
 <span class="kw">struct</span> <span class="ty">workqueue_struct</span> *my_wq;
 my_wq = <span class="fn">alloc_workqueue</span>(<span class="st">"my_wq"</span>, WQ_UNBOUND | WQ_MEM_RECLAIM, <span class="num">4</span>);
 
@@ -192,7 +192,7 @@ my_wq = <span class="fn">alloc_workqueue</span>(<span class="st">"my_wq"</span>,
   <h2><span class="num">06</span> 使用模式</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// 模式一：一次性工作</span>
+    <pre><code class="language-c"><span class="cm">// 模式一：一次性工作</span>
 <span class="kw">static void</span> <span class="fn">my_work_func</span>(<span class="kw">struct</span> <span class="ty">work_struct</span> *work)
 {
     <span class="cm">// 在进程上下文中执行，可睡眠</span>
@@ -206,7 +206,7 @@ my_wq = <span class="fn">alloc_workqueue</span>(<span class="st">"my_wq"</span>,
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// 模式二：延迟工作（定时器）</span>
+    <pre><code class="language-c"><span class="cm">// 模式二：延迟工作（定时器）</span>
 <span class="kw">static void</span> <span class="fn">my_delayed_func</span>(<span class="kw">struct</span> <span class="ty">delayed_work</span> *dwork)
 {
     <span class="fn">pr_info</span>(<span class="st">"delayed work done\n"</span>);
@@ -226,7 +226,7 @@ my_wq = <span class="fn">alloc_workqueue</span>(<span class="st">"my_wq"</span>,
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// 模式三：中断下半部</span>
+    <pre><code class="language-c"><span class="cm">// 模式三：中断下半部</span>
 <span class="kw">static</span> <span class="ty">irqreturn_t</span> <span class="fn">my_irq_handler</span>(<span class="ty">int</span> irq, <span class="ty">void</span> *dev_id)
 {
     <span class="kw">struct</span> <span class="ty">my_device</span> *dev = dev_id;

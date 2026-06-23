@@ -63,7 +63,7 @@
   </div>
 
   <p>整体架构：</p>
-<pre><code>┌─────────────────────────────────────────────┐
+<pre><code class="language-c">┌─────────────────────────────────────────────┐
 │                用户态                         │
 │   libbpf / cilium / bcc / Aya …             │
 │        ↓ bpf() 系统调用                       │
@@ -97,7 +97,7 @@
 
   <p>每个 BPF 程序属于一个类型，类型决定了它的<strong>挂载点</strong>和<strong>可调用的辅助函数</strong>：</p>
 
-<pre><code>// include/uapi/linux/bpf.h
+<pre><code class="language-c">// include/uapi/linux/bpf.h
 enum bpf_prog_type {
     BPF_PROG_TYPE_UNSPEC,
     BPF_PROG_TYPE_SOCKET_FILTER,    // 套接字过滤（原始用途）
@@ -121,7 +121,7 @@ enum bpf_prog_type {
 </code></pre>
 
   <p>程序结构在内核中的表示：</p>
-<pre><code>// include/linux/bpf.h
+<pre><code class="language-c">// include/linux/bpf.h
 struct bpf_prog {
     u16                     pages;          // 占用的页数
     u16                     jited:1,        // 是否已 JIT
@@ -169,7 +169,7 @@ struct bpf_prog_aux {
 
   <p>eBPF 所有操作（加载程序、创建映射、附加、查询）都通过 <code>bpf()</code> 系统调用：</p>
 
-<pre><code>// kernel/bpf/syscall.c
+<pre><code class="language-c">// kernel/bpf/syscall.c
 SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr,
                 unsigned int, size)
 {
@@ -217,7 +217,7 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
   </table>
 
   <p>程序加载流程 <code>bpf_prog_load()</code>：</p>
-<pre><code>bpf_prog_load(&attr)
+<pre><code class="language-c">bpf_prog_load(&attr)
   ├─ bpf_prog_alloc()       // 分配 struct bpf_prog
   ├─ bpf_prog_load_fixup_attach_type()
   ├─ find_prog_type()       // 根据 type 找到 bpf_prog_ops
@@ -240,7 +240,7 @@ static int __sys_bpf(int cmd, bpfptr_t uattr, unsigned int size)
 
   <p>验证器位于 <code>kernel/bpf/verifier.c</code>，入口函数 <code>bpf_check()</code>。验证分两个阶段：</p>
 
-<pre><code>// kernel/bpf/verifier.c
+<pre><code class="language-c">// kernel/bpf/verifier.c
 int bpf_check(struct bpf_prog **prog,
               union bpf_attr *attr,
               bpfptr_t uattr)
@@ -266,7 +266,7 @@ int bpf_check(struct bpf_prog **prog,
 </code></pre>
 
   <p><strong>第一阶段：控制流图（CFG）构建</strong></p>
-<pre><code>// 1. 反向扫描指令，构建 CFG
+<pre><code class="language-c">// 1. 反向扫描指令，构建 CFG
 // 2. 检测不可达代码、死代码
 // 3. 检测有环图（BPF 禁止有环）
 
@@ -277,7 +277,7 @@ int bpf_check(struct bpf_prog **prog,
 </code></pre>
 
   <p><strong>第二阶段：抽象解释（Abstract Interpretation）</strong></p>
-<pre><code>// 这是验证器最复杂的部分
+<pre><code class="language-c">// 这是验证器最复杂的部分
 // 模拟执行每条指令，跟踪寄存器的可能取值
 
 struct bpf_reg_state {
@@ -313,7 +313,7 @@ struct bpf_reg_state {
 </code></pre>
 
   <p><strong>第三阶段：fixup_bpf_calls()</strong></p>
-<pre><code>// 重写伪 BPF 指令为实际操作
+<pre><code class="language-c">// 重写伪 BPF 指令为实际操作
 // - BPF_LD_IMM64 with src_reg=BPF_PSEUDO_MAP_FD → 替换为 map 指针
 // - BPF_EMIT_CALL with imm=helper_id → 解析为 helper 函数指针
 // - 移除死代码
@@ -335,7 +335,7 @@ struct bpf_reg_state {
 
   <p>BPF 映射 (map) 是 eBPF 程序之间、用户态与内核态之间共享状态的核心机制。</p>
 
-<pre><code>// include/uapi/linux/bpf.h
+<pre><code class="language-c">// include/uapi/linux/bpf.h
 enum bpf_map_type {
     BPF_MAP_TYPE_UNSPEC,
     BPF_MAP_TYPE_HASH,             // 哈希表
@@ -360,7 +360,7 @@ enum bpf_map_type {
 </code></pre>
 
   <p>映射的数据结构：</p>
-<pre><code>// include/linux/bpf.h
+<pre><code class="language-c">// include/linux/bpf.h
 struct bpf_map {
     const struct bpf_map_ops *ops ____cacheline_aligned;
     struct bpf_map_value_inner *inner;
@@ -413,7 +413,7 @@ struct bpf_map_ops {
 
   <p>BPF 程序在加载后会被 JIT 编译为本机指令，性能接近原生代码。</p>
 
-<pre><code>// 1. 解释器（兜底，所有架构支持）
+<pre><code class="language-c">// 1. 解释器（兜底，所有架构支持）
 //    kernel/bpf/core.c
 //    ___bpf_prog_run() — 解释执行 BPF 指令
 //
@@ -446,7 +446,7 @@ struct bpf_map_ops {
 </code></pre>
 
   <p>JIT 优化示例：</p>
-<pre><code>// BPF 指令
+<pre><code class="language-c">// BPF 指令
 BPF_MOV64_IMM(BPF_REG_0, 0)
 BPF_EXIT_INSN()
 
@@ -470,7 +470,7 @@ BPF_EXIT_INSN()
 
   <p>BPF 程序不能直接调用内核函数，必须通过受控的辅助函数 (helper) 接口。</p>
 
-<pre><code>// 每个辅助函数由 struct bpf_func_proto 描述
+<pre><code class="language-c">// 每个辅助函数由 struct bpf_func_proto 描述
 struct bpf_func_proto {
     u32                  func_id;       // BPF_FUNC_*
     enum bpf_return_type ret_type;      // 返回类型
@@ -511,7 +511,7 @@ const struct bpf_func_proto bpf_map_lookup_elem_proto = {
 </code></pre>
 
   <p>辅助函数按程序类型限制：</p>
-<pre><code>// kernel/bpf/helpers.c
+<pre><code class="language-c">// kernel/bpf/helpers.c
 const struct bpf_func_proto *
 bpf_base_func_proto(enum bpf_func_id func_id)
 {
@@ -546,7 +546,7 @@ xdp_func_proto(enum bpf_func_id func_id)
 
   <p>BPF Trampoline 允许在<strong>不修改目标函数代码</strong>的情况下挂载 BPF 程序。它通过 ftrace 的动态 patch 机制实现。</p>
 
-<pre><code>// kernel/bpf/trampoline.c
+<pre><code class="language-c">// kernel/bpf/trampoline.c
 struct bpf_trampoline {
     struct hlist_node       hlist;
     struct mod_node         node;
@@ -589,7 +589,7 @@ struct bpf_trampoline {
 
   <p>BPF 程序可以附加到 cgroup 上，对该 cgroup 内进程的网络行为统一治理：</p>
 
-<pre><code>// 主要 cgroup BPF 程序类型
+<pre><code class="language-c">// 主要 cgroup BPF 程序类型
 BPF_PROG_TYPE_CGROUP_SKB        // 进/出包过滤
 BPF_PROG_TYPE_CGROUP_SOCK       // 套接字创建/释放
 BPF_PROG_TYPE_CGROUP_DEVICE     // 设备访问控制

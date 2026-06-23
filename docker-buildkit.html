@@ -51,7 +51,7 @@
   </table>
 
   <p>启动方式：</p>
-<pre><code># 1. dockerd 内置（默认）
+<pre><code class="language-bash"># 1. dockerd 内置（默认）
 # dockerd 配置：features: { buildkit: true }
 # 或 daemon.json:
 {
@@ -79,7 +79,7 @@ buildctl build \
 <section id="architecture" class="toc-link">
   <h2><span class="num">02</span> 架构总览</h2>
 
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-bash">┌─────────────────────────────────────────┐
 │   buildctl / docker CLI                 │
 │   - 用户输入                              │
 │   - 进度显示                              │
@@ -111,7 +111,7 @@ buildctl build \
 </code></pre>
 
   <p>核心 Go 包：</p>
-<pre><code>// buildkit/main.go
+<pre><code class="language-bash">// buildkit/main.go
 // buildkitd daemon 启动
 
 // 1. Frontend 接口
@@ -141,7 +141,7 @@ type WorkerController interface {
 <section id="dockerfile" class="toc-link">
   <h2><span class="num">03</span> Dockerfile 解析</h2>
 
-<pre><code>// 经典 Dockerfile:
+<pre><code class="language-bash">// 经典 Dockerfile:
 FROM debian:12 AS base
 RUN apt-get update &amp;&amp; apt-get install -y nginx
 COPY nginx.conf /etc/nginx/nginx.conf
@@ -185,7 +185,7 @@ type Node struct {
 </code></pre>
 
   <p>Dockerfile 语法版本（parser directives）：</p>
-<pre><code># syntax=docker/dockerfile:1.7
+<pre><code class="language-bash"># syntax=docker/dockerfile:1.7
 # 顶部第一行声明语法版本
 # 这是 frontend image
 
@@ -204,7 +204,7 @@ FROM debian:12
 
   <p>LLB (Low-Level Builder) 是 BuildKit 内部的<strong>有向无环图 (DAG) 表示</strong>，是并行调度的核心。</p>
 
-<pre><code>// buildkit/client/llb/llb.go
+<pre><code class="language-bash">// buildkit/client/llb/llb.go
 
 type State struct {
     output Output
@@ -264,7 +264,7 @@ message FileAction {
 </code></pre>
 
   <p>示例：Dockerfile 转 LLB：</p>
-<pre><code>// Dockerfile:
+<pre><code class="language-bash">// Dockerfile:
 // FROM debian:12 AS builder
 // RUN apt-get update
 // RUN apt-get install -y nginx
@@ -303,7 +303,7 @@ message FileAction {
 <section id="schedule" class="toc-link">
   <h2><span class="num">05</span> 并行调度</h2>
 
-<pre><code>// buildkit/solver/solver.go
+<pre><code class="language-bash">// buildkit/solver/solver.go
 type Solver struct {
     actx       context.Context
     s         *edge
@@ -363,7 +363,7 @@ type Scheduler struct {
 
   <p>BuildKit 缓存是<strong>内容寻址</strong>的：相同输入 → 相同缓存。</p>
 
-<pre><code>// 缓存键计算：
+<pre><code class="language-bash">// 缓存键计算：
 // buildkit/solver/llbsolver/vertex.go
 type CacheKey struct {
     digest.Digest
@@ -400,7 +400,7 @@ docker build --cache-from=type=registry,ref=user/myimage:cache \
 </code></pre>
 
   <p>缓存层（layer）的复用：</p>
-<pre><code>// Dockerfile:
+<pre><code class="language-bash">// Dockerfile:
 FROM ubuntu
 RUN apt update        # layer A
 RUN apt install nginx # layer B
@@ -461,7 +461,7 @@ type Worker interface {
 </pre></code>
 
   <p>Frontend 是<strong>用户输入解析器</strong>：</p>
-<pre><code>// buildkit/frontend/
+<pre><code class="language-bash">// buildkit/frontend/
 type Frontend interface {
     Solve(ctx context.Context, llb FrontendOpt) (*Result, error)
     Inputs() ([]Input, error)
@@ -491,7 +491,7 @@ type Frontend interface {
 
   <p>BuildKit 独有的 Dockerfile 扩展（需要 <code># syntax=docker/dockerfile:1.4+</code>）：</p>
 
-<pre><code># 1. Build secrets（安全密钥）
+<pre><code class="language-bash"># 1. Build secrets（安全密钥）
 # syntax=docker/dockerfile:1.4
 FROM alpine
 RUN --mount=type=secret,id=netrc,target=/root/.netrc \
@@ -581,7 +581,7 @@ docker buildx build \
 <section id="export" class="toc-link">
   <h2><span class="num">09</span> 导出与多平台</a></h2>
 
-<pre><code>// Exporter 类型：
+<pre><code class="language-bash">// Exporter 类型：
 // buildkit/exporter/
 
 // 1. image exporter

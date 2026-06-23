@@ -39,7 +39,7 @@
 <section id="api" class="toc-link">
   <h2><span class="num">02</span> API 与使用</h2>
   <div class="card">
-    <pre><code><span class="cm">// 定义 tracepoint</span>
+    <pre><code class="language-c"><span class="cm">// 定义 tracepoint</span>
 TRACE_EVENT(sched_switch,
     TP_PROTO(<span class="kw">struct</span> <span class="ty">task_struct</span> *prev, <span class="kw">struct</span> <span class="ty">task_struct</span> *next),
     TP_STRUCT__entry(
@@ -63,7 +63,7 @@ trace_sched_switch(prev, next);</code></pre>
 
   <h3>查看 tracepoint</h3>
   <div class="card">
-    <pre><code><span class="cm"># 列出所有可用 tracepoint</span>
+    <pre><code class="language-c"><span class="cm"># 列出所有可用 tracepoint</span>
 $ ls /sys/kernel/debug/tracing/events/
 block/  ext4/  irq/  net/  sched/  ...
 

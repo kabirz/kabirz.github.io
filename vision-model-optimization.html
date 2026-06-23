@@ -37,7 +37,7 @@
   <p>模型量化将 FP32（32 位浮点）权重和激活值映射到 INT8（8 位整数）或更低精度的表示,从而减少模型体积并加速推理。核心公式是将浮点值映射到定点整数范围。</p>
 
   <h3>量化映射公式</h3>
-  <pre><code>// 对称量化 (Symmetric)
+  <pre><code class="language-python">// 对称量化 (Symmetric)
 scale  = max(abs(x_float)) / 127
 x_int8 = round(x_float / scale)
 x_float = x_int8 * scale
@@ -70,7 +70,7 @@ x_float = (x_uint8 - zero_point) * scale</code></pre>
     <li><strong>MSE:</strong> 最小化量化前后的均方误差</li>
   </ul>
 
-  <pre><code># MinMax 校准示意
+  <pre><code class="language-python"># MinMax 校准示意
 def calibrate_minmax(tensor):
     min_val = tensor.min().item()
     max_val = tensor.max().item()
@@ -101,7 +101,7 @@ def calibrate_kl(tensor, num_bins=2048):
   <h3>动态量化 (Dynamic Quantization)</h3>
   <p>权重离线量化为 INT8,激活值在推理时动态量化。适用于 LSTM、Transformer 等权重密集型模型。</p>
 
-  <pre><code>import torch
+  <pre><code class="language-python">import torch
 import torch.quantization as quant
 
 model = torch.load("model.pth")
@@ -124,7 +124,7 @@ torch.save(quantized_model.state_dict(), "model_dynamic.pth")</code></pre>
   <h3>静态量化 (Static Quantization)</h3>
   <p>权重和激活值都预先确定量化参数。需要校准数据集来统计激活值的分布。</p>
 
-  <pre><code>import torch
+  <pre><code class="language-python">import torch
 import torch.quantization as quant
 
 # 1. 准备模型,插入量化/反量化节点
@@ -148,7 +148,7 @@ with torch.no_grad():
     output = quantized_model(input_fp32)</code></pre>
 
   <h3>量化配置详解</h3>
-  <pre><code>from torch.quantization import (
+  <pre><code class="language-python">from torch.quantization import (
     default_qconfig,
     default_per_channel_qconfig,
     QConfig,
@@ -183,7 +183,7 @@ model.qconfig = my_qconfig</code></pre>
   <h3>基本原理</h3>
   <p>QAT 在前向传播中插入 FakeQuantize 模块,模拟量化-反量化（round + clamp）操作。反向传播时使用直通估计器（Straight-Through Estimator, STE）,量化操作的梯度近似为 1,使梯度可以穿过不可微的 round 函数。</p>
 
-  <pre><code># FakeQuantize 前向 (伪代码)
+  <pre><code class="language-python"># FakeQuantize 前向 (伪代码)
 def fake_quantize(x, scale, zero_point, qmin, qmax):
     # 量化
     x_int = torch.round(x / scale + zero_point)
@@ -197,7 +197,7 @@ def fake_quantize(x, scale, zero_point, qmin, qmax):
 # dL/dx = dL/dx_fq  即 round 的梯度视为 1</code></pre>
 
   <h3>PyTorch QAT 实现</h3>
-  <pre><code>import torch
+  <pre><code class="language-python">import torch
 import torch.quantization as quant
 
 # 1. 从预训练模型开始
@@ -259,7 +259,7 @@ with torch.no_grad():
   <p>TensorRT 提供了从 ONNX 模型到 INT8 引擎的一站式量化方案。它使用校准器（Calibrator）收集激活值统计信息,自动生成量化参数。</p>
 
   <h3>INT8 Calibrator 实现</h3>
-  <pre><code>import tensorrt as trt
+  <pre><code class="language-python">import tensorrt as trt
 import pycuda.driver as cuda
 import numpy as np
 import os
@@ -300,7 +300,7 @@ class EntropyCalibrator(trt.IInt8EntropyCalibrator2):
             f.write(cache)</code></pre>
 
   <h3>构建 INT8 引擎</h3>
-  <pre><code>import tensorrt as trt
+  <pre><code class="language-python">import tensorrt as trt
 
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 builder = trt.Builder(TRT_LOGGER)
@@ -363,7 +363,7 @@ with open("model_int8.engine", "wb") as f:
   </table>
 
   <h3>L1 范数剪枝</h3>
-  <pre><code>import torch
+  <pre><code class="language-python">import torch
 import torch.nn.utils.prune as prune
 
 def l1_norm_prune_conv(conv_layer, pruning_ratio=0.3):
@@ -397,7 +397,7 @@ prune.global_unstructured(
 )</code></pre>
 
   <h3>通道剪枝完整流程</h3>
-  <pre><code># 1. 训练一个大的基座模型
+  <pre><code class="language-python"># 1. 训练一个大的基座模型
 base_model = resnet50(pretrained=True)
 
 # 2. 通道级结构剪枝
@@ -427,7 +427,7 @@ finetune(pruned_model, train_loader, num_epochs=30)</code></pre>
   <p>知识蒸馏用一个大的教师模型指导一个小学生模型的训练。学生模型学习教师模型的输出分布,从而获得接近大模型的性能,同时保持小模型的推理效率。</p>
 
   <h3>蒸馏框架</h3>
-  <pre><code>import torch
+  <pre><code class="language-python">import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -467,7 +467,7 @@ for images, labels in train_loader:
   <h3>温度参数的作用</h3>
   <p>温度 T 控制软标签的平滑程度。T=1 时退化为原始 softmax。T 越大,概率分布越平滑,教师模型的暗知识（如类别间的相似度）越容易传递给学生。典型范围是 2-8。</p>
 
-  <pre><code># 温度对 softmax 的影响
+  <pre><code class="language-python"># 温度对 softmax 的影响
 import numpy as np
 
 logits = np.array([2.0, 1.0, 0.1, 3.0, -1.0])
@@ -493,7 +493,7 @@ for T in [1, 2, 4, 8]:
   <h3>算子融合</h3>
   <p>算子融合将多个连续的小算子合并为一个 kernel,减少 kernel launch 开销和中间张量的读写。</p>
 
-  <pre><code>// 常见算子融合模式
+  <pre><code class="language-python">// 常见算子融合模式
 // 1. Conv + BN + ReLU 融合
 // 原始: x -> Conv -> BN -> ReLU -> y
 // 融合: x -> ConvBnReLU -> y
@@ -517,7 +517,7 @@ for T in [1, 2, 4, 8]:
     <li><strong>Precision Override:</strong> 将支持 FP16/INT8 的层降精度处理</li>
   </ul>
 
-  <pre><code># ONNX Runtime 图优化级别
+  <pre><code class="language-python"># ONNX Runtime 图优化级别
 import onnxruntime as ort
 
 options = ort.SessionOptions()
@@ -530,7 +530,7 @@ options.graph_optimization_level =     ort.GraphOptimizationLevel.ORT_ENABLE_EXT
   <h3>内存复用</h3>
   <p>图优化阶段可以分析每个张量的生命周期,让生命周期不重叠的张量共享同一块内存,显著降低峰值内存占用。</p>
 
-  <pre><code># ONNX Runtime 内存优化
+  <pre><code class="language-python"># ONNX Runtime 内存优化
 options.enable_cpu_mem_arena = True
 # 启用内存池后,ONNX Runtime 会复用已分配的内存块
 # 减少 malloc/free 次数,提升性能

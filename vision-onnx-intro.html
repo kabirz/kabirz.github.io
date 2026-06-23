@@ -49,7 +49,7 @@
 
   <h3>典型转换链</h3>
 
-<pre><code># 典型工作流：PyTorch 训练 ONNX 导出 TensorRT 部署
+<pre><code class="language-python"># 典型工作流：PyTorch 训练 ONNX 导出 TensorRT 部署
 
 # PyTorch --torch.onnx.export--&gt; ONNX
 # ONNX --onnx2trt / trtexec--&gt; TensorRT engine
@@ -71,7 +71,7 @@
 
   <h3>核心数据结构</h3>
 
-<pre><code>// ModelProto -- 模型根结构
+<pre><code class="language-python">// ModelProto -- 模型根结构
 message ModelProto {
   int64 ir_version = 1;           // ONNX IR 版本
   repeated OperatorSetIdProto opset_import = 2;
@@ -129,7 +129,7 @@ message TensorProto {
 
   <h3>ONNX 模型结构可视化</h3>
 
-<pre><code># 使用 Python 检查模型结构
+<pre><code class="language-python"># 使用 Python 检查模型结构
 import onnx
 
 model = onnx.load("model.onnx")
@@ -164,7 +164,7 @@ for node in graph.node[:10]:  # 前 10 个节点
 
   <h3>核心视觉算子</h3>
 
-<pre><code># Conv — 卷积
+<pre><code class="language-python"># Conv — 卷积
 # 输入: (N, C, H, W)  权重: (M, C, kh, kw)  偏置: (M,)
 # 属性: dilations, group, kernel_shape, pads, strides
 node = onnx.helper.make_node(
@@ -210,7 +210,7 @@ node = onnx.helper.make_node(
 
   <h3>形状操作算子</h3>
 
-<pre><code># Reshape — 重塑形状
+<pre><code class="language-python"># Reshape — 重塑形状
 # 输入: data, shape  输出: reshaped
 node = onnx.helper.make_node(
     "Reshape",
@@ -258,7 +258,7 @@ node = onnx.helper.make_node("Unsqueeze",
 
   <h3>归约与归一化算子</h3>
 
-<pre><code># Softmax — 归一化指数
+<pre><code class="language-python"># Softmax — 归一化指数
 node = onnx.helper.make_node(
     "Softmax",
     inputs=["X"],
@@ -307,7 +307,7 @@ node = onnx.helper.make_node("Add",
 
   <h3>基本导出</h3>
 
-<pre><code>import torch
+<pre><code class="language-python">import torch
 import torch.onnx
 
 class SimpleModel(torch.nn.Module):
@@ -348,7 +348,7 @@ torch.onnx.export(
 
   <h3>动态轴（Dynamic Axes）</h3>
 
-<pre><code># 生产环境中输入 batch size 和分辨率通常是动态的
+<pre><code class="language-python"># 生产环境中输入 batch size 和分辨率通常是动态的
 # 通过 dynamic_axes 参数指定哪些维度是动态的
 
 torch.onnx.export(
@@ -373,7 +373,7 @@ torch.onnx.export(
 
   <h3>自定义算子与符号函数</h3>
 
-<pre><code># 对于 PyTorch 未注册 ONNX 转换的算子
+<pre><code class="language-python"># 对于 PyTorch 未注册 ONNX 转换的算子
 # 需要手动注册符号函数
 
 from torch.onnx import register_custom_op_symbolic
@@ -402,7 +402,7 @@ def my_custom_op(g, input, scale_factor, mode):
 
   <h3>导出完整检测模型</h3>
 
-<pre><code># 导出 torchvision 检测模型
+<pre><code class="language-python"># 导出 torchvision 检测模型
 import torchvision.models.detection as det
 
 model = det.fasterrcnn_resnet50_fpn(
@@ -457,7 +457,7 @@ torch.onnx.export(
 
   <h3>安装 tf2onnx</h3>
 
-<pre><code># 安装 tf2onnx
+<pre><code class="language-python"># 安装 tf2onnx
 pip install tf2onnx onnx onnxruntime
 
 # 验证安装
@@ -466,7 +466,7 @@ python -c "import tf2onnx; print(tf2onnx.__version__)"
 
   <h3>命令行转换</h3>
 
-<pre><code># 从 SavedModel 转换
+<pre><code class="language-python"># 从 SavedModel 转换
 python -m tf2onnx.convert \
   --saved-model saved_model/my_model \
   --output model.onnx \
@@ -492,7 +492,7 @@ python -m tf2onnx.convert \
 
   <h3>Python API 转换</h3>
 
-<pre><code>import tf2onnx
+<pre><code class="language-python">import tf2onnx
 import tensorflow as tf
 
 # 加载 Keras 模型
@@ -534,7 +534,7 @@ model_proto, _ = tf2onnx.convert.from_function(
 
   <h3>NCHW 与 NHWC 布局</h3>
 
-<pre><code># TensorFlow 使用 NHWC 格式，ONNX 标准使用 NCHW
+<pre><code class="language-python"># TensorFlow 使用 NHWC 格式，ONNX 标准使用 NCHW
 # tf2onnx 默认会处理布局转换，但某些情况需要手动干预
 
 # 方法 1：让 tf2onnx 自动处理 NCHW 转换
@@ -561,7 +561,7 @@ model = tf.keras.Sequential([
 
   <h3>模型验证</h3>
 
-<pre><code>import onnx
+<pre><code class="language-python">import onnx
 import onnxruntime as ort
 import numpy as np
 
@@ -606,7 +606,7 @@ print(f"Max difference: {diff:.6f}")
 
   <h3>模型结构检查</h3>
 
-<pre><code>import onnx
+<pre><code class="language-python">import onnx
 import onnx.helper
 
 # 加载并检查
@@ -629,7 +629,7 @@ for node in model.graph.node:
 
   <h3>ONNX Simplifier</h3>
 
-<pre><code># 安装
+<pre><code class="language-python"># 安装
 pip install onnx-simplifier
 
 # 简化模型（常量折叠、死节点消除、算子融合）
@@ -653,7 +653,7 @@ onnx.save(sim_model, "model_simplified.onnx")
 
   <h3>ONNX Optimizer</h3>
 
-<pre><code># 安装
+<pre><code class="language-python"># 安装
 pip install onnxoptimizer
 
 # Python API
@@ -680,7 +680,7 @@ print(onnxoptimizer.get_available_passes())
 
   <h3>Netron 可视化</h3>
 
-<pre><code># Netron 是 ONNX 模型可视化的最佳工具
+<pre><code class="language-python"># Netron 是 ONNX 模型可视化的最佳工具
 # 支持 Web 版和桌面版
 
 # 在线版：https://netron.app
@@ -697,7 +697,7 @@ npx netron model.onnx
 
   <h3>Polygraphy 工具（NVIDIA）</h3>
 
-<pre><code># Polygraphy 是 NVIDIA 提供的 ONNX/TensorRT 调试工具
+<pre><code class="language-python"># Polygraphy 是 NVIDIA 提供的 ONNX/TensorRT 调试工具
 pip install polygraphy
 
 # 模型信息查看
@@ -734,7 +734,7 @@ polygraphy run model.onnx \
 
   <h3>opset 版本演进</h3>
 
-<pre><code># 关键版本里程碑
+<pre><code class="language-python"># 关键版本里程碑
 # opset 7   (2018)  -- LSTM/GRU 支持，BatchNorm 升级
 # opset 9   (2018)  -- 新增空间注意力、Pad 升级
 # opset 10  (2019)  -- 新增 Resize、ReverseSequence
@@ -752,7 +752,7 @@ polygraphy run model.onnx \
 
   <h3>opset 选择建议</h3>
 
-<pre><code># 部署环境 vs opset 版本
+<pre><code class="language-python"># 部署环境 vs opset 版本
 
 # TensorRT 8.x  -- opset 16+（推荐 opset 16）
 # TensorRT 9.x  -- opset 19+（推荐 opset 18）
@@ -799,7 +799,7 @@ for version in [16, 17, 18, 19]:
 
   <h3>多 opset 模型管理</h3>
 
-<pre><code># 生成兼容性报告
+<pre><code class="language-python"># 生成兼容性报告
 import onnx
 from onnx import version_converter
 
@@ -833,7 +833,7 @@ for op in sorted(ops_used):
 
   <h3>Resize 算子问题</h3>
 
-<pre><code># 问题：PyTorch 的 F.interpolate 导出为 ONNX 时，
+<pre><code class="language-python"># 问题：PyTorch 的 F.interpolate 导出为 ONNX 时，
 #       Resize 算子的 coordinate_transformation_mode 不匹配
 
 # 解决方案 1：在导出前指定
@@ -877,7 +877,7 @@ register_custom_op_symbolic(
 
   <h3>算子不兼容</h3>
 
-<pre><code># 问题：某些 PyTorch 算子没有 ONNX 对应实现
+<pre><code class="language-python"># 问题：某些 PyTorch 算子没有 ONNX 对应实现
 
 # 常见不兼容算子：
 #   torch.einsum -- ONNX 无直接对应
@@ -915,7 +915,7 @@ class CompatModel(torch.nn.Module):
 
   <h3>动态形状问题</h3>
 
-<pre><code># 问题：模型在推理时输入形状变化，ONNX 图有硬编码形状
+<pre><code class="language-python"># 问题：模型在推理时输入形状变化，ONNX 图有硬编码形状
 
 # 场景：输入 (1, 3, H, W) 且 H, W 可变
 
@@ -945,7 +945,7 @@ torch.onnx.export(
 
   <h3>控制流与动态分支</h3>
 
-<pre><code># 问题：tracing 只执行一条路径，不会导出所有分支
+<pre><code class="language-python"># 问题：tracing 只执行一条路径，不会导出所有分支
 
 # 错误示例：
 class BadModel(torch.nn.Module):
@@ -983,7 +983,7 @@ torch.onnx.export(
 
   <h3>版本兼容性检查脚本</h3>
 
-<pre><code>def validate_onnx_compatibility(model_path, backend="onnxruntime"):
+<pre><code class="language-python">def validate_onnx_compatibility(model_path, backend="onnxruntime"):
     """完整的 ONNX 兼容性检查"""
     import onnx
     import onnxruntime as ort

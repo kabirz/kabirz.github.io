@@ -163,7 +163,7 @@ VXLAN Header (8 字节):
   <h2><span class="num">04</span> 核心数据结构</h2>
 
   <div class="card">
-    <pre><code><span class="cm">// include/net/vxlan.h:284 — VXLAN 设备</span>
+    <pre><code class="language-c"><span class="cm">// include/net/vxlan.h:284 — VXLAN 设备</span>
 <span class="kw">struct</span> <span class="ty">vxlan_dev</span> {
     <span class="kw">struct</span> <span class="ty">vxlan_dev_node</span>  hlist4;     <span class="cm">// VNI 哈希表节点（IPv4）</span>
     <span class="kw">struct</span> <span class="ty">list_head</span>       next;       <span class="cm">// 命名空间链表</span>
@@ -179,7 +179,7 @@ VXLAN Header (8 字节):
   </div>
 
   <div class="card">
-    <pre><code><span class="cm">// VXLAN 配置结构</span>
+    <pre><code class="language-c"><span class="cm">// VXLAN 配置结构</span>
 <span class="kw">struct</span> <span class="ty">vxlan_config</span> {
     <span class="ty">__be32</span>              saddr;     <span class="cm">// 源 IP（外层）</span>
     <span class="ty">__be16</span>              dst_port;  <span class="cm">// 目的端口（默认 4789）</span>

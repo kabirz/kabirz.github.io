@@ -42,7 +42,7 @@
   <div class="grid-2">
     <div class="card">
       <div class="card-title">传统方式</div>
-<pre><code>// 每个 IO 都需要系统调用
+<pre><code class="language-c">// 每个 IO 都需要系统调用
 // 上下文切换开销大
 ssize_t r = read(fd, buf, len);
 // 如果有 N 个 IO → N 次 syscall
@@ -50,7 +50,7 @@ ssize_t r = read(fd, buf, len);
     </div>
     <div class="card">
       <div class="card-title">io_uring 方式</div>
-<pre><code>// 批量提交 N 个 IO
+<pre><code class="language-c">// 批量提交 N 个 IO
 // 只需 1 次 syscall
 struct io_uring_sqe sqes[N];
 // 填充 sqes
@@ -73,7 +73,7 @@ io_uring_enter(ring_fd, N, 0, 0);
 
   <p>核心数据结构是共享内存中的两个环形队列：</p>
 
-<pre><code>// include/uapi/linux/io_uring.h — 用户态可见结构
+<pre><code class="language-c">// include/uapi/linux/io_uring.h — 用户态可见结构
 
 // 提交队列条目 (Submission Queue Entry)
 struct io_uring_sqe {
@@ -107,7 +107,7 @@ struct io_uring_cqe {
 
   <p>共享内存的 Ring 结构：</p>
 
-<pre><code>// 内核维护的 ring 信息
+<pre><code class="language-c">// 内核维护的 ring 信息
 struct io_rings {
     struct io_uring      cq;           // 完成队列
     struct io_uring      sq;           // 提交队列
@@ -129,7 +129,7 @@ struct io_rings {
 </code></pre>
 
   <p>SQ 和 CQ 之间的关系：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-c">┌─────────────────────────────────────────┐
 │            用户态                         │
 │  ┌─────┐  ┌─────┐  ┌─────┐            │
 │  │SQE 1│  │SQE 2│  │SQE 3│  ...        │
@@ -161,7 +161,7 @@ struct io_rings {
 <section id="submit" class="toc-link">
   <h2><span class="num">03</span> 提交路径</h2>
 
-<pre><code>// 用户态调用 io_uring_enter()
+<pre><code class="language-c">// 用户态调用 io_uring_enter()
 // 系统调用入口
 SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
                 u32, min_complete, u32, flags, const void __user *, argp,
@@ -191,7 +191,7 @@ io_submit_sqes(ctx, to_submit)
 
   <p>关键数据结构 <code>io_kiocb</code>：</p>
 
-<pre><code>// io_uring/io_uring_types.h
+<pre><code class="language-c">// io_uring/io_uring_types.h
 struct io_kiocb {
     union {
         struct file              *file;          // 目标文件
@@ -220,7 +220,7 @@ struct io_kiocb {
 <section id="complete" class="toc-link">
   <h2><span class="num">04</span> 完成路径</h2>
 
-<pre><code>// io_uring 中有多种完成方式：
+<pre><code class="language-c">// io_uring 中有多种完成方式：
 
 // 1. 立即完成（hot path）
 //    操作在同一个系统调用内完成（如 buffer 已在 page cache 中的 read）
@@ -278,7 +278,7 @@ static void io_req_complete_post(struct io_kiocb *req)
 
   <p>SQPOLL（Submission Queue Polling）是 io_uring 最突出的优化——<strong>内核中有一个专用内核线程持续轮询 SQ，用户态无需任何系统调用即可提交 IO</strong>。</p>
 
-<pre><code>// 设置 SQPOLL 模式
+<pre><code class="language-c">// 设置 SQPOLL 模式
 struct io_uring_params params;
 params.flags |= IORING_SETUP_SQPOLL;
 // 创建时自动启动一个内核线程
@@ -307,7 +307,7 @@ while (1) {
 
   <p>SQPOLL 线程的生命周期：</p>
 
-<pre><code>// io_uring/sqpoll.c
+<pre><code class="language-c">// io_uring/sqpoll.c
 static int io_sq_thread(void *data)
 {
     while (!kthread_should_stop()) {
@@ -335,7 +335,7 @@ static int io_sq_thread(void *data)
 
   <p>IOPOLL（IO Polling）是块设备端的轮询模式：提交 IO 后，CPU 主动轮询硬件完成状态，而不是等待 IRQ。</p>
 
-<pre><code>// 设置
+<pre><code class="language-c">// 设置
 params.flags |= IORING_SETUP_IOPOLL;
 
 // 对块设备生效（如 NVMe 支持 polling）
@@ -381,7 +381,7 @@ static int io_iopoll_check(struct io_ring_ctx *ctx,
 
   <p>io_uring 允许预先注册文件描述符和 buffer，避免每次 IO 的重复开销。</p>
 
-<pre><code>// 注册 buffer
+<pre><code class="language-c">// 注册 buffer
 // io_uring/rsrc.c
 struct io_ring_ctx {
     struct io_mapped_ubuf   **user_bufs; // 注册后的 buffer
@@ -425,7 +425,7 @@ sqe->buf_index = buf_idx;              // buffer 索
 
   <p>当 IO 操作不能在内核快速路径中完成时（如 O_DIRECT 读未命中、lock 冲突），io_uring 将请求分流到 <strong>io-wq</strong> 线程池处理。</p>
 
-<pre><code>// io_uring/io-wq.c
+<pre><code class="language-c">// io_uring/io-wq.c
 struct io_wq {
     struct io_wq_hash        *hash;
     struct io_wq_node {
@@ -480,7 +480,7 @@ static int io_queue_async_work(struct io_kiocb *req)
   </table>
 
   <p>每个操作在 <code>io_uring/</code> 下的独立文件中实现：</p>
-<pre><code>// io_uring/ 目录结构
+<pre><code class="language-c">// io_uring/ 目录结构
 io_uring/
 ├── io_uring.c        // 核心框架
 ├── io_uring_types.h  // 内部数据结构

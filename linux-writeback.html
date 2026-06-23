@@ -99,7 +99,7 @@
 <section id="tuning" class="toc-link">
   <h2><span class="num">04</span> 配置与调优</h2>
   <div class="card">
-    <pre><code><span class="cm"># 查看脏页统计</span>
+    <pre><code class="language-c"><span class="cm"># 查看脏页统计</span>
 $ cat /proc/vmstat | grep -E "nr_dirty|nr_writeback"
 nr_dirty     <span class="num">12345</span>    <span class="cm"># 当前脏页数</span>
 nr_writeback <span class="num">678</span>      <span class="cm"># 正在回写的页数</span>

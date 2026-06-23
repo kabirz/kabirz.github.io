@@ -62,7 +62,7 @@
 </pre></div>
 
   <div class="card">
-    <pre><code><span class="cm">// 内核模块中使用 kprobe</span>
+    <pre><code class="language-c"><span class="cm">// 内核模块中使用 kprobe</span>
 <span class="kw">#include</span> <span class="st">&lt;linux/kprobes.h&gt;</span>
 
 <span class="kw">static</span> <span class="ty">kprobe_opcode_t</span> kprobe_addr;
@@ -88,7 +88,7 @@
 <section id="uprobe" class="toc-link">
   <h2><span class="num">03</span> Uprobe</h2>
   <div class="card">
-    <pre><code><span class="cm"># Uprobe — 用户态函数探针</span>
+    <pre><code class="language-c"><span class="cm"># Uprobe — 用户态函数探针</span>
 
 <span class="cm"># 在 /usr/bin/myapp 的 main 函数处插入探针</span>
 $ echo 'p:myprobe /usr/bin/myapp:main' > /sys/kernel/debug/tracing/kprobe_events

@@ -54,7 +54,7 @@
   </table>
 
   <p>总体架构：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-bash">┌─────────────────────────────────────────┐
 │            宿主全局视图                   │
 │   PID 1, enp3s0, /etc, ipc_queue_1, ... │
 └─────────────────────────────────────────┘
@@ -84,7 +84,7 @@
 
   <p>三个核心系统调用：</p>
 
-<pre><code>// 1. clone() — 创建新进程时进入新 namespace
+<pre><code class="language-bash">// 1. clone() — 创建新进程时进入新 namespace
 long clone(unsigned long flags, void *stack, ...);
 
 // 2. unshare() — 当前进程切换到新 namespace
@@ -105,7 +105,7 @@ CLONE_NEWTIME    // 新 Time namespace
 </code></pre>
 
   <p>task_struct 中的 namespace 关联：</p>
-<pre><code>// include/linux/sched.h
+<pre><code class="language-bash">// include/linux/sched.h
 struct task_struct {
     struct nsproxy    *nsproxy;          // 共享的 namespace 代理
     /* user_namespace 通过 task->cred 引用 */
@@ -129,7 +129,7 @@ struct nsproxy {
 </code></pre>
 
   <p>查看进程的 namespace：</p>
-<pre><code># ls -l /proc/&lt;pid&gt;/ns/
+<pre><code class="language-bash"># ls -l /proc/&lt;pid&gt;/ns/
 0 lrwxrwxrwx ... cgroup -&gt; cgroup:[4026531835]
 0 lrwxrwxrwx ... ipc    -&gt; ipc:[4026531839]
 0 lrwxrwxrwx ... mnt    -&gt; mnt:[4026531841]
@@ -146,7 +146,7 @@ struct nsproxy {
 </code></pre>
 
   <p>从命令行操作 namespace：</p>
-<pre><code># 1. 进入某 namespace 执行命令
+<pre><code class="language-bash"># 1. 进入某 namespace 执行命令
 nsenter --target &lt;pid&gt; --all -- bash
 
 # 2. 持久化 namespace（保持存活）
@@ -170,7 +170,7 @@ ip netns del mynet
 
   <p>PID namespace 让进程在该 ns 内看到的 PID 与宿主不同。容器内的 PID 1 在宿主可能是 PID 4567。</p>
 
-<pre><code>// kernel/pid_namespace.c
+<pre><code class="language-bash">// kernel/pid_namespace.c
 struct pid_namespace {
     struct idr            idr;             // PID 分配器
     struct rcu_head       rcu;
@@ -201,7 +201,7 @@ struct pid_namespace {
 </code></pre>
 
   <p>嵌套层级：</p>
-<pre><code>// level 表示深度，0 是根 ns
+<pre><code class="language-bash">// level 表示深度，0 是根 ns
 // 进程的真实 PID 通过 struct pid 的 numbers[] 数组管理：
 struct pid {
     refcount_t            count;
@@ -224,7 +224,7 @@ struct upid {
 </code></pre>
 
   <p>Docker 中的应用：</p>
-<pre><code># 容器内的视角
+<pre><code class="language-bash"># 容器内的视角
 docker exec mycontainer ps aux
 # USER   PID %CPU  COMMAND
 # root     1  0.0   /bin/sh -c ...
@@ -253,7 +253,7 @@ ps aux | grep mycontainer
 
   <p>Mount namespace 隔离<strong>挂载点视图</strong>，是最古老的 namespace（2.4.19 引入）。</p>
 
-<pre><code>// fs/mount.h
+<pre><code class="language-bash">// fs/mount.h
 struct mnt_namespace {
     struct ns_common      ns;
     struct mount         *root;          // 根 mount
@@ -284,7 +284,7 @@ struct mnt_namespace {
 </code></pre>
 
   <p>容器中的应用：</p>
-<pre><code># runc 启动容器时的典型挂载流程：
+<pre><code class="language-bash"># runc 启动容器时的典型挂载流程：
 # 1. unshare(CLONE_NEWNS)
 # 2. mount("", "/", "", MS_SLAVE | MS_REC, NULL)  # / 变 slave
 #    - 让容器内的挂载不传播到宿主
@@ -302,7 +302,7 @@ struct mnt_namespace {
 </code></pre>
 
   <p>挂载传播示例：</p>
-<pre><code># 宿主上：
+<pre><code class="language-bash"># 宿主上：
 mount --make-shared /data
 # 创建容器：
 unshare --mount --propagation unchanged bash
@@ -318,7 +318,7 @@ mount --make-slave /
 
   <p>Network namespace 提供独立的网络栈：网卡接口、路由表、ARP 表、iptables 规则、socket 端口空间。</p>
 
-<pre><code>// include/net/net_namespace.h
+<pre><code class="language-bash">// include/net/net_namespace.h
 struct net {
     refcount_t            passive;        /* refcount */
     refcount_t            count;          /* 流动 refcount */
@@ -371,7 +371,7 @@ struct net {
 </code></pre>
 
   <p>网卡在 ns 之间的迁移：</p>
-<pre><code># 创建 net ns
+<pre><code class="language-bash"># 创建 net ns
 ip netns add ns1
 
 # 把 eth1 移到 ns1
@@ -390,7 +390,7 @@ ip link set veth1 netns ns1
 </code></pre>
 
   <p>Docker 默认网络架构：</p>
-<pre><code>┌─────────────────────────────────────────┐
+<pre><code class="language-bash">┌─────────────────────────────────────────┐
 │                 宿主                     │
 │   ┌──────────────────────┐              │
 │   │ docker0 (bridge)     │  172.17.0.1  │
@@ -418,7 +418,7 @@ ip link set veth1 netns ns1
 
   <p>UTS (UNIX Timesharing System) namespace 隔离 <strong>hostname</strong> 和 <strong>domainname</strong>。</p>
 
-<pre><code>// include/linux/utsname.h
+<pre><code class="language-bash">// include/linux/utsname.h
 struct uts_namespace {
     struct kref           kref;
     struct new_utsname    name;          // 实际数据
@@ -441,7 +441,7 @@ struct new_utsname {
 </code></pre>
 
   <p>使用示例：</p>
-<pre><code># 宿主：
+<pre><code class="language-bash"># 宿主：
 hostname
 # my-host
 
@@ -468,7 +468,7 @@ hostname   # newname
 
   <p>IPC namespace 隔离 System V IPC 和 POSIX 消息队列。</p>
 
-<pre><code>// include/linux/ipc_namespace.h
+<pre><code class="language-bash">// include/linux/ipc_namespace.h
 struct ipc_namespace {
     struct ipc_ids         ids[3];        // SEM, MSG, SHM
     int                    sem_ctls[4];
@@ -503,7 +503,7 @@ struct ipc_namespace {
 </code></pre>
 
   <p>验证：</p>
-<pre><code># 容器 A：
+<pre><code class="language-bash"># 容器 A：
 docker exec container_a ipcmk -M 1m
 # Shared memory id: 0
 
@@ -529,7 +529,7 @@ docker run -it --shm-size=256m alpine sh
 
   <p>User namespace 是<strong>最强大的隔离</strong>之一：让容器内的 root 在宿主是非特权用户。这是 rootless 容器的基础。</p>
 
-<pre><code>// include/linux/user_namespace.h
+<pre><code class="language-bash">// include/linux/user_namespace.h
 struct user_namespace {
     struct uid_gid_map     uid_map;        // UID 映射
     struct uid_gid_map     gid_map;        // GID 映射
@@ -559,7 +559,7 @@ struct uid_gid_extent {
 </code></pre>
 
   <p>UID/GID 映射示例：</p>
-<pre><code>// 宿主 UID 1000 → 容器内 UID 0 (root)
+<pre><code class="language-bash">// 宿主 UID 1000 → 容器内 UID 0 (root)
 // /proc/&lt;pid&gt;/uid_map:
 //          0       1000          1
 //   子ns起始  父ns起始  数量
@@ -581,7 +581,7 @@ echo deny &gt; /proc/&lt;pid&gt;/setgroups
 </code></pre>
 
   <p>能力与 user_ns：</p>
-<pre><code>// 在 user namespace 内：
+<pre><code class="language-bash">// 在 user namespace 内：
 //   - 拥有所有 capabilities（"fake" capabilities）
 //   - 但只对该 ns 内的资源有效
 //   - 对宿主资源仍受映射后的 UID 限制
@@ -616,7 +616,7 @@ echo deny &gt; /proc/&lt;pid&gt;/setgroups
 
   <p>Cgroup namespace 隔离<strong>cgroup 路径视图</strong>。</p>
 
-<pre><code>// include/linux/cgroup_namespace.h
+<pre><code class="language-bash">// include/linux/cgroup_namespace.h
 struct cgroup_namespace {
     struct css_set          *root_cset;
     struct rcu_head          rcu;
@@ -641,7 +641,7 @@ struct cgroup_namespace {
 //   3. systemd 在容器内的工作
 </code></pre>
 
-<pre><code># Docker 默认开启 cgroup namespace（--cgroupns=private）：
+<pre><code class="language-bash"># Docker 默认开启 cgroup namespace（--cgroupns=private）：
 docker exec container cat /proc/self/cgroup
 # 11:cpuset:/
 # 0::/system.slice/...
@@ -657,7 +657,7 @@ docker run --cgroupns=host alpine cat /proc/self/cgroup
 
   <p>Time namespace（Linux 5.6+）隔离 <code>CLOCK_MONOTONIC</code> 和 <code>CLOCK_BOOTTIME</code> 的<strong>起点偏移</strong>。让容器从非 0 的 uptime 启动。</p>
 
-<pre><code>// kernel/time/namespace.c
+<pre><code class="language-bash">// kernel/time/namespace.c
 struct time_namespace {
     struct ns_common      ns;
     struct timens_offset  offsets[CS_BASES];   // 各 clock 的偏移
@@ -678,7 +678,7 @@ struct timens_offset {
 //   这是相对时间隔离，不是绝对时间隔离
 </code></pre>
 
-<pre><code># 创建带时间偏移的容器
+<pre><code class="language-bash"># 创建带时间偏移的容器
 unshare --time --fork --boottime 86400 bash
 uptime
 # 假装已经启动 1 天
@@ -695,7 +695,7 @@ uptime
 
   <p>Docker（实际是 runc）启动容器时的 namespace 配置：</p>
 
-<pre><code># 默认（docker run ...）会创建：
+<pre><code class="language-bash"># 默认（docker run ...）会创建：
 #   CLONE_NEWPID      — PID namespace
 #   CLONE_NEWNS       — Mount namespace
 #   CLONE_NEWNET      — Network namespace
@@ -724,7 +724,7 @@ docker run --name=c2 --pid=container:c1 --network=container:c1 ...
 </code></pre>
 
   <p>runc 中的 namespace 创建（runtime spec → 系统调用）：</p>
-<pre><code>// runc/libcontainer/nsenter/nsenter.go
+<pre><code class="language-bash">// runc/libcontainer/nsenter/nsenter.go
 // runc/libcontainer/process_linux.go
 
 // 大致流程：

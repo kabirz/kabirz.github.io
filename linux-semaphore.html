@@ -69,7 +69,7 @@
 <section id="api" class="toc-link">
   <h2><span class="num">03</span> 核心 API</h2>
   <div class="card">
-    <pre><code><span class="cm">// 初始化</span>
+    <pre><code class="language-c"><span class="cm">// 初始化</span>
 <span class="fn">sema_init</span>(&sem, <span class="num">1</span>);     <span class="cm">// 计数=1（排他）</span>
 <span class="fn">sema_init</span>(&sem, <span class="num">3</span>);     <span class="cm">// 计数=3（3个持有者）</span>
 
@@ -96,7 +96,7 @@
   <h2><span class="num">04</span> 读写信号量</h2>
   <p><code>rw_semaphore</code> 是最重要的信号量变体，允许多个读者同时持有，写者独占。</p>
   <div class="card">
-    <pre><code><span class="cm">// 初始化</span>
+    <pre><code class="language-c"><span class="cm">// 初始化</span>
 <span class="kw">static DEFINE_RWSEM</span>(my_rwsem);
 
 <span class="cm">// 读者（可睡眠）</span>
@@ -127,7 +127,7 @@
 <section id="patterns" class="toc-link">
   <h2><span class="num">05</span> 使用模式</h2>
   <div class="card">
-    <pre><code><span class="cm">// rw_semaphore：mmap_lock 典型用法</span>
+    <pre><code class="language-c"><span class="cm">// rw_semaphore：mmap_lock 典型用法</span>
 <span class="fn">down_read</span>(&mm->mmap_lock);     <span class="cm">// 遍历 VMA</span>
 <span class="fn">for_each_vma</span>(vma) {
     <span class="cm">// 只读遍历 VMA 链表</span>
