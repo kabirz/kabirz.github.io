@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux ARP 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux ARP 深度解析</h1>
+  <p class="subtitle">地址解析协议 — IP 到 MAC 的桥梁</p>
+  <span class="version">Linux 7.0.12 · net/ipv4/arp.c (1525 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#protocol">协议格式</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">收发流程</a></li>
+    <li><a href="#nud">NUD 状态机</a></li>
+    <li><a href="#proxy">ARP 代理</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>ARP（Address Resolution Protocol）用于将 <strong>IP 地址解析为 MAC 地址</strong>。在以太网中，数据帧通过 MAC 地址寻址，但上层协议使用 IP 地址。ARP 是连接这两层的桥梁。Linux 内核中 ARP 实现在 <code>net/ipv4/arp.c</code>（1525 行），并与通用的邻居子系统（neighbour subsystem）深度集成。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">ARP 工作原理</div>
+      <ul>
+        <li><strong>ARP Request</strong>：广播请求 "谁是 192.168.1.1？"</li>
+        <li><strong>ARP Reply</strong>：单播回复 "我是 192.168.1.1，MAC 是 aa:bb:cc:dd:ee:ff"</li>
+        <li><strong>ARP 缓存</strong>：内核维护 IP→MAC 映射表（neigh_table）</li>
+        <li><strong>老化</strong>：条目超时后删除或重新探测</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">关键概念</div>
+      <table>
+        <tr><th>概念</th><th>说明</th></tr>
+        <tr><td>neigh_table</td><td>邻居表（ARP 表），哈希表实现</td></tr>
+        <tr><td>neighbour</td><td>单个邻居条目（IP+MAC+状态）</td></tr>
+        <tr><td>NUD 状态</td><td>邻居可达性状态机（11 种状态）</td></tr>
+        <tr><td>GARP</td><td> Gratuitous ARP，主动宣告自己的 MAC</td></tr>
+        <tr><td>ARP Proxy</td><td>代替其他主机回复 ARP 请求</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="protocol" class="toc-link">
+  <h2><span class="num">02</span> 协议格式</h2>
+
+  <h3>ARP 报文格式</h3>
+  <div class="ascii-diagram"><pre>
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         Hardware Type (HTYPE) |         Protocol Type (PTYPE) |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+| Hardware Addr | Protocol Addr |         Operation             |
+| Len (HLEN)   | Len (PLEN)    |         (REQUEST=1/REPLY=2)   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                  Sender Hardware Address (SHA)                |
+|                        (6 bytes for Ethernet)                 |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                  Sender Protocol Address (SPA)                |
+|                        (4 bytes for IPv4)                     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                  Target Hardware Address (THA)                |
+|                        (6 bytes, 0 for REQUEST)               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                  Target Protocol Address (TPA)                |
+|                        (4 bytes, 要查询的 IP)                  |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+</pre></div>
+
+  <h3>ARP 报文类型</h3>
+  <table>
+    <tr><th>操作</th><th>Opcode</th><th>说明</th></tr>
+    <tr><td>ARP Request</td><td>1</td><td>广播请求，询问目标 IP 的 MAC</td></tr>
+    <tr><td>ARP Reply</td><td>2</td><td>单播回复，包含自己的 MAC</td></tr>
+    <tr><td>RARP Request</td><td>3</td><td>反向 ARP（已废弃，用 DHCP 替代）</td></tr>
+    <tr><td>RARP Reply</td><td>4</td><td>反向 ARP 回复</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/neighbour.h:209 — 邻居表（ARP 表）</span>
+<span class="kw">struct</span> <span class="ty">neigh_table</span> {
+    <span class="ty">int</span>              family;       <span class="cm">// AF_INET (ARP) / AF_INET6 (NDP)</span>
+    <span class="ty">unsigned int</span>     entry_size;   <span class="cm">// 条目大小</span>
+    <span class="ty">unsigned int</span>     key_len;      <span class="cm">// 键长度（IP 地址长度）</span>
+    <span class="ty">__be16</span>           protocol;     <span class="cm">// ETH_P_IP (0x0800)</span>
+    <span class="ty">u32</span>              (*hash)(...);  <span class="cm">// 哈希函数</span>
+    <span class="ty">int</span>              (*constructor)(<span class="kw">struct</span> <span class="ty">neighbour</span> *); <span class="cm">// 初始化回调</span>
+    <span class="ty">char</span>             *id;          <span class="cm">// "arp_cache"</span>
+    <span class="ty">int</span>              gc_thresh1;   <span class="cm">// GC 阈值 1（软限制）</span>
+    <span class="ty">int</span>              gc_thresh2;   <span class="cm">// GC 阈值 2（开始 GC）</span>
+    <span class="ty">int</span>              gc_thresh3;   <span class="cm">// GC 阈值 3（硬上限）</span>
+    <span class="kw">struct</span> <span class="ty">neigh_hash_table</span> __rcu *nht; <span class="cm">// 哈希表</span>
+    <span class="ty">atomic_t</span>         entries;      <span class="cm">// 当前条目数</span>
+};
+
+<span class="cm">// 全局 ARP 表：ipv4_neigh_table (net/ipv4/arp.c)</span>
+<span class="cm">// 通过 /proc/net/arp 查看</span></code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/neighbour.h:140 — 单个邻居条目</span>
+<span class="kw">struct</span> <span class="ty">neighbour</span> {
+    <span class="kw">struct</span> <span class="ty">hlist_node</span>  hash;          <span class="cm">// 哈希表节点</span>
+    <span class="kw">struct</span> <span class="ty">neigh_table</span> *tbl;           <span class="cm">// 所属邻居表</span>
+    <span class="ty">u8</span>                nud_state;      <span class="cm">// ★ NUD 状态</span>
+    <span class="ty">u8</span>                type;           <span class="cm">// 地址类型</span>
+    <span class="ty">u8</span>                dead;           <span class="cm">// 是否已删除</span>
+    <span class="ty">rwlock_t</span>          lock;           <span class="cm">// 保护锁</span>
+    <span class="ty">refcount_t</span>        refcnt;         <span class="cm">// 引用计数</span>
+    <span class="ty">u32</span>               flags;
+    <span class="kw">struct</span> <span class="ty">sk_buff_head</span> arp_queue;    <span class="cm">// 待发送队列（等待 ARP 解析）</span>
+    <span class="kw">struct</span> <span class="ty">timer_list</span>  timer;          <span class="cm">// 老化/重试定时器</span>
+    <span class="ty">unsigned long</span>     used;           <span class="cm">// 最后使用时间</span>
+    <span class="ty">atomic_t</span>          probes;         <span class="cm">// 探测次数</span>
+    <span class="ty">unsigned char</span>     ha[<span class="num">MAX_ADDR_LEN</span>]; <span class="cm">// ★ 硬件地址（MAC）</span>
+    <span class="kw">struct</span> <span class="ty">net_device</span> *dev;           <span class="cm">// 关联的网络设备</span>
+    <span class="ty">u8</span>                primary_key[];  <span class="cm">// 键（IP 地址）</span>
+};</code></pre>
+  </div>
+
+  <h3>数据结构关系</h3>
+  <div class="ascii-diagram"><pre>
+  ┌──────────────────┐
+  │   neigh_table    │  ← 全局 ARP 表（ipv4_neigh_table）
+  │   "arp_cache"    │
+  │   nht ────────────→ neigh_hash_table（哈希表）
+  │   entries=42     │
+  └──────────────────┘
+           │
+           ↓  哈希桶
+  ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+  │   neighbour      │────→│   neighbour      │────→│   neighbour      │
+  │   192.168.1.1    │     │   192.168.1.2    │     │   192.168.1.3    │
+  │   MAC: aa:bb:... │     │   MAC: cc:dd:... │     │   MAC: ee:ff:... │
+  │   nud_state=     │     │   nud_state=     │     │   nud_state=     │
+  │     NUD_REACHABLE│     │     NUD_STALE    │     │     NUD_FAILED   │
+  │   dev=eth0       │     │   dev=eth0       │     │   dev=eth0       │
+  └──────────────────┘     └──────────────────┘     └──────────────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 收发流程</h2>
+
+  <h3>发送 ARP 请求</h3>
+  <div class="ascii-diagram"><pre>
+  协议栈需要发送数据到 192.168.1.2
+        │
+        ↓
+  <span style="color:#8250df">ip_finish_output2()</span>
+        │
+        ├── 查找邻居表：neigh = __ipv4_neigh_lookup_noref(dev, dst)
+        │
+        ├── 找到且状态为 NUD_REACHABLE → 直接发送
+        │       neigh_output() → hh 输出（二层快速路径）
+        │
+        ├── 找到但状态为 NUD_STALE / NUD_DELAY → 重新探测
+        │       neigh_event_send() → 触发 ARP 探测
+        │
+        └── 未找到 → 创建新 neighbour 条目
+                __neigh_create()
+                │
+                ↓
+        <span style="color:#cf222e">neigh_event_send()</span>
+                │
+                ├── 状态为 NUD_INCOMPLETE → 等待 ARP Reply
+                │       数据包放入 arp_queue
+                │
+                └── 状态需要探测 → 发送 ARP Request
+                        neigh->ops->solicit()
+                        │
+                        ↓
+                <span style="color:#1a7f37">arp_send_dst()</span> — net/ipv4/arp.c
+                        │
+                        ├── 构造 ARP Request 报文
+                        │       SHA = 本机 MAC
+                        │       SPA = 本机 IP
+                        │       THA = 00:00:00:00:00:00
+                        │       TPA = 目标 IP
+                        │
+                        └── 广播发送
+</pre></div>
+
+  <h3>接收 ARP Reply</h3>
+  <div class="ascii-diagram"><pre>
+  收到 ARP Reply（192.168.1.2 的 MAC 是 cc:dd:ee:ff:00:11）
+        │
+        ↓
+  <span style="color:#cf222e">arp_rcv()</span> — net/ipv4/arp.c
+        │
+        ├── 验证 ARP 报文（长度、协议类型等）
+        │
+        ↓
+  <span style="color:#8250df">arp_process()</span>
+        │
+        ├── 查找邻居表：neigh = __neigh_lookup(&amp;arp_tbl, &amp;tip, dev, ...)
+        │
+        ├── 找到对应 neighbour → 更新状态
+        │       neigh_update(neigh, HA, NUD_REACHABLE, ...)
+        │       ├── 更新 ha[]（MAC 地址）
+        │       ├── 设置 nud_state = NUD_REACHABLE
+        │       ├── 唤醒 arp_queue 中等待的数据包
+        │       └── 启动老化定时器
+        │
+        └── 更新 GARP 缓存（其他主机的 ARP 表同步）
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="nud" class="toc-link">
+  <h2><span class="num">05</span> NUD 状态机</h2>
+
+  <h3>11 种 NUD 状态</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────────────────────────────────────────────────────┐
+│                    NUD (Neighbor Unreachability Detection)       │
+│                                                                  │
+│  <span style="color:#1a7f37">NUD_REACHABLE</span>     ← 邻居可达（正常工作状态）                  │
+│       │                                                          │
+│       │ 超时                                                      │
+│       ↓                                                          │
+│  <span style="color:#bc4c00">NUD_STALE</span>         ← 过期未验证（可能仍可达）                  │
+│       │                                                          │
+│       │ 发送数据包                                                │
+│       ↓                                                          │
+│  <span style="color:#8250df">NUD_DELAY</span>         ← 等待确认（5秒）                          │
+│       │                                                          │
+│       │ 仍无回复                                                  │
+│       ↓                                                          │
+│  <span style="color:#cf222e">NUD_PROBE</span>         ← 主动发送单播 ARP 探测                    │
+│       │                                                          │
+│       ├── 收到回复 → 回到 NUD_REACHABLE                         │
+│       │                                                          │
+│       └── 探测失败（超过阈值）                                    │
+│              ↓                                                    │
+│         <span style="color:#cf222e">NUD_FAILED</span>      ← 邻居不可达（数据包丢弃）            │
+│                                                                  │
+│  <span style="color:#656d76">NUD_INCOMPLETE</span>    ← ARP 请求已发，等待回复                    │
+│  <span style="color:#656d76">NUD_NONE</span>          ← 初始状态                                 │
+│  <span style="color:#656d76">NUD_PERMANENT</span>     ← 永久条目（静态配置）                      │
+│  <span style="color:#656d76">NUD_NOARP</span>         ← 不需要 ARP（如 loopback）                 │
+│  <span style="color:#656d76">NUD_PROBE</span>         ← 正在探测中                                │
+│  <span style="color:#656d76">NUD_DELAY</span>         ← 等待确认中                                │
+│  <span style="color:#656d76">NUD_FAILED</span>        ← 不可达                                    │
+└──────────────────────────────────────────────────────────────────┘
+</pre></div>
+
+  <h3>状态转换表</h3>
+  <table>
+    <tr><th>当前状态</th><th>事件</th><th>新状态</th></tr>
+    <tr><td>NUD_REACHABLE</td><td>定时器超时</td><td>NUD_STALE</td></tr>
+    <tr><td>NUD_STALE</td><td>发送数据包</td><td>NUD_DELAY</td></tr>
+    <tr><td>NUD_STALE</td><td>收到 ARP Reply</td><td>NUD_REACHABLE</td></tr>
+    <tr><td>NUD_DELAY</td><td>5 秒超时</td><td>NUD_PROBE</td></tr>
+    <tr><td>NUD_PROBE</td><td>收到 ARP Reply</td><td>NUD_REACHABLE</td></tr>
+    <tr><td>NUD_PROBE</td><td>探测超过阈值</td><td>NUD_FAILED</td></tr>
+    <tr><td>NUD_FAILED</td><td>收到 ARP Reply</td><td>NUD_REACHABLE</td></tr>
+    <tr><td>NUD_INCOMPLETE</td><td>收到 ARP Reply</td><td>NUD_REACHABLE</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>查看 ARP 表</strong><br>
+    <code>ip neigh show</code> — 查看所有邻居条目<br>
+    <code>cat /proc/net/arp</code> — 查看 ARP 缓存<br>
+    <code>arp -a</code> — 传统 ARP 查看命令
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="proxy" class="toc-link">
+  <h2><span class="num">06</span> ARP 代理</h2>
+
+  <h3>Proxy ARP</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">场景：Host A (192.168.1.2) 想访问 Host B (10.0.0.5)</span>
+
+  Host A                Linux Router              Host B
+    │                       │                       │
+    │ ARP: Who has 10.0.0.5?│                       │
+    │ ───────────────────→  │                       │
+    │                       │                       │
+    │  (Linux 代替 Host B 回复)                     │
+    │  ARP Reply: 10.0.0.5 is at aa:bb:cc:dd:ee:ff │
+    │ ←───────────────────  │                       │
+    │                       │                       │
+    │ 数据包 → aa:bb:cc:...  │  路由转发             │
+    │ ───────────────────→  │ ──────────────────→   │
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm"># 启用 Proxy ARP</span>
+$ sysctl -w net.ipv4.conf.eth0.proxy_arp=1
+
+<span class="cm"># 等效于</span>
+$ ip link set eth0 arp off proxy on</code></pre>
+  </div>
+
+  <h3>Gratuitous ARP（GARP）</h3>
+  <div class="card">
+    <p><strong>GARP</strong>（Gratuitous ARP）是主动发送的 ARP Request/Reply，源 IP 和目的 IP 相同。用于：</p>
+    <ul>
+      <li><strong>IP 冲突检测</strong>：发送 GARP 检查是否有其他人使用相同 IP</li>
+      <li><strong>MAC 地址变更通知</strong>：通知其他主机更新 ARP 表</li>
+      <li><strong>VIP 漂移</strong>：高可用集群切换时通知客户端</li>
+      <li><strong>虚拟机迁移</strong>：VM 迁移后通知网络更新 MAC 映射</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/ipv4/</span>
+├── <span class="file">arp.c</span>               <span class="cmt">ARP 核心 (1525 行)</span>
+│     └── arp_rcv()          <span class="cmt">ARP 接收入口</span>
+│     └── arp_process()      <span class="cmt">ARP 处理核心</span>
+│     └── arp_send_dst()     <span class="cmt">发送 ARP 请求</span>
+│     └── arp_solicit()      <span class="cmt">邻居探测回调</span>
+└── <span class="file">ndisc.c</span>             <span class="cmt">IPv6 NDP（邻居发现，类似 ARP）</span>
+
+<span class="dir">net/core/</span>
+├── <span class="file">neighbour.c</span>         <span class="cmt">邻居子系统核心</span>
+│     └── neigh_lookup()     <span class="cmt">查找邻居条目</span>
+│     └── __neigh_create()   <span class="cmt">创建邻居条目</span>
+│     └── neigh_update()     <span class="cmt">更新邻居条目</span>
+│     └── neigh_timer_handler() <span class="cmt">定时器处理（NUD 状态转换）</span>
+└── <span class="file">dst.c</span>               <span class="cmt">路由缓存（与邻居交互）</span>
+
+<span class="dir">include/net/</span>
+├── <span class="file">neighbour.h</span>         <span class="cmt">struct neighbour / neigh_table</span>
+├── <span class="file">arp.h</span>               <span class="cmt">ARP 内部接口</span>
+└── <span class="file">ndisc.h</span>             <span class="cmt">IPv6 NDP 接口</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/ipv4/arp.c</code> — 从 <code>arp_rcv()</code> 开始理解 ARP 接收，<code>arp_solicit()</code> 理解 ARP 发送。<br>
+    <code>net/core/neighbour.c</code> — 邻居子系统核心，理解 NUD 状态机和定时器。<br>
+    <code>include/net/neighbour.h</code> — <code>struct neighbour</code> 和 <code>struct neigh_table</code> 定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/ipv4/arp.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

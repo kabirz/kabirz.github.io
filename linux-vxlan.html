@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux VXLAN 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux VXLAN 深度解析</h1>
+  <p class="subtitle">Overlay 网络 — 跨主机容器通信的基石</p>
+  <span class="version">Linux 7.0.12 · drivers/net/vxlan/ (8049 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#encap">封包与解包</a></li>
+    <li><a href="#arch">内核架构</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#send">发送流程</a></li>
+    <li><a href="#recv">接收流程</a></li>
+    <li><a href="#fdb">FDB 转发表</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>VXLAN（Virtual eXtensible LAN）是一种 overlay 网络技术，通过在 UDP 数据包中封装二层以太网帧，实现跨三层网络的二层互通。它是 Docker Swarm、Kubernetes（Flannel/Calico VXLAN 模式）等容器网络方案的底层技术。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">VXLAN 核心特性</div>
+      <ul>
+        <li><strong>24 位 VNI</strong>：支持 1600 万个虚拟网络（VLAN 仅 4096）</li>
+        <li><strong>UDP 封装</strong>：默认端口 4789</li>
+        <li><strong>跨三层</strong>：可以穿越路由器和防火墙</li>
+        <li><strong>MAC 学习</strong>：FDB 表管理远端 VTEP</li>
+        <li><strong>多播支持</strong>：BUM 流量可走多播</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>vxlan_core.c</td><td>5026</td><td>收发核心、FDB、转发</td></tr>
+        <tr><td>vxlan_mdb.c</td><td>1746</td><td>多播组管理</td></tr>
+        <tr><td>vxlan_vnifilter.c</td><td>1005</td><td>VNI 过滤器</td></tr>
+        <tr><td>include/net/vxlan.h</td><td>607</td><td>结构定义</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="encap" class="toc-link">
+  <h2><span class="num">02</span> 封包与解包</h2>
+
+  <h3>封装格式</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">原始以太网帧（容器 A 发出）：</span>
+
++----------+----------+---------+-----------+
+| DST MAC  | SRC MAC  | Type    | IP Header |  Data
+| (6 字节) | (6 字节) | (2)     |           |
++----------+----------+---------+-----------+
+
+<span style="color:#1a7f37">VXLAN 封装后（通过物理网络传输）：</span>
+
++------+----------+----------+--------+----------+---------+----------+---------+-----------+
+| Outer| Outer    | Outer    | Outer  | VXLAN    | Inner   | Inner    | Inner   | Inner     |
+| DST  | SRC      | UDP      | UDP    | Header   | DST MAC | SRC MAC  | Type    | IP+Data   |
+| MAC  | MAC      | Port     | Len    | (8 字节) | MAC     | MAC      |         |           |
++------+----------+----------+--------+----------+---------+----------+---------+-----------+
+| ←───── 外层以太网头 ──────→| ←UDP→ | ← VXLAN →| ←────────── 内层以太网帧 ──────────────→ |
+                                 4789    VNI=100
+
+VXLAN Header (8 字节):
++--------+--------+--------+--------+
+| Flags  | Reserved|    VNI (24 bit) |
+| (8 bit)|         |    = 0x000064   |
++--------+--------+--------+--------+
+</pre></div>
+
+  <h3>VTEP（VXLAN Tunnel Endpoint）</h3>
+  <div class="ascii-diagram"><pre>
+  VTEP 是 VXLAN 隧道的端点，负责封装和解封数据包
+
+  ┌─────────────────┐                      ┌─────────────────┐
+  │   Host A        │   Underlay Network   │   Host B        │
+  │                 │                      │                 │
+  │  ┌──────────┐   │                      │   ┌──────────┐  │
+  │  │ 容器 A   │   │                      │   │ 容器 B   │  │
+  │  │10.0.0.2  │   │                      │   │10.0.0.3  │  │
+  │  └────┬─────┘   │                      │   └────┬─────┘  │
+  │       │         │                      │        │         │
+  │  ┌────┴─────┐   │                      │   ┌────┴─────┐  │
+  │  │ VXLAN    │   │                      │   │ VXLAN    │  │
+  │  │ VTEP     │   │                      │   │ VTEP     │  │
+  │  │172.17.0.1│───┼── UDP:4789 ──────────┼── │172.17.0.2│  │
+  │  └──────────┘   │   (封装/解封)         │   └──────────┘  │
+  └─────────────────┘                      └─────────────────┘
+         ↑                                        ↑
+    内层：10.0.0.2 → 10.0.0.3              物理 IP 地址
+    外层：172.17.0.1 → 172.17.0.2          (Underlay)
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">03</span> 内核架构</h2>
+
+  <h3>VXLAN 在协议栈中的位置</h3>
+  <div class="ascii-diagram"><pre>
+┌─────────────────────────────────────────────────────────────┐
+│                     容器 A 发送数据                           │
+│                          │                                   │
+│                    ┌─────┴─────┐                             │
+│                    │  协议栈    │  10.0.0.2 → 10.0.0.3      │
+│                    └─────┬─────┘                             │
+│                          │                                   │
+│              ┌───────────┴───────────┐                       │
+│              ↓                       ↓                       │
+│    ┌──────────────┐         ┌──────────────┐                │
+│    │ vxlan0 (VTEP)│         │  eth0 (物理)  │                │
+│    │ 172.17.0.1   │         │              │                │
+│    └──────┬───────┘         └──────┬───────┘                │
+│           │                        │                         │
+│           │ VXLAN 封装              │                         │
+│           │ 外层: UDP:4789         │                         │
+│           ↓                        ↓                         │
+│  ┌──────────────────────────────────────────┐               │
+│  │              UDP 层                       │               │
+│  │  src=4789 dst=4789                       │               │
+│  └──────────────────┬───────────────────────┘               │
+│                     ↓                                       │
+│  ┌──────────────────────────────────────────┐               │
+│  │              IP 层                        │               │
+│  │  src=172.17.0.1 dst=172.17.0.2           │               │
+│  └──────────────────┬───────────────────────┘               │
+│                     ↓                                       │
+│  ┌──────────────────────────────────────────┐               │
+│  │              物理网卡 eth0                  │               │
+│  └──────────────────────────────────────────┘               │
+└─────────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">04</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/vxlan.h:284 — VXLAN 设备</span>
+<span class="kw">struct</span> <span class="ty">vxlan_dev</span> {
+    <span class="kw">struct</span> <span class="ty">vxlan_dev_node</span>  hlist4;     <span class="cm">// VNI 哈希表节点（IPv4）</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span>       next;       <span class="cm">// 命名空间链表</span>
+    <span class="kw">struct</span> <span class="ty">vxlan_sock</span> __rcu *vn4_sock;  <span class="cm">// IPv4 UDP 监听 socket</span>
+    <span class="kw">struct</span> <span class="ty">net_device</span>      *dev;       <span class="cm">// VXLAN 网络设备</span>
+    <span class="kw">struct</span> <span class="ty">net</span>             *net;       <span class="cm">// 网络命名空间</span>
+    <span class="kw">struct</span> <span class="ty">vxlan_rdst</span>      default_dst;<span class="cm">// 默认转发目的地</span>
+
+    <span class="kw">struct</span> <span class="ty">rhashtable</span>       fdb_hash_tbl; <span class="cm">// ★ FDB 转发表</span>
+    <span class="kw">struct</span> <span class="ty">rhashtable</span>       mdb_tbl;       <span class="cm">// 多播组表</span>
+    <span class="kw">struct</span> <span class="ty">vxlan_config</span>     cfg;          <span class="cm">// 配置参数</span>
+};</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// VXLAN 配置结构</span>
+<span class="kw">struct</span> <span class="ty">vxlan_config</span> {
+    <span class="ty">__be32</span>              saddr;     <span class="cm">// 源 IP（外层）</span>
+    <span class="ty">__be16</span>              dst_port;  <span class="cm">// 目的端口（默认 4789）</span>
+    <span class="ty">__be16</span>              port_min;  <span class="cm">// 端口范围最小值</span>
+    <span class="ty">__be16</span>              port_max;  <span class="cm">// 端口范围最大值</span>
+    <span class="ty">u32</span>                vni;       <span class="cm">// ★ VXLAN Network Identifier</span>
+    <span class="ty">u32</span>                flags;     <span class="cm">// VXLAN_F_LEARN 等</span>
+    <span class="ty">u8</span>                 tos;       <span class="cm">// DSCP/TOS</span>
+    <span class="ty">u8</span>                 ttl;       <span class="cm">// 外层 TTL</span>
+};</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="send" class="toc-link">
+  <h2><span class="num">05</span> 发送流程</h2>
+
+  <div class="ascii-diagram"><pre>
+  容器 A 发送数据到 10.0.0.3
+        │
+        ↓
+  协议栈路由 → 10.0.0.3 走 vxlan0
+        │
+        ↓
+  <span style="color:#cf222e">vxlan_xmit()</span> — vxlan_core.c
+        │
+        ├── 1. <span style="color:#8250df">查 FDB</span>
+        │       根据目的 MAC 查找转发表
+        │       找到 → 获取远端 VTEP IP (172.17.0.2)
+        │       找不到 → 多播泛洪 / 丢弃
+        │
+        ├── 2. <span style="color:#1a7f37">构造 VXLAN 头</span>
+        │       设置 VNI（24 位虚拟网络 ID）
+        │       设置 UDP 端口 4789
+        │
+        ├── 3. <span style="color:#bc4c00">封装外层 IP 头</span>
+        │       src=172.17.0.1, dst=172.17.0.2
+        │       protocol=UDP
+        │
+        ├── 4. <span style="color:#8250df">发送</span>
+        │       udp_send_skb() → IP 层 → 物理网卡
+        │
+        ↓
+  外层 UDP 包通过物理网络到达 Host B
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="recv" class="toc-link">
+  <h2><span class="num">06</span> 接收流程</h2>
+
+  <div class="ascii-diagram"><pre>
+  Host B 物理网卡收到 UDP:4789 数据包
+        │
+        ↓
+  协议栈 → UDP 层 → 匹配 VXLAN socket
+        │
+        ↓
+  <span style="color:#cf222e">vxlan_udp_encap()</span> — vxlan_core.c
+        │
+        ├── 1. <span style="color:#8250df">验证 VXLAN 头</span>
+        │       检查 VNI 是否匹配本机 VXLAN 设备
+        │       不匹配 → 丢弃
+        │
+        ├── 2. <span style="color:#1a7f37">解封</span>
+        │       剥离外层 UDP/IP 头
+        │       提取内层以太网帧
+        │
+        ├── 3. <span style="color:#bc4c00">MAC 学习</span>
+        │       根据内层源 MAC + 外层源 IP 更新 FDB
+        │       记录：MAC → VTEP IP 映射
+        │
+        ├── 4. <span style="color:#8250df">转发</span>
+        │       查找内层目的 MAC 对应的本地端口
+        │       交给 bridge / 本地网卡处理
+        │
+        ↓
+  容器 B 从 VXLAN 设备收到原始以太网帧
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="fdb" class="toc-link">
+  <h2><span class="num">07</span> FDB 转发表</h2>
+
+  <p>VXLAN 的 FDB（Forwarding Database）记录 <strong>远端 MAC → 远端 VTEP IP</strong> 的映射关系。</p>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">FDB 表项：</span>
+
+  容器 MAC 地址          远端 VTEP IP         VNI
+  ─────────────          ─────────────        ───
+  aa:bb:cc:dd:ee:01  →   172.17.0.2          100
+  aa:bb:cc:dd:ee:02  →   172.17.0.3          100
+  aa:bb:cc:dd:ee:03  →   172.17.0.4          200
+
+<span style="color:#1a7f37">学习过程：</span>
+
+  1. 收到远端 VXLAN 包 → 学习 (src MAC → outer src IP)
+  2. 静态添加：bridge fdb append aa:bb:cc:dd:ee:01 dst 172.17.0.2 dev vxlan0 vni 100
+  3. 多播/泛洪学习：收到 BUM 包时自动学习
+
+<span style="color:#8250df">老化机制：</span>
+
+  FDB 条目有老化时间（默认 300 秒）
+  超时未使用 → 自动删除
+  避免过期条目占用内存
+</pre></div>
+
+  <div class="callout tip">
+    <strong>FDB 查询优先级</strong><br>
+    ① 先查本机 FDB（静态 + 动态学习的条目）<br>
+    ② 未找到 → 检查是否有多播组（BUM 流量）<br>
+    ③ 未找到 → 丢弃（单播未知目的 MAC）
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="usecases" class="toc-link">
+  <h2><span class="num">08</span> 应用场景</h2>
+
+  <h3>Kubernetes Flannel VXLAN 模式</h3>
+  <div class="ascii-diagram"><pre>
+┌─────────────────────────────────────────────────────────────┐
+│ Node A (192.168.1.100)            Node B (192.168.1.200)   │
+│                                                             │
+│  ┌──────────────┐                ┌──────────────┐          │
+│  │   Pod A      │                │   Pod B      │          │
+│  │ 10.244.1.2   │                │ 10.244.2.3   │          │
+│  │   cni0       │                │   cni0       │          │
+│  └──────┬───────┘                └──────┬───────┘          │
+│         │                               │                   │
+│  ┌──────┴───────┐                ┌──────┴───────┐          │
+│  │  flannel.1   │  ← VXLAN →    │  flannel.1   │          │
+│  │  (VTEP)      │                │  (VTEP)      │          │
+│  │  UDP:4789    │                │  UDP:4789    │          │
+│  └──────┬───────┘                └──────┬───────┘          │
+│         │                               │                   │
+│  ┌──────┴───────┐                ┌──────┴───────┐          │
+│  │   eth0       │  ←── 物理网络 ──│   eth0       │          │
+│  │192.168.1.100 │                │192.168.1.200 │          │
+│  └──────────────┘                └──────────────┘          │
+└─────────────────────────────────────────────────────────────┘
+
+Pod A → Pod B 数据路径：
+10.244.1.2 → cni0 → flannel.1（封装 VXLAN）
+→ eth0（192.168.1.100 → 192.168.1.200）
+→ Node B eth0 → flannel.1（解封 VXLAN）
+→ cni0 → 10.244.2.3
+</pre></div>
+
+  <h3>其他场景</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">数据中心 L2 Overlay</div>
+      <p>跨物理交换机实现二层互通，VM 迁移时 IP 地址不变。VNI 的 1600 万容量远超 VLAN 的 4096。</p>
+    </div>
+    <div class="card">
+      <div class="card-title">多租户隔离</div>
+      <p>不同租户使用不同 VNI，在同一物理网络上完全隔离。云平台（OpenStack/Neutron）使用 VXLAN 实现租户网络。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/net/vxlan/</span>           <span class="cmt">总计 8049 行</span>
+├── <span class="file">vxlan_core.c</span>        <span class="cmt">收发核心 (5026 行)</span>
+│     └── vxlan_xmit()        <span class="cmt">发送入口</span>
+│     └── vxlan_rcv()         <span class="cmt">接收入口</span>
+│     └── vxlan_fdb_find_rcu() <span class="cmt">FDB 查找</span>
+├── <span class="file">vxlan_mdb.c</span>         <span class="cmt">多播组管理 (1746 行)</span>
+├── <span class="file">vxlan_vnifilter.c</span>   <span class="cmt">VNI 过滤 (1005 行)</span>
+└── <span class="file">vxlan_multicast.c</span>   <span class="cmt">多播处理 (272 行)</span>
+
+<span class="dir">include/net/</span>
+└── <span class="file">vxlan.h</span>             <span class="cmt">struct vxlan_dev / VXLAN 头定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>drivers/net/vxlan/vxlan_core.c</code> — 从 <code>vxlan_xmit()</code> 开始理解发送，<code>vxlan_rcv()</code> 理解接收和解封。<br>
+    <code>include/net/vxlan.h</code> — <code>struct vxlan_dev</code> 和 VXLAN 头定义。<br>
+    <code>drivers/net/vxlan/vxlan_mdb.c</code> — 多播组管理，理解 BUM 流量处理。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · drivers/net/vxlan/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

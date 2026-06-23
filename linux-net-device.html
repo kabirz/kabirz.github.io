@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux net_device 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux net_device 深度解析</h1>
+  <p class="subtitle">网络设备核心抽象 — 物理网卡与虚拟设备的统一模型</p>
+  <span class="version">Linux 7.0.12 · include/linux/netdevice.h (5678 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#ops">net_device_ops 操作表</a></li>
+    <li><a href="#lifecycle">设备生命周期</a></li>
+    <li><a href="#data_path">收发数据路径</a></li>
+    <li><a href="#features">硬件特性</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p><code>net_device</code> 是 Linux 内核中<strong>所有网络设备的统一抽象</strong>。无论是物理网卡（eth0）、虚拟设备（veth0）、桥接（br0）、隧道（tun/tap），还是 VLAN（eth0.10），在内核中都以 <code>net_device</code> 表示。它是 5678 行的 <code>include/linux/netdevice.h</code> 中定义的最大结构体之一。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">net_device 统一模型</div>
+      <ul>
+        <li><strong>物理网卡</strong>：eth0, ens33, enp0s3</li>
+        <li><strong>虚拟设备</strong>：veth0, dummy0</li>
+        <li><strong>桥接</strong>：br0（bridge）</li>
+        <li><strong>隧道</strong>：tun0, tap0, vxlan0</li>
+        <li><strong>VLAN</strong>：eth0.10</li>
+        <li><strong>回环</strong>：lo</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心职责</div>
+      <table>
+        <tr><th>职责</th><th>说明</th></tr>
+        <tr><td>收包</td><td>NAPI poll → sk_buff</td></tr>
+        <tr><td>发包</td><td>sk_buff → ndo_start_xmit</td></tr>
+        <tr><td>MTU 管理</td><td>最大传输单元</td></tr>
+        <tr><td>多队列</td><td>TX/RX 多队列队列</td></tr>
+        <tr><td>硬件卸载</td><td>TSO/GSO/GRO/GRO</td></tr>
+        <tr><td>邻居管理</td><td>ARP/NDP 表</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="ops" class="toc-link">
+  <h2><span class="num">02</span> net_device_ops 操作表</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/netdevice.h:1426 — 驱动核心操作表</span>
+<span class="kw">struct</span> <span class="ty">net_device_ops</span> {
+    <span class="cm">// 生命周期</span>
+    <span class="ty">int</span>  (*ndo_init)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev);        <span class="cm">// 设备初始化</span>
+    <span class="ty">int</span>  (*ndo_open)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev);        <span class="cm">// 启动（ifconfig up）</span>
+    <span class="ty">int</span>  (*ndo_stop)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev);        <span class="cm">// 停止（ifconfig down）</span>
+
+    <span class="cm">// 发送路径</span>
+    <span class="ty">netdev_tx_t</span> (*ndo_start_xmit)(<span class="kw">struct</span> <span class="ty">sk_buff</span> *skb,
+                                    <span class="kw">struct</span> <span class="ty">net_device</span> *dev); <span class="cm">// ★ 发送入口</span>
+    <span class="ty">u16</span> (*ndo_select_queue)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev,
+                             <span class="kw">struct</span> <span class="ty">sk_buff</span> *skb, ...); <span class="cm">// TX 队列选择</span>
+
+    <span class="cm">// 配置</span>
+    <span class="ty">int</span> (*ndo_set_mac_address)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev, <span class="ty">void</span> *addr);
+    <span class="ty">int</span> (*ndo_change_mtu)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev, <span class="ty">int</span> new_mtu);
+    <span class="ty">void</span> (*ndo_set_rx_mode)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev); <span class="cm">// 组播/混杂</span>
+
+    <span class="cm">// 统计</span>
+    <span class="ty">void</span> (*ndo_get_stats64)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev,
+                           <span class="kw">struct</span> <span class="ty">rtnl_link_stats64</span> *stats);
+
+    <span class="cm">// VLAN / TC / XDP</span>
+    <span class="ty">int</span> (*ndo_vlan_rx_add_vid)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev, <span class="ty">__be16</span> proto, <span class="ty">u16</span> vid);
+    <span class="ty">int</span> (*ndo_setup_tc)(<span class="kw">struct</span> <span class="ty">net_device</span> *dev, ...); <span class="cm">// tc 调用</span>
+};</code></pre>
+  </div>
+
+  <h3>不同设备的 ops 实现</h3>
+  <div class="ascii-diagram"><pre>
+  net_device_ops 是多态的关键：
+
+  eth0（物理网卡）     → e1000_netdev_ops（Intel 网卡驱动）
+  veth0（虚拟网卡）    → veth_netdev_ops
+  br0（网桥）          → br_dev_ops
+  tun0（隧道）         → tun_netdev_ops
+  vxlan0（overlay）    → vxlan_netdev_ops
+  lo（回环）           → loopback_ops
+
+  每种设备实现自己的 ndo_start_xmit / ndo_open / ndo_stop
+  内核通过统一的 net_device 调用不同驱动的 ops → 多态
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="lifecycle" class="toc-link">
+  <h2><span class="num">03</span> 设备生命周期</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">网络设备从创建到销毁的完整生命周期：</span>
+
+  1. <span style="color:#8250df">分配</span>
+  alloc_netdev() / alloc_netdev_mqs()
+  → 分配 struct net_device + 驱动私有数据
+  → 设置默认值（MTU=1500, name="eth%d"）
+
+  2. <span style="color:#1a7f37">初始化</span>
+  register_netdevice()
+  → dev->netdev_ops->ndo_init()    <span class="cm">// 驱动初始化</span>
+  → 分配 RX/TX 队列
+  → 加入 dev_base_head 链表
+  → 注册到网络命名空间
+  → 发送 RTM_NEWLINK 通知（Netlink）
+
+  3. <span class="color:#bc4c00">启动</span>
+  dev_open()（ifconfig eth0 up）
+  → dev->flags |= IFF_UP
+  → dev->netdev_ops->ndo_open()   <span class="cm">// 驱动启动</span>
+  → 启用 NAPI / 队列
+  → 注册中断处理
+  → 设备状态 → __LINK_STATE_START
+
+  4. <span style="color:#cf222e">运行</span>
+  收包：NAPI poll → netif_receive_skb()
+  发包：dev_queue_xmit() → ndo_start_xmit()
+  配置：dev_set_mtu() / dev_set_mac_address() 等
+
+  5. <span style="color:#8250df">停止</span>
+  dev_close()（ifconfig eth0 down）
+  → dev->flags &= ~IFF_UP
+  → dev->netdev_ops->ndo_stop()   <span class="cm">// 驱动停止</span>
+  → 停用 NAPI / 释放队列
+
+  6. <span style="color:#1a7f37">注销</span>
+  unregister_netdevice()
+  → 从 dev_base_head 移除
+  → dev->netdev_ops->ndo_uninit()
+  → 释放所有资源
+  → 发送 RTM_DELLINK 通知
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data_path" class="toc-link">
+  <h2><span class="num">04</span> 收发数据路径</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">发送路径（协议栈 → 网卡）：</span>
+
+  TCP/UDP → ip_output → dev_queue_xmit()
+        │
+        ↓
+  net_device._tx[queue] → qdisc
+        │
+        ↓
+  dev_hard_start_xmit()
+        │
+        ↓
+  <span style="color:#cf222e">netdev_ops->ndo_start_xmit(skb, dev)</span>
+        │
+        └── 驱动实现：DMA 映射 → 网卡 TX ring → 通知网卡发送
+
+<span style="color:#1a7f37">接收路径（网卡 → 协议栈）：</span>
+
+  网卡 → DMA → 驱动分配 skb → NAPI poll
+        │
+        ↓
+  napi_gro_receive() → __netif_receive_skb_core()
+        │
+        ├── AF_PACKET 抓包点（tcpdump）
+        │
+        ├── rx_handler（bridge 会注册）
+        │
+        └── 协议栈分发（IP/ARP/...）
+                │
+                ↓
+        eth0: net_device.protocol = ETH_P_IP
+        → ip_rcv()
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="features" class="toc-link">
+  <h2><span class="num">05</span> 硬件特性</h2>
+
+  <table>
+    <tr><th>特性</th><th>宏定义</th><th>说明</th></tr>
+    <tr><td><strong>TSO</strong></td><td>NETIF_F_TSO</td><td>TCP Segmentation Offload（TCP 硬件分段）</td></tr>
+    <tr><td><strong>GSO</strong></td><td>NETIF_F_GSO</td><td>Generic Segmentation Offload（通用分段）</td></tr>
+    <tr><td><strong>GRO</strong></td><td>NETIF_F_GRO</td><td>Generic Receive Offload（接收聚合）</td></tr>
+    <tr><td><strong>checksum</strong></td><td>NETIF_F_HW_CSUM</td><td>硬件校验和</td></tr>
+    <tr><td><strong>VLAN offload</strong></td><td>NETIF_F_HW_VLAN</td><td>硬件 VLAN 插入/剥离</td></tr>
+    <tr><td><strong>scatter-gather</strong></td><td>NETIF_F_SG</td><td>分散聚合 DMA</td></tr>
+    <tr><td><strong>multi-queue</strong></td><td>NETIF_F_MQ</td><td>多队列收发</td></tr>
+    <tr><td><strong>XDP</strong></td><td>NETIF_F_XDP</td><td>XDP 硬件卸载</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">include/linux/</span>
+└── <span class="file">netdevice.h</span>        <span class="cmt">net_device / net_device_ops (5678 行)</span>
+      └── struct net_device      <span class="cmt">L2109</span>
+      └── struct net_device_ops  <span class="cmt">L1426</span>
+      └── struct napi_struct     <span class="cmt">L381</span>
+      └── struct softnet_data    <span class="cmt">L3516</span>
+      └── struct netdev_queue    <span class="cmt">TX 队列</span>
+      └── struct netdev_rx_queue <span class="cmt">RX 队列</span>
+
+<span class="dir">net/core/</span>
+├── <span class="file">dev.c</span>              <span class="cmt">设备核心 (13344 行)</span>
+│     └── register_netdevice()
+│     └── unregister_netdevice()
+│     └── dev_open() / dev_close()
+│     └── dev_queue_xmit()
+│     └── __netif_receive_skb_core()
+├── <span class="file">dev_hold.c</span>         <span class="cmt">设备引用计数</span>
+├── <span class="file">devinet.c</span>          <span class="cmt">IP 地址管理</span>
+├── <span class="file">net-sysfs.c</span>        <span class="cmt">/sys/class/net/</span>
+└── <span class="file">link_watch.c</span>       <span class="cmt">链路状态监控</span>
+
+<span class="dir">drivers/net/</span>
+├── <span class="file">ethernet/</span>         <span class="cmt">以太网驱动（e1000/ixgbe/mlx5 等）</span>
+├── <span class="file">veth.c</span>            <span class="cmt">虚拟网卡</span>
+└── <span class="file">tun.c</span>             <span class="cmt">隧道设备</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>include/linux/netdevice.h</code> — <code>struct net_device</code>（L2109）和 <code>struct net_device_ops</code>（L1426）是理解网络设备的核心。<br>
+    <code>net/core/dev.c</code> — <code>dev_queue_xmit()</code> 和 <code>__netif_receive_skb_core()</code> 是收发路径的关键函数。<br>
+    <code>net/core/net-sysfs.c</code> — 理解 <code>/sys/class/net/</code> 下的每个文件如何映射到 net_device 字段。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · include/linux/netdevice.h · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

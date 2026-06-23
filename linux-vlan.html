@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux VLAN 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux VLAN 深度解析</h1>
+  <p class="subtitle">802.1Q 虚拟局域网 — 数据中心网络隔离的标准方案</p>
+  <span class="version">Linux 7.0.12 · net/8021q/ (2417 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#frame">VLAN 帧格式</a></li>
+    <li><a href="#arch">内核架构</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">收发流程</a></li>
+    <li><a href="#bridge">VLAN + Bridge</a></li>
+    <li><a href="#cli">配置命令</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>VLAN（Virtual Local Area Network）是 IEEE 802.1Q 标准定义的虚拟局域网技术。通过在以太网帧中插入 4 字节的 VLAN 标签，将一个物理网络划分为多个逻辑隔离的广播域。Linux 内核原生支持 VLAN，在数据中心和云环境中广泛使用。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">VLAN 核心价值</div>
+      <ul>
+        <li><strong>广播域隔离</strong>：不同 VLAN 间不互通</li>
+        <li><strong>安全性</strong>：流量隔离减少攻击面</li>
+        <li><strong>灵活性</strong>：逻辑划分不受物理位置限制</li>
+        <li><strong>QoS</strong>：通过 VLAN 优先级字段实现流量分级</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Linux VLAN 实现</div>
+      <table>
+        <tr><th>特性</th><th>说明</th></tr>
+        <tr><td>VLAN 过滤</td><td>bridge 内置 VLAN filtering</td></tr>
+        <tr><td>802.1Q 嵌套</td><td>支持 QinQ（双层标签）</td></tr>
+        <tr><td>硬件卸载</td><td>支持网卡 VLAN offload</td></tr>
+        <tr><td>QoS 映射</td><td>内核优先级 → VLAN PCP</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="frame" class="toc-link">
+  <h2><span class="num">02</span> VLAN 帧格式</h2>
+
+  <h3>802.1Q VLAN 标签</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">标准以太网帧：</span>
+
++----------+----------+---------+-----+
+| DST MAC  | SRC MAC  | Type    | Data|  FCS
+| (6 字节) | (6 字节) | (2 字节)|     |
++----------+----------+---------+-----+
+
+<span style="color:#1a7f37">802.1Q VLAN 帧（插入 4 字节标签）：</span>
+
++----------+----------+---------+----------+----------+---------+-----+
+| DST MAC  | SRC MAC  | TPID    | TCI      | Type     | Data    | FCS
+| (6 字节) | (6 字节) | 0x8100  | PCP|DEI|VID | (2 字节)|         |
++----------+----------+---------+----+---+----+----------+---------+
+                           │     │   │    │
+                           │     │   │    └── VLAN ID (12 bit, 0-4095)
+                           │     │    └── Drop Eligible Indicator (1 bit)
+                           │     └── Priority Code Point (3 bit, QoS)
+                           └── Tag Protocol ID (0x8100)
+
+<span style="color:#8250df">内核结构 vlan_ethhdr：</span>
+
++----------+----------+---------+----------+----------+
+| dst      | h_dest   | h_source| h_vlan_proto | h_vlan_TCI | h_vlan_encapsulated_proto |
+| (6)      | (6)      | (2)     | (2)          | (2)        |
++----------+----------+---------+--------------+------------+
+  ether_header (14 bytes)     +  VLAN tag (4 bytes)   + payload
+</pre></div>
+
+  <h3>VLAN ID 范围</h3>
+  <table>
+    <tr><th>VID</th><th>用途</th><th>说明</th></tr>
+    <tr><td>0</td><td>Priority Tag</td><td>仅优先级，无 VLAN 隔离</td></tr>
+    <tr><td>1-4094</td><td>用户 VLAN</td><td>可用的 VLAN ID</td></tr>
+    <tr><td>4095</td><td>保留</td><td>不可使用</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">03</span> 内核架构</h2>
+
+  <h3>VLAN 设备与底层网卡的关系</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────────────────────────────────────────────┐
+│                    应用层                                  │
+│                                                           │
+│  ┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐         │
+│  │ eth0   │  │eth0.10 │  │eth0.20 │  │eth0.30 │         │
+│  │ (无标签)│  │ VLAN 10│  │ VLAN 20│  │ VLAN 30│         │
+│  └───┬────┘  └───┬────┘  └───┬────┘  └───┬────┘         │
+│      │           │           │           │                │
+│  ════╪═══════════╪═══════════╪═══════════╪═══════════    │
+│      │           ↓           ↓           ↓                │
+│      │      ┌─────────────────────────────┐              │
+│      │      │       eth0 (物理网卡)        │              │
+│      │      │     real_dev = eth0          │              │
+│      └──────┤                             ├──────        │
+│             │  收包：strip VLAN tag         │              │
+│             │  发包：add VLAN tag          │              │
+│             └─────────────────────────────┘              │
+│                          │                                │
+│                     物理网线                               │
+└──────────────────────────────────────────────────────────┘
+
+vlan_dev_priv.real_dev = eth0  ← 每个 VLAN 设备指向底层物理网卡
+</pre></div>
+
+  <h3>VLAN 过滤模式（bridge VLAN filtering）</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">传统 VLAN（端口-based）：</span>
+
+  VLAN 10 的包只能从 eth0.10 进出
+  VLAN 20 的包只能从 eth0.20 进出
+
+<span style="color:#1a7f37">Bridge VLAN Filtering（802.1Q aware bridge）：</span>
+
+  一个 br0 接口上可以同时有多个 VLAN
+  每个端口配置允许哪些 VLAN 通过
+  不需要创建多个 VLAN 子接口
+
+  $ ip link add br0 type bridge vlan_filtering 1
+  $ bridge vlan add dev eth0 vid 10
+  $ bridge vlan add dev eth0 vid 20
+  $ bridge vlan add dev eth0 pvid untagged vid 10
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">04</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/if_vlan.h:178 — VLAN 设备私有数据</span>
+<span class="kw">struct</span> <span class="ty">vlan_dev_priv</span> {
+    <span class="ty">unsigned int</span>    nr_ingress_mappings;    <span class="cm">// 入方向优先级映射数</span>
+    <span class="ty">u32</span>             ingress_priority_map[<span class="num">8</span>]; <span class="cm">// PCP → 内核优先级映射</span>
+    <span class="ty">unsigned int</span>    nr_egress_mappings;     <span class="cm">// 出方向优先级映射数</span>
+    <span class="kw">struct</span> <span class="ty">vlan_priority_tci_mapping</span> __rcu
+                    *egress_priority_map[<span class="num">16</span>]; <span class="cm">// 内核优先级 → PCP 映射</span>
+
+    <span class="ty">__be16</span>          vlan_proto;     <span class="cm">// VLAN 协议（0x8100 / 0x88A8）</span>
+    <span class="ty">u16</span>             vlan_id;        <span class="cm">// VLAN ID (0-4095)</span>
+    <span class="ty">u16</span>             flags;          <span class="cm">// VLAN_REORDER_HDR / VLAN_GVRP 等</span>
+
+    <span class="kw">struct</span> <span class="ty">net_device</span> *real_dev;     <span class="cm">// ★ 底层物理网卡</span>
+    <span class="ty">unsigned char</span>   real_dev_addr[<span class="num">ETH_ALEN</span>]; <span class="cm">// 物理网卡 MAC 地址</span>
+
+    <span class="kw">struct</span> <span class="ty">vlan_pcpu_stats</span> __percpu *vlan_pcpu_stats; <span class="cm">// 统计</span>
+};</code></pre>
+  </div>
+
+  <h3>VLAN 设备与底层网卡的关系</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────┐         ┌──────────────┐
+│ eth0.10      │         │ eth0.20      │
+│ (VLAN 10)    │         │ (VLAN 20)    │
+│              │         │              │
+│ priv.real_dev ─────┐   │ priv.real_dev ─────┐
+│ priv.vlan_id=10   │   │ priv.vlan_id=20   │
+└──────────────┘     │   └──────────────┘     │
+                     │                        │
+                     ↓                        ↓
+              ┌──────────────┐
+              │    eth0      │
+              │ (物理网卡)    │
+              │ real_dev     │
+              └──────────────┘
+                    │
+              物理网络线
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="flow" class="toc-link">
+  <h2><span class="num">05</span> 收发流程</h2>
+
+  <h3>发送流程</h3>
+  <div class="ascii-diagram"><pre>
+  应用发送数据到 eth0.10
+        │
+        ↓
+  <span style="color:#8250df">vlan_dev_hard_start_xmit()</span> — net/8021q/vlan_dev.c
+        │
+        ├── 1. 检查 VLAN 标签
+        │       如果 skb 已有 VLAN tag → 重新打标签
+        │       否则 → 构造 4 字节 VLAN 头
+        │
+        ├── 2. 插入 VLAN 头
+        │       __vlan_insert_tag() → 在以太网头中插入 TCI
+        │
+        ├── 3. 交给底层网卡
+        │       dev_queue_xmit(skb, vlan_dev_priv->real_dev)
+        │       → eth0 的 ndo_start_xmit
+        │
+        ↓
+  物理网卡发送带 VLAN tag 的帧
+</pre></div>
+
+  <h3>接收流程</h3>
+  <div class="ascii-diagram"><pre>
+  物理网卡 eth0 收到带 VLAN tag 的帧
+        │
+        ↓
+  网卡驱动检测到 VLAN tag
+        │
+        ├── 硬件卸载（VLAN RX offload）
+        │   驱动剥离 VLAN tag，设置 skb->vlan_tci
+        │
+        └── 软件处理
+            __vlan_hwaccel_rx() 或 __vlan_vlan_receive()
+        │
+        ↓
+  <span style="color:#8250df">__netif_receive_skb_core()</span>
+        │
+        ├── 检查 skb->vlan_tci
+        │
+        ├── vlan_tci != 0 → 查找对应的 VLAN 设备
+        │       vlan_find_dev()
+        │       找到 eth0.10（vid=10）
+        │       重新设置 skb->dev = eth0.10
+        │
+        ├── 再次进入 __netif_receive_skb_core()
+        │       此时 skb->dev = eth0.10
+        │       数据包交给 eth0.10 的协议栈
+        │
+        ↓
+  应用从 eth0.10 读取数据（无 VLAN tag）
+</pre></div>
+
+  <div class="callout tip">
+    <strong>VLAN 标签处理的两种方式</strong><br>
+    ① <strong>硬件卸载</strong>：网卡自动剥离/添加 VLAN tag（高效，推荐）<br>
+    ② <strong>软件处理</strong>：内核在 vlan_dev 中插入/剥离（通用，兼容所有网卡）
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="bridge" class="toc-link">
+  <h2><span class="num">06</span> VLAN + Bridge</h2>
+
+  <h3>两种 VLAN + Bridge 模式</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">模式 1：VLAN 子接口 + Bridge（传统）</span>
+
+  需要为每个 VLAN 创建子接口
+  每个 VLAN 独立的 bridge
+
+  $ ip link add eth0.10 type vlan id 10
+  $ ip link add br10 type bridge
+  $ ip link set eth0.10 master br10
+
+  缺点：N 个 VLAN → N 个 bridge，管理复杂
+
+<span style="color:#1a7f37">模式 2：Bridge VLAN Filtering（推荐）</span>
+
+  一个 bridge 管理所有 VLAN
+  每个端口配置允许哪些 VLAN
+
+  $ ip link add br0 type bridge vlan_filtering 1
+  $ bridge vlan add dev eth0 vid 10 pvid untagged
+  $ bridge vlan add dev eth0 vid 20
+  $ bridge vlan add dev veth0 vid 10 pvid untagged
+  $ bridge vlan add dev veth1 vid 20 pvid untagged
+
+  优势：一个 bridge 管理所有 VLAN，简洁高效
+</pre></div>
+
+  <h3>Bridge VLAN Filtering 架构</h3>
+  <div class="ascii-diagram"><pre>
+┌────────────────────────────────────────────────────┐
+│               br0 (vlan_filtering=1)                │
+│                                                     │
+│  Port: eth0          VLANs: 10, 20                  │
+│  Port: veth0         VLANs: 10 (pvid, untagged)    │
+│  Port: veth1         VLANs: 20 (pvid, untagged)    │
+│                                                     │
+│  eth0 收到 VLAN 10 的帧 → 转发到 veth0（strip tag） │
+│  eth0 收到 VLAN 20 的帧 → 转发到 veth1（strip tag） │
+│  veth0 发送的帧 → 打 VLAN 10 tag → 从 eth0 发出    │
+│  veth1 发送的帧 → 打 VLAN 20 tag → 从 eth0 发出    │
+└────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="cli" class="toc-link">
+  <h2><span class="num">07</span> 配置命令</h2>
+
+  <div class="card">
+    <pre><code><span class="cm"># 创建 VLAN 子接口</span>
+$ ip link add link eth0 name eth0.10 type vlan id 10
+$ ip addr add 10.0.0.1/24 dev eth0.10
+$ ip link set eth0.10 up
+
+<span class="cm"># 查看 VLAN 信息</span>
+$ ip -d link show eth0.10
+    vlan protocol 802.1Q id 10 <REORDER_HDR>
+
+<span class="cm"># Bridge VLAN Filtering</span>
+$ ip link add br0 type bridge vlan_filtering 1
+$ ip link set eth0 master br0
+$ ip link set veth0 master br0
+
+<span class="cm"># 添加 VLAN 到端口</span>
+$ bridge vlan add dev eth0 vid 10
+$ bridge vlan add dev eth0 vid 20 pvid untagged
+$ bridge vlan add dev veth0 vid 10 pvid untagged
+
+<span class="cm"># 查看 VLAN 表</span>
+$ bridge vlan show
+port    vlan ids
+eth0    10 PVID Egress Untagged
+        20
+veth0   10 PVID Egress Untagged
+veth1   20 PVID Egress Untagged
+
+<span class="cm"># 删除 VLAN</span>
+$ bridge vlan del dev eth0 vid 10
+$ ip link del eth0.10
+
+<span class="cm"># pvid：收到未标记帧时，打上此 VLAN ID</span>
+<span class="cm"># untagged：发包时剥离 VLAN tag</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/8021q/</span>                    <span class="cmt">总计 2417 行</span>
+├── <span class="file">vlan.c</span>              <span class="cmt">VLAN 核心 (770 行)</span>
+│     └── register_vlan_dev()   <span class="cmt">注册 VLAN 设备</span>
+│     └── unregister_vlan_dev() <span class="cmt">注销 VLAN 设备</span>
+├── <span class="file">vlan_core.c</span>         <span class="cmt">收发处理 (560 行)</span>
+│     └── __vlan_insert_tag()   <span class="cmt">插入 VLAN 标签</span>
+│     └── __vlan_find_dev_from_vid() <span class="cmt">按 VID 查找设备</span>
+├── <span class="file">vlan_dev.c</span>          <span class="cmt">VLAN 设备操作 (1087 行)</span>
+│     └── vlan_dev_hard_start_xmit() <span class="cmt">发送入口</span>
+│     └── vlan_dev_open()       <span class="cmt">设备打开</span>
+├── <span class="file">vlan_netlink.c</span>      <span class="cmt">Netlink 接口</span>
+└── <span class="file">vlan_proc.c</span>         <span class="cmt">/proc/net/vlan/</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">if_vlan.h</span>           <span class="cmt">struct vlan_dev_priv / VLAN API</span>
+
+<span class="dir">net/bridge/</span>
+├── <span class="file">br_vlan.c</span>           <span class="cmt">Bridge VLAN Filtering</span>
+├── <span class="file">br_vlan_core.c</span>      <span class="cmt">VLAN 核心逻辑</span>
+└── <span class="file">br_vlan_netlink.c</span>   <span class="cmt">VLAN Netlink 接口</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/8021q/vlan_dev.c</code> — VLAN 设备的收发实现，从 <code>vlan_dev_hard_start_xmit()</code> 开始。<br>
+    <code>net/8021q/vlan_core.c</code> — VLAN 标签的插入/剥离核心逻辑。<br>
+    <code>net/bridge/br_vlan.c</code> — Bridge VLAN Filtering 实现，与 bridge 配合使用。<br>
+    <code>include/linux/if_vlan.h</code> — <code>struct vlan_dev_priv</code> 定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/8021q/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

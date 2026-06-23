@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 路由子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 路由子系统深度解析</h1>
+  <p class="subtitle">FIB 转发表 — 每个数据包的决策中心</p>
+  <span class="version">Linux 7.0.12 · net/ipv4/ (10428 行路由相关)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">路由决策流程</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#fib">FIB 转发表</a></li>
+    <li><a href="#cache">路由缓存</a></li>
+    <li><a href="#policy">策略路由</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>路由子系统是 Linux 网络栈的<strong>决策中心</strong>。每个进出本机的数据包都要经过路由决策：确定从哪个接口发出、下一跳是谁、是否需要转发。Linux 的路由实现基于 FIB（Forwarding Information Base），使用 LC-trie 数据结构实现高效最长前缀匹配。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">路由核心职责</div>
+      <ul>
+        <li><strong>最长前缀匹配</strong>：从路由表中找到最精确的路由</li>
+        <li><strong>下一跳解析</strong>：确定数据包发往哪个网关或接口</li>
+        <li><strong>多路径负载均衡</strong>：ECMP 等价多路径</li>
+        <li><strong>策略路由</strong>：基于源 IP、DSCP、fwmark 选择路由表</li>
+        <li><strong>PMTU</strong>：路径 MTU 发现</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>route.c</td><td>3799</td><td>路由缓存、核心查找</td></tr>
+        <tr><td>fib_trie.c</td><td>3041</td><td>LC-trie 前缀匹配</td></tr>
+        <tr><td>fib_frontend.c</td><td>1713</td><td>FIB Netlink 接口</td></tr>
+        <tr><td>ip_output.c</td><td>1694</td><td>IP 输出（调用路由）</td></tr>
+        <tr><td>ip_forward.c</td><td>181</td><td>IP 转发</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 路由决策流程</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">收包路由决策（ip_rcv）：</span>
+
+  数据包到达 IP 层
+        │
+        ↓
+  <span style="color:#8250df">ip_rcv()</span> → NF_INET_PRE_ROUTING
+        │
+        ↓
+  <span style="color:#1a7f37">ip_route_input()</span> — route.c
+        │
+        ├── 1. 查路由缓存（dst_cache）
+        │       命中 → 直接返回 rtable（快速路径）
+        │
+        ├── 2. 缓存未命中 → ip_route_input_slow()
+        │       │
+        │       ├── 3. fib_table_lookup() → FIB 查找
+        │       │       最长前缀匹配，得到 fib_result
+        │       │
+        │       ├── 4. 判断路由类型
+        │       │       RTN_LOCAL  → 本机接收
+        │       │       RTN_UNICAST → 转发
+        │       │       RTN_MULTICAST → 组播
+        │       │       RTN_BLACKHOLE → 丢弃
+        │       │
+        │       └── 5. 创建 rtable，加入路由缓存
+        │
+        ↓
+  ┌─────────────────────────────────────┐
+  │ 路由类型判断                          │
+  ├─────────┬─────────┬─────────────────┤
+  │ 本地    │ 转发    │ 丢弃/其他       │
+  │ ip_local_deliver → ip_forward →    │
+  │ → UDP/TCP  → netfilter → 发送     │
+  └─────────┴─────────┴─────────────────┘
+
+<span style="color:#1a7f37">发包路由决策（ip_output）：</span>
+
+  socket 发送数据
+        │
+        ↓
+  <span style="color:#8250df">ip_route_output_flow()</span> — route.c
+        │
+        ├── 查路由缓存 → 命中 → 返回
+        │
+        └── 缓存未命中 → ip_route_output_key_hash()
+                │
+                ├── fib_table_lookup() → FIB 查找
+                ├── 创建 rtable，加入缓存
+                └── 返回 skb->dst = rtable
+        │
+        ↓
+  ip_output → ip_finish_output → dev_queue_xmit
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/flow.h:68 — 路由查找键</span>
+<span class="kw">struct</span> <span class="ty">flowi4</span> {
+    <span class="ty">__be32</span>  saddr;      <span class="cm">// 源 IP</span>
+    <span class="ty">__be32</span>  daddr;      <span class="cm">// 目的 IP（路由查找键）</span>
+    <span class="cm">// 来自 flowi_common：</span>
+    <span class="ty">int</span>     flowi4_oif; <span class="cm">// 出接口（可选）</span>
+    <span class="ty">int</span>     flowi4_iif; <span class="cm">// 入接口</span>
+    <span class="ty">__u8</span>    flowi4_tos; <span class="cm">// TOS/DSCP</span>
+    <span class="ty">__u8</span>    flowi4_proto;<span class="cm">// 协议（TCP/UDP/ICMP）</span>
+    <span class="ty">union</span> flowi_uli uli; <span class="cm">// 源/目的端口（用于 ECMP 哈希）</span>
+};</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/route.h:57 — 路由缓存条目</span>
+<span class="kw">struct</span> <span class="ty">rtable</span> {
+    <span class="kw">struct</span> <span class="ty">dst_entry</span>  dst;          <span class="cm">// 目的缓存（含邻居引用）</span>
+    <span class="ty">int</span>               rt_genid;      <span class="cm">// 路由表代号</span>
+    <span class="ty">unsigned int</span>      rt_flags;      <span class="cm">// RTCF_BROADCAST 等</span>
+    <span class="ty">__u16</span>             rt_type;       <span class="cm">// RTN_LOCAL / RTN_UNICAST</span>
+    <span class="ty">__u8</span>              rt_is_input;   <span class="cm">// 是否是收包路由</span>
+    <span class="ty">__u8</span>              rt_uses_gateway;<span class="cm">// 是否使用网关</span>
+    <span class="ty">int</span>               rt_iif;        <span class="cm">// 入接口索引</span>
+    <span class="ty">__be32</span>            rt_gw4;        <span class="cm">// IPv4 下一跳网关</span>
+    <span class="ty">u32</span>               rt_pmtu:31;    <span class="cm">// 路径 MTU</span>
+};</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/ip_fib.h:173 — FIB 查找结果</span>
+<span class="kw">struct</span> <span class="ty">fib_result</span> {
+    <span class="ty">__be32</span>              prefix;      <span class="cm">// 匹配的路由前缀</span>
+    <span class="ty">unsigned char</span>       prefixlen;   <span class="cm">// 前缀长度（最长匹配）</span>
+    <span class="ty">unsigned char</span>       nh_sel;      <span class="cm">// 下一跳选择（ECMP）</span>
+    <span class="ty">unsigned char</span>       type;        <span class="cm">// 路由类型（UNICAST/LOCAL...）</span>
+    <span class="ty">unsigned char</span>       scope;       <span class="cm">// 路由作用域</span>
+    <span class="kw">struct</span> <span class="ty">fib_nh_common</span> *nhc;       <span class="cm">// 下一跳信息</span>
+    <span class="kw">struct</span> <span class="ty">fib_info</span>     *fi;         <span class="cm">// 路由详细信息</span>
+    <span class="kw">struct</span> <span class="ty">fib_table</span>    *table;      <span class="cm">// 匹配的路由表</span>
+};</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="fib" class="toc-link">
+  <h2><span class="num">04</span> FIB 转发表</h2>
+
+  <h3>FIB 表结构</h3>
+  <div class="card">
+    <pre><code><span class="cm">// include/net/ip_fib.h:257</span>
+<span class="kw">struct</span> <span class="ty">fib_table</span> {
+    <span class="ty">u32</span>             tb_id;        <span class="cm">// 表 ID（255=main, 254=local, 0=unspec）</span>
+    <span class="ty">int</span>             tb_num_hoists; <span class="cm">// 被引用次数</span>
+    <span class="kw">struct</span> <span class="ty">rhlist_head</span> tb_rh;    <span class="cm">// RHASH 节点</span>
+    <span class="kw">struct</span> <span class="ty">fib_table_ops</span> __rcu *tb_data; <span class="cm">// 操作函数表</span>
+};
+
+<span class="cm">// 常用路由表：</span>
+<span class="cm">// RT_TABLE_LOCAL (254) — 本地路由（本机 IP）</span>
+<span class="cm">// RT_TABLE_MAIN  (255) — 主路由表</span>
+<span class="cm">// RT_TABLE_UNSPEC (0)  — 未指定</span></code></pre>
+  </div>
+
+  <h3>LC-trie 前缀匹配</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">FIB 使用 LC-trie（Level Compressed Trie）数据结构：</span>
+
+  路由表：
+  10.0.0.0/8      → dev eth0        (scope link)
+  192.168.1.0/24  → via 10.0.0.1    (gw)
+  192.168.1.10/32 → dev eth0        (scope host, 本地)
+
+  LC-trie 结构（简化）：
+                        ┌───┐
+                        │ 1 │ ← 第 0 位
+                        └─┬─┘
+                    0 /     \ 1
+                ┌───┐         ┌───┐
+                │ 0 │         │ 1 │
+                └─┬─┘         └─┬─┘
+             ...    ...
+                      ┌─────┐
+                      │10.0 │ ← 匹配 10.0.0.0/8
+                      └─────┘
+                      ┌───────────┐
+                      │192.168.1.0│ ← 匹配 192.168.1.0/24
+                      └───────────┘
+                      ┌───────────────┐
+                      │192.168.1.10   │ ← 匹配 192.168.1.10/32（最长匹配）
+                      └───────────────┘
+
+  查找结果：最长前缀匹配
+  192.168.1.10 → 匹配 /32（精确），不匹配 /24 或 /8
+</pre></div>
+
+  <h3>路由表类型</h3>
+  <table>
+    <tr><th>类型</th><th>说明</th><th>示例</th></tr>
+    <tr><td><code>RTN_UNICAST</code></td><td>单播路由</td><td>默认路由、直连路由</td></tr>
+    <tr><td><code>RTN_LOCAL</code></td><td>本地路由</td><td>本机 IP 地址</td></tr>
+    <tr><td><code>RTN_BROADCAST</code></td><td>广播路由</td><td>子网广播地址</td></tr>
+    <tr><td><code>RTN_MULTICAST</code></td><td>组播路由</td><td>224.0.0.0/4</td></tr>
+    <tr><td><code>RTN_BLACKHOLE</code></td><td>黑洞路由</td><td>丢弃所有匹配包</td></tr>
+    <tr><td><code>RTN_UNREACHABLE</code></td><td>不可达</td><td>返回 ICMP unreachable</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="cache" class="toc-link">
+  <h2><span class="num">05</span> 路由缓存</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">现代 Linux（3.6+）使用 dst_cache 替代传统路由缓存：</span>
+
+  <span style="color:#8250df">传统路由缓存</span>（已废弃）：
+  ┌──────────────────────────────┐
+  │ 全局路由缓存哈希表            │
+  │ (saddr, daddr, tos, ...) →   │
+  │         rtable               │
+  └──────────────────────────────┘
+  问题：可被伪造 IP 攻击（CVE-2013-2224）→ 3.6 移除
+
+  <span style="color:#1a7f37">现代 dst_cache</span>（当前实现）：
+  ┌──────────────────────────────┐
+  │ 每个 skb 内嵌 dst_cache      │
+  │ rtable 缓存在 skb->dst 中    │
+  │ 相同 flow 的后续包可复用      │
+  │ 无需全局哈希表               │
+  └──────────────────────────────┘
+  优势：无锁、无全局竞争、安全
+</pre></div>
+
+  <div class="callout tip">
+    <strong>查看路由表</strong><br>
+    <code>ip route show</code> — 查看主路由表<br>
+    <code>ip route show table local</code> — 查看本地路由表<br>
+    <code>ip route get 8.8.8.8</code> — 查看到达指定 IP 的路由<br>
+    <code>cat /proc/net/route</code> — 查看 FIB 路由表
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="policy" class="toc-link">
+  <h2><span class="num">06</span> 策略路由</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">普通路由：仅根据目的 IP 选择路由</span>
+
+  数据包 → 查找 main 表 → 选择路由
+
+<span style="color:#1a7f37">策略路由：根据多种条件选择不同的路由表</span>
+
+  数据包 → ip_rule 查找
+      │
+      ├── 匹配 fwmark=100 → 查表 100
+      ├── 匹配 src=10.0.0.0/8 → 查表 200
+      ├── 匹配 dscp=46 → 查表 300
+      └── 默认 → 查 main 表
+
+<span style="color:#8250df">多路由表示例：</span>
+
+  表 100 (isp1):
+  default via 10.0.1.1 dev eth0
+
+  表 200 (isp2):
+  default via 10.0.2.1 dev eth1
+
+  ip rule:
+  from 10.0.1.0/24  table 100  (ISP1 用户 → ISP1 路由)
+  from 10.0.2.0/24  table 200  (ISP2 用户 → ISP2 路由)
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm"># 配置策略路由</span>
+$ ip rule show
+0:	from all lookup local
+32766:	from all lookup main
+32767:	from all lookup default
+
+<span class="cm"># 添加策略规则</span>
+$ ip rule add from 10.0.1.0/24 table 100
+$ ip rule add fwmark 100 table 200
+
+<span class="cm"># 添加路由到指定表</span>
+$ ip route add default via 10.0.1.1 dev eth0 table 100
+$ ip route add default via 10.0.2.1 dev eth1 table 200
+
+<span class="cm"># 用 iptables 标记数据包</span>
+$ iptables -t mangle -A PREROUTING -s 10.0.1.0/24 -j MARK --set-mark 100</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/ipv4/</span>                       <span class="cmt">路由相关总计 10428 行</span>
+├── <span class="file">route.c</span>              <span class="cmt">路由核心 (3799 行)</span>
+│     └── ip_route_input()      <span class="cmt">收包路由查找</span>
+│     └── ip_route_output_flow() <span class="cmt">发包路由查找</span>
+│     └── ip_route_input_slow() <span class="cmt">慢速路径</span>
+├── <span class="file">fib_trie.c</span>           <span class="cmt">LC-trie 前缀匹配 (3041 行)</span>
+│     └── fib_table_lookup()    <span class="cmt">FIB 查找核心</span>
+├── <span class="file">fib_frontend.c</span>       <span class="cmt">FIB Netlink 接口 (1713 行)</span>
+├── <span class="file">ip_output.c</span>          <span class="cmt">IP 输出 (1694 行)</span>
+│     └── ip_output()           <span class="cmt">→ ip_finish_output</span>
+├── <span class="file">ip_forward.c</span>         <span class="cmt">IP 转发 (181 行)</span>
+├── <span class="file">ip_input.c</span>           <span class="cmt">IP 输入</span>
+├── <span class="file">fib_rules.c</span>          <span class="cmt">策略路由规则</span>
+├── <span class="file">fib_semantics.c</span>      <span class="cmt">FIB 语义解析</span>
+└── <span class="file">ipmr.c</span>               <span class="cmt">组播路由</span>
+
+<span class="dir">include/net/</span>
+├── <span class="file">route.h</span>              <span class="cmt">struct rtable 定义</span>
+├── <span class="file">ip_fib.h</span>             <span class="cmt">struct fib_table / fib_result</span>
+├── <span class="file">flow.h</span>               <span class="cmt">struct flowi4（路由查找键）</span>
+└── <span class="file">fib_rules.h</span>          <span class="cmt">策略路由规则接口</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/ipv4/route.c</code> — 从 <code>ip_route_input_slow()</code> 开始理解收包路由查找。<br>
+    <code>net/ipv4/fib_trie.c</code> — <code>fib_table_lookup()</code> 是 FIB 查找核心，理解 LC-trie。<br>
+    <code>net/ipv4/fib_frontend.c</code> — FIB 的 Netlink 接口，理解 <code>ip route</code> 命令如何操作路由表。<br>
+    <code>include/net/flow.h</code> — <code>struct flowi4</code> 定义路由查找键。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/ipv4/route.c · net/ipv4/fib_trie.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

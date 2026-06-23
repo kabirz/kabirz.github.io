@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux UDP 协议栈深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux UDP 协议栈深度解析</h1>
+  <p class="subtitle">简单高效 — 无连接传输协议的内核实现</p>
+  <span class="version">Linux 7.0.12 · net/ipv4/udp.c (4066 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">协议栈架构</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#send">发送流程</a></li>
+    <li><a href="#recv">接收流程</a></li>
+    <li><a href="#hash">端口查找与哈希表</a></li>
+    <li><a href="#gso">GSO/GRO/GSO</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>UDP（User Datagram Protocol）是 Linux 中最简单的传输层协议。与 TCP 不同，UDP 是<strong>无连接、不可靠</strong>的——没有握手、没有重传、没有拥塞控制。它的优势在于<strong>低延迟、低开销</strong>，适合实时应用和高性能场景。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">UDP 特性</div>
+      <ul>
+        <li><strong>无连接</strong>：不需要建立/释放连接</li>
+        <li><strong>不可靠</strong>：不保证交付、不保证顺序</li>
+        <li><strong>无拥塞控制</strong>：发送速率不受限</li>
+        <li><strong>头部小</strong>：仅 8 字节（TCP 最少 20 字节）</li>
+        <li><strong>支持广播/多播</strong>：TCP 只支持单播</li>
+        <li><strong>零拷贝支持</strong>：MSG_ZEROCOPY / GSO</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>udp.c</td><td>4066</td><td>UDP 核心实现</td></tr>
+        <tr><td>udp_offload.c</td><td>993</td><td>GSO/GRO 硬件卸载</td></tr>
+        <tr><td>include/linux/udp.h</td><td>250</td><td>struct udp_sock</td></tr>
+        <tr><td>include/net/udp.h</td><td>677</td><td>struct udp_table + 内部 API</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 协议栈架构</h2>
+
+  <div class="ascii-diagram"><pre>
+┌─────────────────────────────────────────────────────────────┐
+│                      用户态                                   │
+│                                                              │
+│  ┌──────────┐  sendto() / recvfrom() / sendmsg() / recvmsg()│
+│  │  应用程序  │  sendmmsg()（批量发送）                       │
+│  └────┬─────┘                                               │
+│       │  syscall                                            │
+│  ═════╪═══════════════════════════════════════════════════  │
+│       ↓                       内核态                         │
+│  ┌──────────┐                                               │
+│  │ Socket层 │  sock->ops = inet_dgram_ops                   │
+│  └────┬─────┘                                               │
+│       ↓                                                     │
+│  ┌──────────┐                                               │
+│  │   UDP    │  udp_prot                                     │
+│  │   层     │  udp_sendmsg() / udp_recvmsg()               │
+│  │          │  udp_queue_rcv_skb()                          │
+│  │          │  __udp4_lib_lookup()                          │
+│  └────┬─────┘                                               │
+│       ↓                                                     │
+│  ┌──────────┐                                               │
+│  │   IP     │  ip_send_skb() / ip_rcv()                    │
+│  └──────────┘                                               │
+└─────────────────────────────────────────────────────────────┘
+</pre></div>
+
+  <h3>UDP vs TCP 内核复杂度对比</h3>
+  <table>
+    <tr><th>特性</th><th>UDP</th><th>TCP</th></tr>
+    <tr><td>核心代码行数</td><td>~4066 行（udp.c）</td><td>~22602 行（tcp*.c）</td></tr>
+    <tr><td>状态机</td><td>无</td><td>11 种状态</td></tr>
+    <tr><td>重传</td><td>无</td><td>4 种重传机制</td></tr>
+    <tr><td>拥塞控制</td><td>无</td><td>CUBIC/BBR 等</td></tr>
+    <tr><td>流量控制</td><td>无</td><td>滑动窗口</td></tr>
+    <tr><td>头部大小</td><td>8 字节</td><td>20-60 字节</td></tr>
+    <tr><td>端口查找</td><td>三级哈希表（hash/hash2/hash4）</td><td>二级哈希表（ehash/lhash2）</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/udp.h:53 — UDP socket 结构</span>
+<span class="kw">struct</span> <span class="ty">udp_sock</span> {
+    <span class="cm">// 继承自 inet_sock → sock</span>
+    <span class="kw">struct</span> <span class="ty">inet_sock</span>  inet;
+
+    <span class="ty">unsigned long</span>    udp_flags;
+    <span class="ty">int</span>              pending;       <span class="cm">// 待发送帧数（UDP CORK）</span>
+    <span class="ty">__u8</span>             encap_type;    <span class="cm">// UDP 封装类型（UDP tunnel）</span>
+    <span class="ty">__u16</span>            len;           <span class="cm">// 待发送帧总长度</span>
+    <span class="ty">__u16</span>            gso_size;      <span class="cm">// GSO 段大小</span>
+
+    <span class="cm">// UDP tunnel 封装回调（VXLAN/GRE 等）</span>
+    <span class="ty">int</span> (*encap_rcv)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, <span class="kw">struct</span> <span class="ty">sk_buff</span> *skb);
+
+    <span class="cm">// GRO 回调（接收路径聚合）</span>
+    <span class="kw">struct</span> <span class="ty">sk_buff</span> *(*gro_receive)(...);
+    <span class="ty">int</span> (*gro_complete)(...);
+
+    <span class="cm">// 接收队列（高性能优化）</span>
+    <span class="kw">struct</span> <span class="ty">sk_buff_head</span> reader_queue;
+};</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/udp.h:97 — UDP 端口哈希表</span>
+<span class="kw">struct</span> <span class="ty">udp_table</span> {
+    <span class="kw">struct</span> <span class="ty">udp_hslot</span>       *hash;    <span class="cm">// 一级哈希：按本地端口</span>
+    <span class="kw">struct</span> <span class="ty">udp_hslot_main</span>  *hash2;   <span class="cm">// 二级哈希：(端口, 地址)</span>
+    <span class="kw">struct</span> <span class="ty">udp_hslot</span>       *hash4;   <span class="cm">// 三级哈希：(端口, 地址, 对端端口, 对端地址)</span>
+    <span class="ty">unsigned int</span>           mask;    <span class="cm">// 哈希表大小 - 1</span>
+};
+
+<span class="cm">// 三级哈希查找策略：</span>
+<span class="cm">// hash  → 最快：仅按端口查找（通配地址的 socket）</span>
+<span class="cm">// hash2 → 精确：(端口 + 本地地址) → 支持多网卡绑定</span>
+<span class="cm">// hash4 → 精确：(四元组) → 已连接 UDP（connect() 后）</span></code></pre>
+  </div>
+
+  <h3>继承层次</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────┐
+│     struct sock  │  ← 基础 socket
+├──────────────────┤
+│   inet_sock      │  ← 添加 IP 地址/端口
+├──────────────────┤
+│   udp_sock       │  ← UDP 专有：pending/gso_size/encap_rcv
+└──────────────────┘
+
+TCP 多了一层继承（tcp_sock → inet_connection_sock）
+UDP 没有连接状态，直接从 inet_sock 派生
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="send" class="toc-link">
+  <h2><span class="num">04</span> 发送流程</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">应用调用 sendto(fd, buf, len, 0, dest_addr, addrlen)</span>
+        │
+        ↓
+  <span class="color:#8250df">udp_sendmsg()</span> — net/ipv4/udp.c
+        │
+        ├── 1. <span style="color:#1a7f37">路由查找</span>
+        │       ip_route_output_flow() → 确定出接口和源 IP
+        │       如果 socket 已 connect()，使用缓存的路由
+        │
+        ├── 2. <span style="color:#bc4c00">构造 skb</span>
+        │       __ip_append_data() → 分配 skb + UDP 头
+        │       如果 UDP_CORK 或 MSG_MORE → 缓存不立即发送
+        │
+        ├── 3. <span style="color:#8250df">填充 UDP 头</span>
+        │       源端口、目的端口、长度、校验和
+        │
+        ├── 4. <span style="color:#1a7f37">GSO 分段检查</span>
+        │       如果启用 GSO → 构造大段（延迟到驱动层分段）
+        │       udp_send_skb() → ip_send_skb()
+        │
+        ↓
+  进入 IP 层 → netdevice → 网卡
+</pre></div>
+
+  <h3>UDP_CORK 与 MSG_MORE</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">UDP_CORK</div>
+      <pre><code><span class="cm">// 设置后，数据不会立即发送</span>
+<span class="cm">// 而是缓存在发送队列中</span>
+setsockopt(fd, SOL_UDP, UDP_CORK, &amp;val, <span class="num">1</span>);
+send(fd, buf1, len1, <span class="num">0</span>);  <span class="cm">// 不发送</span>
+send(fd, buf2, len2, <span class="num">0</span>);  <span class="cm">// 不发送</span>
+setsockopt(fd, SOL_UDP, UDP_CORK, &amp;val, <span class="num">0</span>);
+<span class="cm">// uncork → 合并为一个包发送</span></code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title">MSG_MORE</div>
+      <pre><code><span class="cm">// 每次 send 都带 MSG_MORE 标志</span>
+<span class="cm">// 效果等同于 UDP_CORK</span>
+send(fd, buf1, len1, MSG_MORE);  <span class="cm">// 不发送</span>
+send(fd, buf2, len2, MSG_MORE);  <span class="cm">// 不发送</span>
+send(fd, buf3, len3, <span class="num">0</span>);         <span class="cm">// 发送（合并）</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="recv" class="toc-link">
+  <h2><span class="num">05</span> 接收流程</h2>
+
+  <div class="ascii-diagram"><pre>
+  网卡收到 UDP 数据包
+        │
+        ↓
+  IP 层 → ip_rcv() → routing → NF_INET_LOCAL_IN
+        │
+        ↓
+  <span style="color:#cf222e">udp_rcv()</span> — net/ipv4/udp.c
+        │
+        ├── 1. <span style="color:#8250df">校验和验证</span>
+        │       如果校验和错误 → 丢弃
+        │
+        ├── 2. <span style="color:#1a7f37">查找匹配的 socket</span>
+        │       __udp4_lib_lookup_skb()
+        │       → __udp4_lib_lookup() → udp_lib_lookup()
+        │
+        │       查找顺序（三级哈希）：
+        │       hash4 → 已连接 socket（四元组精确匹配）
+        │       hash2 → (端口 + 地址) 匹配
+        │       hash  → 仅端口匹配（通配地址）
+        │
+        ├── 3. <span style="color:#bc4c00">找不到 socket → ICMP port unreachable</span>
+        │
+        ├── 4. <span style="color:#1a7f37">入队</span>
+        │       udp_queue_rcv_skb()
+        │       → __udp_enqueue_schedule_skb()
+        │       → __skb_queue_tail(&amp;sk->sk_receive_queue)
+        │
+        ├── 5. <span style="color:#8250df">通知应用</span>
+        │       sk->sk_data_ready(sk) → 唤醒等待的 recvfrom()
+        │
+        ↓
+  应用 recvfrom() 读取数据
+</pre></div>
+
+  <div class="callout warn">
+    <strong>UDP 接收缓冲区满</strong><br>
+    UDP 没有流量控制。当 socket 接收缓冲区满时，<strong>新到达的包直接丢弃</strong>。不会通知发送方（不像 TCP 的零窗口通知）。<br>
+    <code>netstat -su</code> 中的 <code>RcvbufErrors</code> 就是缓冲区满导致的丢包计数。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="hash" class="toc-link">
+  <h2><span class="num">06</span> 端口查找与哈希表</h2>
+
+  <h3>三级哈希表设计</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">hash — 一级：仅端口</span>
+
+  通配地址的 socket（bind 0.0.0.0:53）
+  → 仅按端口号哈希
+  → 最快，适用于大多数 server socket
+
+<span style="color:#1a7f37">hash2 — 二级：(端口 + 本地地址)</span>
+
+  绑定特定地址的 socket（bind 192.168.1.1:53）
+  → 按 (端口, 地址) 哈希
+  → 支持多网卡绑定
+
+<span style="color:#8250df">hash4 — 三级：(端口, 地址, 对端端口, 对端地址)</span>
+
+  已 connect() 的 UDP socket
+  → 四元组精确匹配
+  → 支持已连接 UDP 的高效查找
+
+查找策略：
+  1. 先查 hash4（最快，精确匹配）
+  2. 再查 hash2（次快，端口+地址）
+  3. 最后查 hash（最慢，仅端口）
+</pre></div>
+
+  <div class="callout tip">
+    <strong>为什么需要三级哈希？</strong><br>
+    ① <strong>性能</strong>：已连接 UDP 用 hash4 O(1) 精确匹配，避免遍历<br>
+    ② <strong>兼容</strong>：通配地址的 socket 用 hash 仍然高效<br>
+    ③ <strong>多宿主</strong>：同一端口绑定不同地址时用 hash2 区分
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="gso" class="toc-link">
+  <h2><span class="num">07</span> GSO/GRO/硬件卸载</h2>
+
+  <h3>发送：GSO（Generic Segmentation Offload）</h3>
+  <div class="ascii-diagram"><pre>
+  应用发送 64KB 数据
+        │
+        ↓
+  UDP 层构造一个超大 skb（64KB，gso_size=1472）
+        │
+        ↓
+  IP 层传递给网卡驱动
+        │
+        ↓
+  网卡驱动检查：支持 GSO？
+    ├── 是 → 网卡硬件分段为多个 MTU 大小的包
+    └── 否 → __udp_gso_segment() 内核软件分段
+</pre></div>
+
+  <h3>接收：GRO（Generic Receive Offload）</h3>
+  <div class="ascii-diagram"><pre>
+  网卡收到多个小 UDP 包
+        │
+        ↓
+  NAPI poll → napi_gro_receive()
+        │
+        ↓
+  GRO 尝试合并：同一 (src, dst, port) 的连续 UDP 包
+        │
+        ├── 合并成功 → 一个大 skb 交给协议栈
+        └── 合并失败 → 逐个处理
+</pre></div>
+
+  <table>
+    <tr><th>机制</th><th>方向</th><th>作用</th><th>性能提升</th></tr>
+    <tr><td><strong>GSO</strong></td><td>发送</td><td>延迟分段，减少协议栈处理</td><td>~30%</td></tr>
+    <tr><td><strong>GRO</strong></td><td>接收</td><td>合并小包，减少协议栈处理</td><td>~40%</td></tr>
+    <tr><td><strong>TSO</strong></td><td>发送</td><td>网卡硬件分段（TCP 专用）</td><td>~50%</td></tr>
+    <tr><td><strong>LRO</strong></td><td>接收</td><td>网卡硬件合并（已废弃）</td><td>-</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="usecases" class="toc-link">
+  <h2><span class="num">08</span> 应用场景</h2>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title" style="color:#cf222e">DNS 查询</div>
+      <p>DNS 使用 UDP 53 端口。请求小（几十字节），响应也小，延迟敏感。UDP 的无连接特性完美匹配——不需要 TCP 的三次握手开销。</p>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#1a7f37">视频流 / 音频流</div>
+      <p>实时音视频（WebRTC、RTP）使用 UDP。丢失几个包不影响播放，但延迟是致命的。TCP 的重传机制反而会造成卡顿。</p>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#8250df">游戏服务器</div>
+      <p>在线游戏使用 UDP 传输位置/状态更新。每秒几十个包，丢失就丢弃（用新值覆盖），不需要重传。</p>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#bc4c00">VXLAN 隧道</div>
+      <p>容器 overlay 网络使用 VXLAN（UDP 4789）。每个容器数据包封装在 UDP 中跨主机传输。udp_sock 的 encap_rcv 回调处理解封装。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/ipv4/</span>
+├── <span class="file">udp.c</span>               <span class="cmt">UDP 核心 (4066 行)</span>
+│     └── udp_sendmsg()     <span class="cmt">发送入口</span>
+│     └── udp_rcv()         <span class="cmt">接收入口</span>
+│     └── udp_queue_rcv_skb() <span class="cmt">入队</span>
+│     └── __udp4_lib_lookup() <span class="cmt">端口查找</span>
+├── <span class="file">udp_offload.c</span>       <span class="cmt">GSO/GRO 卸载 (993 行)</span>
+├── <span class="file">udplite.c</span>           <span class="cmt">UDP-Lite 协议</span>
+└── <span class="file">ping.c</span>              <span class="cmt">ICMP ping</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">udp.h</span>               <span class="cmt">struct udp_sock 定义</span>
+
+<span class="dir">include/net/</span>
+└── <span class="file">udp.h</span>               <span class="cmt">struct udp_table + 内部 API</span>
+
+<span class="dir">net/ipv4/</span>
+├── <span class="file">af_inet.c</span>           <span class="cmt">inet_dgram_ops 注册</span>
+└── <span class="file">inet_hashtables.c</span>   <span class="cmt">TCP 哈希表（对比参考）</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/ipv4/udp.c</code> — 从 <code>udp_sendmsg()</code> 开始理解发送，<code>udp_rcv()</code> 理解接收。<br>
+    <code>net/ipv4/udp_offload.c</code> — 理解 GSO/GRO 如何提升 UDP 性能。<br>
+    <code>include/net/udp.h</code> — 三级哈希表 <code>udp_table</code> 结构定义。<br>
+    <code>net/ipv4/af_inet.c</code> — <code>inet_dgram_ops</code> 如何注册到 inetsw[]。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/ipv4/udp.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux AF_PACKET / Raw Socket 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux AF_PACKET / Raw Socket 深度解析</h1>
+  <p class="subtitle">原始套接字 — tcpdump / libpcap / 网络嗅探的底层机制</p>
+  <span class="version">Linux 7.0.12 · net/packet/af_packet.c (4820 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">三种原始套接字</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#rx">收包路径</a></li>
+    <li><a href="#tx">发包路径</a></li>
+    <li><a href="#mmap">mmap 零拷贝</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>AF_PACKET 是 Linux 提供的<strong>原始套接字地址族</strong>，允许用户态程序直接收发二层以太网帧（跳过协议栈）。它是 <code>tcpdump</code>、<code>libpcap</code>、<code>scapy</code>、<code>dpdk</code> 等网络工具的底层机制。在收发包流程和 Netfilter 文章中，AF_PACKET 多次被提及——它就是"tcpdump 抓包点"。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">AF_PACKET 核心能力</div>
+      <ul>
+        <li><strong>零协议栈</strong>：直接操作二层帧</li>
+        <li><strong>混杂模式</strong>：捕获所有经过网卡的数据</li>
+        <li><strong>mmap 零拷贝</strong>：高性能收包</li>
+        <li><strong>环形缓冲区</strong>：批量处理数据包</li>
+        <li><strong>FANOUT</strong>：多 socket 负载均衡</li>
+        <li><strong>QDISC_BYPASS</strong>：绕过 tc 流量控制</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>af_packet.c</td><td>4820</td><td>AF_PACKET 核心</td></tr>
+        <tr><td>internal.h</td><td>159</td><td>packet_sock 定义</td></tr>
+        <tr><td>diag.c</td><td>267</td><td>socket 诊断</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 三种原始套接字</h2>
+
+  <table>
+    <tr><th>类型</th><th>socket 参数</th><th>层级</th><th>能抓到什么</th><th>典型用途</th></tr>
+    <tr><td><strong>AF_PACKET</strong></td><td>SOCK_RAW</td><td>L2 以太网</td><td>以太网帧（含 MAC 头）</td><td>tcpdump</td></tr>
+    <tr><td><strong>AF_PACKET</strong></td><td>SOCK_DGRAM</td><td>L2 以太网</td><td>以太网帧（不含 MAC 头）</td><td>简化抓包</td></tr>
+    <tr><td><strong>AF_INET</strong></td><td>SOCK_RAW</td><td>L3 IP</td><td>IP 数据包（无 L2 头）</td><td>ping (ICMP)、traceroute</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">AF_PACKET + SOCK_RAW（tcpdump 使用）：</span>
+
+  收到的完整以太网帧：
+  ┌──────────┬──────────┬─────────┬──────────┐
+  │ DST MAC  │ SRC MAC  │  Type   │ IP Data  │
+  │ (6B)     │ (6B)     │ (2B)    │          │
+  └──────────┴──────────┴─────────┴──────────┘
+  ↑ 用户态可以看到完整的以太网帧（14 字节头 + 负载）
+
+<span style="color:#1a7f37">AF_PACKET + SOCK_DGRAM：</span>
+
+  收到的帧去掉以太网头后：
+  ┌─────────┬──────────┐
+  │  Type   │ IP Data  │
+  │ (2B)    │          │
+  └─────────┴──────────┘
+  ↑ 用户态看不到 MAC 头，但更简单
+
+<span style="color:#8250df">AF_INET + SOCK_RAW（ping 使用）：</span>
+
+  收到的 IP 数据包：
+  ┌──────────┬─────────┬──────────┐
+  │ IP Header│ICMP/Hdr │ Payload  │
+  └──────────┴─────────┴──────────┘
+  ↑ 用户态只能看到 IP 层以上
+</pre></div>
+
+  <div class="callout tip">
+    <strong>tcpdump 为什么需要 AF_PACKET + SOCK_RAW？</strong><br>
+    tcpdump 需要看到<strong>完整的以太网帧</strong>，包括 MAC 地址和所有协议头。只有 AF_PACKET + SOCK_RAW 能提供完整的 L2 帧。AF_INET + SOCK_RAW 只能看到 L3 及以上。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// net/packet/internal.h:104 — AF_PACKET socket</span>
+<span class="kw">struct</span> <span class="ty">packet_sock</span> {
+    <span class="kw">struct</span> <span class="ty">sock</span>          sk;             <span class="cm">// 继承自 sock</span>
+    <span class="kw">struct</span> <span class="ty">packet_fanout</span> *fanout;        <span class="cm">// FANOUT 负载均衡</span>
+    <span class="kw">struct</span> <span class="ty">packet_ring_buffer</span> rx_ring;   <span class="cm">// ★ mmap 接收环形缓冲区</span>
+    <span class="kw">struct</span> <span class="ty">packet_ring_buffer</span> tx_ring;   <span class="cm">// ★ mmap 发送环形缓冲区</span>
+    <span class="ty">int</span>                   ifindex;       <span class="cm">// 绑定的网络设备</span>
+    <span class="kw">struct</span> <span class="ty">packet_mclist</span> *mclist;       <span class="cm">// 多播/组播过滤</span>
+    <span class="kw">enum</span> <span class="ty">tpacket_versions</span> tp_version;  <span class="cm">// TPACKET 版本（v1/v2/v3）</span>
+    <span class="kw">struct</span> <span class="ty">packet_type</span>   prot_hook ____cacheline_aligned_in_smp;
+                                          <span class="cm">// ★ 注册到协议栈的钩子</span>
+};</code></pre>
+  </div>
+
+  <h3>AF_PACKET 在协议栈中的位置</h3>
+  <div class="ascii-diagram"><pre>
+  收包路径：
+  NIC → 驱动 → NAPI poll
+    │
+    ├── → 协议栈 → Socket（TCP/UDP）
+    │
+    └── → <span style="color:#cf222e">packet_type.prot_hook</span> → AF_PACKET socket
+                ↑
+                这就是 tcpdump 的抓包点！
+                在 __netif_receive_skb_core() 中检查
+
+  发包路径：
+  AF_PACKET socket → packet_snd()
+    │
+    ├── QDISC_BYPASS=0 → dev_queue_xmit（经过 tc）
+    └── QDISC_BYPASS=1 → dev_hard_start_xmit（绕过 tc）
+                │
+                ↓
+            网卡发送
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="rx" class="toc-link">
+  <h2><span class="num">04</span> 收包路径</h2>
+
+  <div class="ascii-diagram"><pre>
+  数据包到达 __netif_receive_skb_core()
+        │
+        ├── 1. 检查是否有 AF_PACKET socket 注册
+        │       遍历 ptype_all / ptype_specific
+        │       packet_type->func() = <span style="color:#cf222e">packet_rcv()</span>
+        │
+        ├── 2. <span style="color:#8250df">packet_rcv()</span> — af_packet.c
+        │       │
+        │       ├── 检查过滤条件（protocol、接口）
+        │       │
+        │       ├── 检查 socket 接收缓冲区是否满
+        │       │       满 → 丢弃（tp_drops++）
+        │       │
+        │       ├── 方式 A：直接拷贝
+        │       │       skb_clone() + skb_queue_tail()
+        │       │       → 传递给 socket 等待的 recvmsg()
+        │       │
+        │       ├── 方式 B：mmap 环形缓冲区（TPACKET）
+        │       │       写入 rx_ring
+        │       │       用户态通过 poll() 检测新包
+        │       │
+        │       └── 方式 C：QDISC_BYPASS
+        │               绕过 tc 直接到网卡
+        │
+        └── 3. 数据包同时继续传递给协议栈
+                AF_PACKET 是"旁路"抓包，不影响正常流程
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="tx" class="toc-link">
+  <h2><span class="num">05</span> 发包路径</h2>
+
+  <div class="ascii-diagram"><pre>
+  应用调用 sendto(fd, frame, len, ...)
+        │
+        ↓
+  <span style="color:#8250df">packet_snd()</span> — af_packet.c
+        │
+        ├── 1. 构造 sk_buff
+        │       分配 skb + 复制用户数据到 skb
+        │
+        ├── 2. 设置 skb->protocol = ETH_P_ALL
+        │       设置 skb->dev = 绑定的网络设备
+        │
+        ├── 3. 发送
+        │       ├── QDISC_BYPASS=0 → dev_queue_xmit(skb)
+        │       │       经过 tc 流量控制（默认）
+        │       │
+        │       └── QDISC_BYPASS=1 → dev_hard_start_xmit(skb)
+        │               绕过 tc（高性能模式）
+        │
+        ↓
+  网卡驱动发送原始以太网帧
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="mmap" class="toc-link">
+  <h2><span class="num">06</span> mmap 零拷贝</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">传统 recvmsg()（有拷贝）：</span>
+
+  内核 → skb_clone() → skb_queue → recvmsg() → memcpy → 用户态
+                            ↑              ↑
+                        内核态拷贝      用户态拷贝
+
+<span style="color:#1a7f37">mmap TPACKET（零拷贝）：</span>
+
+  内核 rx_ring ←──→ 用户态 rx_ring（共享内存）
+       ↑                   ↑
+  驱动直接写入         用户态直接读取
+  无 memcpy！         无 memcpy！
+</pre></div>
+
+  <h3>TPACKET 版本</h3>
+  <table>
+    <tr><th>版本</th><th>缓冲区</th><th>特点</th></tr>
+    <tr><td>TPACKET_V1</td><td>固定帧大小</td><td>简单，但浪费内存（小包也占整帧）</td></tr>
+    <tr><td>TPACKET_V2</td><td>可变帧大小</td><td>支持时间戳精度提升</td></tr>
+    <tr><td>TPACKET_V3</td><td>块模式</td><td>批量处理，性能最优，tcpdump 默认</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm">// 用户态代码示例</span>
+<span class="ty">int</span> fd = <span class="fn">socket</span>(AF_PACKET, SOCK_RAW, <span class="fn">htons</span>(ETH_P_ALL));
+
+<span class="cm">// 设置 TPACKET_V3</span>
+<span class="kw">struct</span> <span class="ty">tpacket_req3</span> req = {
+    .tp_block_size = <span class="num">4096</span>,
+    .tp_block_nr   = <span class="num">64</span>,
+    .tp_frame_size = <span class="num">2048</span>,
+    .tp_frame_nr   = <span class="num">128</span>,
+};
+<span class="fn">setsockopt</span>(fd, SOL_PACKET, PACKET_VERSION, &amp;v3, <span class="kw">sizeof</span>(v3));
+<span class="fn">setsockopt</span>(fd, SOL_PACKET, PACKET_RX_RING, &amp;req, <span class="kw">sizeof</span>(req));
+
+<span class="cm">// mmap 共享内存</span>
+<span class="ty">void</span> *ring = <span class="fn">mmap</span>(NULL, total_size, PROT_READ, MAP_SHARED, fd, <span class="num">0</span>);
+
+<span class="cm">// poll 等待新包</span>
+<span class="fn">poll</span>(&amp;pfd, <span class="num">1</span>, -<span class="num">1</span>);
+<span class="cm">// 直接读 ring，无 memcpy</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/packet/</span>              <span class="cmt">总计 5087 行</span>
+├── <span class="file">af_packet.c</span>      <span class="cmt">AF_PACKET 核心 (4820 行)</span>
+│     └── packet_rcv()       <span class="cmt">收包入口（旁路抓包）</span>
+│     └── packet_snd()       <span class="cmt">发包入口</span>
+│     └── tpacket_rcv()      <span class="cmt">mmap 收包</span>
+│     └── packet_create()    <span class="cmt">创建 AF_PACKET socket</span>
+├── <span class="file">internal.h</span>       <span class="cmt">struct packet_sock (159 行)</span>
+└── <span class="file">diag.c</span>           <span class="cmt">socket 诊断 (267 行)</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">packet.h</span>         <span class="cmt">TPACKET 结构定义</span>
+
+<span class="dir">net/core/</span>
+└── <span class="file">dev.c</span>            <span class="cmt">__netif_receive_skb_core() 中的 ptype 分发</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/packet/af_packet.c</code> — 从 <code>packet_rcv()</code> 理解收包旁路，<code>packet_snd()</code> 理解发包。<br>
+    <code>net/core/dev.c</code> — <code>__netif_receive_skb_core()</code> 中的 <code>ptype_all</code> 分发是抓包的关键。<br>
+    <code>include/linux/packet.h</code> — TPACKET V1/V2/V3 结构定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/packet/af_packet.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

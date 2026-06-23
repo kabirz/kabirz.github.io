@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Page Cache 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Page Cache 深度解析</h1>
+  <p class="subtitle">页面缓存 — 文件 I/O 性能的核心加速器</p>
+  <span class="version">Linux 7.0.12 · mm/filemap.c (4752 行) · mm/page-writeback.c (3114 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#read">读路径</a></li>
+    <li><a href="#write">写路径与回写</a></li>
+    <li><a href="#tuning">调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Page Cache（页面缓存）是 Linux 内核的<strong>文件内容缓存</strong>。当进程读写文件时，数据首先在 Page Cache 中缓存，避免每次都要访问磁盘。它是 Linux 文件 I/O 性能的核心——大部分文件读操作都是 Page Cache 命中，根本不涉及磁盘 I/O。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Page Cache 核心价值</div>
+      <ul>
+        <li><strong>极速读取</strong>：重复读取直接从内存获取</li>
+        <li><strong>延迟写入</strong>：write() 只写 Page Cache，异步回写磁盘</li>
+        <li><strong>mmap 支撑</strong>：mmap 依赖 Page Cache 做页面映射</li>
+        <li><strong>共享内存</strong>：同一文件的 mmap 被多进程共享</li>
+        <li><strong>sendfile 零拷贝</strong>：文件→socket 直接走 Page Cache</li>
+        <li><strong>动态回收</strong>：空闲时自动回收，内存紧张时优先回收</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>mm/filemap.c</td><td>4752</td><td>Page Cache 核心读写</td></tr>
+        <tr><td>mm/page-writeback.c</td><td>3114</td><td>回写（writeback）机制</td></tr>
+        <tr><td>fs/buffer.c</td><td>3163</td><td>Buffer Cache（块设备缓存）</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Page Cache 在 I/O 路径中的位置：</span>
+
+  ┌──────────────────────────────────────────────────────────┐
+  │                      用户进程                             │
+  │                                                           │
+  │  read(fd, buf, len)    write(fd, buf, len)                │
+  │         │                    │                            │
+  │         ↓                    ↓                            │
+  │  ┌─────────────┐    ┌─────────────┐                      │
+  │  │ VFS 层      │    │ VFS 层      │                      │
+  │  └──────┬──────┘    └──────┬──────┘                      │
+  │         ↓                  ↓                              │
+  │  ┌──────────────────────────────────────┐                │
+  │  │         Page Cache（内存中）          │                │
+  │  │                                        │                │
+  │  │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ │                │
+  │  │  │Page 0│ │Page 1│ │Page 2│ │Page 3│ │ ← XArray 管理  │
+  │  │  └──────┘ └──────┘ └──────┘ └──────┘ │                │
+  │  │                                        │                │
+  │  │  address_space（每个 inode 一个）      │                │
+  │  └──────────────────────────────────────┘                │
+  │                    ↑              │                        │
+  │                    │              ↓                        │
+  │              Page Cache 命中    回写线程 (pdflush/flush)   │
+  │              直接返回数据        异步写回磁盘               │
+  │                    ↑                                        │
+  │  ┌──────────────────────────────────────┐                │
+  │  │           Block Layer                │                │
+  │  └──────────────────────────────────────┘                │
+  │                    ↑              │                        │
+  │              DMA 读取          DMA 写入                    │
+  │                    │              ↓                        │
+  │  ┌──────────────────────────────────────┐                │
+  │  │              磁盘 / SSD               │                │
+  │  └──────────────────────────────────────┘                │
+  └──────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/fs.h:470 — 地址空间（每个 inode 一个）</span>
+<span class="kw">struct</span> <span class="ty">address_space</span> {
+    <span class="kw">struct</span> <span class="ty">inode</span>          *host;        <span class="cm">// 所属的 inode（文件）</span>
+    <span class="kw">struct</span> <span class="ty">xarray</span>          i_pages;     <span class="cm">// ★ 页面 XArray（pgoff → page）</span>
+    <span class="kw">struct</span> <span class="ty">rb_root_cached</span>  i_mmap;      <span class="cm">// mmap 区域树</span>
+    <span class="ty">unsigned long</span>          nrpages;     <span class="cm">// 缓存的页面总数</span>
+    <span class="ty">pgoff_t</span>                writeback_index; <span class="cm">// 回写起始偏移</span>
+    <span class="kw">const struct</span> <span class="ty">address_space_operations</span> *a_ops; <span class="cm">// 操作函数表</span>
+    <span class="ty">unsigned long</span>          flags;       <span class="cm">// AS_DIRTY / AS_EIO 等</span>
+};</code></pre>
+  </div>
+
+  <h3>Page Cache 查找</h3>
+  <div class="ascii-diagram"><pre>
+  Page Cache 使用 XArray（可扩展稀疏数组）管理：
+
+  address_space.i_pages (XArray)
+    │
+    ├── key = pgoff（文件内页面偏移）
+    │
+    ├── value = struct page / folio（物理页面）
+    │
+    └── 支持按 tag 检索：
+          PAGECACHE_TAG_DIRTY     → 脏页面
+          PAGECACHE_TAG_WRITEBACK → 正在回写的页面
+          PAGECACHE_TAG_TOWRITE   → 待写入的页面
+
+  查找：find_get_page(mapping, offset) → O(log n)
+  插入：add_to_page_cache_lru() → O(log n)
+  删除：delete_from_page_cache() → O(log n)
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="read" class="toc-link">
+  <h2><span class="num">04</span> 读路径</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">generic_file_read_iter() — 通用文件读取路径：</span>
+
+  read(fd, buf, count)
+        │
+        ↓
+  <span style="color:#8250df">generic_file_read_iter()</span> — mm/filemap.c
+        │
+        ├── 1. 查找 Page Cache
+        │       filemap_get_pages()
+        │       → find_get_page() 在 XArray 中查找
+        │
+        ├── 2. Page Cache 命中（常见路径）
+        │       页面已在内存中
+        │       copy_page_to_iter() → 复制到用户态 buf
+        │       <span style="color:#1a7f37">无需磁盘 I/O！</span>
+        │
+        ├── 3. Page Cache 未命中
+        │       page_cache_sync_readahead()
+        │       → 预读（readahead）策略
+        │       → 从磁盘读取多个连续页面
+        │       → 加入 Page Cache
+        │       → 复制到用户态
+        │
+        └── 4. 返回读取的字节数
+</pre></div>
+
+  <div class="callout tip">
+    <strong>预读（Readahead）</strong><br>
+    Linux 内核在 Page Cache 未命中时不是只读一个页面，而是<strong>预读一批连续页面</strong>（默认 32KB~256KB）。这利用了文件访问的空间局部性——读取 offset 100 附近的页面后，很可能马上要读 offset 101、102。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="write" class="toc-link">
+  <h2><span class="num">05</span> 写路径与回写</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">写入路径（延迟写入）：</span>
+
+  write(fd, buf, count)
+        │
+        ↓
+  <span style="color:#8250df">generic_perform_write()</span>
+        │
+        ├── 1. 查找/分配 Page Cache 页面
+        │       grab_cache_page_write_begin()
+        │
+        ├── 2. 将数据复制到 Page Cache
+        │       copy_page_from_iter_atomic()
+        │       页面标记为 DIRTY（脏页）
+        │
+        ├── 3. 返回 count
+        │       <span style="color:#1a7f37">write() 立即返回！</span>
+        │       <span style="color:#1a7f37">数据还在 Page Cache 中，未写磁盘</span>
+        │
+        ↓
+  ──────────────── 异步回写 ────────────────
+        │
+        ↓
+  <span style="color:#8250df">回写线程（writeback）</span>
+        │
+        ├── 触发条件：
+        │   - dirty_ratio 超限（脏页比例过高）
+        │   - dirty_expire_interval 超时（脏页超过 30 秒）
+        │   - 内存不足（kswapd 唤醒）
+        │   - 用户调用 sync() / fsync()
+        │
+        ├── 扫描 address_space.i_pages
+        │   找到 PAGECACHE_TAG_DIRTY 标记的页面
+        │
+        └── 执行回写
+            a_ops->writepage() / writepages()
+            → 提交到 Block Layer → DMA 写入磁盘
+</pre></div>
+
+  <h3>脏页管理</h3>
+  <table>
+    <tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+    <tr><td><code>vm.dirty_ratio</code></td><td>20%</td><td>脏页占系统内存比例上限，超过则阻塞写入</td></tr>
+    <tr><td><code>vm.dirty_background_ratio</code></td><td>10%</td><td>触发后台回写的脏页比例</td></tr>
+    <tr><td><code>vm.dirty_expire_centisecs</code></td><td>3000</td><td>脏页最大存活时间（30 秒）</td></tr>
+    <tr><td><code>vm.dirty_writeback_centisecs</code></td><td>500</td><td>回写线程唤醒间隔（5 秒）</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="tuning" class="toc-link">
+  <h2><span class="num">06</span> 调优</h2>
+
+  <div class="card">
+    <pre><code><span class="cm"># 查看 Page Cache 使用情况</span>
+$ free -h
+$ cat /proc/meminfo | grep -E "Cached|Buffers|Dirty|Writeback"
+
+<span class="cm"># 调整脏页策略（数据库服务器常用）</span>
+$ sysctl -w vm.dirty_ratio=40
+$ sysctl -w vm.dirty_background_ratio=5
+$ sysctl -w vm.dirty_expire_centisecs=500
+
+<span class="cm"># 强制同步写入（数据安全优先）</span>
+$ sysctl -w vm.dirty_expire_centisecs=100
+<span class="cm"># 或在应用层使用 O_SYNC / fdatasync()</span>
+
+<span class="cm"># 预读调整</span>
+$ blockdev --setra 4096 /dev/sda    <span class="cm"># 预读 2MB（4096 扇区）</span>
+
+<span class="cm"># 直接 I/O（绕过 Page Cache）</span>
+$ open(file, O_DIRECT | O_WRONLY)   <span class="cm"># 数据库常用</span>
+<span class="cm"># 注意：O_DIRECT 需要对齐内存地址（512/4096 字节对齐）</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">filemap.c</span>         <span class="cmt">Page Cache 核心 (4752 行)</span>
+│     └── generic_file_read_iter() <span class="cmt">通用文件读取</span>
+│     └── filemap_get_pages()      <span class="cmt">查找/预读页面</span>
+│     └── grab_cache_page_write_begin() <span class="cmt">写入时获取页面</span>
+├── <span class="file">page-writeback.c</span>  <span class="cmt">回写机制 (3114 行)</span>
+│     └── balance_dirty_pages()    <span class="cmt">脏页平衡</span>
+│     └── writeback_single_inode() <span class="cmt">回写单个 inode</span>
+├── <span class="file">readahead.c</span>       <span class="cmt">预读策略</span>
+└── <span class="file">swap.c</span>            <span class="cmt">页面换出</span>
+
+<span class="dir">fs/</span>
+├── <span class="file">buffer.c</span>          <span class="cmt">Buffer Cache (3163 行)</span>
+└── <span class="file">fsync.c</span>           <span class="cmt">fsync / fdatasync</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">fs.h</span>              <span class="cmt">struct address_space (L470)</span>
+├── <span class="file">mm.h</span>              <span class="cmt">页面标志定义</span>
+└── <span class="file">pagemap.h</span>         <span class="cmt">页面缓存 API</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/filemap.c</code> — 从 <code>generic_file_read_iter()</code> 理解读路径，<code>filemap_get_pages()</code> 理解 Page Cache 查找和预读。<br>
+    <code>mm/page-writeback.c</code> — 从 <code>balance_dirty_pages()</code> 理解脏页管理和回写触发。<br>
+    <code>include/linux/fs.h</code> — <code>struct address_space</code>（L470）是 Page Cache 的核心数据结构。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/filemap.c · mm/page-writeback.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

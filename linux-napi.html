@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux NAPI 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux NAPI 深度解析</h1>
+  <p class="subtitle">New API — 高性能数据包接收的核心机制</p>
+  <span class="version">Linux 7.0.12 · net/core/dev.c (13344 行) · net/core/gro.c (842 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#compare">传统 vs NAPI</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">NAPI 工作流程</a></li>
+    <li><a href="#threaded">Threaded NAPI</a></li>
+    <li><a href="#gro">GRO 聚合</a></li>
+    <li><a href="#rps">RPS/RFS</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>NAPI（New API）是 Linux 内核中<strong>高性能网络数据包接收</strong>的核心机制。它将中断驱动和轮询模式结合，在高流量时自动从"中断模式"切换到"轮询模式"，避免 CPU 被中断淹没。所有现代 Linux 网卡驱动都使用 NAPI。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">NAPI 核心思想</div>
+      <ul>
+        <li><strong>低流量</strong>：中断驱动（省 CPU）</li>
+        <li><strong>高流量</strong>：轮询模式（高吞吐）</li>
+        <li><strong>自动切换</strong>：基于 NAPI_WEIGHT 自适应</li>
+        <li><strong>批量处理</strong>：一次 poll 处理多个包</li>
+        <li><strong>与 GRO 集成</strong>：合并小包减少协议栈开销</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>net/core/dev.c</td><td>13344</td><td>NAPI 核心、net_rx_action</td></tr>
+        <tr><td>net/core/gro.c</td><td>842</td><td>GRO 聚合逻辑</td></tr>
+        <tr><td>net/core/devinet.c</td><td>-</td><td>网络设备管理</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="compare" class="toc-link">
+  <h2><span class="num">02</span> 传统 vs NAPI</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">传统模式（每个包一次中断）：</span>
+
+  包 1 到达 → IRQ → softIRQ → 处理包 1
+  包 2 到达 → IRQ → softIRQ → 处理包 2
+  包 3 到达 → IRQ → softIRQ → 处理包 3
+  ...
+
+  问题：高流量时 CPU 忙于中断处理，无法做有用工作
+  PPS 100 万 → 100 万次 IRQ/softIRQ → CPU 100% 忙碌
+
+<span style="color:#1a7f37">NAPI 模式（中断 + 轮询混合）：</span>
+
+  包 1 到达 → IRQ → <span style="color:#8250df">禁用 IRQ</span> + <span style="color:#1a7f37">加入 poll_list</span>
+                  → 触发 softIRQ（NET_RX_SOFTIRQ）
+                  → net_rx_action()
+                  → <span style="color:#1a7f37">轮询处理所有包</span>（weight=64 个）
+                  → 处理完 → <span style="color:#cf222e">重新启用 IRQ</span>
+  包 2..64 到达 → DMA 到内存，无中断
+                  → net_rx_action 继续轮询
+                  → 全部处理完
+
+  优势：64 个包只需 1 次 IRQ + 1 次 softIRQ → CPU 利用率低
+</pre></div>
+
+  <table>
+    <tr><th>特性</th><th>传统模式</th><th>NAPI</th></tr>
+    <tr><td>中断频率</td><td>每包一次</td><td>仅首包触发一次</td></tr>
+    <tr><td>处理方式</td><td>中断上下文</td><td>softirq 轮询</td></tr>
+    <tr><td>批量处理</td><td>不支持</td><td>一次 poll 处理多个包</td></tr>
+    <tr><td>高流量时</td><td>CPU 被中断淹没</td><td>自动切换轮询</td></tr>
+    <tr><td>低流量时</td><td>响应快</td><td>自动恢复中断</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/netdevice.h:381 — NAPI 结构</span>
+<span class="kw">struct</span> <span class="ty">napi_struct</span> {
+    <span class="ty">unsigned long</span>         state;         <span class="cm">// 状态位图（SCHED/MISSED/DISABLE）</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span>      poll_list;     <span class="cm">// 等待轮询的 NAPI 列表</span>
+    <span class="ty">int</span>                   weight;        <span class="cm">// ★ 轮询权重（默认 64）</span>
+    <span class="ty">int</span>                 (*poll)(<span class="kw">struct</span> <span class="ty">napi_struct</span> *, <span class="ty">int</span>); <span class="cm">// ★ 驱动的轮询函数</span>
+    <span class="kw">struct</span> <span class="ty">net_device</span>    *dev;          <span class="cm">// 关联的网络设备</span>
+    <span class="kw">struct</span> <span class="ty">sk_buff</span>       *skb;          <span class="cm">// 当前正在处理的 skb</span>
+    <span class="kw">struct</span> <span class="ty">gro_node</span>       gro;           <span class="cm">// GRO 聚合节点</span>
+    <span class="kw">struct</span> <span class="ty">hrtimer</span>        timer;         <span class="cm">// 定时器（busy polling）</span>
+    <span class="kw">struct</span> <span class="ty">task_struct</span>    *thread;       <span class="cm">// Threaded NAPI 线程</span>
+    <span class="ty">u32</span>                   napi_id;       <span class="cm">// NAPI 唯一 ID</span>
+    <span class="ty">int</span>                   irq;           <span class="cm">// 关联的 IRQ 号</span>
+};</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/netdevice.h:3516 — 每 CPU 软中断数据</span>
+<span class="kw">struct</span> <span class="ty">softnet_data</span> {
+    <span class="kw">struct</span> <span class="ty">list_head</span>      poll_list;      <span class="cm">// 本 CPU 的 NAPI 轮询列表</span>
+    <span class="kw">struct</span> <span class="ty">sk_buff_head</span>   process_queue;  <span class="cm">// 待处理的 backlog 队列</span>
+    <span class="ty">unsigned int</span>          processed;      <span class="cm">// 已处理包数</span>
+    <span class="ty">unsigned int</span>          time_squeeze;   <span class="cm">// 因时间不足未处理完的次数</span>
+    <span class="kw">struct</span> <span class="ty">Qdisc</span>         *output_queue;  <span class="cm">// 发送队列（TC）</span>
+    <span class="kw">struct</span> <span class="ty">sk_buff</span>       *completion_queue; <span class="cm">// 完成队列</span>
+};</code></pre>
+  </div>
+
+  <h3>数据结构关系</h3>
+  <div class="ascii-diagram"><pre>
+  每个 CPU 有独立的 softnet_data：
+
+  CPU 0                          CPU 1
+  ┌──────────────────┐          ┌──────────────────┐
+  │  softnet_data    │          │  softnet_data    │
+  │  poll_list:      │          │  poll_list:      │
+  │   ├─ napi_struct │(eth0)    │   ├─ napi_struct │(eth1)
+  │   └─ napi_struct │(eth2)    │   └─ napi_struct │(eth3)
+  │                  │          │                  │
+  │  process_queue:  │          │  process_queue:  │
+  │   └─ sk_buff...  │          │   └─ sk_buff...  │
+  └──────────────────┘          └──────────────────┘
+
+  napi_struct 由驱动创建，绑定到 net_device
+  softirq 调度时，遍历本 CPU 的 poll_list 逐个 NAPI poll
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> NAPI 工作流程</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">1. 网卡收到数据包，触发 IRQ</span>
+
+  NIC → DMA 到内存 → raise IRQ → CPU
+        │
+        ↓
+  <span style="color:#8250df">napi_schedule()</span> — 驱动调用
+        │
+        ├── 设置 NAPI_STATE_SCHED（原子位操作）
+        ├── 禁用网卡 IRQ：disable_irq(napi->irq)
+        ├── napi 加入 per-CPU poll_list
+        └── raise NET_RX_SOFTIRQ（触发软中断）
+
+<span style="color:#1a7f37">2. 软中断处理：net_rx_action()</span>
+
+  NET_RX_SOFTIRQ → <span style="color:#1a7f37">net_rx_action()</span> — net/core/dev.c
+        │
+        ├── 遍历 softnet_data->poll_list
+        │
+        ├── 对每个 napi_struct 调用：
+        │       work = napi->poll(napi, budget)
+        │       │
+        │       ├── 驱动从 DMA 缓冲区取出 sk_buff
+        │       ├── 调用 napi_gro_receive()（GRO 聚合）
+        │       └── 返回已处理的包数
+        │
+        ├── budget 限制：每个 NAPI 最多处理 budget 个包
+        │       总 budget = 300（所有 NAPI 共享）
+        │
+        ├── 如果 work == 0（处理完毕）
+        │       → 从 poll_list 移除
+        │       → napi_complete(napi)
+        │       → 启用网卡 IRQ：enable_irq(napi->irq)
+        │
+        └── 如果 work > 0（还有包）
+                → 重新调度（reschedule）
+                → 继续下一轮 poll
+
+<span style="color:#8250df">3. 数据包进入协议栈</span>
+
+  napi_gro_receive(napi, skb)
+        │
+        ├── GRO 聚合：合并小包
+        │
+        └── __netif_receive_skb(skb)
+                → 进入协议栈（IP/TCP/UDP）
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="threaded" class="toc-link">
+  <h2><span class="num">05</span> Threaded NAPI</h2>
+
+  <p>Threaded NAPI 是 Linux 5.14+ 引入的新特性。NAPI poll 在<strong>专用内核线程</strong>中执行，而非 softirq 上下文。</p>
+
+  <table>
+    <tr><th>特性</th><th>传统 NAPI（softirq）</th><th>Threaded NAPI</th></tr>
+    <tr><td>执行上下文</td><td>softirq（不可睡眠）</td><td>内核线程（可睡眠）</td></tr>
+    <tr><td>优先级</td><td>高（所有 softirq 共享）</td><td>SCHED_FIFO 实时优先级</td></tr>
+    <tr><td>CPU 亲和性</td><td>运行在触发 IRQ 的 CPU</td><td>可绑定到任意 CPU</td></tr>
+    <tr><td>适用场景</td><td>通用</td><td>高吞吐 + 低延迟</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>启用 Threaded NAPI</strong><br>
+    <code>echo 1 > /sys/class/net/eth0/threaded</code><br>
+    <code>ip link set eth0 threaded on</code>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="gro" class="toc-link">
+  <h2><span class="num">06</span> GRO 聚合</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">GRO（Generic Receive Offload）在 NAPI poll 中执行：</span>
+
+  无 GRO：
+  包 1 → skb → 协议栈处理
+  包 2 → skb → 协议栈处理
+  包 3 → skb → 协议栈处理
+  → 3 次协议栈开销
+
+  <span style="color:#1a7f37">有 GRO：</span>
+  包 1 → skb ─┐
+  包 2 → skb ─┤→ GRO 合并 → 大 skb → 协议栈处理
+  包 3 → skb ─┘
+  → 1 次协议栈开销（减少 66%）
+
+  GRO 合并条件：
+  - 同一 (src, dst, port) 四元组
+  - 连续的序号（TCP）
+  - 相同的协议类型
+  - 不超过 MSS（最大段大小）
+</pre></div>
+
+  <div class="callout">
+    <strong>GRO vs GSO</strong><br>
+    <strong>GRO</strong>（接收）：合并小包 → 减少协议栈处理次数 → 提升接收性能<br>
+    <strong>GSO</strong>（发送）：延迟分段 → 减少协议栈处理次数 → 提升发送性能<br>
+    两者对称：GRO 在接收路径合并，GSO 在发送路径分段。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="rps" class="toc-link">
+  <h2><span class="num">07</span> RPS/RFS</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">RPS（Receive Packet Steering）— 软件层面的接收多队列：</span>
+
+  单队列网卡 + RPS：
+  ┌──────────┐
+  │   NIC    │ → 单队列 → CPU 0（传统：所有包在 CPU 0 处理）
+  └──────────┘
+  ┌──────────┐
+  │   NIC    │ → RPS → 按流哈希分发 → CPU 0 / CPU 1 / CPU 2 / CPU 3
+  └──────────┘
+  优势：即使网卡只有单队列，也能多 CPU 并行处理
+
+<span style="color:#1a7f37">RFS（Receive Flow Steering）— 将包送到处理该流的 CPU：</span>
+
+  传统 RPS：按哈希分发，可能送到错误 CPU（导致 cache miss）
+  RFS：     追踪应用在哪个 CPU 处理，将包送到同一 CPU
+            → 应用 cache 命中率提升 → 性能更好
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm"># 配置 RPS（为 eth0 启用 4 个 CPU）</span>
+$ echo "f" > /sys/class/net/eth0/queues/rx-0/rps_cpus
+<span class="cm"># f = 0xf = 二进制 1111 = CPU 0-3</span>
+
+<span class="cm"># 配置 RFS（全局）</span>
+$ sysctl -w net.core.rps_sock_flow_entries=32768
+$ echo 32768 > /sys/class/net/eth0/queues/rx-0/rps_flow_cnt</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/core/</span>
+├── <span class="file">dev.c</span>              <span class="cmt">NAPI 核心 (13344 行)</span>
+│     └── net_rx_action()     <span class="cmt">NAPI 轮询主循环</span>
+│     └── __netif_receive_skb_core() <span class="cmt">协议栈分发</span>
+│     └── napi_schedule()     <span class="cmt">调度 NAPI（驱动调用）</span>
+│     └── napi_complete()     <span class="cmt">NAPI 完成（恢复中断）</span>
+├── <span class="file">gro.c</span>              <span class="cmt">GRO 聚合 (842 行)</span>
+│     └── napi_gro_receive()  <span class="cmt">NAPI + GRO 入口</span>
+│     └── dev_gro_receive()   <span class="cmt">GRO 聚合核心</span>
+└── <span class="file">gro_cells.c</span>        <span class="cmt">多设备 GRO</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">netdevice.h</span>         <span class="cmt">struct napi_struct / softnet_data</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/core/dev.c</code> — 从 <code>net_rx_action()</code> 开始理解 NAPI poll 主循环。<br>
+    <code>net/core/gro.c</code> — <code>napi_gro_receive()</code> 理解 GRO 如何与 NAPI 集成。<br>
+    <code>include/linux/netdevice.h</code> — <code>struct napi_struct</code>（第 381 行）和 <code>struct softnet_data</code>（第 3516 行）。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/core/dev.c · net/core/gro.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

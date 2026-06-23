@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Pipe 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Pipe 深度解析</h1>
+  <p class="subtitle">匿名管道 — 最简单最高效的进程间通信</p>
+  <span class="version">Linux 7.0.12 · fs/pipe.c (1552 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">管道类型</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">读写流程</a></li>
+    <li><a href="#splice">splice 与零拷贝</a></li>
+    <li><a href="#compare">IPC 对比</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Pipe（管道）是 UNIX/Linux 中<strong>最古老最简单</strong>的进程间通信机制。管道提供单向字节流，写入端发送数据，读取端接收数据，内核在中间维护一个环形缓冲区。Pipe 是 <code>cmd1 | cmd2</code> shell 管道操作符的底层实现。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Pipe 核心特性</div>
+      <ul>
+        <li><strong>单向通信</strong>：一端读、一端写</li>
+        <li><strong>字节流</strong>：无消息边界</li>
+        <li><strong>阻塞 I/O</strong>：满时写阻塞，空时读阻塞</li>
+        <li><strong>自动清理</strong>：所有 fd 关闭后数据丢弃</li>
+        <li><strong>页面缓存</strong>：零拷贝传输（pipe→pipe splice）</li>
+        <li><strong>跨 fork</strong>：父进程 pipe，子进程继承 fd</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>fs/pipe.c</td><td>1552</td><td>Pipe 核心实现</td></tr>
+        <tr><td>include/linux/pipe_fs_i.h</td><td>339</td><td>数据结构定义</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 管道类型</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">匿名管道（pipe）：</span>
+
+  int fd[2];
+  pipe(fd);
+  // fd[0] = 读端
+  // fd[1] = 写端
+
+  fork() → 子进程继承 fd
+  父进程写 fd[1] → 内核缓冲区 → 子进程读 fd[0]
+  ┌──────────────────────────────────────────────┐
+  │  进程 A (写端)    内核管道缓冲区    进程 B (读端) │
+  │  write(fd[1])  → [ring buffer] → read(fd[0]) │
+  └──────────────────────────────────────────────┘
+
+<span style="color:#1a7f37">命名管道（FIFO）：</span>
+
+  mkfifo /tmp/myfifo 0644
+  // 创建文件系统中的管道节点
+
+  进程 A (写端)              进程 B (读端)
+  open("/tmp/myfifo", O_WRONLY) → open("/tmp/myfifo", O_RDONLY)
+  write(data) → [内核 ring buffer] → read(data)
+
+  优势：无亲缘关系的进程也能通信
+
+<span style="color:#8250df">对比：</span>
+
+  匿名管道：只能在父子进程间使用（fork 继承 fd）
+  命名管道：任意进程可通过路径访问
+  两者底层都使用 pipe_inode_info
+</pre></div>
+
+  <h3>管道缓冲区大小</h3>
+  <table>
+    <tr><th>属性</th><th>默认值</th><th>说明</th></tr>
+    <tr><td>PIPE_BUF</td><td>4096 字节</td><td>原子写入保证（≤此大小的写入不会与并发写混合）</td></tr>
+    <tr><td>管道容量</td><td>65536 字节（64KB）</td><td>Linux 3.16+ 默认环形缓冲区大小</td></tr>
+    <tr><td>可配置</td><td>/proc/sys/fs/pipe-max-size</td><td>可通过 fcntl(F_SETPIPE_SZ) 调整</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/pipe_fs_i.h:84 — 管道核心结构</span>
+<span class="kw">struct</span> <span class="ty">pipe_inode_info</span> {
+    <span class="kw">struct</span> <span class="ty">mutex</span>           mutex;       <span class="cm">// 保护管道的互斥锁</span>
+    <span class="kw">struct</span> <span class="ty">wait_queue_head_t</span> rd_wait, wr_wait; <span class="cm">// 读/写等待队列</span>
+    <span class="ty">unsigned int</span>          max_usage;   <span class="cm">// 当前已使用槽位数</span>
+    <span class="ty">unsigned int</span>          ring_size;   <span class="cm">// 环形缓冲区大小（槽位数）</span>
+    <span class="ty">unsigned int</span>          readers;     <span class="cm">// 读端 fd 数量</span>
+    <span class="ty">unsigned int</span>          writers;     <span class="cm">// 写端 fd 数量</span>
+    <span class="kw">struct</span> <span class="ty">pipe_buffer</span>    *bufs;       <span class="cm">// ★ 环形缓冲区数组</span>
+    <span class="kw">struct</span> <span class="ty">user_struct</span>    *user;       <span class="cm">// 所属用户（内存计数）</span>
+};</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// pipe_buffer — 单个缓冲区槽位</span>
+<span class="kw">struct</span> <span class="ty">pipe_buffer</span> {
+    <span class="kw">struct</span> <span class="ty">page</span>                *page;     <span class="cm">// 数据页面</span>
+    <span class="kw">struct</span> <span class="ty">pipe_buf_operations</span> *ops;      <span class="cm">// 操作函数表</span>
+    <span class="ty">unsigned int</span>               offset;    <span class="cm">// 页内偏移</span>
+    <span class="ty">unsigned int</span>               len;       <span class="cm">// 数据长度</span>
+    <span class="ty">unsigned int</span>               flags;     <span class="cm">// 标志</span>
+    <span class="kw">struct</span> <span class="ty">pipe_buf_operations</span> *private;  <span class="cm">// 私有操作</span>
+};
+
+<span class="cm">// pipe_buf_operations — 操作函数表</span>
+<span class="kw">struct</span> <span class="ty">pipe_buf_operations</span> {
+    <span class="ty">int</span>   (*confirm)(<span class="kw">struct</span> <span class="ty">pipe_inode_info</span> *, <span class="kw">struct</span> <span class="ty">pipe_buffer</span> *);
+    <span class="ty">void</span> (*release)(<span class="kw">struct</span> <span class="ty">pipe_inode_info</span> *, <span class="kw">struct</span> <span class="ty">pipe_buffer</span> *);
+    <span class="ty">bool</span> (*try_steal)(<span class="kw">struct</span> <span class="ty">pipe_inode_info</span> *, <span class="kw">struct</span> <span class="ty">pipe_buffer</span> *);
+    <span class="ty">bool</span> (*get)(<span class="kw">struct</span> <span class="ty">pipe_inode_info</span> *, <span class="kw">struct</span> <span class="ty">pipe_buffer</span> *);
+};</code></pre>
+  </div>
+
+  <h3>环形缓冲区</h3>
+  <div class="ascii-diagram"><pre>
+  管道的内部数据结构：
+
+  pipe_inode_info.bufs → [ slot0 | slot1 | slot2 | ... | slot31 ]
+                          ↑                                ↑
+                       ring_size = 32 个槽位
+                       每个槽位 = pipe_buffer（page + offset + len）
+
+  写入：bufs[head % ring_size] = 新数据，head++
+  读取：bufs[tail % ring_size] 取数据，tail++
+  环绕：head/tail 递增，通过 % ring_size 自动环绕
+
+  ┌───┬───┬───┬───┬───┬───┬───┬───┐
+  │ 0 │ 1 │ 2 │ 3 │ 4 │ 5 │...│31 │ ← 32 个 slot
+  └───┴───┴───┴───┴───┴───┴───┴───┘
+    ↑           ↑
+   tail        head
+  (读位置)    (写位置)
+  max_usage = head - tail = 已写入但未读取的槽位数
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 读写流程</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">写入流程 write(fd[1], buf, len)：</span>
+
+  1. <span style="color:#8250df">pipe_write()</span> — fs/pipe.c
+        │
+        ├── 检查写端是否有效（writers > 0）
+        │
+        ├── 计算可用空间（ring_size - max_usage）
+        │
+        ├── 空间不足 → 等待
+        │       wait_event_interruptible(wr_wait, 空间可用)
+        │
+        ├── 有空间 → 分配页面
+        │       alloc_page() 或 复用已有页面
+        │
+        ├── 将数据复制到 pipe_buffer
+        │       memcpy(buf->page + offset, data, len)
+        │
+        ├── 更新 pipe_buffer（offset += len, len = 写入量）
+        │       max_usage++ (head++)
+        │
+        └── 唤醒读端
+                wake_up_interruptible(&amp;pipe->rd_wait)
+
+<span style="color:#1a7f37">读取流程 read(fd[0], buf, len)：</span>
+
+  1. <span style="color:#1a7f37">pipe_read()</span> — fs/pipe.c
+        │
+        ├── 检查读端是否有效（readers > 0）
+        │
+        ├── 检查是否有数据（max_usage > 0）
+        │
+        ├── 无数据 → 等待
+        │       wait_event_interruptible(rd_wait, 数据可用)
+        │
+        ├── 有数据 → 从 pipe_buffer 复制到用户态
+        │       memcpy(data, page + offset, copy_len)
+        │
+        ├── 处理 partial read（可能一次读不完）
+        │
+        ├── 消费完毕 → 释放 pipe_buffer
+        │       pipe_buf_release() → put_page()
+        │       max_usage-- (tail++)
+        │
+        └── 唤醒写端（如果有等待的写者）
+                wake_up_interruptible(&amp;pipe->wr_wait)
+</pre></div>
+
+  <div class="callout tip">
+    <strong>pipe 的阻塞行为</strong><br>
+    <strong>写阻塞</strong>：管道满（max_usage == ring_size）时 write() 阻塞<br>
+    <strong>读阻塞</strong>：管道空（max_usage == 0）时 read() 阻塞<br>
+    <strong>O_NONBLOCK</strong>：设置非阻塞模式后，满时 write 返回 -1(EAGAIN)，空时 read 返回 0
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="splice" class="toc-link">
+  <h2><span class="num">05</span> splice 与零拷贝</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">传统 write + read（两次拷贝）：</span>
+
+  用户态 buffer → memcpy → pipe → memcpy → 用户态 buffer
+                        ↑              ↑
+                    内核缓冲区     内核缓冲区
+                    拷贝 1         拷贝 2
+
+<span style="color:#1a7f37">splice（零拷贝）：</span>
+
+  splice(fd_in, off_in, pipefd[1], NULL, len, SPLICE_F_MOVE)
+  splice(pipefd[0], NULL, fd_out, off_out, len, SPLICE_F_MOVE)
+
+  仅修改页面引用计数，不复制数据！
+  内核页 → pipe buffer → 内核页（只改指针，不拷贝字节）
+
+  适用场景：
+  - cat file | grep pattern（文件→管道→文件/终端）
+  - nginx/sendfile（文件→socket 零拷贝发送）
+</pre></div>
+
+  <table>
+    <tr><th>操作</th><th>拷贝次数</th><th>性能</th></tr>
+    <tr><td>write() + read()</td><td>2 次</td><td>低</td></tr>
+    <tr><td>splice()</td><td>0 次（页面引用）</td><td>极高</td></tr>
+    <tr><td>sendfile()</td><td>0 次</td><td>极高（仅文件→socket）</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="compare" class="toc-link">
+  <h2><span class="num">06</span> IPC 对比</h2>
+
+  <table>
+    <tr><th>特性</th><th>Pipe</th><th>FIFO</th><th>UNIX Socket</th><th>共享内存</th><th>Signal</th></tr>
+    <tr><td>方向</td><td>单向</td><td>单向</td><td>双向</td><td>双向</td><td>单向通知</td></tr>
+    <tr><td>数据格式</td><td>字节流</td><td>字节流</td><td>字节流/数据报</td><td>原始内存</td><td>无数据（仅信号号）</td></tr>
+    <tr><td>关系要求</td><td>父子进程</td><td>任意</td><td>任意</td><td>任意</td><td>任意（权限）</td></tr>
+    <tr><td>性能</td><td><strong>极高</strong></td><td>高</td><td>极高</td><td>最高</td><td>极高（无数据）</td></tr>
+    <tr><td>内核代码</td><td>1552 行</td><td>同 pipe</td><td>3970 行</td><td>~200 行</td><td>5050 行</td></tr>
+    <tr><td>典型场景</td><td>shell 管道</td><td>命名管道</td><td>Docker/API</td><td>数据库</td><td>异步通知</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">fs/</span>
+└── <span class="file">pipe.c</span>             <span class="cmt">Pipe 核心 (1552 行)</span>
+      └── pipe_write()       <span class="cmt">写入实现</span>
+      └── pipe_read()        <span class="cmt">读取实现</span>
+      └── pipe_release()     <span class="cmt">释放管道</span>
+      └── pipe_fcntl()       <span class="cmt">F_SETPIPE_SZ / F_GETPIPE_SZ</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">pipe_fs_i.h</span>        <span class="cmt">struct pipe_inode_info / pipe_buffer</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>fs/pipe.c</code> — 从 <code>pipe_write()</code> 和 <code>pipe_read()</code> 理解核心读写逻辑。<br>
+    <code>include/linux/pipe_fs_i.h</code> — <code>struct pipe_inode_info</code> 和 <code>struct pipe_buffer</code> 定义。<br>
+    <code>fs/splice.c</code> — 理解 splice 如何实现管道零拷贝。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · fs/pipe.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

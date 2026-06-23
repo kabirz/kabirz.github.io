@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux sk_buff 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux sk_buff 深度解析</h1>
+  <p class="subtitle">Socket Buffer — 内核网络栈的核心数据结构</p>
+  <span class="version">Linux 7.0.12 · include/linux/skbuff.h · net/core/skbuff.c (7541 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#layout">内存布局</a></li>
+    <li><a href="#data">核心字段</a></li>
+    <li><a href="#lifecycle">生命周期</a></li>
+    <li><a href="#manipulate">常用操作</a></li>
+    <li><a href="#cloning">克隆与复制</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p><code>sk_buff</code>（socket buffer）是 Linux 内核网络栈中<strong>最核心的数据结构</strong>。每一个网络数据包——无论是在收包路径、发包路径、协议栈处理、Netfilter 钩子、还是设备驱动——都以 sk_buff 的形式在内核中流转。理解 sk_buff 就是理解 Linux 网络栈的关键。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">sk_buff 无处不在</div>
+      <ul>
+        <li>网卡驱动 → sk_buff → 协议栈</li>
+        <li>TCP/UDP → sk_buff → IP 层 → 设备层</li>
+        <li>Netfilter 在 sk_buff 上执行过滤</li>
+        <li>bridge 在 sk_buff 上转发</li>
+        <li>iptables 在 sk_buff 上修改/NAT</li>
+        <li>tc (Traffic Control) 排队管理 sk_buff</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">规模</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>说明</th></tr>
+        <tr><td>skbuff.h</td><td>5443</td><td>结构定义 + 内联函数</td></tr>
+        <tr><td>skbuff.c</td><td>7541</td><td>sk_buff 核心实现</td></tr>
+        <tr><td>总计</td><td>12984</td><td>网络栈最大的单文件对</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="layout" class="toc-link">
+  <h2><span class="num">02</span> 内存布局</h2>
+
+  <h3>四指针模型</h3>
+  <div class="ascii-diagram"><pre>
+sk_buff 的数据区域使用四个指针管理：
+
+  +------+------+------+------+------+------+------+------+
+  | head |      | data |      |      | tail |      | end  |
+  +------+------+------+------+------+------+------+------+
+  ↑               ↑                       ↑              ↑
+  head            data                    tail           end
+  (分配起点)      (数据起点)              (数据终点)      (分配终点)
+
+  head → data  : headroom（预留空间，可 prepend 头部）
+  data → tail  : 实际数据（以太网帧 / IP 包 / TCP 段）
+  tail → end   : tailroom（尾部空间，可 append 数据）
+
+  使用场景：
+  ┌──────────────────────────────────────────────────────────┐
+  │ headroom (可 prepend)   │  data (实际数据)  │ tailroom   │
+  │                         │                   │            │
+  │ ETH HDR prepended here  │ ← skb_push() →   │ ← append   │
+  │ → skb_put() 尾部扩展    │    skb_pull() 前移│            │
+  └──────────────────────────────────────────────────────────┘
+
+  举例：收到一个 1500 字节的以太网帧
+  head = 0xffff880012340000
+  data = 0xffff88001234002e  (data - head = 46 bytes headroom)
+  tail = 0xffff880012340614  (tail - data = 1500 bytes)
+  end  = 0xffff880012341000  (end - tail = tailroom)
+</pre></div>
+
+  <h3>四指针操作 API</h3>
+  <table>
+    <tr><th>操作</th><th>函数</th><th>效果</th></tr>
+    <tr><td>头部预留</td><td><code>skb_reserve(skb, len)</code></td><td>data 和 tail 同时前移，预留头部空间</td></tr>
+    <tr><td>头部扩展</td><td><code>skb_push(skb, len)</code></td><td>data 前移 len 字节，增长数据头部</td></tr>
+    <tr><td>头部收缩</td><td><code>skb_pull(skb, len)</code></td><td>data 后移 len 字节，削减数据头部</td></tr>
+    <tr><td>尾部扩展</td><td><code>skb_put(skb, len)</code></td><td>tail 后移 len 字节，增长数据尾部</td></tr>
+    <tr><td>尾部收缩</td><td><code>skb_trim(skb, len)</code></td><td>tail 前移到 data+len，截断数据</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心字段</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/skbuff.h:886 — sk_buff 核心字段</span>
+<span class="kw">struct</span> <span class="ty">sk_buff</span> {
+    <span class="cm">/* ──── 链表 / 树节点 ──── */</span>
+    <span class="kw">union</span> {
+        <span class="kw">struct</span> { <span class="kw">struct</span> <span class="ty">sk_buff</span> *next, *prev; }; <span class="cm">// 队列链表</span>
+        <span class="kw">struct</span> <span class="ty">rb_node</span>    rbnode;     <span class="cm">// 红黑树节点（TCP 重传队列）</span>
+        <span class="kw">struct</span> <span class="ty">list_head</span> list;       <span class="cm">// 通用链表</span>
+    };
+
+    <span class="cm">/* ──── 关联的 socket 和设备 ──── */</span>
+    <span class="kw">struct</span> <span class="ty">sock</span>        *sk;         <span class="cm">// 所属 socket</span>
+    <span class="kw">struct</span> <span class="ty">net_device</span>  *dev;         <span class="cm">// 关联的网络设备</span>
+
+    <span class="cm">/* ──── 时间戳 ──── */</span>
+    <span class="ty">ktime_t</span>            tstamp;      <span class="cm">// 收发时间戳</span>
+
+    <span class="cm">/* ──── 控制缓冲区（每层私有数据） ──── */</span>
+    <span class="ty">char</span>               cb[<span class="num">48</span>] __aligned(<span class="num">8</span>); <span class="cm">// 48 字节，各层可用</span>
+
+    <span class="cm">/* ──── 数据长度 ──── */</span>
+    <span class="ty">unsigned int</span>       len;         <span class="cm">// 数据总长度（含 frag）</span>
+    <span class="ty">unsigned int</span>       data_len;    <span class="cm">// 非线性数据长度</span>
+
+    <span class="cm">/* ──── 协议头偏移量 ──── */</span>
+    <span class="ty">__u16</span>              transport_header; <span class="cm">// L4（TCP/UDP）头偏移</span>
+    <span class="ty">__u16</span>              network_header;   <span class="cm">// L3（IP）头偏移</span>
+    <span class="ty">__u16</span>              mac_header;       <span class="cm">// L2（以太网）头偏移</span>
+    <span class="ty">__u16</span>              inner_transport_header; <span class="cm">// 内层 L4（隧道）</span>
+    <span class="ty">__u16</span>              inner_network_header;   <span class="cm">// 内层 L3（隧道）</span>
+    <span class="ty">__u16</span>              inner_mac_header;       <span class="cm">// 内层 L2（隧道）</span>
+
+    <span class="cm">/* ──── 校验和 ──── */</span>
+    <span class="ty">__u32</span>              csum;        <span class="cm">// 校验和</span>
+    <span class="ty">__u8</span>               ip_summed;   <span class="cm">// CHECKSUM_NONE/UNNECESSARY/PARTIAL</span>
+
+    <span class="cm">/* ──── 数据指针（关键！） ──── */</span>
+    <span class="ty">sk_buff_data_t</span>     tail;        <span class="cm">// 数据尾指针</span>
+    <span class="ty">sk_buff_data_t</span>     end;         <span class="cm">// 缓冲区尾指针</span>
+    <span class="ty">unsigned char</span>      *head;       <span class="cm">// 缓冲区头指针</span>
+    <span class="ty">unsigned char</span>      *data;       <span class="cm">// ★ 数据起始指针</span>
+
+    <span class="cm">/* ──── 元数据 ──── */</span>
+    <span class="ty">__u16</span>              protocol;    <span class="cm">// 协议类型（ETH_P_IP 等）</span>
+    <span class="ty">__u16</span>              vlan_tci;    <span class="cm">// VLAN 标签</span>
+    <span class="ty">__u32</span>              mark;        <span class="cm">// Netfilter 标记</span>
+    <span class="ty">__u32</span>              priority;    <span class="cm">// 优先级</span>
+    <span class="ty">int</span>                skb_iif;     <span class="cm">// 入接口索引</span>
+    <span class="ty">u32</span>                hash;        <span class="cm">// 流哈希（RPS/ECMP）</span>
+
+    <span class="cm">/* ──── 引用计数 ──── */</span>
+    <span class="ty">refcount_t</span>         users;       <span class="cm">// 引用计数</span>
+    <span class="ty">unsigned int</span>       truesize;    <span class="cm">// 实际占用内存（含 skb 结构）</span>
+};</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="lifecycle" class="toc-link">
+  <h2><span class="num">04</span> 生命周期</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">收包路径中 sk_buff 的生命周期：</span>
+
+  1. <span style="color:#1a7f37">分配</span>
+  网卡驱动调用 __netdev_alloc_skb()
+  → __alloc_skb() → kmalloc 头 + alloc_page 数据
+  → 初始化 skb->head, data, tail, end
+  → skb->dev = 网卡
+  → skb_reserve(skb, NET_SKB_PAD)  <span style="color:#656d76">// 预留头部空间</span>
+
+  2. <span style="color:#8250df">DMA 写入</span>
+  网卡将数据 DMA 到 skb 的 data 区域
+  → skb_put(skb, pkt_len)  <span style="color:#656d76">// 设置数据长度</span>
+
+  3. <span style="color:#cf222e">协议栈处理</span>
+  每层协议处理时修改 skb：
+  → eth_type_trans()       <span style="color:#656d76">// skb_pull 剥离以太网头</span>
+  → skb_pull(skb, ip_hdr_len) <span style="color:#656d76">// 剥离 IP 头</span>
+  → skb_pull(skb, tcp_hdr_len) <span style="color:#656d76">// 剥离 TCP 头</span>
+  → 到达 socket 时 skb->data 指向应用数据
+
+  4. <span style="color:#1a7f37">用户态读取</span>
+  应用调用 recv() / read()
+  → skb_copy_datagram() 将数据拷贝到用户态
+
+  5. <span style="color:#8250df">释放</span>
+  kfree_skb() / __kfree_skb()
+  → 减少引用计数
+  → 引用为 0 时释放 skb 和数据缓冲区
+  → 回收 page / slab
+
+<span style="color:#1a7f37">发包路径中 sk_buff 的生命周期：</span>
+
+  1. 应用调用 send() → 内核分配 skb
+  2. TCP/UDP 层添加协议头（skb_push）
+  3. IP 层添加 IP 头（skb_push）
+  4. 设备层添加以太网头（skb_push）
+  5. 驱动 DMA 发送
+  6. 发送完成 → 释放 skb
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="manipulate" class="toc-link">
+  <h2><span class="num">05</span> 常用操作</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// 头部操作 — 逐层剥离协议头</span>
+
+<span class="cm">// 收包：从 L2 到 L4</span>
+skb->protocol = eth_type_trans(skb, dev); <span class="cm">// 剥离以太网头，设置协议</span>
+<span class="cm">// skb->data 现在指向 IP 头</span>
+
+ip_hdr = ip_hdr(skb);                    <span class="cm">// 获取 IP 头指针</span>
+skb_pull(skb, ip_hdrlen(skb));            <span class="cm">// 剥离 IP 头</span>
+<span class="cm">// skb->data 现在指向 TCP/UDP 头</span>
+
+tcp_hdr = tcp_hdr(skb);                   <span class="cm">// 获取 TCP 头指针</span>
+
+<span class="cm">// 发包：逐层添加协议头</span>
+skb_reserve(skb, header_len);             <span class="cm">// 预留头部空间</span>
+skb_put(skb, payload_len);                <span class="cm">// 设置负载数据</span>
+skb_push(skb, ip_hdr_len);               <span class="cm">// 添加 IP 头</span>
+skb_push(skb, eth_hdr_len);              <span class="cm">// 添加以太网头</span>
+
+<span class="cm">// 隧道封装：添加内外层头部</span>
+skb->inner_network_header = skb->network_header;
+skb_push(skb, outer_hdr_len);             <span class="cm">// 添加外层头</span>
+skb->encapsulation = <span class="num">1</span>;                  <span class="cm">// 标记有内层封装</span></code></pre>
+  </div>
+
+  <h3>协议头访问函数</h3>
+  <table>
+    <tr><th>函数</th><th>返回</th><th>说明</th></tr>
+    <tr><td><code>skb_mac_header(skb)</code></td><td>L2 以太网头指针</td><td>mac_header 偏移</td></tr>
+    <tr><td><code>skb_network_header(skb)</code></td><td>L3 IP 头指针</td><td>network_header 偏移</td></tr>
+    <tr><td><code>skb_transport_header(skb)</code></td><td>L4 TCP/UDP 头指针</td><td>transport_header 偏移</td></tr>
+    <tr><td><code>ip_hdr(skb)</code></td><td><code>struct iphdr *</code></td><td>直接获取 IP 头</td></tr>
+    <tr><td><code>tcp_hdr(skb)</code></td><td><code>struct tcphdr *</code></td><td>直接获取 TCP 头</td></tr>
+    <tr><td><code>udp_hdr(skb)</code></td><td><code>struct udphdr *</code></td><td>直接获取 UDP 头</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="cloning" class="toc-link">
+  <h2><span class="num">06</span> 克隆与复制</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">skb_clone() — 浅拷贝（共享数据区）</span>
+
+  原始 sk_buff                    克隆的 sk_buff
+  ┌──────────┐                   ┌──────────┐
+  │ skb 头部  │                   │ skb 头部  │
+  │ data ────┼──→ 共享数据区 ←────┼─── data  │
+  │ ...      │                   │ ...      │
+  └──────────┘                   └──────────┘
+       ↓                              ↓
+  head ──────────→ [共享数据缓冲区] ←────────── head
+
+  用途：
+  - Netfilter 需要同时查看和修改数据包
+  - TCP 重传时保留原始数据
+  - tc 分类时多路径处理
+
+<span style="color:#1a7f37">skb_copy() — 深拷贝（独立数据区）</span>
+
+  原始 sk_buff                    复制的 sk_buff
+  ┌──────────┐                   ┌──────────┐
+  │ skb 头部  │                   │ skb 头部  │
+  │ data ────┼──→ 数据区 A        │ data ────┼──→ 数据区 B（独立副本）
+  └──────────┘                   └──────────┘
+
+  用途：
+  - 需要修改数据但不影响原始包
+  - 向用户态发送数据副本
+</pre></div>
+
+  <table>
+    <tr><th>操作</th><th>函数</th><th>数据共享</th><th>性能</th></tr>
+    <tr><td>浅拷贝</td><td><code>skb_clone()</code></td><td>共享数据区</td><td>快（仅分配 skb 头部）</td></tr>
+    <tr><td>深拷贝</td><td><code>skb_copy()</code></td><td>独立副本</td><td>慢（分配 skb + 复制数据）</td></tr>
+    <tr><td>头部分离</td><td><code>skb_cow_head()</code></td><td>按需分离</td><td>中（仅在需要写头时复制）</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>skb_cow_head() 的巧妙设计</strong><br>
+    当协议栈需要修改 skb 头部（如 TCP 重传修改序号）时，调用 <code>skb_cow_head()</code>。它会检查头部空间是否充足且 skb 是否被共享（cloned）。如果不满足，才执行 <code>skb_copy_head()</code> 分离。这避免了不必要的复制，是"写时复制"（COW）思想在内核网络栈中的应用。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/core/</span>
+└── <span class="file">skbuff.c</span>            <span class="cmt">sk_buff 核心实现 (7541 行)</span>
+      └── alloc_skb()        <span class="cmt">分配 skb</span>
+      └── __kfree_skb()      <span class="cmt">释放 skb</span>
+      └── skb_clone()        <span class="cmt">浅拷贝</span>
+      └── skb_copy()         <span class="cmt">深拷贝</span>
+      └── skb_copy_datagram() <span class="cmt">拷贝到用户态</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">skbuff.h</span>             <span class="cmt">sk_buff 结构定义 + API (5443 行)</span>
+      └── skb_reserve()      <span class="cmt">预留头部空间</span>
+      └── skb_push()         <span class="cmt">头部扩展</span>
+      └── skb_pull()         <span class="cmt">头部收缩</span>
+      └── skb_put()          <span class="cmt">尾部扩展</span>
+      └── skb_trim()         <span class="cmt">尾部收缩</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>include/linux/skbuff.h</code> — <code>struct sk_buff</code> 定义（第 886 行），以及所有内联操作函数。<br>
+    <code>net/core/skbuff.c</code> — 从 <code>__alloc_skb()</code> 开始理解分配，<code>__kfree_skb()</code> 理解释放。<br>
+    <code>net/core/dev.c</code> — <code>__netif_receive_skb_core()</code> 理解 skb 如何在协议栈中流转。<br>
+    <code>net/ipv4/tcp_output.c</code> — <code>tcp_transmit_skb()</code> 理解 TCP 如何构造和发送 skb。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · include/linux/skbuff.h · net/core/skbuff.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

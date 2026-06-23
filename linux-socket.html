@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Socket 层深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Socket 层深度解析</h1>
+  <p class="subtitle">从系统调用到协议栈 — 用户态与内核网络的桥梁</p>
+  <span class="version">Linux 7.0.12 · net/socket.c (3730 行) · net/ipv4/af_inet.c (2073 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构与分层</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#create">socket() 系统调用</a></li>
+    <li><a href="#send">send/recv 数据流</a></li>
+    <li><a href="#proto">协议族多态</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Socket 层是用户态应用程序与内核协议栈之间的<strong>桥梁</strong>。当应用调用 <code>socket()</code>、<code>bind()</code>、<code>connect()</code>、<code>send()</code>、<code>recv()</code> 等系统调用时，请求经过 Socket 层分发到具体的协议实现（TCP/UDP/RAW）。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Socket 层的职责</div>
+      <ul>
+        <li><strong>系统调用入口</strong>：接收用户态 socket 调用</li>
+        <li><strong>fd → socket 映射</strong>：文件描述符关联到 socket 结构</li>
+        <li><strong>协议分发</strong>：根据 family/type/proto 选择协议实现</li>
+        <li><strong>缓冲区管理</strong>：发送/接收队列管理</li>
+        <li><strong>等待队列</strong>：阻塞/非阻塞 I/O 通知</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>net/socket.c</td><td>3730</td><td>系统调用入口、VFS 集成</td></tr>
+        <tr><td>net/ipv4/af_inet.c</td><td>2073</td><td>AF_INET 协议族注册</td></tr>
+        <tr><td>include/linux/net.h</td><td>372</td><td>struct socket 定义</td></tr>
+        <tr><td>include/net/sock.h</td><td>3146</td><td>struct sock + struct proto</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构与分层</h2>
+
+  <h3>Socket 层在内核中的位置</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────────────────────────────────────────────┐
+│                        用户态                             │
+│                                                           │
+│  ┌──────────┐  socket() bind() connect() send() recv()  │
+│  │  应用程序  │  setsockopt() getsockopt() close()       │
+│  └────┬─────┘                                            │
+│       │  syscall                                         │
+│  ═════╪════════════════════════════════════════════════  │
+│       ↓                    内核态                         │
+│  ┌──────────┐                                            │
+│  │ VFS 层   │  socket → file → inode → file_operations  │
+│  │ (sys_socket)                                          │
+│  └────┬─────┘                                            │
+│       ↓                                                  │
+│  ┌──────────────────────────────────────────────┐       │
+│  │            Socket 层                          │       │
+│  │                                                │       │
+│  │  ┌─────────┐  struct proto_ops                │       │
+│  │  │ socket  │  (inet_stream_ops /              │       │
+│  │  │ struct  │   inet_dgram_ops)                │       │
+│  │  └────┬────┘                                   │       │
+│  │       ↓                                        │       │
+│  │  ┌─────────┐  struct proto                    │       │
+│  │  │   sock  │  (tcp_prot / udp_prot /          │       │
+│  │  │ struct  │   raw_prot)                      │       │
+│  └──┴────┬────┴──────────────────────────────────┘       │
+│          ↓                                               │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
+│  │   TCP    │  │   UDP    │  │   RAW    │              │
+│  │ tcp_prot │  │ udp_prot │  │ raw_prot │              │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘              │
+│       ↓              ↓              ↓                    │
+│  ┌──────────────────────────────────────────┐           │
+│  │              IP 层                        │           │
+│  └──────────────────────────────────────────┘           │
+└──────────────────────────────────────────────────────────┘
+</pre></div>
+
+  <h3>两次多态分发</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">第一次分发：proto_ops（socket 级操作）</span>
+
+  socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+      │
+      ↓
+  pf->create() → inet_create()
+      │
+      ├── SOCK_STREAM → <span style="color:#cf222e">inet_stream_ops</span>  → <span style="color:#cf222e">tcp_prot</span>
+      ├── SOCK_DGRAM  → <span style="color:#1a7f37">inet_dgram_ops</span>   → <span style="color:#1a7f37">udp_prot</span>
+      └── SOCK_RAW    → <span style="color:#8250df">inet_sockraw_ops</span> → <span style="color:#8250df">raw_prot</span>
+
+<span style="color:#1a7f37">第二次分发：proto（协议级操作）</span>
+
+  send()/recv() → sock->ops->sendmsg()
+      │
+      ↓
+  tcp_sendmsg() / udp_sendmsg() / raw_sendmsg()
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/net.h:116 — BSD Socket（用户态可见）</span>
+<span class="kw">struct</span> <span class="ty">socket</span> {
+    <span class="ty">socket_state</span>    state;      <span class="cm">// SS_UNCONNECTED / SS_CONNECTING / SS_CONNECTED</span>
+    <span class="ty">short</span>           type;       <span class="cm">// SOCK_STREAM / SOCK_DGRAM / SOCK_RAW</span>
+    <span class="ty">unsigned long</span>   flags;
+    <span class="kw">struct</span> <span class="ty">file</span>     *file;      <span class="cm">// 关联的 file 结构（VFS 集成）</span>
+    <span class="kw">struct</span> <span class="ty">sock</span>     *sk;        <span class="cm">// 指向内核 sock 结构（核心！）</span>
+    <span class="kw">const struct</span> <span class="ty">proto_ops</span> *ops; <span class="cm">// 协议族操作表（TCP/UDP 差异）</span>
+    <span class="kw">struct</span> <span class="ty">socket_wq</span> wq;      <span class="cm">// 等待队列（poll/select/epoll）</span>
+};</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/sock.h:1286 — 协议操作表（多态关键）</span>
+<span class="kw">struct</span> <span class="ty">proto_ops</span> {
+    <span class="ty">int</span> family;
+    <span class="ty">int</span> (*bind)(<span class="kw">struct</span> <span class="ty">socket</span> *sock, <span class="kw">struct</span> <span class="ty">sockaddr</span> *myaddr, <span class="ty">int</span> sockaddr_len);
+    <span class="ty">int</span> (*connect)(<span class="kw">struct</span> <span class="ty">socket</span> *sock, <span class="kw">struct</span> <span class="ty">sockaddr</span> *vaddr, <span class="ty">int</span> sockaddr_len, <span class="ty">int</span> flags);
+    <span class="ty">int</span> (*accept)(<span class="kw">struct</span> <span class="ty">socket</span> *sock, <span class="kw">struct</span> <span class="ty">socket</span> *newsock, <span class="ty">struct</span> <span class="ty">proto_accept_arg</span> *arg);
+    <span class="ty">ssize_t</span> (*sendmsg)(<span class="kw">struct</span> <span class="ty">socket</span> *sock, <span class="kw">struct</span> <span class="ty">msghdr</span> *m, <span class="ty">size_t</span> total_len);
+    <span class="ty">ssize_t</span> (*recvmsg)(<span class="kw">struct</span> <span class="ty">socket</span> *sock, <span class="kw">struct</span> <span class="ty">msghdr</span> *m, <span class="ty">size_t</span> total_len, <span class="ty">int</span> flags);
+    <span class="ty">__poll_t</span> (*poll)(<span class="kw">struct</span> <span class="ty">file</span> *file, <span class="kw">struct</span> <span class="ty">socket</span> *sock, <span class="kw">struct</span> <span class="ty">poll_table_struct</span> *wait);
+    <span class="ty">int</span> (*setsockopt)(<span class="kw">struct</span> <span class="ty">socket</span> *sock, <span class="ty">int</span> level, <span class="ty">int</span> optname, sockptr_t optval, <span class="ty">unsigned int</span> optlen);
+    <span class="cm">// ...</span>
+};
+
+<span class="cm">// inet_stream_ops — TCP/IPv4 的 proto_ops</span>
+<span class="cm">// inet_dgram_ops  — UDP/IPv4 的 proto_ops</span></code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/sock.h:1286 — 协议操作表（协议级多态）</span>
+<span class="kw">struct</span> <span class="ty">proto</span> {
+    <span class="ty">void</span> (*close)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, <span class="ty">long</span> timeout);
+    <span class="ty">int</span>  (*connect)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, ...);
+    <span class="kw">struct</span> <span class="ty">sock</span> *(*accept)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, ...);
+    <span class="ty">int</span>  (*sendmsg)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, <span class="kw">struct</span> <span class="ty">msghdr</span> *msg, <span class="ty">size_t</span> len);
+    <span class="ty">int</span>  (*recvmsg)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, <span class="kw">struct</span> <span class="ty">msghdr</span> *msg, ...);
+    <span class="ty">int</span>  (*bind)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, ...);
+    <span class="ty">int</span>  (*hash)(<span class="kw">struct</span> <span class="ty">sock</span> *sk);
+    <span class="ty">int</span>  (*get_port)(<span class="kw">struct</span> <span class="ty">sock</span> *sk, <span class="ty">unsigned short</span> snum);
+    <span class="cm">// ...</span>
+    <span class="kw">union</span> {
+        <span class="kw">struct</span> <span class="ty">inet_hashinfo</span> *hashinfo;  <span class="cm">// TCP</span>
+        <span class="kw">struct</span> <span class="ty">udp_table</span>     *udp_table;  <span class="cm">// UDP</span>
+        <span class="kw">struct</span> <span class="ty">raw_hashinfo</span>  *raw_hash;   <span class="cm">// RAW</span>
+    } h;
+};
+
+<span class="cm">// tcp_prot   — TCP 协议的 proto 实现</span>
+<span class="cm">// udp_prot   — UDP 协议的 proto 实现</span>
+<span class="cm">// raw_prot   — RAW 协议的 proto 实现</span></code></pre>
+  </div>
+
+  <h3>数据结构关系图</h3>
+  <div class="ascii-diagram"><pre>
+  ┌──────────────┐
+  │    file      │  ← VFS 文件（用户态 fd 指向这里）
+  ├──┬───────────┤
+  │  │ private_data
+  ↓  ↓
+  ┌──────────────┐
+  │   socket     │  ← BSD socket
+  │  state       │     SS_CONNECTED
+  │  type        │     SOCK_STREAM
+  │  ops ────────────→ proto_ops (inet_stream_ops)
+  │  sk ─────────────→ sock
+  └──────────────┘
+                     ┌──────────────────┐
+                     │     sock          │  ← 内核协议无关 socket
+                     │  sk_prot ──────────→ proto (tcp_prot)
+                     │  sk_receive_queue │     sendmsg / recvmsg
+                     │  sk_write_queue   │     hash / get_port
+                     │  sk_wq            │
+                     └──────────────────┘
+                            │
+                            ↓
+                     ┌──────────────────┐
+                     │    tcp_sock       │  ← TCP 专有数据
+                     │  snd_cwnd         │     拥塞窗口
+                     │  snd_nxt          │     发送序号
+                     │  rcv_nxt          │     接收序号
+                     └──────────────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="create" class="toc-link">
+  <h2><span class="num">04</span> socket() 系统调用</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)</span>
+        │
+        ↓
+  <span style="color:#8250df">__sys_socket()</span> — net/socket.c
+        │
+        ├── 1. <span style="color:#1a7f37">sock_create()</span>
+        │       │
+        │       ├── 分配 struct socket
+        │       ├── 查找 net_families[AF_INET] → inet_family_ops
+        │       ├── 调用 pf->create(net, sock, protocol)
+        │       │       │
+        │       │       ↓
+        │       │   <span style="color:#1a7f37">inet_create()</span> — net/ipv4/af_inet.c
+        │       │       │
+        │       │       ├── 遍历 inetsw[SOCK_STREAM] 找到匹配的协议
+        │       │       │
+        │       │       ├── SOCK_STREAM → inet_stream_ops + tcp_prot
+        │       │       ├── SOCK_DGRAM  → inet_dgram_ops  + udp_prot
+        │       │       └── SOCK_RAW    → inet_sockraw_ops + raw_prot
+        │       │
+        │       │       ├── 分配 struct sock（tcp_sock / udp_sock）
+        │       │       ├── sk->sk_prot->init(sk)  ← TCP/UDP 初始化
+        │       │       └── sock->ops = inet_stream_ops
+        │       │
+        │       └── 返回 struct socket
+        │
+        ├── 2. <span style="color:#8250df">sock_map_fd()</span>
+        │       ├── 分配 file 结构
+        │       ├── file->f_op = socket_file_ops
+        │       ├── file->private_data = socket
+        │       └── 返回 fd（如 3）
+        │
+        ↓
+  返回 fd=3 给用户态
+</pre></div>
+
+  <div class="callout tip">
+    <strong>关键设计</strong><br>
+    ① <code>socket</code> 结构通过 <code>file->private_data</code> 与 VFS fd 关联<br>
+    ② <code>socket->sk</code> 指向内核协议无关的 <code>sock</code> 结构<br>
+    ③ <code>sock->sk_prot</code> 指向具体协议的 <code>proto</code> 操作表<br>
+    ④ 用户态的 <code>send()/recv()</code> 最终调用 <code>sock->sk_prot->sendmsg()/recvmsg()</code>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="send" class="toc-link">
+  <h2><span class="num">05</span> send/recv 数据流</h2>
+
+  <h3>发送路径</h3>
+  <div class="ascii-diagram"><pre>
+  应用调用 send(fd, buf, len, 0)
+        │
+        ↓
+  <span style="color:#8250df">sock_sendmsg()</span> — net/socket.c
+        │
+        ↓
+  sock->ops->sendmsg(sock, msg, len)
+        │
+        ├── TCP: inet_stream_ops.sendmsg = <span style="color:#cf222e">inet_sendmsg()</span>
+        │           → sk->sk_prot->sendmsg = <span style="color:#cf222e">tcp_sendmsg()</span>
+        │
+        ├── UDP: inet_dgram_ops.sendmsg = <span style="color:#1a7f37">inet_sendmsg()</span>
+        │           → sk->sk_prot->sendmsg = <span style="color:#1a7f37">udp_sendmsg()</span>
+        │
+        └── RAW: inet_sockraw_ops.sendmsg = <span style="color:#8250df">raw_sendmsg()</span>
+</pre></div>
+
+  <h3>接收路径</h3>
+  <div class="ascii-diagram"><pre>
+  应用调用 recv(fd, buf, len, 0)
+        │
+        ↓
+  <span style="color:#8250df">sock_recvmsg()</span> — net/socket.c
+        │
+        ↓
+  sock->ops->recvmsg(sock, msg, len, flags)
+        │
+        ├── TCP: → <span style="color:#cf222e">tcp_recvmsg()</span>
+        │          从 sk_receive_queue 读取数据
+        │          如果无数据 → 睡眠等待
+        │
+        ├── UDP: → <span style="color:#1a7f37">udp_recvmsg()</span>
+        │          从 udp_table 查找数据包
+        │          如果无数据 → 睡眠等待
+        │
+        └── RAW: → <span style="color:#8250df">raw_recvmsg()</span>
+</pre></div>
+
+  <h3>阻塞 vs 非阻塞</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title" style="color:#cf222e">阻塞模式（默认）</div>
+      <pre><code><span class="cm">// 数据未就绪时，进程睡眠等待</span>
+n = recv(fd, buf, len, <span class="num">0</span>);
+<span class="cm">// 进程在此处阻塞</span>
+<span class="cm">// 直到 sk_data_ready() 唤醒</span></code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#1a7f37">非阻塞模式</div>
+      <pre><code><span class="cm">// 设置 O_NONBLOCK 后</span>
+fcntl(fd, F_SETFL, O_NONBLOCK);
+n = recv(fd, buf, len, <span class="num">0</span>);
+<span class="cm">// 无数据时立即返回 -1</span>
+<span class="cm">// errno = EAGAIN / EWOULDBLOCK</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="proto" class="toc-link">
+  <h2><span class="num">06</span> 协议族多态</h2>
+
+  <h3>TCP vs UDP vs RAW socket 差异</h3>
+  <table>
+    <tr><th>特性</th><th>TCP</th><th>UDP</th><th>RAW</th></tr>
+    <tr><td>proto_ops</td><td>inet_stream_ops</td><td>inet_dgram_ops</td><td>inet_sockraw_ops</td></tr>
+    <tr><td>proto</td><td>tcp_prot</td><td>udp_prot</td><td>raw_prot</td></tr>
+    <tr><td>可靠性</td><td>可靠（重传/排序）</td><td>不可靠</td><td>依赖实现</td></tr>
+    <tr><td>连接</td><td>面向连接（三次握手）</td><td>无连接</td><td>无连接</td></tr>
+    <tr><td>队列</td><td>receive_queue + backlog</td><td>udp_table 队列</td><td>raw_hash 哈希</td></tr>
+    <tr><td>端口查找</td><td>inet_hashinfo（哈希表）</td><td>udp_table（哈希表）</td><td>raw_hashinfo</td></tr>
+    <tr><td>流量控制</td><td>滑动窗口</td><td>无</td><td>无</td></tr>
+    <tr><td>拥塞控制</td><td>CUBIC/BBR</td><td>无</td><td>无</td></tr>
+  </table>
+
+  <h3>协议注册机制</h3>
+  <div class="card">
+    <pre><code><span class="cm">// net/ipv4/af_inet.c — 协议族注册</span>
+<span class="kw">static struct</span> <span class="ty">list_head</span> inetsw[SOCK_MAX];  <span class="cm">// 按 socket 类型索引</span>
+
+<span class="kw">static const struct</span> <span class="ty">inet_protosw</span> inetsw_array[] = {
+    {   <span class="cm">// TCP</span>
+        .type = SOCK_STREAM,
+        .protocol = IPPROTO_TCP,
+        .ops = &amp;inet_stream_ops,
+        .prot = &amp;tcp_prot,
+    },
+    {   <span class="cm">// UDP</span>
+        .type = SOCK_DGRAM,
+        .protocol = IPPROTO_UDP,
+        .ops = &amp;inet_dgram_ops,
+        .prot = &amp;udp_prot,
+    },
+    {   <span class="cm">// RAW</span>
+        .type = SOCK_RAW,
+        .protocol = IPPROTO_ICMP,
+        .ops = &amp;inet_sockraw_ops,
+        .prot = &amp;raw_prot,
+    },
+};
+
+<span class="cm">// socket() 调用时：</span>
+<span class="cm">// inetsw[SOCK_STREAM] → 找到 TCP</span>
+<span class="cm">// inetsw[SOCK_DGRAM]  → 找到 UDP</span>
+<span class="cm">// inetsw[SOCK_RAW]    → 找到 RAW</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/</span>
+├── <span class="file">socket.c</span>             <span class="cmt">Socket 核心 (3730 行)</span>
+│     └── __sys_socket()  <span class="cmt">socket() 系统调用入口</span>
+│     └── sock_sendmsg()  <span class="cmt">send() 系统调用入口</span>
+│     └── sock_recvmsg()  <span class="cmt">recv() 系统调用入口</span>
+│
+├── <span class="dir">ipv4/</span>
+│   ├── <span class="file">af_inet.c</span>        <span class="cmt">AF_INET 协议族 (2073 行)</span>
+│   │     └── inet_create()    <span class="cmt">创建 TCP/UDP/RAW socket</span>
+│   │     └── inetsw[]         <span class="cmt">协议分发表</span>
+│   ├── <span class="file">tcp.c</span>            <span class="cmt">TCP socket 操作</span>
+│   ├── <span class="file">udp.c</span>            <span class="cmt">UDP socket 操作</span>
+│   └── <span class="file">raw.c</span>            <span class="cmt">RAW socket 操作</span>
+│
+├── <span class="dir">ipv6/</span>
+│   └── <span class="file">af_inet6.c</span>       <span class="cmt">AF_INET6 协议族</span>
+│
+├── <span class="dir">unix/</span>
+│   └── <span class="file">af_unix.c</span>        <span class="cmt">UNIX domain socket</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">net.h</span>               <span class="cmt">struct socket 定义</span>
+
+<span class="dir">include/net/</span>
+├── <span class="file">sock.h</span>              <span class="cmt">struct sock + struct proto (3146 行)</span>
+├── <span class="file">inet_sock.h</span>         <span class="cmt">struct inet_sock 定义</span>
+└── <span class="file">protocol.h</span>          <span class="cmt">协议族注册接口</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/socket.c</code> — 从 <code>__sys_socket()</code> 开始，理解 fd 如何关联到 socket。<br>
+    <code>net/ipv4/af_inet.c</code> — <code>inet_create()</code> 是理解协议分发的关键。<br>
+    <code>include/linux/net.h</code> — <code>struct socket</code> 结构定义。<br>
+    <code>include/net/sock.h</code> — <code>struct sock</code> 和 <code>struct proto</code> 是协议多态的核心。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/socket.c · net/ipv4/af_inet.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

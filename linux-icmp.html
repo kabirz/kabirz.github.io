@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux ICMP 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux ICMP 深度解析</h1>
+  <p class="subtitle">Internet Control Message Protocol — 网络控制与诊断</p>
+  <span class="version">Linux 7.0.12 · net/ipv4/icmp.c (1778 行) · net/ipv4/ping.c (1187 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#format">报文格式</a></li>
+    <li><a href="#types">消息类型</a></li>
+    <li><a href="#arch">内核处理</a></li>
+    <li><a href="#error">错误消息与 socket 映射</a></li>
+    <li><a href="#ping">ping 与 ping6</a></li>
+    <li><a href="#security">安全与调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>ICMP（Internet Control Message Protocol）是 IP 层的<strong>控制和诊断协议</strong>，定义在 RFC 792。它不传输用户数据，而是用于网络错误报告（目标不可达、TTL 过期等）和网络诊断（ping、traceroute）。Linux 内核 ICMP 实现在 <code>net/ipv4/icmp.c</code>（1778 行）。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">ICMP 核心功能</div>
+      <ul>
+        <li><strong>Echo 请求/应答</strong>：ping 工具的基础</li>
+        <li><strong>错误报告</strong>：目标不可达、TTL 过期</li>
+        <li><strong>路由重定向</strong>：通知更优的路由</li>
+        <li><strong>路径 MTU 发现</strong>：Frag Needed 消息</li>
+        <li><strong>时间戳</strong>：网络延迟测量（已少用）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>icmp.c</td><td>1778</td><td>ICMP 收发、错误处理</td></tr>
+        <tr><td>ping.c</td><td>1187</td><td>ping/ping6 socket 实现</td></tr>
+        <tr><td>ip_icmp.c</td><td>-</td><td>IP 层调用 ICMP 生成错误</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="format" class="toc-link">
+  <h2><span class="num">02</span> 报文格式</h2>
+
+  <div class="ascii-diagram"><pre>
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     Type      |     Code      |          Checksum             |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                          消息特定字段                           |
+|                    （取决于 Type 和 Code）                      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                       原始数据包头 + 8 字节载荷                 |
+|               （仅错误消息包含，用于定位触发错误的包）            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+<span style="color:#cf222e">Echo 请求/应答（Type 8/0）：</span>
+  +-----------+-----------+-------------+
+  | Identifier| Sequence  |   Data      |
+  | (16 bit)  | (16 bit)  | (可变长度)   |
+  +-----------+-----------+-------------+
+
+<span style="color:#1a7f37">目标不可达（Type 3）：</span>
+  +-----------+-----------+-------------+
+  | Unused    |  MTU      | 原始IP头+8B |
+  | (16 bit)  | (16 bit)  |             |
+  +-----------+-----------+-------------+
+  Code: 0=网络不可达, 1=主机不可达, 2=协议不可达,
+        3=端口不可达, 4=需要分片, ...
+</pre></div>
+
+  <h3>ICMPv4 vs ICMPv6</h3>
+  <table>
+    <tr><th>特性</th><th>ICMPv4</th><th>ICMPv6</th></tr>
+    <tr><td>协议号</td><td>1</td><td>58</td></tr>
+    <tr><td>地址解析</td><td>ARP</td><td>NDP（ICMPv6 邻居发现）</td></tr>
+    <tr><td>路由器发现</td><td>ICMPv4 Router Solicitation</td><td>NDP Router Advertisement</td></tr>
+    <tr><td>组播管理</td><td>IGMP</td><td>MLD（ICMPv6 Multicast Listener）</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="types" class="toc-link">
+  <h2><span class="num">03</span> 消息类型</h2>
+
+  <h3>常用 ICMP 消息</h3>
+  <table>
+    <tr><th>Type</th><th>名称</th><th>Code</th><th>含义</th></tr>
+    <tr><td>0</td><td>Echo Reply</td><td>0</td><td>ping 应答</td></tr>
+    <tr><td>3</td><td>Destination Unreachable</td><td>0-15</td><td>目标不可达</td></tr>
+    <tr><td>4</td><td>Source Quench</td><td>0</td><td>拥塞通知（已废弃）</td></tr>
+    <tr><td>5</td><td>Redirect</td><td>0-3</td><td>路由重定向</td></tr>
+    <tr><td>8</td><td>Echo Request</td><td>0</td><td>ping 请求</td></tr>
+    <tr><td>11</td><td>Time Exceeded</td><td>0-1</td><td>TTL 过期（traceroute 基础）</td></tr>
+    <tr><td>12</td><td>Parameter Problem</td><td>0</td><td>IP 头参数错误</td></tr>
+    <tr><td>13</td><td>Timestamp</td><td>0</td><td>时间戳请求</td></tr>
+  </table>
+
+  <h3>Destination Unreachable 子类型</h3>
+  <div class="card">
+    <pre><code><span class="cm">// net/ipv4/icmp.c:124 — ICMP 错误到 errno 映射</span>
+<span class="kw">const struct</span> <span class="ty">icmp_err</span> icmp_err_convert[] = {
+    { .errno = ENETUNREACH,   .fatal = <span class="num">0</span> },  <span class="cm">// 0: Network Unreachable</span>
+    { .errno = EHOSTUNREACH,  .fatal = <span class="num">0</span> },  <span class="cm">// 1: Host Unreachable</span>
+    { .errno = ENOPROTOOPT,   .fatal = <span class="num">1</span> },  <span class="cm">// 2: Protocol Unreachable</span>
+    { .errno = ECONNREFUSED,  .fatal = <span class="num">1</span> },  <span class="cm">// 3: Port Unreachable</span>
+    { .errno = EMSGSIZE,      .fatal = <span class="num">0</span> },  <span class="cm">// 4: Fragmentation Needed</span>
+    { .errno = EOPNOTSUPP,    .fatal = <span class="num">0</span> },  <span class="cm">// 5: Source Route Failed</span>
+    { .errno = ENETUNREACH,   .fatal = <span class="num">1</span> },  <span class="cm">// 6: Network Unknown</span>
+    { .errno = EHOSTDOWN,     .fatal = <span class="num">1</span> },  <span class="cm">// 7: Host Unknown</span>
+    { .errno = EHOSTUNREACH,  .fatal = <span class="num">0</span> },  <span class="cm">// 12: TOS Host Unreachable</span>
+};
+<span class="cm">// fatal=1 → 连接直接终止</span>
+<span class="cm">// fatal=0 → 可以重试其他路由</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">04</span> 内核处理</h2>
+
+  <h3>接收 ICMP 消息</h3>
+  <div class="ascii-diagram"><pre>
+  网卡收到 ICMP 数据包
+        │
+        ↓
+  IP 层 → ip_rcv → NF_INET_LOCAL_IN → ip_local_deliver
+        │
+        ↓
+  IP 协议分发：protocol = IPPROTO_ICMP
+        │
+        ↓
+  <span style="color:#cf222e">icmp_rcv()</span> — net/ipv4/icmp.c
+        │
+        ├── 校验和验证
+        │
+        ├── 根据 Type 查找 icmp_pointers[] 处理函数
+        │
+        ├── Type 0 (Echo Reply)  → <span style="color:#1a7f37">ping_rcv()</span>
+        │       传递给 ping socket
+        │       唤醒 ping 进程
+        │
+        ├── Type 8 (Echo Request) → <span style="color:#8250df">icmp_echo()</span>
+        │       构造 Echo Reply
+        │       调用 icmp_reply() 发送
+        │
+        ├── Type 3 (Dest Unreach) → <span style="color:#bc4c00">icmp_unreach()</span>
+        │       提取原始数据包头
+        │       传递给上层协议（TCP/UDP）
+        │       → tcp_v4_err() / udp_err()
+        │
+        ├── Type 5 (Redirect) → <span style="color:#1a7f37">icmp_redirect()</span>
+        │       更新路由缓存
+        │
+        └── Type 11 (Time Exceeded) → <span style="color:#8250df">icmp_unreach()</span>
+                traceroute 使用此消息
+</pre></div>
+
+  <h3>发送 ICMP 消息</h3>
+  <div class="ascii-diagram"><pre>
+  <span style="color:#cf222e">icmp_send()</span> — 内核协议栈调用（生成错误消息）
+        │
+        ├── 被谁调用？
+        │   ip_rcv()     → 目标不可达
+        │   ip_forward() → 转发失败
+        │   ip_frag()    → 需要分片
+        │   udp_rcv()    → 端口不可达
+        │
+        ├── rate limit 检查（防止 ICMP 风暴）
+        │       icmpv4_xrlim_allow()
+        │       最多每秒 1000 个 ICMP 错误消息
+        │
+        └── 构造 ICMP 头 + 原始包头
+                icmp_reply() → ip_append_data() → ip_push_pending_frames()
+
+  <span style="color:#1a7f37">icmp_echo()</span> → icmp_reply() — 处理 ping 请求
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="error" class="toc-link">
+  <h2><span class="num">05</span> 错误消息与 socket 映射</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">ICMP 错误消息如何传递到应用层？</span>
+
+  目标主机收到 ICMP Dest Unreach (Port Unreachable)
+        │
+        ↓
+  icmp_unreach() → 提取原始包的 (protocol, sport, dport)
+        │
+        ├── protocol = TCP → tcp_v4_err()
+        │       → 通知 TCP socket "连接被拒绝"
+        │       → 应用 recv() 返回 -1, errno = ECONNREFUSED
+        │
+        ├── protocol = UDP → udp_err()
+        │       → 通知 UDP socket "端口不可达"
+        │       → 应用 recvfrom() 返回 -1, errno = ECONNREFUSED
+        │
+        └── protocol = 未知 → 丢弃
+
+<span style="color:#1a7f37">典型场景：</span>
+
+  客户端 TCP connect() → SYN → 服务端无监听
+  ← RST (TCP) 或 ← ICMP Port Unreachable
+  → connect() 返回 ECONNREFUSED
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="ping" class="toc-link">
+  <h2><span class="num">06</span> ping 与 ping6</h2>
+
+  <div class="ascii-diagram"><pre>
+  ping 进程
+    │
+    ├── socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP) <span style="color:#656d76">（ping）</span>
+    │   或 socket(AF_INET6, SOCK_DGRAM, IPPROTO_ICMPV6) <span style="color:#656d76">（ping6）</span>
+    │
+    ├── sendto(fd, echo_request, ...) → 内核 ICMP 层
+    │       → icmp_echo() 构造 Echo Request
+    │       → ip_output() → 网卡发送
+    │
+    ├── 等待 Echo Reply
+    │       → icmp_rcv() → Type 0 (Echo Reply)
+    │       → ping_rcv() → 唤醒 socket
+    │
+    └── recvfrom(fd, echo_reply, ...) → 计算 RTT
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm">// net/ipv4/icmp.c:1677 — Echo Request 处理</span>
+[ICMP_ECHO] = {
+    .handler = icmp_echo,  <span class="cm">// 收到 Echo Request 后回调</span>
+},
+
+<span class="cm">// icmp_echo() 核心逻辑：</span>
+<span class="kw">static void</span> <span class="fn">icmp_echo</span>(<span class="kw">struct</span> <span class="ty">sk_buff</span> *skb)
+{
+    <span class="cm">// 检查 sysctl_icmp_echo_ignore_all</span>
+    <span class="kw">if</span> (net->ipv4.sysctl_icmp_echo_ignore_all)
+        <span class="kw">return</span>;  <span class="cm">// 丢弃所有 ping</span>
+
+    <span class="cm">// 检查广播 ping 是否忽略</span>
+    <span class="kw">if</span> (skb->pkt_type == PACKET_BROADCAST &amp;&amp;
+        net->ipv4.sysctl_icmp_echo_ignore_broadcasts)
+        <span class="kw">return</span>;
+
+    <span class="cm">// 构造并发送 Echo Reply</span>
+    icmp_echo(skb);
+}</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="security" class="toc-link">
+  <h2><span class="num">07</span> 安全与调优</h2>
+
+  <div class="card">
+    <pre><code><span class="cm"># 禁止所有 ping（ICMP Echo Reply）</span>
+$ sysctl -w net.ipv4.icmp_echo_ignore_all=1
+
+<span class="cm"># 忽略广播 ping</span>
+$ sysctl -w net.ipv4.icmp_echo_ignore_broadcasts=1
+
+<span class="cm"># 限制 ICMP 错误消息速率（防止 ICMP 风暴）</span>
+$ sysctl -w net.ipv4.icmp_ratelimit=1000     <span class="cm"># 每秒上限</span>
+$ sysctl -w net.ipv4.icmp_ratemask=6168       <span class="cm"># 受限的消息类型</span>
+
+<span class="cm"># ICMP 重定向控制</span>
+$ sysctl -w net.ipv4.conf.all.accept_redirects=0
+$ sysctl -w net.ipv4.conf.all.send_redirects=0
+
+<span class="cm"># 忽略伪造的 ICMP 错误响应</span>
+$ sysctl -w net.ipv4.icmp_ignore_bogus_error_responses=1</code></pre>
+  </div>
+
+  <h3>关键 sysctl 参数</h3>
+  <table>
+    <tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+    <tr><td><code>icmp_echo_ignore_all</code></td><td>0</td><td>1=禁止所有 ping</td></tr>
+    <tr><td><code>icmp_echo_ignore_broadcasts</code></td><td>1</td><td>忽略广播 ping（推荐开启）</td></tr>
+    <tr><td><code>icmp_ratelimit</code></td><td>1000</td><td>ICMP 错误消息速率限制（ms）</td></tr>
+    <tr><td><code>icmp_ratemask</code></td><td>6168</td><td>哪些 ICMP 类型受速率限制</td></tr>
+    <tr><td><code>accept_redirects</code></td><td>1</td><td>是否接受 ICMP 重定向</td></tr>
+    <tr><td><code>send_redirects</code></td><td>1</td><td>是否发送 ICMP 重定向</td></tr>
+    <tr><td><code>ignore_bogus_error_responses</code></td><td>1</td><td>忽略伪造错误响应</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/ipv4/</span>
+├── <span class="file">icmp.c</span>              <span class="cmt">ICMP 核心 (1778 行)</span>
+│     └── icmp_rcv()         <span class="cmt">ICMP 接收入口</span>
+│     └── icmp_echo()        <span class="cmt">Echo Request 处理</span>
+│     └── icmp_unreach()     <span class="cmt">错误消息处理</span>
+│     └── icmp_redirect()    <span class="cmt">重定向处理</span>
+│     └── icmp_send()        <span class="cmt">生成 ICMP 错误</span>
+├── <span class="file">ping.c</span>              <span class="cmt">ping/ping6 socket (1187 行)</span>
+│     └── ping_rcv()         <span class="cmt">Echo Reply 处理</span>
+│     └── ping_v4_sendmsg()  <span class="cmt">ping 发送</span>
+└── <span class="file">ip_icmp.c</span>           <span class="cmt">IP 层调用 ICMP</span>
+
+<span class="dir">include/net/</span>
+└── <span class="file">icmp.h</span>              <span class="cmt">ICMP 内部接口</span>
+
+<span class="dir">include/uapi/linux/</span>
+└── <span class="file">icmp.h</span>              <span class="cmt">ICMP Type/Code 定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/ipv4/icmp.c</code> — 从 <code>icmp_rcv()</code> 理解接收，<code>icmp_send()</code> 理解错误生成。<br>
+    <code>net/ipv4/ping.c</code> — <code>ping_rcv()</code> 理解 ping 应答如何传递到用户态。<br>
+    <code>include/uapi/linux/icmp.h</code> — ICMP Type/Code 常量定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/ipv4/icmp.c · net/ipv4/ping.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

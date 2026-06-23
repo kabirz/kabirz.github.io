@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux UNIX Domain Socket 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux UNIX Domain Socket 深度解析</h1>
+  <p class="subtitle">同一主机进程间高效通信 — 不经过网络栈的 Socket</p>
+  <span class="version">Linux 7.0.12 · net/unix/af_unix.c (3970 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">类型与寻址</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">通信流程</a></li>
+    <li><a href="#scm">SCM_RIGHTS 文件描述符传递</a></li>
+    <li><a href="#compare">与其他 IPC 对比</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>UNIX Domain Socket（AF_UNIX）是 Linux 中<strong>同一主机进程间通信</strong>的高性能机制。它使用 Socket API，但<strong>不经过网络协议栈</strong>——数据直接在内核中从一个 socket 的发送队列复制到另一个 socket 的接收队列。Docker、Systemd、X11、D-Bus 等大量系统服务使用它。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">UNIX Domain Socket 特性</div>
+      <ul>
+        <li><strong>不经过协议栈</strong>：数据不走 IP/TCP/UDP</li>
+        <li><strong>支持 SOCK_STREAM</strong>：可靠有序（类似 TCP）</li>
+        <li><strong>支持 SOCK_DGRAM</strong>：无连接（类似 UDP）</li>
+        <li><strong>文件描述符传递</strong>：SCM_RIGHTS（独特能力）</li>
+        <li><strong>路径寻址</strong>：/var/run/docker.sock</li>
+        <li><strong>凭证传递</strong>：SCM_CREDENTIALS（UID/GID）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">典型应用</div>
+      <table>
+        <tr><th>应用</th><th>Socket 路径</th><th>说明</th></tr>
+        <tr><td>Docker</td><td>/var/run/docker.sock</td><td>Docker API</td></tr>
+        <tr><td>Systemd</td><td>/run/systemd/private</td><td>systemctl 通信</td></tr>
+        <tr><td>X11</td><td>/tmp/.X11-unix/X0</td><td>图形显示</td></tr>
+        <tr><td>D-Bus</td><td>/run/user/1000/bus</td><td>桌面服务总线</td></tr>
+        <tr><td>PostgreSQL</td><td>/var/run/postgresql/</td><td>数据库连接</td></tr>
+        <tr><td>MySQL</td><td>/var/run/mysqld/mysqld.sock</td><td>数据库连接</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 类型与寻址</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">SOCK_STREAM（流式，可靠有序）：</span>
+
+  服务端                          客户端
+  socket(AF_UNIX, SOCK_STREAM)    socket(AF_UNIX, SOCK_STREAM)
+  bind("/var/run/app.sock")       connect("/var/run/app.sock")
+  listen()                        ↓
+  accept()  ← 连接建立 →         send()/recv()
+                                   ↓
+                                 数据双向流动（内核复制 sk_buff）
+
+<span style="color:#1a7f37">SOCK_DGRAM（数据报，无连接）：</span>
+
+  服务端                          客户端
+  socket(AF_UNIX, SOCK_DGRAM)    socket(AF_UNIX, SOCK_DGRAM)
+  bind("/var/run/app.sock")       sendto("/var/run/app.sock", data)
+  recvfrom() ← 数据报 ←         （无需 listen/accept）
+  注意：无连接但仍然有序（同一对 socket 之间）
+
+<span style="color:#8250df">抽象命名空间（无文件系统路径）：</span>
+
+  bind() 时 addr->sun_path[0] = '\0'
+  → 不在文件系统中创建文件
+  → 仅通过进程传名可见（/proc/pid/fd/）
+  → 自动清理，无残留 socket 文件
+</pre></div>
+
+  <h3>地址结构</h3>
+  <div class="card">
+    <pre><code><span class="cm">// struct sockaddr_un — UNIX Domain Socket 地址</span>
+<span class="kw">struct</span> <span class="ty">sockaddr_un</span> {
+    <span class="ty">sa_family_t</span> sun_family;  <span class="cm">// AF_UNIX</span>
+    <span class="ty">char</span>        sun_path[<span class="num">108</span>]; <span class="cm">// 文件系统路径（如 /var/run/docker.sock）</span>
+};
+
+<span class="cm">// 绑定示例</span>
+<span class="kw">struct</span> <span class="ty">sockaddr_un</span> addr;
+addr.sun_family = AF_UNIX;
+<span class="fn">strcpy</span>(addr.sun_path, <span class="st">"/var/run/myapp.sock"</span>);
+<span class="fn">bind</span>(fd, (<span class="kw">struct</span> <span class="ty">sockaddr</span> *)&amp;addr, <span class="kw">sizeof</span>(addr));</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/af_unix.h:36 — UNIX socket</span>
+<span class="kw">struct</span> <span class="ty">unix_sock</span> {
+    <span class="kw">struct</span> <span class="ty">sock</span>         sk;          <span class="cm">// 继承自 sock</span>
+    <span class="kw">struct</span> <span class="ty">unix_address</span> *addr;       <span class="cm">// 绑定的地址（路径）</span>
+    <span class="kw">struct</span> <span class="ty">path</span>         path;        <span class="cm">// 文件系统路径</span>
+    <span class="kw">struct</span> <span class="ty">sock</span>         *peer;       <span class="cm">// ★ 对端 socket（连接后指向对方）</span>
+    <span class="kw">struct</span> <span class="ty">sock</span>         *listener;   <span class="cm">// 监听 socket（accept 前的 socket）</span>
+    <span class="kw">struct</span> <span class="ty">socket_wq</span>    peer_wq;     <span class="cm">// 对端等待队列</span>
+    <span class="kw">struct</span> <span class="ty">wait_queue_entry_t</span> peer_wake; <span class="cm">// 对端唤醒</span>
+    <span class="kw">struct</span> <span class="ty">scm_stat</span>     scm_stat;    <span class="cm">// 凭证统计</span>
+};</code></pre>
+  </div>
+
+  <h3>数据结构关系</h3>
+  <div class="ascii-diagram"><pre>
+  服务端 unix_sock                    客户端 unix_sock
+  ┌──────────────┐                   ┌──────────────┐
+  │ sk           │                   │ sk           │
+  │ addr → /var/...│                 │ addr → /var/...│
+  │ peer ─────────┼──────────────────┼── peer       │
+  │ listener → sk │                   │              │
+  └──────────────┘                   └──────────────┘
+
+  连接建立后：
+  服务端 sk->peer = 客户端 sk
+  客户端 sk->peer = 服务端 sk
+  双向指针，直接通信
+
+  数据发送路径：
+  服务端 send() → sk->sk_write_queue → sk->peer->sk_receive_queue
+  客户端 recv() ← sk->sk_receive_queue（从对端的写队列取出）
+  无协议栈参与，纯内核内存复制！
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 通信流程</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">SOCK_STREAM 连接流程：</span>
+
+  服务端                                    客户端
+  │                                         │
+  │ socket(AF_UNIX, SOCK_STREAM, 0)         │ socket(AF_UNIX, SOCK_STREAM, 0)
+  │ bind(path)                              │
+  │ listen(backlog)                         │
+  │              ┌──────────────┐           │
+  │ accept() ←── │ 三次握手模拟  │ ←── connect(path)
+  │              └──────────────┘           │
+  │                                         │
+  │ ←──────── 双向数据流 ─────────→         │
+  │ send() → sk_write_queue → peer recv()  │
+  │ send() → sk_write_queue → peer recv()  │
+  │                                         │
+  │ close()                                 │ close()
+  │              ┌──────────────┐           │
+  │              │ 半关闭通知    │           │
+  │              └──────────────┘           │
+
+<span style="color:#1a7f37">SOCK_DGRAM 无连接流程：</span>
+
+  服务端                                    客户端
+  │                                         │
+  │ socket(AF_UNIX, SOCK_DGRAM, 0)          │ socket(AF_UNIX, SOCK_DGRAM, 0)
+  │ bind(path)                              │
+  │ recvfrom()                              │ sendto(path, data)
+  │ ←────── 数据报直达 ───────→             │
+  │ close()                                 │ close()
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="scm" class="toc-link">
+  <h2><span class="num">05</span> SCM_RIGHTS 文件描述符传递</h2>
+
+  <p>UNIX Domain Socket 最独特的功能是<strong>跨进程传递文件描述符</strong>——发送方可以将一个 fd 通过 socket 发送给接收方，接收方获得一个指向同一个内核文件对象的 fd。这是其他 IPC 机制无法做到的。</p>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">SCM_RIGHTS 文件描述符传递：</span>
+
+  进程 A（发送方）                        进程 B（接收方）
+  ┌─────────────────┐                    ┌─────────────────┐
+  │  fd = open(...)  │                    │                 │
+  │  ↓              │                    │                 │
+  │  sendmsg(fd)    │ ─── SCM_RIGHTS ──→ │ recvmsg()      │
+  │  + 辅助数据      │     内核传递       │ → new_fd        │
+  │  (fd=3)         │                    │ (fd=7)         │
+  └─────────────────┘                    └─────────────────┘
+
+  关键：
+  - 进程 A 的 fd=3 和进程 B 的 fd=7 指向同一个内核 file
+  - 不是复制文件描述符值，而是共享内核对象
+  - 接收方的 fd 号可以不同
+
+  使用场景：
+  - systemd 传递 listening socket 给子进程（socket activation）
+  - Docker 传递 pipe fd 给容器
+  - X11 传递 X socket 给应用
+  - privilege separation（sshd 传递 socket 给特权进程）
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 发送方：通过 SCM_RIGHTS 发送 fd</span>
+<span class="kw">struct</span> <span class="ty">msghdr</span> msg = { <span class="num">0</span> };
+<span class="kw">struct</span> <span class="ty">cmsghdr</span> *cmsg;
+<span class="ty">char</span> buf[CMSG_SPACE(<span class="kw">sizeof</span>(<span class="ty">int</span>))];
+<span class="ty">int</span> fd = <span class="fn">open</span>(<span class="st">"/tmp/file"</span>, O_RDONLY);
+
+msg.msg_control = buf;
+msg.msg_controllen = <span class="kw">sizeof</span>(buf);
+cmsg = <span class="fn">CMSG_FIRSTHDR</span>(&amp;msg);
+cmsg->cmsg_level = SOL_SOCKET;
+cmsg->cmsg_type = SCM_RIGHTS;
+cmsg->cmsg_len = CMSG_LEN(<span class="kw">sizeof</span>(<span class="ty">int</span>));
+*<span class="fn">CMSG_DATA</span>(cmsg) = fd;
+
+<span class="fn">sendmsg</span>(sock_fd, &amp;msg, <span class="num">0</span>);
+
+<span class="cm">// 接收方：接收 fd</span>
+<span class="fn">recvmsg</span>(sock_fd, &amp;msg, <span class="num">0</span>);
+cmsg = <span class="fn">CMSG_FIRSTHDR</span>(&amp;msg);
+<span class="ty">int</span> new_fd = *<span class="fn">CMSG_DATA</span>(cmsg);  <span class="cm">// 新的 fd 编号</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="compare" class="toc-link">
+  <h2><span class="num">06</span> 与其他 IPC 对比</h2>
+
+  <table>
+    <tr><th>特性</th><th>UNIX Socket</th><th>TCP Socket</th><th>Pipe</th><th>共享内存</th><th>消息队列</th></tr>
+    <tr><td>跨主机</td><td>否</td><td>是</td><td>否</td><td>否</td><td>否</td></tr>
+    <tr><td>性能</td><td><strong>极高</strong></td><td>高</td><td>极高</td><td>最高</td><td>中</td></tr>
+    <tr><td>双向通信</td><td>是</td><td>是</td><td>单向</td><td>是</td><td>是</td></tr>
+    <tr><td>fd 传递</td><td><strong>支持</strong></td><td>不支持</td><td>不支持</td><td>不支持</td><td>不支持</td></tr>
+    <tr><td>凭证传递</td><td><strong>支持</strong></td><td>不支持</td><td>不支持</td><td>不支持</td><td>不支持</td></tr>
+    <tr><td>可靠传输</td><td>STREAM 模式</td><td>是</td><td>是</td><td>需同步</td><td>是</td></tr>
+    <tr><td>内核实现复杂度</td><td>5226 行</td><td>22602 行</td><td>~500 行</td><td>~200 行</td><td>~1000 行</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>什么时候用 UNIX Socket 而不是 TCP？</strong><br>
+    当通信双方在同一主机上时，UNIX Domain Socket 性能更好（无协议栈开销），并且支持 fd 传递和凭证传递。典型场景：数据库本地连接、Docker API、systemd 通信。
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/unix/</span>                  <span class="cmt">总计 5226 行</span>
+├── <span class="file">af_unix.c</span>         <span class="cmt">UNIX Socket 核心 (3970 行)</span>
+│     └── unix_stream_sendmsg()  <span class="cmt">流式发送</span>
+│     └── unix_stream_recvmsg()  <span class="cmt">流式接收</span>
+│     └── unix_dgram_sendmsg()   <span class="cmt">数据报发送</span>
+│     └── unix_bind()            <span class="cmt">绑定路径</span>
+│     └── unix_stream_connect()  <span class="cmt">连接（三次握手）</span>
+├── <span class="file">garbage.c</span>         <span class="cmt">GC：清理无引用的 socket (659 行)</span>
+├── <span class="file">unix_bpf.c</span>        <span class="cmt">BPF 支持 (205 行)</span>
+├── <span class="file">diag.c</span>            <span class="cmt">socket 诊断 (330 行)</span>
+└── <span class="file">sysctl_net_unix.c</span> <span class="cmt">sysctl 参数 (62 行)</span>
+
+<span class="dir">include/net/</span>
+└── <span class="file">af_unix.h</span>         <span class="cmt">struct unix_sock 定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/unix/af_unix.c</code> — 核心文件，从 <code>unix_stream_sendmsg()</code> 和 <code>unix_stream_recvmsg()</code> 理解数据流。<br>
+    <code>net/unix/garbage.c</code> — 理解 UNIX socket 的 GC 机制（处理 fd 传递的循环引用）。<br>
+    <code>include/net/af_unix.h</code> — <code>struct unix_sock</code> 定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/unix/af_unix.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

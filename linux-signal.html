@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Signal 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Signal 深度解析</h1>
+  <p class="subtitle">进程间异步通知 — 内核最古老的 IPC 机制</p>
+  <span class="version">Linux 7.0.12 · kernel/signal.c (5050 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#signals">信号列表</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">发送与投递流程</a></li>
+    <li><a href="#handler">信号处理</a></li>
+    <li><a href="#rt">实时信号</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Signal（信号）是 Linux 内核提供的<strong>进程间异步通知机制</strong>。当某个事件发生时（如用户按下 Ctrl+C、子进程退出、段错误），内核向目标进程发送一个信号。进程可以注册信号处理函数来响应信号，也可以选择忽略或使用默认行为。Signal 是 Linux 最古老的 IPC 机制，核心实现 <code>kernel/signal.c</code> 共 <strong>5050 行</strong>。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Signal 核心特性</div>
+      <ul>
+        <li><strong>异步通知</strong>：不阻塞，立即处理</li>
+        <li><strong>不可排队</strong>：标准信号（1-31）不排队，合并</li>
+        <li><strong>实时信号</strong>：32-64 可排队，不合并</li>
+        <li><strong>三种处理</strong>：自定义 handler / 忽略 / 默认</li>
+        <li><strong>特权检查</strong>：非特权进程不能向其他进程发信号</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">典型场景</div>
+      <table>
+        <tr><th>信号</th><th>触发</th><th>默认行为</th></tr>
+        <tr><td>SIGINT</td><td>Ctrl+C</td><td>终止进程</td></tr>
+        <tr><td>SIGKILL</td><td>kill -9</td><td>强制终止</td></tr>
+        <tr><td>SIGSEGV</td><td>段错误</td><td>终止+core dump</td></tr>
+        <tr><td>SIGCHLD</td><td>子进程退出</td><td>忽略（需 wait 回收）</td></tr>
+        <tr><td>SIGTERM</td><td>kill pid</td><td>优雅终止</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="signals" class="toc-link">
+  <h2><span class="num">02</span> 信号列表</h2>
+
+  <h3>标准信号（1-31）</h3>
+  <table>
+    <tr><th>编号</th><th>名称</th><th>默认行为</th><th>说明</th></tr>
+    <tr><td>1</td><td>SIGHUP</td><td>终止</td><td>终端挂起或控制进程死亡</td></tr>
+    <tr><td>2</td><td>SIGINT</td><td>终止</td><td>键盘中断（Ctrl+C）</td></tr>
+    <tr><td>3</td><td>SIGQUIT</td><td>终止+core</td><td>键盘退出（Ctrl+\）</td></tr>
+    <tr><td>6</td><td>SIGABRT</td><td>终止+core</td><td>abort() 调用</td></tr>
+    <tr><td>9</td><td>SIGKILL</td><td>终止（不可捕获）</td><td>强制杀死进程</td></tr>
+    <tr><td>11</td><td>SIGSEGV</td><td>终止+core</td><td>段错误（无效内存访问）</td></tr>
+    <tr><td>13</td><td>SIGPIPE</td><td>终止</td><td>向已关闭的管道写入</td></tr>
+    <tr><td>15</td><td>SIGTERM</td><td>终止</td><td>优雅终止（kill 默认）</td></tr>
+    <tr><td>17</td><td>SIGCHLD</td><td>忽略</td><td>子进程退出或停止</td></tr>
+    <tr><td>19</td><td>SIGSTOP</td><td>停止（不可捕获）</td><td>暂停进程</td></tr>
+    <tr><td>20</td><td>SIGTSTP</td><td>停止</td><td>终端暂停（Ctrl+Z）</td></tr>
+  </table>
+
+  <h3>实时信号（32-64）</h3>
+  <div class="card">
+    <pre><code><span class="cm">// include/uapi/asm-generic/signal.h</span>
+<span class="cm">// SIGRTMIN = 32, SIGRTMAX = 64</span>
+<span class="cm">// 实时信号特点：</span>
+<span class="cm">// 1. 可排队（多个信号不会合并）</span>
+<span class="cm">// 2. 按顺序投递（FIFO）</span>
+<span class="cm">// 3. 默认终止进程（如果未注册 handler）</span>
+<span class="cm">// 4. 可携带数据（sigval）</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/signal_types.h — 信号核心结构</span>
+
+<span class="cm">// 信号队列节点</span>
+<span class="kw">struct</span> <span class="ty">sigqueue</span> {
+    <span class="kw">struct</span> <span class="ty">list_head</span>     list;    <span class="cm">// 链表节点</span>
+    <span class="ty">int</span>                  flags;   <span class="cm">// SIGQUEUE_PREALLOC 等</span>
+    <span class="ty">kernel_siginfo_t</span>     info;    <span class="cm">// ★ 信号信息（发送者、信号号等）</span>
+    <span class="kw">struct</span> <span class="ty">ucounts</span>       *ucounts;<span class="cm">// 用户命名空间计数</span>
+};
+
+<span class="cm">// 待处理信号集</span>
+<span class="kw">struct</span> <span class="ty">sigpending</span> {
+    <span class="kw">struct</span> <span class="ty">list_head</span> list;  <span class="cm">// 排队的 sigqueue 链表</span>
+    <span class="ty">sigset_t</span>        signal; <span class="cm">// ★ 位图：哪些信号待处理</span>
+};
+
+<span class="cm">// 信号处理动作</span>
+<span class="kw">struct</span> <span class="ty">sigaction</span> {
+    <span class="ty">__sighandler_t</span>  sa_handler; <span class="cm">// 信号处理函数指针</span>
+    <span class="ty">unsigned long</span>   sa_flags;   <span class="cm">// SA_RESTART / SA_SIGINFO 等</span>
+    <span class="ty">sigset_t</span>        sa_mask;    <span class="cm">// 处理信号时屏蔽的信号集</span>
+};</code></pre>
+  </div>
+
+  <h3>task_struct 中的信号相关字段</h3>
+  <div class="ascii-diagram"><pre>
+  task_struct（进程描述符）中与信号相关的字段：
+
+  ┌────────────────────────────────────────────┐
+  │                 task_struct                  │
+  ├────────────────────────────────────────────┤
+  │  struct sighand_struct  *sighand;           │ ← 信号处理函数表
+  │  struct signal_struct   *signal;            │ ← 共享信号信息（线程组）
+  │  struct sigpending      pending;            │ ← 进程私有待处理信号
+  │  sigset_t               blocked;            │ ← 被屏蔽的信号集
+  │  struct sigpending      shared_pending;     │ ← 线程组共享待处理信号
+  │  int                    exit_code;          │ ← 退出码（被信号杀死时设置）
+  │  unsigned int           flags;              │ ← PF_SIGNALED 等标志
+  └────────────────────────────────────────────┘
+
+  线程组共享的信号信息：
+  ┌────────────────────────────────────────────┐
+  │              signal_struct                  │
+  ├────────────────────────────────────────────┤
+  │  atomic_t     live;          ← 存活线程数  │
+  │  atomic_t     count;         ← 引用计数    │
+  │  struct k_sigaction action[<span class="num">64</span>]; ← 信号动作表│
+  │  sigset_t     shared_pending; ← 共享待处理  │
+  │  struct pid   *leader_pgrp;  ← 前台进程组  │
+  └────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 发送与投递流程</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">发送信号（kill / raise / 内核触发）：</span>
+
+  用户态：kill(pid, SIGTERM)
+    或
+  内核：do_siginfo()（如 SIGSEGV、SIGCHLD）
+        │
+        ↓
+  <span style="color:#8250df">send_signal_locked()</span> — kernel/signal.c
+        │
+        ├── 1. 权限检查
+        │       CAP_KILL → 可发给任意进程
+        │       同一用户 → 只能发给同用户的进程
+        │       目标进程的 uid/egid 匹配
+        │
+        ├── 2. 标准信号合并检查
+        │       如果是标准信号（1-31）且 pending 位图已有该信号
+        │       → 不重复入队（标准信号不排队）
+        │
+        ├── 3. 分配 sigqueue 节点
+        │       从 slab 缓存分配，填充 info（sender pid/signal no）
+        │
+        ├── 4. 加入目标进程的 pending 队列
+        │       list_add_tail(&amp;sq->list, &amp;pending->list)
+        │       set_bit(sig, &amp;pending->signal)
+        │
+        └── 5. 唤醒目标进程
+                signal_wake_up_state(t, ...)
+                → 设置 TIF_SIGPENDING 标志
+                → 如果目标在睡眠：try_to_wake_up()
+                → 如果目标在用户态：下次返回内核时处理
+
+<span style="color:#1a7f37">投递信号（目标进程被唤醒后）：</span>
+
+  进程从用户态返回内核态（syscall / 中断 / 调度返回）
+        │
+        ↓
+  检查 TIF_SIGPENDING 标志
+        │
+        ├── 未设置 → 正常返回用户态
+        │
+        └── 已设置 → <span style="color:#cf222e">do_signal()</span> → <span style="color:#1a7f37">get_signal()</span>
+                │
+                ├── 1. 获取待处理信号
+                │       从 shared_pending + pending 位图取最高优先级
+                │
+                ├── 2. 检查信号是否被 blocked
+                │       blocked 位图中该位为 1 → 跳过
+                │
+                ├── 3. 根据 sa_handler 执行：
+                │       SIG_IGN → 忽略
+                │       SIG_DFL → 执行默认行为
+                │       用户函数 → 构造信号栈帧，跳转到 handler
+                │
+                └── 4. handler 返回后 → 信号系统调用重启动
+                        （如果设置了 SA_RESTART）
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="handler" class="toc-link">
+  <h2><span class="num">05</span> 信号处理</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// 注册信号处理函数</span>
+<span class="kw">struct</span> <span class="ty">sigaction</span> sa;
+sa.sa_handler = my_handler;
+<span class="fn">sigemptyset</span>(&amp;sa.sa_mask);
+sa.sa_flags = SA_RESTART; <span class="cm">// 被信号中断的系统调用自动重启</span>
+
+<span class="fn">sigaction</span>(SIGTERM, &amp;sa, <span class="num">NULL</span>);
+
+<span class="cm">// 信号处理函数</span>
+<span class="ty">void</span> <span class="fn">my_handler</span>(<span class="ty">int</span> sig) {
+    <span class="cm">// 只能使用 async-signal-safe 函数</span>
+    <span class="cm">// 不能使用 malloc、printf 等</span>
+    <span class="cm">// 只能设置全局 volatile sig_atomic_t 标志</span>
+}</code></pre>
+  </div>
+
+  <h3>信号处理的安全限制</h3>
+  <div class="callout warn">
+    <strong>信号处理函数中只能调用 async-signal-safe 函数</strong><br>
+    在信号处理函数中，进程可能处于<strong>任意状态</strong>（如 malloc 内部锁被持有），调用非安全函数可能导致死锁或数据损坏。<br><br>
+    <strong>安全的函数</strong>：<code>_exit</code>、<code>write</code>、<code>read</code>、<code>close</code>、<code>kill</code>、<code>sigprocmask</code>、<code>sigaddset</code><br>
+    <strong>不安全的函数</strong>：<code>malloc</code>、<code>printf</code>、<code>free</code>、<code>getenv</code>、<code>localtime</code>、任何 mutex 操作
+  </div>
+
+  <h3>SA_RESTART 的影响</h3>
+  <table>
+    <tr><th>标志</th><th>行为</th></tr>
+    <tr><td>无 SA_RESTART</td><td>被信号中断的系统调用返回 -1, errno=EINTR</td></tr>
+    <tr><td>有 SA_RESTART</td><td>内核自动重启被中断的系统调用</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="rt" class="toc-link">
+  <h2><span class="num">06</span> 实时信号</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">标准信号（1-31）：</span>
+
+  发送 SIGTERM → pending 已有 SIGTERM → 不入队（合并）
+  进程只能知道收到过 SIGTERM，不能知道几次
+
+<span style="color:#1a7f37">实时信号（32-64）：</span>
+
+  发送 SIGRTMIN+1 → 入队 → 排列到 pending 队列
+  再发 SIGRTMIN+1 → 再入队 → 队列中有 2 个
+  进程可以精确知道收到几次，按顺序处理
+
+  sigwaitinfo() / sigtimedwait() 可以获取 siginfo_t
+  包含发送者 PID、信号值、排队时间等信息
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 发送实时信号（可携带数据）</span>
+<span class="kw">union</span> <span class="ty">sigval</span> val;
+val.sival_int = <span class="num">42</span>;
+<span class="fn">sigqueue</span>(pid, SIGRTMIN, val);
+
+<span class="cm">// 接收实时信号（获取详细信息）</span>
+<span class="ty">siginfo_t</span> info;
+<span class="fn">sigwaitinfo</span>(&amp;set, &amp;info);
+<span class="cm">// info.si_signo = 信号号</span>
+<span class="cm">// info.si_value.sival_int = 42</span>
+<span class="cm">// info.si_pid = 发送者 PID</span></code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+└── <span class="file">signal.c</span>           <span class="cmt">信号核心 (5050 行)</span>
+      └── send_signal_locked()  <span class="cmt">发送信号</span>
+      └── do_signal()           <span class="cmt">信号投递入口</span>
+      └── get_signal()          <span class="cmt">获取待处理信号</span>
+      └── setup_rt_frame()      <span class="cmt">构造 handler 栈帧</span>
+      └── do_sigaltstack()      <span class="cmt">信号栈处理</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">signal_types.h</span>     <span class="cmt">sigqueue / sigpending / sigaction</span>
+
+<span class="dir">include/uapi/linux/</span>
+└── <span class="file">signal.h</span>           <span class="cmt">信号号 / siginfo_t 定义</span>
+
+<span class="dir">include/uapi/asm-generic/</span>
+└── <span class="file">signal.h</span>           <span class="cmt">SIGKILL / SIGTERM / SIGRTMIN 等</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/signal.c</code> — 从 <code>send_signal_locked()</code> 理解发送，<code>get_signal()</code> 理解投递。<br>
+    <code>include/linux/signal_types.h</code> — <code>sigqueue</code>、<code>sigpending</code>、<code>sigaction</code> 结构定义。<br>
+    <code>include/uapi/linux/signal.h</code> — <code>siginfo_t</code> 和信号号常量定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/signal.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Traffic Control 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Traffic Control 深度解析</h1>
+  <p class="subtitle">流量控制 — QoS、整形、调度与过滤</p>
+  <span class="version">Linux 7.0.12 · net/sched/ (63124 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#qdisc">Qdisc 调度器</a></li>
+    <li><a href="#cls">分类器与动作</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#cli">配置命令</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Traffic Control（tc）是 Linux 内核中的<strong>流量控制框架</strong>，位于网络设备层和协议栈之间。它控制数据包的发送顺序和速率，实现 QoS（服务质量）、带宽限制、流量整形、优先级调度等功能。tc 框架总计 <strong>63124 行</strong>代码，是内核网络栈中最庞大的子系统之一。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">tc 核心能力</div>
+      <ul>
+        <li><strong>QoS</strong>：保证关键流量的带宽</li>
+        <li><strong>限速</strong>：限制接口发送速率</li>
+        <li><strong>整形</strong>：平滑突发流量</li>
+        <li><strong>调度</strong>：多队列优先级调度</li>
+        <li><strong>过滤</strong>：按流分类处理</li>
+        <li><strong>丢包策略</strong>：智能丢包（如 RED、CoDel）</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心概念</div>
+      <table>
+        <tr><th>组件</th><th>说明</th></tr>
+        <tr><td>Qdisc</td><td>队列规则（调度器）</td></tr>
+        <tr><td>Class</td><td>分类（逻辑子队列）</td></tr>
+        <tr><td>Filter</td><td>过滤器（按条件分类）</td></tr>
+        <tr><td>Action</td><td>动作（对匹配包的处理）</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+
+  <h3>tc 在数据包路径中的位置</h3>
+  <div class="ascii-diagram"><pre>
+  协议栈发送数据包
+        │
+        ↓
+  IP 层 → ip_output → ip_finish_output
+        │
+        ↓
+  dev_queue_xmit() — net/core/dev.c
+        │
+        ├── 无 qdisc → 直接 dev_hard_start_xmit()
+        │
+        └── 有 qdisc → <span style="color:#8250df">sch_handle_xmit()</span>
+                │
+                ↓
+  ┌──────────────────────────────────────────────────┐
+  │           tc 框架（Qdisc → Class → Filter）       │
+  │                                                    │
+  │  ┌──────────────────────────────────────┐         │
+  │  │         Root Qdisc (根调度器)         │         │
+  │  │         prio / htb / tbf / fq        │         │
+  │  ├──────────┬───────────┬───────────────┤         │
+  │  │ Class 1: │ Class 2:  │ Class 3:      │         │
+  │  │ 高优先级  │ 普通      │ 低优先级       │         │
+  │  │ (10Mbps) │ (80Mbps)  │ (10Mbps)      │         │
+  │  └────┬─────┴─────┬─────┴───────┬───────┘         │
+  │       │ Filter    │ Filter      │                  │
+  │       │ port 22   │ tcp/80      │ 其他              │
+  └───────┼───────────┼─────────────┼──────────────────┘
+          ↓           ↓             ↓
+          dev_hard_start_xmit(skb, dev)
+                    ↓
+               网卡发送
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/sch_generic.h:66 — Qdisc（队列规则）</span>
+<span class="kw">struct</span> <span class="ty">Qdisc</span> {
+    <span class="ty">int</span>             (*enqueue)(<span class="kw">struct</span> <span class="ty">sk_buff</span> *skb,
+                               <span class="kw">struct</span> <span class="ty">Qdisc</span> *sch,
+                               <span class="kw">struct</span> <span class="ty">sk_buff</span> **to_free); <span class="cm">// ★ 入队</span>
+    <span class="kw">struct</span> <span class="ty">sk_buff</span> *(*dequeue)(<span class="kw">struct</span> <span class="ty">Qdisc</span> *sch); <span class="cm">// ★ 出队</span>
+    <span class="ty">u32</span>             limit;       <span class="cm">// 队列长度上限</span>
+    <span class="ty">unsigned int</span>    backlog;     <span class="cm">// 当前队列中的包数</span>
+    <span class="kw">struct</span> <span class="ty">net_rate_estimator</span> *rate_est; <span class="cm">// 速率估算</span>
+    <span class="kw">struct</span> <span class="ty">Qdisc_ops</span>  *ops;      <span class="cm">// 操作函数表</span>
+    <span class="kw">struct</span> <span class="ty">netdev_queue</span> *dev_queue; <span class="cm">// 关联的设备队列</span>
+    <span class="kw">struct</span> <span class="ty">Qdisc_class_hash</span> clhash; <span class="cm">// 分类哈希表</span>
+};</code></pre>
+  </div>
+
+  <div class="card">
+    <pre><code><span class="cm">// Qdisc 操作表（不同调度器实现不同的 ops）</span>
+<span class="kw">struct</span> <span class="ty">Qdisc_ops</span> {
+    <span class="kw">const struct</span> <span class="ty">Qdisc_class_ops</span> *cl_ops;
+    <span class="ty">int</span>             (*enqueue)(<span class="kw">struct</span> <span class="ty">sk_buff</span> *skb, ...);
+    <span class="kw">struct</span> <span class="ty">sk_buff</span> *(*dequeue)(<span class="kw">struct</span> <span class="ty">Qdisc</span> *sch);
+    <span class="ty">int</span>             (*init)(<span class="kw">struct</span> <span class="ty">Qdisc</span> *sch, <span class="kw">struct</span> <span class="ty">nlattr</span> *opt, ...);
+    <span class="ty">void</span>            (*destroy)(<span class="kw">struct</span> <span class="ty">Qdisc</span> *sch);
+    <span class="ty">int</span>             (*dump)(<span class="kw">struct</span> <span class="ty">Qdisc</span> *sch, <span class="kw">struct</span> <span class="ty">sk_buff</span> *skb, ...);
+    <span class="ty">char</span>            id[<span class="num">QDISC_ID_LEN</span>]; <span class="cm">// 如 "pfifo_fast", "htb", "tbf"</span>
+    <span class="ty">int</span>             priv_size;   <span class="cm">// 私有数据大小</span>
+};
+
+<span class="cm">// 过滤器操作表</span>
+<span class="kw">struct</span> <span class="ty">tcf_proto_ops</span> {
+    <span class="ty">int</span>             (*classify)(<span class="kw">struct</span> <span class="ty">sk_buff</span> *skb,
+                               <span class="kw">const struct</span> <span class="ty">tcf_proto</span> *tp,
+                               <span class="kw">struct</span> <span class="ty">tcf_result</span> *res);
+    <span class="ty">char</span>            kind[<span class="num">IFNAMSIZ</span>]; <span class="cm">// "u32", "flower", "bpf" 等</span>
+};</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="qdisc" class="toc-link">
+  <h2><span class="num">04</span> Qdisc 调度器</h2>
+
+  <p>Qdisc 是 tc 的核心组件，决定数据包的<strong>发送顺序</strong>和<strong>速率</strong>。</p>
+
+  <h3>常见 Qdisc 类型</h3>
+  <table>
+    <tr><th>Qdisc</th><th>类型</th><th>功能</th><th>适用场景</th></tr>
+    <tr><td><strong>pfifo_fast</strong></td><td>无类</td><td>3 队列优先级 FIFO</td><td>默认调度器</td></tr>
+    <tr><td><strong>fq</strong></td><td>无类</td><td>Fair Queuing（公平队列）</td><td>Google BBR 推荐</td></tr>
+    <tr><td><strong>fq_codel</strong></td><td>无类</td><td>FQ + CoDel 主动队列管理</td><td>抗 bufferbloat</td></tr>
+    <tr><td><strong>tbf</strong></td><td>无类</td><td>Token Bucket Filter（令牌桶限速）</td><td>带宽限制</td></tr>
+    <tr><td><strong>htb</strong></td><td>有类</td><td>Hierarchy Token Bucket（层级令牌桶）</td><td>精细 QoS</td></tr>
+    <tr><td><strong>prio</strong></td><td>有类</td><td>多优先级队列</td><td>简单优先级</td></tr>
+    <tr><td><strong>sfq</strong></td><td>无类</td><td>Stochastic Fair Queuing</td><td>公平带宽</td></tr>
+    <tr><td><strong>red</strong></td><td>无类</td><td>Random Early Detection（随机早期丢弃）</td><td>抗拥塞</td></tr>
+  </table>
+
+  <h3>有类 vs 无类 Qdisc</h3>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">无类 Qdisc（简单）：</span>
+
+  所有数据包进入同一个队列
+  按统一策略处理（FIFO/限速/公平）
+
+  tbf (Token Bucket Filter)：
+  ┌──────────────────────────────────────┐
+  │  令牌桶：令牌以固定速率生成            │
+  │  包需要获取令牌才能发送                │
+  │  桶满 → 令牌被丢弃（限速）            │
+  │  桶空 → 包等待或丢弃                  │
+  └──────────────────────────────────────┘
+
+<span style="color:#1a7f37">有类 Qdisc（精细）：</span>
+
+  根 Qdisc 可以有多个子类（Class）
+  每个 Class 可以有独立的 Qdisc
+  过滤器决定包进入哪个 Class
+
+  htb (Hierarchy Token Bucket)：
+  ┌──────────────────────────────────────────┐
+  │           Root Qdisc (htb)               │
+  │     ┌──────────┬──────────┬──────────┐   │
+  │     │ Class 1  │ Class 2  │ Class 3  │   │
+  │     │ 10Mbps   │ 80Mbps   │ 10Mbps   │   │
+  │     │ (保证)   │ (借用)   │ (低优先) │   │
+  │     └────┬─────┘──────────┘──────────┘   │
+  │          │                                │
+  │     ┌────┴────┐                          │
+  │     │ qdisc   │                          │
+  │     │ (sfq)   │                          │
+  │     └─────────┘                          │
+  └──────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="cls" class="toc-link">
+  <h2><span class="num">05</span> 分类器与动作</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#8250df">数据包分类流程：</span>
+
+  数据包进入 Qdisc
+        │
+        ↓
+  Filter 分类（匹配条件）
+        │
+        ├── u32 匹配：IP 头/端口/协议
+        │       tc filter add dev eth0 parent 1:0 protocol ip u32
+        │       match ip dport 80 0xffff flowid 1:10
+        │
+        ├── flower 匹配：5 元组 + MAC + VLAN
+        │       tc filter add dev eth0 parent 1:0 protocol ip flower
+        │       dst_port 80 ip_proto tcp flowid 1:10
+        │
+        └── bpf 匹配：自定义 BPF 程序
+                tc filter add dev eth0 parent 1:0 bpf da
+                obj my_filter.o sec classifier
+
+<span style="color:#1a7f37">Action 处理（对匹配包的操作）：</span>
+
+  → mirred：重定向到其他设备（镜像）
+  → vlan：修改 VLAN 标签
+  → pedit：修改包头字段
+  → gact：丢弃/通过/随机
+  → police：限速
+  → bpf：执行 BPF 程序
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="usecases" class="toc-link">
+  <h2><span class="num">06</span> 应用场景</h2>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title" style="color:#cf222e">带宽限制</div>
+      <pre><code><span class="cm"># 限制 eth0 下行 100Mbps</span>
+tc qdisc add dev eth0 root tbf \
+  rate 100mbit burst 64kb latency 50ms</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#1a7f37">优先级队列</div>
+      <pre><code><span class="cm"># SSH 优先，HTTP 次之，其他最低</span>
+tc qdisc add dev eth0 root handle 1: prio
+tc filter add dev eth0 parent 1:0 protocol ip u32 \
+  match ip dport 22 0xffff flowid 1:1
+tc filter add dev eth0 parent 1:0 protocol ip u32 \
+  match ip dport 80 0xffff flowid 1:2</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#8250df">抗 Bufferbloat</div>
+      <pre><code><span class="cm"># 使用 fq_codel 替代默认 qdisc</span>
+tc qdisc replace dev eth0 root fq_codel
+<span class="cm"># fq_codel 主动管理队列深度</span>
+<span class="cm"># 防止缓冲区膨胀导致的高延迟</span></code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#bc4c00">流量镜像</div>
+      <pre><code><span class="cm"># 镜像所有流量到 tap0（抓包）</span>
+tc qdisc add dev eth0 ingress
+tc filter add dev eth0 parent ffff: \
+  protocol all u32 match u32 0 0 \
+  action mirred egress mirror dev tap0</code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="cli" class="toc-link">
+  <h2><span class="num">07</span> 配置命令</h2>
+
+  <div class="card">
+    <pre><code><span class="cm"># 查看 qdisc</span>
+$ tc qdisc show dev eth0
+
+<span class="cm"># 查看 filter</span>
+$ tc filter show dev eth0
+
+<span class="cm"># 查看 class</span>
+$ tc class show dev eth0
+
+<span class="cm"># 添加 qdisc</span>
+$ tc qdisc add dev eth0 root handle 1: prio
+
+<span class="cm"># 删除 qdisc</span>
+$ tc qdisc del dev eth0 root
+
+<span class="cm"># 替换 qdisc</span>
+$ tc qdisc replace dev eth0 root fq_codel
+
+<span class="cm"># 添加 filter</span>
+$ tc filter add dev eth0 parent 1:0 protocol ip \
+  u32 match ip dport 22 0xffff flowid 1:1
+
+<span class="cm"># 查看统计</span>
+$ tc -s qdisc show dev eth0</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">08</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/sched/</span>                    <span class="cmt">总计 63124 行</span>
+├── <span class="file">sch_api.c</span>          <span class="cmt">Qdisc 核心 API (2521 行)</span>
+├── <span class="file">sch_generic.c</span>      <span class="cmt">通用 Qdisc (1590 行)</span>
+├── <span class="file">cls_api.c</span>          <span class="cmt">Filter 核心 API (4125 行)</span>
+├── <span class="file">act_api.c</span>          <span class="cmt">Action 核心 API</span>
+├── <span class="file">sch_pfifo_fast.c</span>   <span class="cmt">默认 3 队列优先级</span>
+├── <span class="file">sch_fq.c</span>           <span class="cmt">Fair Queuing</span>
+├── <span class="file">sch_fq_codel.c</span>     <span class="cmt">FQ + CoDel</span>
+├── <span class="file">sch_tbf.c</span>          <span class="cmt">Token Bucket Filter</span>
+├── <span class="file">sch_htb.c</span>          <span class="cmt">Hierarchy Token Bucket</span>
+├── <span class="file">sch_prio.c</span>         <span class="cmt">Priority Qdisc</span>
+├── <span class="file">sch_red.c</span>          <span class="cmt">Random Early Detection</span>
+├── <span class="file">sch_sfq.c</span>          <span class="cmt">Stochastic Fair Queuing</span>
+├── <span class="file">cls_u32.c</span>          <span class="cmt">U32 过滤器</span>
+├── <span class="file">cls_flower.c</span>       <span class="cmt">Flower 过滤器</span>
+├── <span class="file">cls_bpf.c</span>          <span class="cmt">BPF 过滤器</span>
+├── <span class="file">act_mirred.c</span>       <span class="cmt">Mirror/Redirect 动作</span>
+├── <span class="file">act_vlan.c</span>         <span class="cmt">VLAN 动作</span>
+├── <span class="file">act_pedit.c</span>        <span class="cmt">包编辑动作</span>
+└── <span class="file">act_police.c</span>       <span class="cmt">限速动作</span>
+
+<span class="dir">include/net/</span>
+└── <span class="file">sch_generic.h</span>      <span class="cmt">struct Qdisc / Qdisc_ops</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/sched/sch_api.c</code> — 从 <code>dev_queue_xmit()</code> 中的 qdisc 调用路径开始。<br>
+    <code>net/sched/sch_generic.c</code> — <code>pfifo_fast</code> 默认调度器实现。<br>
+    <code>net/sched/sch_fq_codel.c</code> — 现代 Qdisc 代表，理解主动队列管理。<br>
+    <code>net/sched/cls_api.c</code> — Filter 框架核心。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/sched/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux mmap 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux mmap 深度解析</h1>
+  <p class="subtitle">内存映射 — 零拷贝 IPC、共享内存、文件映射的基石</p>
+  <span class="version">Linux 7.0.12 · mm/mmap.c (1922 行) · mm/memory.c (7522 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">映射类型</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">mmap 流程</a></li>
+    <li><a href="#pagefault">缺页异常</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>mmap（memory map）是 Linux 中<strong>将文件或设备映射到进程地址空间</strong>的系统调用。它使得进程可以像访问内存一样访问文件内容，实现零拷贝 I/O。mmap 是众多高性能技术的基石：共享内存（IPC）、TCP zero-copy send、pipe splice、DPDK、XDP 等都依赖它。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">mmap 核心能力</div>
+      <ul>
+        <li><strong>文件映射</strong>：直接读写文件内容（页缓存共享）</li>
+        <li><strong>匿名映射</strong>：分配匿名内存（类似 malloc）</li>
+        <li><strong>共享映射</strong>：多进程共享同一内存区域</li>
+        <li><strong>私有映射</strong>：写时复制（COW）</li>
+        <li><strong>设备映射</strong>：映射设备 I/O（如显卡显存）</li>
+        <li><strong>MAP_HUGETLB</strong>：大页映射</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>mm/mmap.c</td><td>1922</td><td>mmap 系统调用核心</td></tr>
+        <tr><td>mm/memory.c</td><td>7522</td><td>缺页异常处理</td></tr>
+        <tr><td>mm/filemap.c</td><td>-</td><td>文件页缓存映射</td></tr>
+        <tr><td>mm/mremap.c</td><td>-</td><td>mremap 调整映射</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 映射类型</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">MAP_SHARED（共享映射）：</span>
+
+  进程 A 和进程 B 映射同一文件
+  进程 A 写入 → 页面修改 → 进程 B 看到修改
+  修改最终写回文件
+
+  ┌──────────┐          ┌──────────┐
+  │ 进程 A    │          │ 进程 B    │
+  │ mmap     │          │ mmap     │
+  └────┬─────┘          └────┬─────┘
+       │                     │
+       ↓                     ↓
+  ┌─────────────────────────────────┐
+  │    共享页（同一物理页面）        │
+  │    物理页面 refcount = 2        │
+  └─────────────────────────────────┘
+       │
+       ↓
+  ┌──────────┐
+  │ 文件     │  （最终写回）
+  └──────────┘
+
+<span style="color:#1a7f37">MAP_PRIVATE（私有映射 / 写时复制）：</span>
+
+  进程 A 和进程 B 映射同一文件
+  初始时共享只读页面
+  进程 A 写入 → 触发 COW → 进程 A 获得私有副本
+  进程 B 看不到 A 的修改
+
+  ┌──────────┐          ┌──────────┐
+  │ 进程 A    │          │ 进程 B    │
+  │ mmap     │          │ mmap     │
+  └────┬─────┘          └────┬─────┘
+       │                     │
+       ↓ COW                 ↓
+  ┌──────────┐          ┌──────────┐
+  │ 私有页面  │          │ 共享页面  │
+  │ (A 的副本)│          │ (原文件)  │
+  └──────────┘          └──────────┘
+</pre></div>
+
+  <h3>常用映射标志</h3>
+  <table>
+    <tr><th>标志</th><th>说明</th></tr>
+    <tr><td><code>MAP_SHARED</code></td><td>共享映射，修改对其他进程可见</td></tr>
+    <tr><td><code>MAP_PRIVATE</code></td><td>私有映射，写时复制</td></tr>
+    <tr><td><code>MAP_FIXED</code></td><td>映射到指定地址</td></tr>
+    <tr><td><code>MAP_ANONYMOUS</code></td><td>匿名映射（不关联文件）</td></tr>
+    <tr><td><code>MAP_POPULATE</code></td><td>预先分配页面</td></tr>
+    <tr><td><code>MAP_LOCKED</code></td><td>锁定页面（不允许换出）</td></tr>
+    <tr><td><code>MAP_HUGETLB</code></td><td>使用大页（2MB/1GB）</td></tr>
+    <tr><td><code>MAP_UNINITIALIZED</code></td><td>不初始化（性能优化）</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/mm_types.h:913 — 虚拟内存区域</span>
+<span class="kw">struct</span> <span class="ty">vm_area_struct</span> {
+    <span class="ty">unsigned long</span>  vm_start;       <span class="cm">// 映射起始地址</span>
+    <span class="ty">unsigned long</span>  vm_end;         <span class="cm">// 映射结束地址</span>
+    <span class="kw">struct</span> <span class="ty">mm_struct</span>  *vm_mm;       <span class="cm">// 所属进程地址空间</span>
+    <span class="ty">pgprot_t</span>       vm_page_prot;  <span class="cm">// 页面访问权限</span>
+    <span class="ty">vm_flags_t</span>     vm_flags;      <span class="cm">// VM_READ/VM_WRITE/VM_EXEC/VM_SHARED</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span> anon_vma_chain;
+    <span class="kw">struct</span> <span class="ty">anon_vma</span>  *anon_vma;    <span class="cm">// 匿名页面反向映射</span>
+    <span class="kw">const struct</span> <span class="ty">vm_operations_struct</span> *vm_ops; <span class="cm">// 操作函数表</span>
+    <span class="kw">struct</span> <span class="ty">file</span>     *vm_file;      <span class="cm">// ★ 关联的文件（匿名映射为 NULL）</span>
+    <span class="ty">unsigned long</span>  vm_pgoff;      <span class="cm">// 文件偏移（以页面为单位）</span>
+};</code></pre>
+  </div>
+
+  <h3>数据结构关系</h3>
+  <div class="ascii-diagram"><pre>
+  进程地址空间 mm_struct
+    │
+    ├── VMA 链表（按地址排序）
+    │     ┌──────────┐    ┌──────────┐    ┌──────────┐
+    │     │ VMA 1    │───→│ VMA 2    │───→│ VMA 3    │
+    │     │ code     │    │ data     │    │ heap     │
+    │     │ RO+Exec  │    │ RW+Shared│    │ RW+Anon  │
+    │     └──────────┘    └──────────┘    └──────────┘
+    │
+    ├── mm_pgtable (页表)
+    │     PGD → P4D → PUD → PMD → PTE
+    │
+    └── mmap_lock（保护 VMA 的读写锁）
+
+  mmap() 调用后：
+  1. 创建新的 VMA
+  2. 插入 VMA 链表和红黑树
+  3. <span style="color:#1a7f37">不立即分配物理页面！</span>
+  4. 访问时触发缺页异常 → 按需分配
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> mmap 流程</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">mmap() 系统调用完整流程：</span>
+
+  用户态：ptr = mmap(NULL, 4096, PROT_READ|PROT_WRITE,
+                     MAP_SHARED, fd, 0);
+        │
+        ↓
+  <span style="color:#8250df">do_mmap()</span> — mm/mmap.c:335
+        │
+        ├── 1. 参数检查
+        │       len > 0, addr 合法, fd 有效
+        │
+        ├── 2. 计算映射参数
+        │       offset 页对齐
+        │       addr = get_unmapped_area()  ← 找到空闲虚拟地址空间
+        │
+        ├── 3. 创建 VMA
+        │       kmem_cache_alloc(vm_area_cachep)
+        │       设置 vm_start, vm_end, vm_flags, vm_file
+        │
+        ├── 4. 调用文件的 mmap 方法
+        │       file->f_op->mmap(file, vma)
+        │       │
+        │       ├── 普通文件 → generic_file_mmap()
+        │       │       设置 vm_ops = &amp;generic_file_vm_ops
+        │       │
+        │       ├── 匿名映射 → anon_vma_prepare()
+        │       │
+        │       └── 设备文件 → 设备自己的 mmap 实现
+        │           （如 /dev/dri/card0 → GPU 显存映射）
+        │
+        ├── 5. 插入 VMA 到进程地址空间
+        │       vma_link() → 红黑树 + 链表
+        │
+        └── 6. 返回用户态虚拟地址
+                <span style="color:#1a7f37">注意：此时没有分配物理页面！</span>
+
+<span style="color:#1a7f37">首次访问映射区域 → 缺页异常：</span>
+
+  用户态访问 ptr[0]
+        │
+        ↓
+  CPU → 缺页异常（页表项不存在）
+        │
+        ↓
+  <span style="color:#8250df">do_page_fault()</span> → <span style="color:#cf222e">handle_mm_fault()</span>
+        │
+        ├── 文件映射：从磁盘读取页面（page cache 命中则直接使用）
+        ├── 匿名映射：分配零页面（COW 时分配新页面）
+        └── 建立页表映射
+        │
+        ↓
+  返回用户态，ptr[0] 正常读取
+  后续访问不再缺页（页面已映射）
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="pagefault" class="toc-link">
+  <h2><span class="num">05</span> 缺页异常</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">缺页异常处理流程（handle_mm_fault）：</span>
+
+  CPU 访问虚拟地址 → 页表项无效 → 缺页异常
+        │
+        ↓
+  <span style="color:#8250df">handle_pte_fault()</span>
+        │
+        ├── PTE 不存在（首次访问）
+        │     │
+        │     ├── 匿名页面 → do_anonymous_page()
+        │     │       分配零页面，建立映射
+        │     │       写时触发 COW → do_wp_page()
+        │     │
+        │     ├── 文件映射页面 → do_fault()
+        │     │       ├── 读取页面（read fault）
+        │     │       │   从 page cache 或磁盘读取
+        │     │       ├── 写共享页面 → COW
+        │     │       └── 写私有页面 → 分配新页面 + 复制
+        │     │
+        │     └── 设备映射 → vm_ops->fault()
+        │             设备驱动处理（如 GPU 页面）
+        │
+        ├── PTE 存在但权限不足
+        │     │
+        │     └── 写只读页面 → COW
+        │           do_wp_page() → 分配新页面 + 复制内容
+        │
+        └── 已在交换区（swap）
+              do_swap_page() → 从 swap 恢复
+</pre></div>
+
+  <div class="callout tip">
+    <strong>mmap + 缺页异常的性能优势</strong><br>
+    mmap 延迟分配物理页面（直到首次访问才分配），这带来两个好处：<br>
+    ① <strong>更快的进程创建</strong>：fork() 时 COW 共享父进程页面，无需立即复制<br>
+    ② <strong>按需分配</strong>：映射了 1GB 但只用了 1MB，只分配实际使用的页面
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="usecases" class="toc-link">
+  <h2><span class="num">06</span> 应用场景</h2>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title" style="color:#cf222e">共享内存（IPC）</div>
+      <pre><code><span class="cm">// POSIX 共享内存</span>
+<span class="ty">int</span> fd = <span class="fn">shm_open</span>(<span class="st">"/myshm"</span>, O_RDWR|O_CREAT, <span class="num">0666</span>);
+<span class="fn">ftruncate</span>(fd, <span class="num">4096</span>);
+<span class="ty">void</span> *ptr = <span class="fn">mmap</span>(NULL, <span class="num">4096</span>,
+    PROT_READ|PROT_WRITE,
+    MAP_SHARED, fd, <span class="num">0</span>);
+<span class="cm">// 多个进程映射同一文件 → 共享内存</span></code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#1a7f37">TCP Zero-Copy Send</div>
+      <pre><code><span class="cm">// sendfile / MSG_ZEROCOPY</span>
+<span class="cm">// 文件 → page cache → mmap</span>
+<span class="cm">// → NIC DMA 读取页面</span>
+<span class="cm">// 无 memcpy！</span>
+<span class="cm">// 网卡直接 DMA 读文件页</span></code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#8250df">pipe splice</div>
+      <pre><code><span class="cm">// splice(fd_in, ..., pipe, ..., SPLICE_F_MOVE)</span>
+<span class="cm">// 仅修改页面引用计数</span>
+<span class="cm">// 不复制实际数据</span>
+<span class="cm">// 依赖 mmap 的页面管理机制</span></code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title" style="color:#bc4c00">动态链接库</div>
+      <pre><code><span class="cm">// libc.so 被 mmap 到进程地址空间</span>
+<span class="cm">// .text 段共享（多个进程共享同一份）</span>
+<span class="cm">// .data 段私有（COW 各自独立）</span>
+<span class="cm">// 节省内存 + 加快加载</span></code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">mmap.c</span>            <span class="cmt">mmap 核心 (1922 行)</span>
+│     └── do_mmap()         <span class="cmt">创建映射</span>
+│     └── vm_mmap_pgoff()   <span class="cmt">mmap 系统调用入口</span>
+├── <span class="file">memory.c</span>          <span class="cmt">缺页异常 (7522 行)</span>
+│     └── handle_mm_fault() <span class="cmt">缺页处理入口</span>
+│     └── do_anonymous_page() <span class="cmt">匿名页面分配</span>
+│     └── do_wp_page()      <span class="cmt">写时复制</span>
+│     └── do_fault()        <span class="cmt">文件页面缺页</span>
+├── <span class="file">filemap.c</span>         <span class="cmt">文件页缓存映射</span>
+├── <span class="file">mremap.c</span>          <span class="cmt">调整映射大小</span>
+├── <span class="file">munmap.c</span>          <span class="cmt">取消映射</span>
+└── <span class="file">vma.c</span>             <span class="cmt">VMA 管理</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">mm_types.h</span>        <span class="cmt">struct vm_area_struct / mm_struct</span>
+└── <span class="file">mm.h</span>              <span class="cmt">VM_READ/VM_WRITE/VM_SHARED 等标志</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/mmap.c</code> — 从 <code>do_mmap()</code> 理解映射创建。<br>
+    <code>mm/memory.c</code> — <code>handle_mm_fault()</code> 是缺页异常核心，理解按需分配和 COW。<br>
+    <code>include/linux/mm_types.h</code> — <code>struct vm_area_struct</code> 是理解进程地址空间的关键。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/mmap.c · mm/memory.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

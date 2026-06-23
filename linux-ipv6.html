@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux IPv6 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux IPv6 深度解析</h1>
+  <p class="subtitle">下一代互联网协议 — 128 位地址、NDP、SLAAC、双栈</p>
+  <span class="version">Linux 7.0.12 · net/ipv6/ (69 个源文件, 13012+ 行核心)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#header">报文格式</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#ndp">NDP 邻居发现</a></li>
+    <li><a href="#slaac">SLAAC 地址自动配置</a></li>
+    <li><a href="#dualstack">双栈与过渡</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>IPv6（Internet Protocol version 6）是 IPv4 的继任者，提供 <strong>128 位地址空间</strong>（3.4×10³⁸ 个地址）。Linux 从内核 2.6 开始全面支持 IPv6，当前 IPv6 代码分布在 <code>net/ipv6/</code> 目录下共 69 个源文件，核心代码超过 13000 行。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">IPv6 vs IPv4</div>
+      <table>
+        <tr><th>特性</th><th>IPv4</th><th>IPv6</th></tr>
+        <tr><td>地址长度</td><td>32 位</td><td>128 位</td></tr>
+        <tr><td>地址空间</td><td>~43 亿</td><td>3.4×10³⁸</td></tr>
+        <tr><td>头部大小</td><td>20-60 字节</td><td><strong>40 字节（固定）</strong></td></tr>
+        <tr><td>校验和</td><td>IP 头校验和</td><td>无（由 L2/L4 覆盖）</td></tr>
+        <tr><td>分片</td><td>路由器可分片</td><td>仅发送端分片</td></tr>
+        <tr><td>ARP</td><td>ARP 协议</td><td>NDP（ICMPv6）</td></tr>
+        <tr><td>地址配置</td><td>DHCP / 手动</td><td>SLAAC + DHCPv6</td></tr>
+        <tr><td>多播</td><td>可选</td><td><strong>必需</strong>（无广播）</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">IPv6 核心优势</div>
+      <ul>
+        <li><strong>海量地址</strong>：每粒沙子都有 IP</li>
+        <li><strong>简化头部</strong>：固定长度，路由器处理更快</li>
+        <li><strong>自动配置</strong>：SLAAC 无需 DHCP</li>
+        <li><strong>内建安全</strong>：IPsec（可选）</li>
+        <li><strong>无广播</strong>：多播替代广播</li>
+        <li><strong>移动性</strong>：更好的移动 IPv6 支持</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="header" class="toc-link">
+  <h2><span class="num">02</span> 报文格式</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">IPv6 固定头部（40 字节）：</span>
+
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|          Version              | Traffic Class |  Flow Label  |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|         Payload Length        | Next Header   |  Hop Limit   |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++                                                               +
+|                                                               |
++                         Source Address                        +
+|                     (128 bits = 16 字节)                      |
++                                                               +
+|                                                               |
++                                                               +
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++                                                               +
+|                                                               |
++                      Destination Address                      +
+|                     (128 bits = 16 字节)                      |
++                                                               +
+|                                                               |
++                                                               +
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+  Version:          6 (4 bit)
+  Traffic Class:    流量类别（类似 IPv4 TOS）(8 bit)
+  Flow Label:       流标签（用于 QoS）(20 bit)
+  Payload Length:   有效载荷长度（不含固定头部）(16 bit)
+  Next Header:      下一个头部类型 (8 bit) — 类似 IPv4 Protocol
+  Hop Limit:        跳数限制（类似 IPv4 TTL）(8 bit)
+
+<span style="color:#1a7f37">扩展头部链（Next Header 字段串联）：</span>
+
+  IPv6 Header → Hop-by-Hop → Routing → Fragment → Destination → TCP/UDP
+  (Next=0)      (Next=43)    (Next=44)   (Next=60)    (Next=6)
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// include/net/if_inet6.h:167 — IPv6 设备状态</span>
+<span class="kw">struct</span> <span class="ty">inet6_dev</span> {
+    <span class="kw">struct</span> <span class="ty">net_device</span>  *dev;          <span class="cm">// 关联的网络设备</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span>   addr_list;    <span class="cm">// ★ 地址链表（可能有多个 IPv6 地址）</span>
+    <span class="kw">struct</span> <span class="ty">ifmcaddr6</span>   __rcu *mc_list;<span class="cm">// 组播地址列表（MLD）</span>
+    <span class="kw">struct</span> <span class="ty">ifacaddr6</span>   __rcu *ac_list;<span class="cm">// 任播地址列表</span>
+    <span class="kw">struct</span> <span class="ty">neigh_parms</span> *nd_parms;    <span class="cm">// NDP 邻居参数</span>
+    <span class="kw">struct</span> <span class="ty">ipv6_devconf</span> cnf;         <span class="cm">// sysctl 配置</span>
+    <span class="kw">struct</span> <span class="ty">timer_list</span>  rs_timer;    <span class="cm">// 路由器发现定时器</span>
+    <span class="ty">__u8</span>               rs_probes;   <span class="cm">// RS 探测次数</span>
+    <span class="kw">struct</span> <span class="ty">in6_addr</span>    token;       <span class="cm">// 稳定隐私地址 token</span>
+};</code></pre>
+  </div>
+
+  <h3>数据结构关系</h3>
+  <div class="ascii-diagram"><pre>
+  net_device (eth0)
+    │
+    ├── inet6_dev (IPv6 状态)
+    │     ├── addr_list → [fe80::1] [2001:db8::1] [2001:db8::2]
+    │     ├── mc_list → [ff02::1] [ff02::2]
+    │     ├── nd_parms → NDP 参数
+    │     └── cnf → sysctl 配置
+    │
+    ├── arp_tbl (ARP 表，IPv4 用)
+    │
+    └── ip6_ptr → inet6_dev（别名，快速访问）
+
+  一个网卡可以同时有多个 IPv6 地址（不像 IPv4 通常只有一个）：
+    - 链路本地地址（fe80::/10）← 自动生成
+    - 全局单播地址（2000::/3）← SLAAC / DHCPv6
+    - 临时隐私地址 ← 防止跟踪
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="ndp" class="toc-link">
+  <h2><span class="num">04</span> NDP 邻居发现</h2>
+
+  <p>NDP（Neighbor Discovery Protocol）替代了 IPv4 的 ARP、ICMP Router Discovery 和 ICMP Redirect，使用 ICMPv6 消息实现。</p>
+
+  <h3>NDP 四种消息类型</h3>
+  <table>
+    <tr><th>类型</th><th>名称</th><th>功能</th><th>替代 IPv4</th></tr>
+    <tr><td>133</td><td>Router Solicitation (RS)</td><td>主机请求路由器信息</td><td>ICMP Router Discovery</td></tr>
+    <tr><td>134</td><td>Router Advertisement (RA)</td><td>路由器宣告（前缀、MTU 等）</td><td>ICMP Router Advertisement</td></tr>
+    <tr><td>135</td><td>Neighbor Solicitation (NS)</td><td>地址解析（类似 ARP Request）</td><td>ARP Request</td></tr>
+    <tr><td>136</td><td>Neighbor Advertisement (NA)</td><td>地址解析回复（类似 ARP Reply）</td><td>ARP Reply</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">NDP 地址解析（替代 ARP）：</span>
+
+  主机 A 想知道 2001:db8::2 的 MAC 地址
+        │
+        ↓
+  发送 ICMPv6 Neighbor Solicitation (Type 135)
+  目标地址: ff02::1:ff00:2 (请求节点多播地址)
+  源地址: fe80::1
+  选项: 源链路层地址 (A 的 MAC)
+        │
+        ↓
+  2001:db8::2 收到 NS（通过多播组匹配）
+        │
+        ↓
+  回复 ICMPv6 Neighbor Advertisement (Type 136)
+  目标地址: 2001:db8::2
+  选项: 目标链路层地址 (B 的 MAC)
+        │
+        ↓
+  主机 A 更新邻居缓存（替代 ARP 缓存）
+
+  NDP 优势：使用多播替代广播 → 更高效
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="slaac" class="toc-link">
+  <h2><span class="num">05</span> SLAAC 地址自动配置</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">SLAAC（Stateless Address Autoconfiguration）流程：</span>
+
+  主机接入网络
+        │
+        ├── 1. 生成链路本地地址（fe80::/10）
+        │       使用 EUI-64 或稳定隐私地址
+        │       链路本地地址不需要 RA
+        │
+        ├── 2. 发送 Router Solicitation (RS)
+        │       请求路由器信息
+        │
+        ├── 3. 收到 Router Advertisement (RA)
+        │       RA 包含：
+        │       - 网络前缀（如 2001:db8::/64）
+        │       - 前缀有效期
+        │       - 默认路由信息
+        │       - MTU 信息
+        │
+        ├── 4. 生成全局单播地址
+        │       = 前缀（64 位）+ 接口 ID（64 位）
+        │       接口 ID = EUI-64(MAC) 或 随机
+        │
+        └── 5. DAD（重复地址检测）
+                发送 NS 检查地址是否冲突
+                无 NA 回复 → 地址可用
+                有 NA 回复 → 地址冲突，重新生成
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm"># 查看 IPv6 地址</span>
+$ ip -6 addr show
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt;
+    inet6 fe80::a00:27ff:fe3b:d9b9/64 scope link     <span class="cm"># 链路本地</span>
+    inet6 2001:db8::1/64 scope global dynamic         <span class="cm"># 全局单播</span>
+
+<span class="cm"># 查看邻居缓存（替代 ARP 缓存）</span>
+$ ip -6 neigh show
+fe80::1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE
+
+<span class="cm"># 查看路由表</span>
+$ ip -6 route show
+default via fe80::1 dev eth0 proto ra metric 1024
+2001:db8::/64 dev eth0 proto kernel metric 256</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="dualstack" class="toc-link">
+  <h2><span class="num">06</span> 双栈与过渡</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">双栈（Dual Stack）— 同时运行 IPv4 和 IPv6：</span>
+
+  主机                    网络
+  ┌─────────────────┐
+  │  eth0            │
+  │  IPv4: 10.0.0.1  │ ←→ IPv4 网络
+  │  IPv6: 2001::1   │ ←→ IPv6 网络
+  └─────────────────┘
+  两个协议栈独立运行，互不干扰
+
+<span style="color:#1a7f37">过渡技术：</span>
+
+  ┌──────────────────────────────────────────────────┐
+  │ 技术              │ 说明                          │
+  ├──────────────────────────────────────────────────┤
+  │ 6to4              │ IPv6 over IPv4 隧道          │
+  │ 6in4              │ 手动 IPv6 in IPv4 隧道       │
+  │ ISATAP            │ Intra-Site 隧道              │
+  │ NAT64/DNS64       │ IPv6 客户端访问 IPv4 服务器   │
+  │ MAP-E/MAP-T       │ IPv4 基础设施上承载 IPv6      │
+  │ 纯 IPv6           │ 最终目标，淘汰 IPv4            │
+  └──────────────────────────────────────────────────┘
+</pre></div>
+
+  <h3>Linux IPv6 系统调优</h3>
+  <div class="card">
+    <pre><code><span class="cm"># 启用 IPv6</span>
+$ sysctl -w net.ipv6.conf.all.disable_ipv6=0
+
+<span class="cm"># 禁用 IPv6（如果不需要）</span>
+$ sysctl -w net.ipv6.conf.all.disable_ipv6=1
+
+<span class="cm"># 启用隐私扩展（随机化接口 ID）</span>
+$ sysctl -w net.ipv6.conf.all.use_tempaddr=2
+
+<span class="cm"># 启用 SLAAC</span>
+$ sysctl -w net.ipv6.conf.all.accept_ra=1
+
+<span class="cm"># 查看所有 IPv6 sysctl</span>
+$ sysctl -a | grep ipv6 | head -20</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/ipv6/</span>                    <span class="cmt">69 个源文件，13012+ 行核心</span>
+├── <span class="file">af_inet6.c</span>         <span class="cmt">AF_INET6 协议族 (1314 行)</span>
+├── <span class="file">ip6_output.c</span>       <span class="cmt">IPv6 输出 (2072 行)</span>
+├── <span class="file">ip6_input.c</span>        <span class="cmt">IPv6 输入 (597 行)</span>
+├── <span class="file">route.c</span>            <span class="cmt">IPv6 路由 (6983 行)</span>
+├── <span class="file">ndisc.c</span>            <span class="cmt">NDP 邻居发现 (2046 行)</span>
+├── <span class="file">addrconf.c</span>         <span class="cmt">地址配置（SLAAC/DAD）</span>
+├── <span class="file">mcast.c</span>            <span class="cmt">组播（MLD）</span>
+├── <span class="file">ping.c</span>             <span class="cmt">ping6</span>
+├── <span class="file">tcp_ipv6.c</span>         <span class="cmt">TCP over IPv6</span>
+├── <span class="file">udp.c</span>              <span class="cmt">UDP over IPv6</span>
+├── <span class="file">raw.c</span>              <span class="cmt">RAW over IPv6</span>
+├── <span class="file">xfrm6.c</span>            <span class="cmt">IPsec over IPv6</span>
+└── <span class="file">sit.c</span>              <span class="cmt">6-in-4 隧道</span>
+
+<span class="dir">include/net/</span>
+├── <span class="file">if_inet6.h</span>         <span class="cmt">struct inet6_dev 定义</span>
+├── <span class="file">ipv6.h</span>             <span class="cmt">IPv6 协议内部接口</span>
+└── <span class="file">addrconf.h</span>         <span class="cmt">地址配置接口</span>
+
+<span class="dir">include/uapi/linux/</span>
+└── <span class="file">ipv6.h</span>             <span class="cmt">IPv6 用户态接口</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>net/ipv6/ndisc.c</code> — NDP 核心，理解邻居发现如何替代 ARP。<br>
+    <code>net/ipv6/addrconf.c</code> — SLAAC 和 DAD 实现。<br>
+    <code>net/ipv6/route.c</code> — IPv6 路由（6983 行，比 IPv4 路由更复杂）。<br>
+    <code>include/net/if_inet6.h</code> — <code>struct inet6_dev</code> 定义，理解每个网卡的 IPv6 状态。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/ipv6/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
