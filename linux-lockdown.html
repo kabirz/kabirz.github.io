@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Kernel Lockdown 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Kernel Lockdown 深度解析</h1>
+  <p class="subtitle">内核锁定 — 限制内核自我修改能力</p>
+  <span class="version">Linux 7.0.12 · security/lockdown/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#modes">锁定模式</a></li>
+    <li><a href="#flow">检查流程</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Kernel Lockdown 是 Linux 内核的安全功能，限制内核<strong>自我修改的能力</strong>。即使以 root 权限运行，也无法加载未签名模块、修改内核映射、访问特定硬件寄存器。它是 UEFI 安全启动和 Secure Boot 的内核侧实现。</p>
+</section>
+
+<section id="modes" class="toc-link">
+  <h2><span class="num">02</span> 锁定模式</h2>
+  <table>
+    <tr><th>模式</th><th>sysctl 值</th><th>限制</th></tr>
+    <tr><td><strong>0 (无锁定)</strong></td><td>kernel.lockdown=0</td><td>不限制（默认）</td></tr>
+    <tr><td><strong>1 (完整性)</strong></td><td>kernel.lockdown=1</td><td>阻止修改内核映射和模块签名验证</td></tr>
+    <tr><td><strong>2 (机密性)</strong></td><td>kernel.lockdown=2</td><td>阻止所有内核自我修改</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">完整性模式（Integrity）限制：</span>
+
+  ✗ 禁止：加载未签名的内核模块
+  ✗ 禁止：直接修改内核内存
+  ✓ 允许：读取 /dev/mem（有限制）
+  ✓ 允许：kexec 加载已签名内核
+  ✓ 允许：休眠/挂起
+
+<span style="color:#1a7f37">机密性模式（Confidentiality）限制：</span>
+
+  ✗ 禁止：所有完整性模式的限制
+  ✗ 禁止：访问 /dev/mem
+  ✗ 禁止：访问 /dev/kmem
+  ✗ 禁止：debugfs 中的敏感信息
+  ✗ 禁止：性能计数器（perf_event）
+  ✗ 禁止：kexec
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 检查流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Lockdown 检查流程：</span>
+
+  内核代码尝试执行受限操作
+        │
+        ├── 尝试加载模块
+        │   → security_locked_down(LOCKDOWN_MODULE_LOAD)
+        │   → 检查模块签名
+        │   → 未签名 → 返回 -EPERM
+        │
+        ├── 尝试访问 /dev/mem
+        │   → security_locked_down(LOCKDOWN_DEV_MEM)
+        │   → 机密性模式 → 返回 -EPERM
+        │
+        ├── 尝试修改内核映射
+        │   → security_locked_down(LOCKDOWN_KCORE)
+        │   → 返回 -EPERM
+        │
+        └── 尝试 perf_event
+            → security_locked_down(LOCKDOWN_PERF)
+            → 机密性模式 → 返回 -EPERM
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 应用场景</h2>
+  <table>
+    <tr><th>场景</th><th>锁定模式</th><th>说明</th></tr>
+    <tr><td>UEFI Secure Boot</td><td>完整性</td><td>确保只运行签名的内核</td></tr>
+    <tr><td>容器安全</td><td>机密性</td><td>防止容器逃逸攻击</td></tr>
+    <tr><td>DRM/KMS</td><td>完整性</td><td>防止 GPU 固件被篡改</td></tr>
+    <tr><td>合规环境</td><td>机密性</td><td>PCI-DSS、HIPAA 等要求</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">security/lockdown/</span>
+├── <span class="file">common.c</span>         <span class="cmt">Lockdown 核心</span>
+│     └── security_locked_down() <span class="cmt">检查入口</span>
+├── <span class="file">integrity.c</span>      <span class="cmt">完整性模式限制</span>
+└── <span class="file">confidentiality.c</span> <span class="cmt">机密性模式限制</span>
+
+<span class="dir">include/linux/security.h</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>security/lockdown/common.c</code> — <code>security_locked_down()</code> 理解检查入口。<br>
+    <code>security/lockdown/integrity.c</code> — 完整性模式的限制清单。<br>
+    <code>security/lockdown/confidentiality.c</code> — 机密性模式的限制清单。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · security/lockdown/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
