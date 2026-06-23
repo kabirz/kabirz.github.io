@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Coredump 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Coredump 深度解析</h1>
+  <p class="subtitle">进程崩溃转储 — 调试段错误的利器</p>
+  <span class="version">Linux 7.0.12 · fs/coredump.c (1783 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#flow">Coredump 流程</a></li>
+    <li><a href="#format">ELF Core 格式</a></li>
+    <li><a href="#tuning">配置与使用</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Coredump 是进程崩溃时内核将<strong>进程内存映像保存到文件</strong>的机制。当进程收到 SIGSEGV（段错误）等致命信号时，内核可以生成 core 文件，包含进程的内存内容、寄存器状态和堆栈信息。GDB 可以加载 core 文件进行事后分析（post-mortem debugging）。</p>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">02</span> Coredump 流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Coredump 触发流程：</span>
+
+  进程收到致命信号（如 SIGSEGV）
+        │
+        ├── 检查是否生成 core dump
+        │   ├── core_pattern 是否配置？
+        │   ├── 进程的 RLIMIT_CORE 是否足够？
+        │   ├── 进程是否有 CAP_SYS_RESOURCE？
+        │   └── 是否被 seccomp 阻止？
+        │
+        ├── <span style="color:#8250df">do_coredump()</span> — fs/coredump.c
+        │   │
+        │   ├── 1. 打开 core 文件
+        │   │       根据 core_pattern 决定路径
+        │   │       /proc/sys/kernel/core_pattern
+        │   │
+        │   ├── 2. 写入 ELF 头
+        │   │       ET_CORE 类型
+        │   │
+        │   ├── 3. 遍历所有 VMA（虚拟内存区域）
+        │   │       对每个 VMA 生成 PT_LOAD 段
+        │   │       包含内存内容
+        │   │
+        │   ├── 4. 写入寄存器状态
+        │   │       NT_PRSTATUS（通用寄存器）
+        │   │       NT_FPREGSET（浮点寄存器）
+        │   │
+        │   ├── 5. 写入辅助信息
+        │   │       /proc/pid/maps（内存映射）
+        │   │       /proc/pid/auxv（环境变量）
+        │   │
+        │   └── 6. 关闭文件
+        │
+        └── 进程被杀死
+</pre></div>
+</section>
+
+<section id="format" class="toc-link">
+  <h2><span class="num">03</span> ELF Core 格式</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">ELF Core 文件结构：</span>
+
+  ┌──────────────────────────────┐
+  │ ELF Header (ET_CORE)        │  文件类型标识
+  ├──────────────────────────────┤
+  │ Program Header 1            │  PT_NOTE（寄存器等）
+  │ - NT_PRSTATUS                │  进程状态
+  │ - NT_PRPSINFO               │  进程信息
+  ├──────────────────────────────┤
+  │ Program Header 2            │  PT_LOAD（.text 段）
+  │ - addr: 0x400000            │  代码段内存内容
+  ├──────────────────────────────┤
+  │ Program Header 3            │  PT_LOAD（.data 段）
+  │ - addr: 0x600000            │  数据段内存内容
+  ├──────────────────────────────┤
+  │ Program Header 4            │  PT_LOAD（.bss 段）
+  │ - addr: 0x800000            │  BSS 段内存内容
+  ├──────────────────────────────┤
+  │ Program Header 5            │  PT_LOAD（栈）
+  │ - addr: 0x7fff...           │  进程栈内存内容
+  ├──────────────────────────────┤
+  │ Program Header 6            │  PT_LOAD（堆）
+  │ - addr: 0x5555...           │  进程堆内存内容
+  ├──────────────────────────────┤
+  │ VMA 数据区域                 │  实际内存内容
+  └──────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">04</span> 配置与使用</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 启用 core dump</span>
+$ ulimit -c unlimited  <span class="cm"># 设置 core 文件大小无限制</span>
+
+<span class="cm"># 配置 core 文件名</span>
+$ cat /proc/sys/kernel/core_pattern
+core
+
+<span class="cm"># 使用 systemd-coredump（推荐）</span>
+$ echo '|/usr/lib/systemd/systemd-coredump %P %g %u %t %e %h %s' \
+  > /proc/sys/kernel/core_pattern
+
+<span class="cm"># 查看 core 文件列表</span>
+$ coredumpctl list
+
+<span class="cm"># 用 GDB 分析 core 文件</span>
+$ gdb /path/to/program /path/to/core
+(gdb) bt              <span class="cm"># 查看崩溃调用栈</span>
+(gdb) info registers  <span class="cm"># 查看寄存器</span>
+(gdb) info locals     <span class="cm"># 查看局部变量</span>
+(gdb) thread apply all bt  <span class="cm"># 所有线程的调用栈</span>
+
+<span class="cm"># 禁用 core dump（安全）</span>
+$ ulimit -c 0
+$ echo '/proc/sys/kernel/core_pattern = /dev/null' > /etc/sysctl.d/core.conf</code></pre>
+  </div>
+
+  <h3>常见 core 文件位置</h3>
+  <table>
+    <tr><th>配置</th><th>文件名</th></tr>
+    <tr><td>默认</td><td>./core（当前目录）</td></tr>
+    <tr><td>systemd</td><td>/var/lib/systemd/coredump/</td></tr>
+    <tr><td>自定义</td><td>core.%e.%p（进程名.PID）</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">fs/</span>
+└── <span class="file">coredump.c</span>       <span class="cmt">Coredump 核心 (1783 行)</span>
+      └── do_coredump()      <span class="cmt">Coredump 入口</span>
+      └── elf_core_dump()    <span class="cmt">ELF 格式 core 写入</span>
+      └── dump_user_range()  <span class="cmt">转储用户内存</span>
+
+<span class="dir">fs/binfmt_elf.c</span>
+└── <span class="file">elf_core_dump()</span>  <span class="cmt">ELF core 文件写入</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>fs/coredump.c</code> — <code>do_coredump()</code> 理解 coredump 触发条件和配置检查。<br>
+    <code>fs/binfmt_elf.c</code> — <code>elf_core_dump()</code> 理解 ELF core 文件的写入过程。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · fs/coredump.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

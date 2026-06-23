@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux cpuidle 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux cpuidle 深度解析</h1>
+  <p class="subtitle">CPU 空闲管理 — 深度休眠省电</p>
+  <span class="version">Linux 7.0.12 · drivers/cpuidle/cpuidle.c (825 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#states">CPU 空闲状态</a></li>
+    <li><a href="#flow">进入空闲流程</a></li>
+    <li><a href="#governor">空闲调节器</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>cpuidle 是 Linux 的<strong>CPU 空闲管理框架</strong>。当 CPU 没有任务可运行时，cpuidle 决定让 CPU 进入哪种深度的休眠状态。休眠越深，省电越多，但唤醒延迟也越高。cpuidle 与 cpufreq 配合，实现完整的 CPU 功耗管理。</p>
+</section>
+
+<section id="states" class="toc-link">
+  <h2><span class="num">02</span> CPU 空闲状态</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">CPU C-states（深度递增）：</span>
+
+  ┌──────────┬──────────────┬──────────┬──────────┐
+  │ 状态     │ 功耗节省      │ 唤醒延迟  │ 说明     │
+  ├──────────┼──────────────┼──────────┼──────────┤
+  │ C0       │ 无           │ 0        │ 运行中   │
+  │ C1       │ ~10%         │ 1 μs     │ HLT     │
+  │ C1E      │ ~30%         │ 1 μs     │ 增强暂停 │
+  │ C2       │ ~50%         │ 10 μs    │ 停止时钟 │
+  │ C3       │ ~70%         │ 50 μs    │ 睡眠     │
+  │ C6       │ ~90%         │ 100 μs   │ 深度睡眠 │
+  │ C7/C8    │ ~95%+        │ 300 μs+  │ 最深休眠 │
+  └──────────┴──────────────┴──────────┴──────────┘
+
+  服务器：通常只用 C1/C2（延迟敏感）
+  笔记本：使用 C3-C6（省电优先）
+  嵌入式：使用最深 C-state（最低功耗）
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 进入空闲流程</h2>
+  <div class="ascii-diagram"><pre>
+  调度器发现 CPU 无任务
+        │
+        ↓
+  <span style="color:#8250df">cpuidle_idle_call()</span> — 调用 cpuidle 框架
+        │
+        ├── 1. 调用调节器选择目标状态
+        │       menu Governor / TEO Governor
+        │       基于历史空闲时间预测最佳状态
+        │
+        ├── 2. 调用 driver->enter()
+        │       ├── C1: 执行 HLT 指令
+        │       ├── C3: 关闭 L1/L2 缓存
+        │       └── C6: 进入深度睡眠（关闭更多电路）
+        │
+        ├── 3. CPU 进入休眠状态
+        │       功耗降低
+        │
+        └── 4. 唤醒（中断到达）
+                恢复执行
+                记录实际空闲时间
+                更新统计
+</pre></div>
+</section>
+
+<section id="governor" class="toc-link">
+  <h2><span class="num">04</span> 空闲调节器</h2>
+  <table>
+    <tr><th>调节器</th><th>策略</th><th>适用场景</th></tr>
+    <tr><td><strong>menu</strong></td><td>基于预测的空闲时间选择</td><td>默认，通用</td></tr>
+    <tr><td><strong>teo</strong></td><td>基于定时器误差的优化</td><td>推荐（5.4+）</td></tr>
+    <tr><td><strong>haltpoll</strong></td><td>先轮询再休眠</td><td>虚拟化环境</td></tr>
+    <tr><td><strong>ladder</strong></td><td>阶梯式状态选择</td><td>已废弃</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>cpuidle 与 cpufreq 的关系</strong><br>
+    <strong>cpufreq</strong>：CPU 运行时调节频率（动态电压频率调节 DVFS）<br>
+    <strong>cpuidle</strong>：CPU 空闲时进入休眠状态<br>
+    两者配合实现完整的 CPU 功耗管理：<br>
+    • 有任务时：cpufreq 按负载调节频率<br>
+    • 无任务时：cpuidle 选择深度休眠
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/cpuidle/</span>
+├── <span class="file">cpuidle.c</span>        <span class="cmt">cpuidle 核心 (825 行)</span>
+│     └── cpuidle_enter()     <span class="cmt">进入空闲状态</span>
+│     └── cpuidle_select()    <span class="cmt">选择空闲状态</span>
+├── <span class="file">governors/</span>
+│   ├── <span class="file">menu.c</span>         <span class="cmt">menu 调节器</span>
+│   ├── <span class="file">teo.c</span>          <span class="cmt">TEO 调节器</span>
+│   └── <span class="file">haltpoll.c</span>     <span class="cmt">haltpoll 调节器</span>
+└── <span class="dir">drivers/</span>
+    └── idle/intel_idle.c   <span class="cmt">Intel C-state 驱动</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>drivers/cpuidle/cpuidle.c</code> — cpuidle 核心，理解进入/退出空闲状态。<br>
+    <code>drivers/cpuidle/governors/menu.c</code> — menu 调节器，理解状态选择策略。<br>
+    <code>drivers/cpuidle/governors/teo.c</code> — TEO 调节器，更精确的定时器预测。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · drivers/cpuidle/cpuidle.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

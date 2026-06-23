@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux ptrace 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux ptrace 深度解析</h1>
+  <p class="subtitle">进程跟踪 — strace/ltrace/debugger 的内核基础</p>
+  <span class="version">Linux 7.0.12 · kernel/ptrace.c (1571 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#api">ptrace API</a></li>
+    <li><a href="#flow">跟踪流程</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>ptrace（process trace）是 Linux 提供的<strong>进程跟踪系统调用</strong>。它允许一个进程（tracer）观察和控制另一个进程（tracee）的执行，包括读写内存、寄存器、拦截系统调用。strace、ltrace、gdb 的内核基础都是 ptrace。</p>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">02</span> ptrace API</h2>
+  <div class="card">
+    <pre><code><span class="kw">#include</span> <span class="st">&lt;sys/ptrace.h&gt;</span>
+
+<span class="cm">// 请求类型</span>
+PTRACE_TRACEME      <span class="cm">// 子进程请求被跟踪（通常在 exec 前调用）</span>
+PTRACE_ATTACH       <span class="cm">// 附加到已运行的进程</span>
+PTRACE_DETACH       <span class="cm">// 分离，恢复被跟踪进程</span>
+PTRACE_PEEKTEXT     <span class="cm">// 读取被跟踪进程的内存</span>
+PTRACE_POKETEXT     <span class="cm">// 写入被跟踪进程的内存</span>
+PTRACE_GETREGS      <span class="cm">// 获取寄存器</span>
+PTRACE_SETREGS      <span class="cm">// 设置寄存器</span>
+PTRACE_SINGLESTEP   <span class="cm">// 单步执行（执行一条指令）</span>
+PTRACE_SYSCALL      <span class="cm">// 在系统调用入口/出口停止</span>
+PTRACE_CONT         <span class="cm">// 继续执行</span>
+PTRACE_KILL         <span class="cm">// 终止被跟踪进程</span>
+
+<span class="cm">// 示例：strace 简化版</span>
+<span class="kw">if</span> (<span class="fn">fork</span>() == <span class="num">0</span>) {
+    <span class="fn">ptrace</span>(PTRACE_TRACEME, <span class="num">0</span>, NULL, NULL);
+    <span class="fn">execlp</span>(<span class="st">"ls"</span>, <span class="st">"ls"</span>, NULL);
+} <span class="kw">else</span> {
+    <span class="ty">int</span> status;
+    <span class="fn">wait</span>(&amp;status);
+    <span class="kw">while</span> (!<span class="fn">WIFEXITED</span>(status)) {
+        <span class="fn">ptrace</span>(PTRACE_SYSCALL, child, NULL, NULL);
+        <span class="fn">wait</span>(&amp;status);
+        <span class="cm">// 在系统调用入口/出口获得控制</span>
+    }
+}</code></pre>
+  </div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 跟踪流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">ptrace 跟踪流程：</span>
+
+  tracer 进程（如 strace）        tracee 进程（如 ls）
+  │                                │
+  ├── ptrace(PTRACE_TRACEME)       │
+  │   标记为被跟踪                  │
+  │                                ├── execve("ls")
+  │                                │   触发 SIGTRAP
+  │   wait() ← 等待               │
+  │                                │
+  ├── ptrace(PTRACE_SYSCALL)       │
+  │   让 tracee 继续执行            │
+  │                                ├── 执行系统调用
+  │                                │   触发 SIGTRAP（入口）
+  │   wait() ← 获得控制            │
+  ├── 获取系统调用号               │
+  ├── ptrace(PTRACE_SYSCALL)       │
+  │                                ├── 执行系统调用
+  │                                │   触发 SIGTRAP（出口）
+  │   wait() ← 获得控制            │
+  ├── 获取返回值                   │
+  └── 继续循环...
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 应用场景</h2>
+  <table>
+    <tr><th>工具</th><th>用途</th><th>ptrace 用法</th></tr>
+    <tr><td><strong>strace</strong></td><td>系统调用追踪</td><td>PTRACE_SYSCALL</td></tr>
+    <tr><td><strong>ltrace</strong></td><td>库函数调用追踪</td><td>PTRACE_SYSCALL + PLT 解析</td></tr>
+    <tr><td><strong>gdb</strong></td><td>调试器</td><td>PTRACE_PEEK/POKE + 断点</td></tr>
+    <tr><td><strong>perf</strong></td><td>性能分析</td><td>PTRACE + perf_event</td></tr>
+    <tr><td><strong>seccomp</strong></td><td>系统调用过滤</td><td>基于 ptrace 的通知模式</td></tr>
+    <tr><td><strong>recordmcount</strong></td><td>内核函数追踪</td><td>PTRACE 实现</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+├── <span class="file">ptrace.c</span>         <span class="cmt">ptrace 核心 (1571 行)</span>
+│     └── ptrace_check_attach() <span class="cmt">检查附着状态</span>
+│     └── ptrace_request()      <span class="cmt">请求分发</span>
+│     └── ptrace_attach()       <span class="cmt">附加到进程</span>
+├── <span class="file">signal.c</span>         <span class="cmt">信号处理（ptrace 信号拦截）</span>
+└── <span class="file">fork.c</span>            <span class="cmt">fork（tracee 创建）</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/ptrace.c</code> — 从 <code>ptrace_attach()</code> 理解附着过程，<code>ptrace_request()</code> 理解请求分发。<br>
+    <code>kernel/signal.c</code> — ptrace 如何拦截和重定向信号。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/ptrace.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
