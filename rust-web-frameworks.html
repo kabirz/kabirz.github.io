@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust Web 框架深度对比</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Rust Web 框架深度对比</h1>
+  <p class="subtitle">Axum / Actix-web / Rocket — 选型与架构</p>
+  <span class="version">2024 · tokio-rs/axum · actix/actix-web · rwf/Rocket</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#axum">Axum 详解</a></li>
+    <li><a href="#actix">Actix-web 详解</a></li>
+    <li><a href="#rocket">Rocket 详解</a></li>
+    <li><a href="#compare">横向对比</a></li>
+    <li><a href="#hyper">底层：Hyper</a></li>
+    <li><a href="#middleware">中间件机制</a></li>
+    <li><a href="#extractors">Extractors 模式</a></li>
+    <li><a href="#ecosystem">生态工具</a></li>
+    <li><a href="#choice">选型指南</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Rust Web 框架生态以 <strong>Tokio + Hyper</strong> 为基础，上层有多个选择：</p>
+
+  <table>
+    <tr><th>框架</th><th>Stars</th><th>核心特点</th><th>主要用户</th></tr>
+    <tr><td><strong>Axum</strong></td><td>18k+</td><td>Tokio 团队官方，类型安全</td><td>新兴项目、Cloudflare</td></tr>
+    <tr><td><strong>Actix-web</strong></td><td>20k+</td><td>Actor 模型，性能极致</td><td>大流量生产</td></tr>
+    <tr><td><strong>Rocket</strong></td><td>24k+</td><td>宏丰富，类型安全</td><td>爱好项目、原型</td></tr>
+    <tr><td><strong>Warp</strong></td><td>9k+</td><td>Filter 组合器</td><td>个人偏好</td></tr>
+    <tr><td><strong>Poem</strong></td><td>3k+</td><td>OpenAPI 内置</td><td>API 服务</td></tr>
+    <tr><td><strong>Salvo</strong></td><td>3k+</td><td>中间件链</td><td>新兴</td></tr>
+  </table>
+
+  <p>底层栈：</p>
+<pre><code>┌─────────────────────────────────────────┐
+│   应用代码                                │
+├─────────────────────────────────────────┤
+│   Axum / Actix / Rocket / Warp           │
+│   （Web 框架）                            │
+├─────────────────────────────────────────┤
+│   Hyper / H2 / H3                        │
+│   （HTTP/1, HTTP/2, HTTP/3）             │
+├─────────────────────────────────────────┤
+│   Tokio                                  │
+│   （async runtime, IO driver）           │
+├─────────────────────────────────────────┤
+│   Linux Kernel                           │
+│   （epoll, accept4, sendfile, io_uring） │
+└─────────────────────────────────────────┘
+</code></pre>
+</section>
+
+<section id="axum" class="toc-link">
+  <h2><span class="num">02</span> Axum 详解</h2>
+
+  <p>Axum 是 Tokio 团队官方维护的 Web 框架，强调<strong>类型安全和组合性</strong>。</p>
+
+<pre><code>// Cargo.toml:
+// [dependencies]
+// axum = "0.7"
+// tokio = { version = "1", features = ["full"] }
+
+use axum::{routing::get, Router, Json};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct Hello { message: String }
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/users/:id", get(get_user).post(create_user))
+        .route("/health", get(|| async { "ok" }));
+    
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn root() -> Json&lt;Hello&gt; {
+    Json(Hello { message: "hi".into() })
+}
+
+async fn get_user(Path(id): Path&lt;u32&gt;) -> Json&lt;User&gt; {
+    Json(User { id, name: "test".into() })
+}
+
+async fn create_user(Json(payload): Json&lt;CreateUser&gt;) -> (StatusCode, Json&lt;User&gt;) {
+    (StatusCode::CREATED, Json(User { ... }))
+}
+</code></pre>
+
+  <p>核心特性：</p>
+  <ul>
+    <li><strong>Extractor 模式</strong>：函数参数自动从请求提取</li>
+    <li><strong>类型安全路由</strong>：编译期检查 handler 签名</li>
+    <li><strong>无宏</strong>：纯 Rust 类型系统</li>
+    <li><strong>Tree 路由</strong>：路径自动合并</li>
+    <li><strong>与 Tower 集成</strong>：Service trait 生态</li>
+  </ul>
+
+  <p>Extractor 示例：</p>
+<pre><code>use axum::extract::{Path, Query, State, ConnectInfo};
+use std::net::SocketAddr;
+
+// 自定义 extractor
+struct AuthUser { id: u32 }
+
+#[async_trait]
+impl FromRequestParts&lt;AppState&gt; for AuthUser {
+    type Rejection = StatusCode;
+    
+    async fn from_request_parts(parts: &amp;mut Parts, state: &amp;AppState) -> Result&lt;Self, Self::Rejection&gt; {
+        let token = parts.headers.get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+        let user = verify_token(token).map_err(|_| StatusCode::UNAUTHORIZED)?;
+        Ok(AuthUser { id: user })
+    }
+}
+
+// 使用：
+async fn handler(
+    Path(id): Path&lt;u32&gt;,            // URL 参数
+    Query(filter): Query&lt;Filter&gt;,    // query string
+    State(db): State&lt;DbPool&gt;,        // 全局状态
+    user: AuthUser,                  // 自定义 extractor
+) -> Json&lt;Item&gt; {
+    Json(db.get_item(id, &amp;filter).await?)
+}
+</code></pre>
+</section>
+
+<section id="actix" class="toc-link">
+  <h2><span class="num">03</span> Actix-web 详解</h2>
+
+  <p>Actix-web 基于 Actor 模型，<strong>性能基准测试长期第一</strong>。</p>
+
+<pre><code>// [dependencies]
+// actix-web = "4"
+
+use actix_web::{web, App, HttpServer, Responder, HttpResponse};
+
+async fn index() -> impl Responder {
+    HttpResponse::Ok().body("Hello world!")
+}
+
+async fn get_user(path: web::Path&lt;u32&gt;) -> impl Responder {
+    format!("User {}", path.into_inner())
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result&lt;()&gt; {
+    HttpServer::new(|| {
+        App::new()
+            .route("/", web::get().to(index))
+            .route("/users/{id}", web::get().to(get_user))
+    })
+    .bind("127.0.0.1:8080")?
+    .run()
+    .await
+}
+</code></pre>
+
+  <p>核心特性：</p>
+  <ul>
+    <li><strong>Actor 模型</strong>：状态管理通过 actor message</li>
+    <li><strong>App scope</strong>：模块化路由</li>
+    <li><strong>Websocket 一等公民</strong>：内置支持</li>
+    <li><strong>高性能</strong>：经优化，常压基准第一</li>
+    <li><strong>成熟生态</strong>：5+ 年生产使用</li>
+  </ul>
+
+  <p>State via Actor：</p>
+<pre><code>use actix::prelude::*;
+use actix_web::web::Data;
+
+struct DbActor { pool: Pool }
+
+#[derive(Message)]
+#[rtype(result = "Result&lt;User, Error&gt;")]
+struct GetUser { id: u32 }
+
+impl Handler&lt;GetUser&gt; for DbActor {
+    type Result = Result&lt;User, Error&gt;;
+    fn handle(&amp;mut self, msg: GetUser, _: &amp;mut Self::Context) -> Self::Result {
+        self.pool.get_user(msg.id)
+    }
+}
+
+async fn get_user(
+    path: web::Path&lt;u32&gt;,
+    db: Data&lt;Addr&lt;DbActor&gt;&gt;,
+) -> impl Responder {
+    let user = db.send(GetUser { id: path.into_inner() }).await.unwrap().unwrap();
+    HttpResponse::Ok().json(user)
+}
+
+// App state
+HttpServer::new(|| {
+    let db_actor = DbActor { pool: create_pool() }.start();
+    App::new()
+        .app_data(Data::new(db_actor))
+        .route("/users/{id}", web::get().to(get_user))
+});
+</code></pre>
+</section>
+
+<section id="rocket" class="toc-link">
+  <h2><span class="num">04</span> Rocket 详解</h2>
+
+  <p>Rocket 是最早的 Rust Web 框架之一，强调<strong>开发者体验和宏</strong>。</p>
+
+<pre><code>// [dependencies]
+// rocket = { version = "0.5", features = ["json"] }
+
+#[macro_use] extern crate rocket;
+
+#[get("/")]
+fn index() -> &amp;'static str {
+    "Hello, world!"
+}
+
+#[get("/users/&lt;id&gt;")]
+fn get_user(id: u32) -> Json&lt;User&gt; {
+    Json(User { id, name: "test".into() })
+}
+
+#[launch]
+fn rocket() -> _ {
+    rocket::build()
+        .mount("/", routes![index])
+        .mount("/api", routes![get_user])
+}
+</code></pre>
+
+  <p>核心特性：</p>
+  <ul>
+    <li><strong>过程宏路由</strong>：<code>#[get("/path")]</code></li>
+    <li><strong>类型安全参数</strong>：FromParam、FromSegments</li>
+    <li><strong>Request Guards</strong>：类似 extractor</li>
+    <li><strong>模板支持</strong>：Tera、Handlebars</li>
+    <li><strong>数据库集成</strong>： #[database]</li>
+  </ul>
+
+  <p>Request Guard 示例：</p>
+<pre><code>use rocket::request::{FromRequest, Outcome, Request};
+
+struct AdminUser(User);
+
+#[rocket::async_trait]
+impl&lt;'r&gt; FromRequest&lt;'r&gt; for AdminUser {
+    type Error = ();
+    
+    async fn from_request(req: &amp;'r Request&lt;'_&gt;) -> Outcome&lt;Self, Self::Error&gt; {
+        let user = User::from_request(req).await?;
+        if user.is_admin {
+            Outcome::Success(AdminUser(user))
+        } else {
+            Outcome::Forward(Status::Forbidden)
+        }
+    }
+}
+
+#[get("/admin")]
+fn admin_panel(admin: AdminUser) -> Json&lt;AdminData&gt; {
+    // 自动调用 AdminUser::from_request
+    Json(get_admin_data(admin.0.id))
+}
+</code></pre>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">05</span> 横向对比</h2>
+
+  <table>
+    <tr><th></th><th>Axum</th><th>Actix-web</th><th>Rocket</th></tr>
+    <tr><td>设计哲学</td><td>无宏、组合</td><td>Actor 模型</td><td>宏丰富</td></tr>
+    <tr><td>路由定义</td><td>Router::new().route()</td><td>App::new().route()</td><td><code>#[get()]</code> 宏</td></tr>
+    <tr><td>参数提取</td><td>Extractor (类型)</td><td>FromRequest (trait)</td><td>FromRequest Guard</td></tr>
+    <tr><td>状态管理</td><td>State extractor</td><td>Actor messages</td><td>State + request-local</td></tr>
+    <tr><td>Middleware</td><td>Tower layer</td><td>Middleware trait</td><td>Fairings</td></tr>
+    <tr><td>WebSocket</td><td>外部</td><td>内置</td><td>channel</td></tr>
+    <tr><td>性能</td><td>接近 Actix</td><td>基准第一</td><td>略慢</td></tr>
+    <tr><td>学习曲线</td><td>平缓</td><td>陡（Actor）</td><td>平缓</td></tr>
+    <tr><td>维护</td><td>Tokio 团队</td><td>独立社区</td><td>SergioBenitez</td></tr>
+    <tr><td>稳定性</td><td>稳定</td><td>稳定（4.0+）</td><td>稳定（0.5+）</td></tr>
+    <tr><td>1.0 ETA</td><td>近</td><td>无明确</td><td>无明确</td></tr>
+  </table>
+
+  <p>性能基准（参考，2024，TechEmpower）：</p>
+<pre><code>// 综合排序（不同场景排名变化）：
+// 1. actix-web          ~ 700k req/s
+// 2. axum              ~ 650k req/s
+// 3. rocket            ~ 500k req/s
+// 4. warp              ~ 620k req/s
+// 5. poem              ~ 600k req/s
+
+// 对比其他语言：
+// nginx              ~ 1500k req/s (C)
+// fasthttp (Go)      ~ 750k req/s
+// Spring (Java)      ~ 200k req/s
+// Express (Node.js)  ~ 100k req/s
+// Django (Python)    ~ 30k req/s
+
+// 注：基准是 "Hello World"，实际应用差异更大
+//     I/O bound（DB、网络）时差距变小
+</code></pre>
+</section>
+
+<section id="hyper" class="toc-link">
+  <h2><span class="num">06</span> 底层：Hyper</h2>
+
+  <p>Hyper 是 Rust 最成熟的 HTTP 实现，被所有主流框架使用。</p>
+
+<pre><code>// Hyper 提供底层 HTTP/1/2
+// [dependencies]
+// hyper = { version = "1", features = ["full"] }
+// tokio = { version = "1", features = ["full"] }
+
+use hyper::{Body, Request, Response, Server};
+use hyper::service::{make_service_fn, service_fn};
+
+async fn handle(_req: Request&lt;Body&gt;) -> Result&lt;Response&lt;Body&gt;, hyper::Error&gt; {
+    Ok(Response::new(Body::from("Hello!")))
+}
+
+#[tokio::main]
+async fn main() {
+    let make_svc = make_service_fn(|_conn| async {
+        Ok::&lt;_, hyper::Error&gt;(service_fn(handle))
+    });
+    
+    let addr = ([0, 0, 0, 0], 3000).into();
+    let server = Server::bind(&amp;addr).serve(make_svc);
+    
+    if let Err(e) = server.await {
+        eprintln!("server error: {}", e);
+    }
+}
+
+// Hyper 关键 API：
+//   - Body / Request / Response
+//   - Server (incoming)
+//   - Client (outgoing)
+//   - Service trait
+
+// HTTP/2 / HTTP/3：
+//   h2 crate (HTTP/2)
+//   h3 crate (HTTP/3，基于 quinn)
+</code></pre>
+
+  <p>reqwest — HTTP 客户端（基于 Hyper）：</p>
+<pre><code>// [dependencies]
+// reqwest = { version = "0.12", features = ["json"] }
+
+#[tokio::main]
+async fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let resp = reqwest::get("https://api.example.com/users").await?
+        .json::&lt;Vec&lt;User&gt;&gt;().await?;
+    
+    for u in resp {
+        println!("{}", u.name);
+    }
+    
+    // POST
+    let client = reqwest::Client::new();
+    let res = client.post("https://api.example.com/users")
+        .json(&amp;CreateUser { name: "Alice".into() })
+        .send()
+        .await?;
+    
+    Ok(())
+}
+</code></pre>
+</section>
+
+<section id="middleware" class="toc-link">
+  <h2><span class="num">07</span> 中间件机制</h2>
+
+  <p>三种主流中间件模式：</p>
+
+<pre><code>// 1. Axum + Tower Layer
+use axum::middleware::{self, Next};
+use tower::ServiceBuilder;
+use tower_http::{trace::TraceLayer, compression::CompressionLayer};
+
+let app = Router::new()
+    .route("/", get(handler))
+    .layer(
+        ServiceBuilder::new()
+            .layer(TraceLayer::new_for_http())
+            .layer(CompressionLayer::new())
+            .layer(middleware::from_fn(auth_middleware))
+    );
+
+async fn auth_middleware(req: Request, next: Next) -> Response {
+    if !is_authorized(&amp;req) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    next.run(req).await
+}
+
+// 2. Actix middleware
+use actix_web::middleware::Logger;
+use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
+
+HttpServer::new(|| {
+    App::new()
+        .wrap(Logger::default())
+        .wrap(Auth)
+        .route("/", web::get().to(handler))
+});
+
+struct Auth;
+
+impl&lt;S, B&gt; Transform&lt;S, ServiceRequest&gt; for Auth
+where S: Service&lt;ServiceRequest, Response = ServiceResponse&lt;B&gt;&gt;
+{
+    // ...
+}
+
+// 3. Rocket Fairings
+use rocket::fairing::{Fairing, Info, Kind};
+use rocket::{Rocket, Orbit};
+
+struct Counter;
+#[rocket::async_trait]
+impl Fairing for Counter {
+    fn info(&amp;self) -> Info {
+        Info { name: "Counter", kind: Kind::Request }
+    }
+    async fn on_request(&amp;self, req: &amp;mut Request&lt;'_&gt;, _: &amp;mut Data&lt;'_&gt;) {
+        // 计数
+    }
+}
+
+rocket::build().attach(Counter);
+</code></pre>
+
+  <p>选择中间件库：</p>
+  <table>
+    <tr><th>库</th><th>用途</th></tr>
+    <tr><td><code>tower-http</code></td><td>HTTP 通用（CORS、压缩、日志、超时）</td></tr>
+    <tr><td><code>tracing</code></td><td>结构化日志</td></tr>
+    <tr><td><code>opentelemetry</code></td><td>分布式追踪</td></tr>
+    <tr><td><code>prometheus</code></td><td>metrics</td></tr>
+    <tr><td><code>actix-cors</code> / <code>tower-http::cors</code></td><td>CORS</td></tr>
+    <tr><td><code>jsonwebtoken</code></td><td>JWT</td></tr>
+    <tr><td><code>argon2</code> / <code>bcrypt</code></td><td>密码哈希</td></tr>
+  </table>
+</section>
+
+<section id="extractors" class="toc-link">
+  <h2><span class="num">08</span> Extractors 模式</h2>
+
+  <p>Extractor 是<strong>从 Request 提取数据</strong>的统一抽象。所有主流框架都支持。</p>
+
+<pre><code>// Axum 内置 extractor：
+async fn handler(
+    Method(method): Method,                // GET/POST/...
+    Uri(uri): Uri,                          // 完整 URI
+    Path(id): Path&lt;u32&gt;,                    // /users/:id
+    Query(filter): Query&lt;Filter&gt;,          // ?foo=bar
+    Json(body): Json&lt;CreateUser&gt;,         // JSON body
+    Form(form): Form&lt;LoginForm&gt;,          // form-urlencoded
+    TypedHeader(auth): TypedHeader&lt;Authorization&lt;Bearer&gt;&gt;,
+    State(db): State&lt;Db&gt;,                   // 共享状态
+    Extension(user): Extension&lt;AuthUser&gt;,  // 中间件注入
+    headers: HeaderMap,                     // 所有 headers
+    ConnectInfo(addr): ConnectInfo&lt;SocketAddr&gt;,
+    // ...
+) -> Json&lt;Item&gt; { ... }
+
+// 自定义 extractor：
+struct ApiKey(String);
+
+#[async_trait]
+impl&lt;S&gt; FromRequestParts&lt;S&gt; for ApiKey
+where S: Send + Sync
+{
+    type Rejection = (StatusCode, String);
+    
+    async fn from_request_parts(parts: &amp;mut Parts, _state: &amp;S) -> Result&lt;Self, Self::Rejection&gt; {
+        let key = parts.headers.get("X-API-Key")
+            .and_then(|v| v.to_str().ok())
+            .ok_or((StatusCode::BAD_REQUEST, "missing api key".into()))?;
+        Ok(ApiKey(key.to_string()))
+    }
+}
+
+async fn protected(api_key: ApiKey) -> Json&lt;Data&gt; {
+    // 自动从 header 提取
+    Json(get_data(&amp;api_key.0))
+}
+
+// 顺序很重要：
+//   Path 和 Query 在 JSON 之前
+//   extractor 消费 body（一次性的）
+//   自定义 extractor 在内置之后
+</code></pre>
+
+  <p>类型安全的路由：</p>
+<pre><code>// Axum 通过泛型约束检查
+// 如果 handler 期望 u32，但路由参数不是数字 → 编译错误
+
+#[derive(FromRequestParts)]   // 不存在，但概念
+struct RequestContext {
+    user: AuthUser,
+    db: DbPool,
+}
+
+async fn handler(
+    Path(id): Path&lt;u32&gt;,
+    ctx: RequestContext,
+) -> Json&lt;Item&gt; { ... }
+
+// 错误的 handler 不会通过类型检查
+async fn bad_handler(Path(id): Path&lt;String&gt;) -> ... 
+// 如果路由写 /:id 而 id 不是 String → 编译报错
+</code></pre>
+</section>
+
+<section id="ecosystem" class="toc-link">
+  <h2><span class="num">09</span> 生态工具</h2>
+
+  <p>数据库 ORM/Query builder：</p>
+  <table>
+    <tr><th>库</th><th>特点</th></tr>
+    <tr><td><code>sqlx</code></td><td>异步、编译期检查 SQL</td></tr>
+    <tr><td><code>diesel</code></td><td>同步、强类型 ORM</td></tr>
+    <tr><td><code>sea-orm</code></td><td>异步 ORM</td></tr>
+    <tr><td><code>rbsqlx</code></td><td>SQL macro</td></tr>
+  </table>
+
+  <p>序列化：</p>
+  <table>
+    <tr><th>库</th><th>用途</th></tr>
+    <tr><td><code>serde</code></td><td>序列化框架</td></tr>
+    <tr><td><code>serde_json</code></td><td>JSON</td></tr>
+    <tr><td><code>serde_yaml</code></td><td>YAML</td></tr>
+    <tr><td><code>toml</code></td><td>TOML</td></tr>
+    <tr><td><code>bincode</code></td><td>二进制</td></tr>
+    <tr><td><code>prost</code></td><td>Protobuf</td></tr>
+  </table>
+
+  <p>认证 / 安全：</p>
+  <table>
+    <tr><th>库</th><th>用途</th></tr>
+    <tr><td><code>jsonwebtoken</code></td><td>JWT</td></tr>
+    <tr><td><code>argon2</code> / <code>bcrypt</code></td><td>密码哈希</td></tr>
+    <tr><td><code>oauth2</code></td><td>OAuth2 client</td></tr>
+    <tr><td><code>openidconnect</code></td><td>OIDC</td></tr>
+    <tr><td><code>lettre</code></td><td>邮件</td></tr>
+  </table>
+
+  <p>模板引擎：</p>
+  <table>
+    <tr><th>库</th><th>风格</th></tr>
+    <tr><td><code>askama</code></td><td>Jinja2 风格（编译期）</td></tr>
+    <tr><td><code>tera</code></td><td>Jinja2 风格（运行期）</td></tr>
+    <tr><td><code>handlebars</code></td><td>Handlebars</td></tr>
+    <tr><td><code>yew</code></td><td>JSX-like (前端)</td></tr>
+  </table>
+
+  <p>可观测性：</p>
+  <table>
+    <tr><th>库</th><th>用途</th></tr>
+    <tr><td><code>tracing</code></td><td>结构化日志 + 追踪</td></tr>
+    <tr><td><code>opentelemetry</code></td><td>OpenTelemetry</td></tr>
+    <tr><td><code>prometheus</code></td><td>Metrics</td></tr>
+    <tr><td><code>sentry</code></td><td>错误追踪</td></tr>
+    <tr><td><code>tower-http::trace</code></td><td>HTTP tracing</td></tr>
+  </table>
+</section>
+
+<section id="choice" class="toc-link">
+  <h2><span class="num">10</span> 选型指南</h2>
+
+  <p>决策树：</p>
+<pre><code>新项目？
+├─ 是 → Axum
+│       - Tokio 官方维护
+│       - 类型安全
+│       - 与 Tower 生态无缝
+│       - 1.0 即将到来
+│
+├─ 已有 Actix 项目 → 继续 Actix-web
+│       - 性能最好
+│       - 成熟稳定
+│
+└─ 偏好宏风格 → Rocket
+        - 学习曲线最低
+        - 宏做大部分工作
+
+特殊需求：
+├─ WebSockets 重度 → Actix-web（内置）
+├─ OpenAPI → Poem 或 Salvo
+├─ 服务端渲染 → Axum + askama
+├─ 微服务 → Axum + tonic（gRPC）
+├─ 性能极致 → Actix-web
+└─ 嵌入式 / no_std → 不用框架，直接 hyper
+</code></pre>
+
+  <div class="callout">
+    <strong>Web 框架总结:</strong><br>
+    1. <strong>Axum</strong>：新项目首选，Tokio 官方，类型安全<br>
+    2. <strong>Actix-web</strong>：性能王者，Actor 模型<br>
+    3. <strong>Rocket</strong>：宏友好，开发体验好<br>
+    4. <strong>Hyper</strong>：所有框架的底层基础<br>
+    5. <strong>Tower</strong>：中间件标准 trait<br>
+    6. <strong>Extractor 模式</strong>：所有框架核心抽象<br>
+    Rust Web 性能远超 Java/Python/Node.js，与 Go 相当甚至更快。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

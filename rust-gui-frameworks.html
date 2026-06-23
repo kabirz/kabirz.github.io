@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust GUI 框架深度对比</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Rust GUI 框架深度对比</h1>
+  <p class="subtitle">Tauri / Iced / egui / Slint / Dioxus — 多范式 GUI 生态</p>
+  <span class="version">2024 · 五大主流 GUI 框架对比</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#tauri">Tauri（混合架构）</a></li>
+    <li><a href="#iced">Iced（Elm 风格）</a></li>
+    <li><a href="#egui">egui（Immediate Mode）</a></li>
+    <li><a href="#slint">Slint（声明式 DSL）</a></li>
+    <li><a href="#dioxus">Dioxus（React 风格）</a></li>
+    <li><a href="#compare">横向对比</a></li>
+    <li><a href="#render">渲染后端</a></li>
+    <li><a href="#state">状态管理</a></li>
+    <li><a href="#choice">选型指南</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Rust GUI 生态比成熟语言（C++ Qt / Swift UIKit / JavaFX）年轻，但<strong>迭代极快</strong>。五个主流框架各有特色：</p>
+
+  <table>
+    <tr><th>框架</th><th>范式</th><th>渲染</th><th>最佳场景</th></tr>
+    <tr><td><strong>Tauri</strong></td><td>Web + Native</td><td>WebView</td><td>混合应用</td></tr>
+    <tr><td><strong>Iced</strong></td><td>Elm (MVU)</td><td>wgpu</td><td>跨平台桌面</td></tr>
+    <tr><td><strong>egui</strong></td><td>Immediate Mode</td><td>wgpu / glow</td><td>工具、调试</td></tr>
+    <tr><td><strong>Slint</strong></td><td>声明式 DSL</td><td>OpenGL/SK/Wayland</td><td>嵌入式</td></tr>
+    <tr><td><strong>Dioxus</strong></td><td>React (RSX)</td><td>WebView / Tauri / wgpu</td><td>跨端（web/desktop/mobile）</td></tr>
+  </table>
+
+  <p>范式对比：</p>
+  <ul>
+    <li><strong>Retained Mode</strong>：构建 UI 树，框架维护状态（Qt、GTK、Iced、Slint）</li>
+    <li><strong>Immediate Mode</strong>：每帧重画，无状态（egui）</li>
+    <li><strong>Reactive</strong>：声明式 + 状态变化触发重渲染（React、Dioxus）</li>
+    <li><strong>Hybrid</strong>：Rust 后端 + Web 前端（Tauri）</li>
+  </ul>
+</section>
+
+<section id="tauri" class="toc-link">
+  <h2><span class="num">02</span> Tauri（混合架构）</h2>
+
+  <p>Tauri 用<strong>系统 WebView</strong> 渲染 HTML/CSS/JS，Rust 作为后端。体积小、内存省（相比 Electron）。</p>
+
+<pre><code>// Cargo.toml + tauri.conf.json
+// [dependencies]
+// tauri = { version = "2", features = [] }
+
+// src-tauri/src/main.rs
+#[tauri::command]
+fn greet(name: &amp;str) -> String {
+    format!("Hello, {}!", name)
+}
+
+fn main() {
+    tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![greet])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+// 前端（React/Vue/Svelte/Vanilla）
+// app/index.html:
+// &lt;button onclick="greet()"&gt;Greet&lt;/button&gt;
+// &lt;script&gt;
+//   import { invoke } from '@tauri-apps/api';
+//   function greet() {
+//     invoke('greet', { name: 'World' }).then(console.log);
+//   }
+// &lt;/script&gt;
+</code></pre>
+
+  <p>核心特性：</p>
+  <ul>
+    <li><strong>体积小</strong>：~5MB（Electron 100MB+）</li>
+    <li><strong>内存省</strong>：~30MB（Electron 200MB+）</li>
+    <li><strong>跨平台</strong>：Windows / macOS / Linux / Mobile（2.0+）</li>
+    <li><strong>前端自由</strong>：React、Vue、Svelte、Vanilla</li>
+    <li><strong>安全</strong>：白名单 IPC，文件系统/网络可控</li>
+    <li><strong>Plugin 丰富</strong>：通知、对话框、剪贴板、文件系统、shell</li>
+  </ul>
+
+  <p>Tauri 2.0 新特性：</p>
+<pre><code>// 移动端支持（iOS + Android）
+tauri android init
+tauri android dev
+tauri android build
+
+tauri ios init
+tauri ios dev
+tauri ios build
+
+// Plugin 系统
+tauri-plugin-fs
+tauri-plugin-dialog
+tauri-plugin-notification
+tauri-plugin-clipboard-manager
+tauri-plugin-shell
+tauri-plugin-store
+tauri-plugin-http
+tauri-plugin-process
+tauri-plugin-os
+// ...
+
+// 自动更新
+tauri-plugin-updater
+
+// 安全：CSP、CORS、capability system
+</code></pre>
+</section>
+
+<section id="iced" class="toc-link">
+  <h2><span class="num">03</span> Iced（Elm 风格）</h2>
+
+  <p>Iced 是<strong>The Elm Architecture</strong> (MVU) 的 Rust 实现。纯 Rust，无 JavaScript。</p>
+
+<pre><code>// [dependencies]
+// iced = "0.12"
+
+use iced::widget::{button, column, text};
+use iced::{Center, Element};
+
+fn main() -> iced::Result {
+    iced::run("Counter", App::update, App::view)
+}
+
+#[derive(Default)]
+struct App {
+    counter: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Message {
+    IncrementPressed,
+    DecrementPressed,
+}
+
+impl App {
+    fn update(&amp;mut self, message: Message) {
+        match message {
+            Message::IncrementPressed =&gt; self.counter += 1,
+            Message::DecrementPressed =&gt; self.counter -= 1,
+        }
+    }
+    
+    fn view(&amp;self) -> Element&lt;Message&gt; {
+        column![
+            button("Increment").on_press(Message::IncrementPressed),
+            text(self.counter).size(50),
+            button("Decrement").on_press(Message::DecrementPressed),
+        ]
+        .padding(20)
+        .align_x(Center)
+        .into()
+    }
+}
+</code></pre>
+
+  <p>核心特性：</p>
+  <ul>
+    <li><strong>MVU 架构</strong>：Model + View + Update</li>
+    <li><strong>响应式</strong>：状态变化自动重渲染</li>
+    <li><strong>wgpu 渲染</strong>：跨平台、GPU 加速</li>
+    <li><strong>类型安全</strong>：Message 是 enum，编译期检查</li>
+    <li><strong>无运行时</strong>：完全 Rust</li>
+    <li><strong>主题支持</strong>：内置 + 自定义</li>
+    <li><strong>跨平台</strong>：桌面 + Web（experimental）</li>
+  </ul>
+
+  <p>典型应用：</p>
+<pre><code>// 复杂状态：
+struct AppState {
+    todos: Vec&lt;Todo&gt;,
+    filter: Filter,
+    input: String,
+}
+
+enum Message {
+    AddTodo,
+    ToggleTodo(usize),
+    DeleteTodo(usize),
+    FilterChanged(Filter),
+    InputChanged(String),
+}
+
+fn update(state: &amp;mut AppState, msg: Message) -> Task&lt;Message&gt; {
+    match msg {
+        Message::AddTodo =&gt; {
+            if !state.input.is_empty() {
+                state.todos.push(Todo::new(state.input.clone()));
+                state.input.clear();
+            }
+        }
+        // ...
+    }
+    Task::none()
+}
+
+// 异步（Task）：
+enum Message {
+    DataLoaded(Result&lt;Data, Error&gt;),
+}
+
+fn load_data() -> Task&lt;Message&gt; {
+    Task::perform(async {
+        fetch_data().await
+    }, Message::DataLoaded)
+}
+</code></pre>
+</section>
+
+<section id="egui" class="toc-link">
+  <h2><span class="num">04</span> egui（Immediate Mode）</h2>
+
+  <p>egui 是<strong>立即模式 GUI</strong>，每帧重新绘制所有 UI。极简、极快、极适合工具应用。</p>
+
+<pre><code>// [dependencies]
+// eframe = "0.27"
+
+use eframe::egui;
+
+fn main() -> eframe::Result {
+    eframe::run_simple_native("My App", Default::default(), |ctx, _| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Hello");
+            if ui.button("Click").clicked() {
+                println!("clicked");
+            }
+            ui.label("Status: ok");
+        });
+    })
+}
+
+// 带状态：
+struct App { count: i32 }
+
+impl eframe::App for App {
+    fn update(&amp;mut self, ctx: &amp;egui::Context, _: &amp;mut eframe::Frame) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.label(format!("Count: {}", self.count));
+            if ui.button("+1").clicked() {
+                self.count += 1;
+            }
+        });
+    }
+}
+
+fn main() {
+    eframe::run_native("app", Default::default(), Box::new(|_| Box::new(App { count: 0 }))).unwrap();
+}
+</code></pre>
+
+  <p>核心特性：</p>
+  <ul>
+    <li><strong>无状态</strong>：每帧重新绘制</li>
+    <li><strong>极简 API</strong>：函数式调用</li>
+    <li><strong>超快</strong>：60FPS + 极低 CPU</li>
+    <li><strong>调试友好</strong>：每帧重新计算</li>
+    <li><strong>跨平台</strong>：Web、桌面、VR</li>
+    <li><strong>跨框架集成</strong>：bevy、wgpu、glium、SDL</li>
+  </ul>
+
+  <p>典型用例：</p>
+  <ul>
+    <li>调试工具</li>
+    <li>数据可视化</li>
+    <li>游戏内 UI</li>
+    <li>配置面板</li>
+    <li>开发工具（如 Rust Explorer）</li>
+  </ul>
+
+  <p>高级控件：</p>
+<pre><code>ui.text_edit_singleline(&amp;mut self.name);
+ui.checkbox(&amp;mut self.option, "Enable");
+ui.slider(&amp;mut self.value, 0..=100);
+ui.color_picker_button_rgb(&amp;mut self.color);
+
+// 绘图：
+egui::Plot::new("plot")
+    .show(ui, |plot_ui| {
+        plot_ui.line(Line::new(PlotPoints::from_explicit_function(
+            |x| x.sin(),
+            0.0..std::f32::consts::TAU,
+            100,
+        )));
+    });
+
+// 自定义绘制：
+let (rect, _) = ui.allocate_exact_size(
+    Vec2::new(100.0, 100.0),
+    egui::Sense::click(),
+);
+ui.painter().rect_filled(rect, 5.0, egui::Color32::RED);
+</code></pre>
+</section>
+
+<section id="slint" class="toc-link">
+  <h2><span class="num">05</span> Slint（声明式 DSL）</h2>
+
+  <p>Slint 用<strong>声明式 DSL</strong>（类似 QML）描述 UI，Rust 作为后端逻辑。适合嵌入式。</p>
+
+<pre><code>// main.rs
+slint::slint! {
+    export component App inherits Window {
+        in property &lt;int&gt; counter: 0;
+        callback increment;
+        
+        VerticalBox {
+            Text { text: "Counter: \{root.counter}"; }
+            Button {
+                text: "Add";
+                clicked =&gt; { root.counter += 1; }
+            }
+        }
+    }
+}
+
+fn main() {
+    let app = App::new().unwrap();
+    app.run().unwrap();
+}
+</code></pre>
+
+  <p>外部 .slint 文件：</p>
+<pre><code>// main.rs
+slint::include_modules!();
+
+fn main() {
+    let app = App::new().unwrap();
+    app.on_increment({
+        let app_handle = app.as_weak();
+        move || {
+            let app = app_handle.unwrap();
+            app.set_counter(app.get_counter() + 1);
+        }
+    });
+    app.run().unwrap();
+}
+
+// app.slint (separate file):
+// export component App inherits Window { ... }
+</code></pre>
+
+  <p>核心特性：</p>
+  <ul>
+    <li><strong>DSL 语言</strong>：QML 风格，编译器校验</li>
+    <li><strong>多渲染后端</strong>：OpenGL、Skia、Software、Qt</li>
+    <li><strong>嵌入式友好</strong>：极小二进制、低内存</li>
+    <li><strong>语言绑定</strong>：Rust、C++、JavaScript、Python</li>
+    <li><strong>可视化编辑器</strong>：Slint Studio</li>
+    <li><strong>商业许可</strong>：GPLv3 + 商业双授权</li>
+  </ul>
+</section>
+
+<section id="dioxus" class="toc-link">
+  <h2><span class="num">06</span> Dioxus（React 风格）</h2>
+
+  <p>Dioxus 是<strong>React for Rust</strong>。RSX 宏、Virtual DOM、Hooks。已有专门文档（rust-dioxus.html）。</p>
+
+<pre><code>// [dependencies]
+// dioxus = { version = "0.5", features = ["desktop"] }
+
+use dioxus::prelude::*;
+
+fn main() {
+    dioxus::launch(app);
+}
+
+fn app() -> Element {
+    let mut count = use_signal(|| 0);
+    
+    rsx! {
+        div {
+            h1 { "Counter: {count}" }
+            button { onclick: move |_| count += 1, "Increment" }
+            button { onclick: move |_| count -= 1, "Decrement" }
+        }
+    }
+}
+</code></pre>
+
+  <p>核心特性：</p>
+  <ul>
+    <li><strong>React 习惯</strong>：use_signal、use_resource、use_effect</li>
+    <li><strong>RSX 宏</strong>：类似 JSX，但 Rust 原生</li>
+    <li><strong>多 renderer</strong>：Desktop（WebView/wgpu）、Mobile、Web、SSR、TUI、LiveView</li>
+    <li><strong>跨端</strong>：一套代码多端运行</li>
+    <li><strong>真 Virtual DOM</strong>：diff + patch</li>
+  </ul>
+
+  <p>更多内容参考 <a href="rust-dioxus.html">Dioxus 深度文档</a>。</p>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">07</span> 横向对比</h2>
+
+  <table>
+    <tr><th></th><th>Tauri</th><th>Iced</th><th>egui</th><th>Slint</th><th>Dioxus</th></tr>
+    <tr><td>范式</td><td>Hybrid</td><td>MVU</td><td>Immediate</td><td>Declarative DSL</td><td>React</td></tr>
+    <tr><td>渲染</td><td>WebView</td><td>wgpu</td><td>wgpu/glow</td><td>多后端</td><td>WebView/wgpu</td></tr>
+    <tr><td>体积</td><td>~5MB</td><td>~10MB</td><td>~5MB</td><td>~1-5MB</td><td>~10MB</td></tr>
+    <tr><td>内存</td><td>中</td><td>低</td><td>极低</td><td>极低</td><td>中</td></tr>
+    <tr><td>启动</td><td>慢（WebView）</td><td>快</td><td>极快</td><td>极快</td><td>中</td></tr>
+    <tr><td>开发体验</td><td>前端友好</td><td>Rust 原生</td><td>极简</td><td>DSL 学习</td><td>React 友好</td></tr>
+    <tr><td>跨端</td><td>桌面+移动</td><td>桌面</td><td>桌面+Web+VR</td><td>桌面+嵌入式</td><td>全端</td></tr>
+    <tr><td>成熟度</td><td>生产</td><td>准生产</td><td>生产</td><td>生产</td><td>beta</td></tr>
+    <tr><td>授权</td><td>MIT/Apache</td><td>MIT</td><td>MIT</td><td>GPLv3+商业</td><td>MIT/Apache</td></tr>
+    <tr><td>学习曲线</td><td>平缓（前端）</td><td>陡（MVU）</td><td>平缓</td><td>陡（DSL）</td><td>平缓（React）</td></tr>
+    <tr><td>主要优势</td><td>生态广</td><td>纯 Rust</td><td>速度极快</td><td>嵌入式优化</td><td>跨端一套码</td></tr>
+    <tr><td>主要劣势</td><td>WebView 一致性</td><td>控件少</td><td>复杂 UI 难</td><td>商业限制</td><td>1.0 未到</td></tr>
+  </table>
+
+  <p>常见控件支持：</p>
+<pre><code>// 评级（1-5）：
+//                Tauri   Iced   egui   Slint  Dioxus
+// Button         5       5      5      5      5
+// Text           5       5      5      5      5
+// TextInput      5       5      5      5      5
+// List/Grid      5       3      3      4      5
+// Table          5       2      4      3      3
+// Tree           5       1      3      2      3
+// Chart          5       2      4      3      3
+// Canvas         5       3      5      4      3
+// Video          5       1      1      1      1
+// Web View       5       1      1      1      1
+// Native Win     5       5      5      5      5
+// Animation      5       3      3      4      4
+// Theme          5       4      3      4      4
+</code></pre>
+</section>
+
+<section id="render" class="toc-link">
+  <h2><span class="num">08</span> 渲染后端</h2>
+
+  <p>纯 Rust GUI 框架多基于 wgpu（WebGPU API）：</p>
+
+<pre><code>// wgpu 抽象：
+//   - 基于 WebGPU 规范
+//   - 后端：Vulkan, Metal, DX12, Browser
+//   - 现代图形 API 抽象
+
+// wgpu 抽象层：
+//   应用 → wgpu → Vulkan / Metal / DX12 / WebGPU
+
+// 各框架：
+//   Iced:    wgpu 原生
+//   egui:    wgpu 或 glow（OpenGL）
+//   Slint:   多后端（OpenGL, Skia, Qt, Software）
+//   Dioxus:  WebView（默认）或 wgpu（实验）
+
+// Software Renderer（无 GPU）：
+//   tiny-skia (Slint)
+//   使用 CPU 光栅化
+//   适合嵌入式
+</code></pre>
+
+  <p>字体与文本：</p>
+<pre><code>// Rust GUI 普遍用：
+//   cosmic-text  (System76 的文本布局)
+//   rusttype     (基础 TrueType)
+//   ab_glyph     (rusttype 替代)
+
+// 字体格式：TTF、OTF
+// 文本布局：HarfBuzz（C++）、rustybuzz（Rust）
+// 国际化：fluent、locale
+</code></pre>
+</section>
+
+<section id="state" class="toc-link">
+  <h2><span class="num">09</span> 状态管理</h2>
+
+<pre><code>// 1. MVU (Iced)：
+struct State { count: i32 }
+enum Message { Increment }
+fn update(state: &amp;mut State, msg: Message) { ... }
+fn view(state: &amp;State) -> Element&lt;Message&gt; { ... }
+
+// 2. Reactive (Dioxus)：
+use_signal / use_resource / use_effect
+// 类似 React hooks
+
+// 3. Immediate (egui)：
+// 没有"状态"概念，每帧直接画
+
+// 4. MVVM (Slint)：
+// .slint 文件声明 properties
+// Rust 端读写
+
+// 5. Tauri：
+// 前端用 React/Vue 状态管理
+// Rust 后端通过 IPC 通信
+</code></pre>
+
+  <p>跨组件状态：</p>
+<pre><code>// Iced：通过 update 链
+// Dioxus：use_context_provider / use_context
+// egui：内存 storage
+// Slint：global singletons
+
+// 全局状态管理：
+// Iced: application state (single struct)
+// Dioxus: Context + signal
+// Tauri: 前端 store + 后端 state
+</code></pre>
+</section>
+
+<section id="choice" class="toc-link">
+  <h2><span class="num">10</span> 选型指南</h2>
+
+  <p>决策树：</p>
+<pre><code>需要现代 UI？
+├─ Web 技术栈 → Tauri
+│       - 前端团队熟悉
+│       - 跨端一致
+│       - 复杂富文本（编辑器、富 HTML）
+│
+├─ React 习惯 → Dioxus
+│       - 跨端一套码
+│       - 喜欢声明式 + Hooks
+│
+├─ 纯 Rust + 复杂应用 → Iced
+│       - MVU 干净
+│       - 无 JS 依赖
+│       - 桌面应用
+│
+├─ 工具 / 调试 → egui
+│       - 立即模式简单
+│       - 性能极高
+│       - 不追求精致 UI
+│
+├─ 嵌入式 / 资源受限 → Slint
+│       - 极小体积
+│       - 多后端
+│       - 注意商业授权
+│
+└─ 游戏 UI → egui（调试）+ 自定义（实际）
+</code></pre>
+
+  <p>2024 各场景推荐：</p>
+
+  <table>
+    <tr><th>场景</th><th>首选</th><th>次选</th></tr>
+    <tr><td>桌面应用（开发者熟悉前端）</td><td>Tauri</td><td>Dioxus</td></tr>
+    <tr><td>桌面应用（纯 Rust 团队）</td><td>Iced</td><td>Slint</td></tr>
+    <tr><td>调试工具</td><td>egui</td><td>Iced</td></tr>
+    <tr><td>数据可视化</td><td>egui</td><td>Iced</td></tr>
+    <tr><td>嵌入式 GUI</td><td>Slint</td><td>egui</td></tr>
+    <tr><td>跨平台 + 移动</td><td>Tauri 2</td><td>Dioxus</td></tr>
+    <tr><td>Web 应用</td><td>Dioxus</td><td>Tauri</td></tr>
+    <tr><td>游戏 UI</td><td>egui</td><td>—</td></tr>
+    <tr><td>大公司商业产品</td><td>Tauri</td><td>Slint (商业版)</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>GUI 生态总结:</strong><br>
+    1. <strong>Tauri</strong>：生产成熟，前端友好，最大生态<br>
+    2. <strong>Iced</strong>：纯 Rust，Elm 风格，准生产<br>
+    3. <strong>egui</strong>：极简极快，工具应用首选<br>
+    4. <strong>Slint</strong>：嵌入式优化，DSL 学习<br>
+    5. <strong>Dioxus</strong>：React 习惯，跨端一套码<br>
+    Rust GUI 仍在快速发展，没有"Qt"那样的统一王者，但每个框架都很优秀。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

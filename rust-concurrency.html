@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust 并发原语深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Rust 并发原语深度解析</h1>
+  <p class="subtitle">Thread / Mutex / Arc / Channel — fearless concurrency</p>
+  <span class="version">Rust 1.80 · std::sync + std::thread</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#thread">Thread</a></li>
+    <li><a href="#send-sync">Send/Sync 详解</a></li>
+    <li><a href="#mutex">Mutex / RwLock</a></li>
+    <li><a href="#arc">Arc 引用计数</a></li>
+    <li><a href="#condvar">Condvar 条件变量</a></li>
+    <li><a href="#channels">通道 (Channels)</a></li>
+    <li><a href="#atomic">原子操作</a></li>
+    <li><a href="#memory-ordering">内存序</a></li>
+    <li><a href="#patterns">并发模式</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Rust 的"无畏并发"（Fearless Concurrency）：<strong>编译期阻止数据竞争</strong>，让多线程编程不再可怕。</p>
+
+  <p>核心保证：</p>
+  <ul>
+    <li>无数据竞争（Send/Sync + 所有权规则）</li>
+    <li>并发 bug 变成编译错误</li>
+    <li>零开销抽象</li>
+    <li>易组合（async/sync 互操作）</li>
+  </ul>
+
+  <p>主要 API：</p>
+  <table>
+    <tr><th>分类</th><th>类型</th><th>用途</th></tr>
+    <tr><td>线程</td><td><code>std::thread</code></td><td>OS 线程</td></tr>
+    <tr><td>共享状态</td><td><code>Mutex&lt;T&gt;</code></td><td>互斥锁</td></tr>
+    <tr><td>共享状态</td><td><code>RwLock&lt;T&gt;</code></td><td>读写锁</td></tr>
+    <tr><td>共享所有权</td><td><code>Arc&lt;T&gt;</code></td><td>原子引用计数</td></tr>
+    <tr><td>同步</td><td><code>Condvar</code></td><td>条件变量</td></tr>
+    <tr><td>同步</td><td><code>Barrier</code>, <code>Once</code></td><td>一次性同步</td></tr>
+    <tr><td>消息传递</td><td><code>mpsc, crossbeam</code></td><td>通道</td></tr>
+    <tr><td>原子</td><td><code>AtomicBool/I32/Usize/Ptr</code></td><td>无锁原子操作</td></tr>
+  </table>
+</section>
+
+<section id="thread" class="toc-link">
+  <h2><span class="num">02</span> Thread</h2>
+
+<pre><code>use std::thread;
+use std::time::Duration;
+
+// 创建线程
+let handle = thread::spawn(|| {
+    for i in 1..10 {
+        println!("hi {} from thread", i);
+        thread::sleep(Duration::from_millis(1));
+    }
+});
+
+for i in 1..5 {
+    println!("hi {} from main", i);
+    thread::sleep(Duration::from_millis(1));
+}
+
+// 等待线程结束
+handle.join().unwrap();
+
+// move 闭包（获取所有权）
+let data = vec![1, 2, 3];
+let handle = thread::spawn(move || {
+    println!("{:?}", data);   // data 被 move 进线程
+});
+// println!("{:?}", data);   // ❌ data 已 move
+handle.join().unwrap();
+
+// 线程属性
+use std::thread::Builder;
+let handle = Builder::new()
+    .name("worker-1".to_string())
+    .stack_size(4 * 1024 * 1024)   // 4 MB
+    .spawn(|| { /* ... */ })
+    .unwrap();
+
+// 当前线程信息
+let name = thread::current().name().unwrap_or("unnamed");
+let id = thread::current().id();
+
+// park / unpark（轻量同步）
+thread::park();   // 阻塞当前线程
+// 另一线程
+thread::current().unpark();   // 唤醒
+
+// thread_local!
+use std::cell::RefCell;
+thread_local! {
+    static COUNTER: RefCell&lt;u32&gt; = RefCell::new(1);
+}
+COUNTER.with(|c| {
+    *c.borrow_mut() = 2;
+});
+</code></pre>
+</section>
+
+<section id="send-sync" class="toc-link">
+  <h2><span class="num">03</span> Send/Sync 详解</h2>
+
+<pre><code>// Send: 类型可以跨线程转移所有权
+//   T: Send 表示 T 可以从一个线程 move 到另一个线程
+
+// Sync: &T 可以跨线程共享
+//   T: Sync 表示多线程可以同时持有 &T
+
+// 关系：T: Sync ⟺ &T: Send
+
+// 自动派生规则：
+//   struct Foo { a: T, b: U }
+//   Foo: Send ⟺ T: Send &amp;&amp; U: Send
+//   Foo: Sync ⟺ T: Sync &amp;&amp; U: Sync
+
+// 不是 Send/Sync 的类型：
+//   Rc&lt;T&gt;          - 不是 Send（非原子）
+//   Cell&lt;T&gt;        - 不是 Sync
+//   RefCell&lt;T&gt;     - 不是 Sync
+//   *const T/*mut T - 默认不 Send/Sync
+
+// 强制实现（unsafe）：
+struct MyPtr(*mut u8);
+unsafe impl Send for MyPtr {}
+unsafe impl Sync for MyPtr {}
+
+// spawn 要求：F: Send + 'static, T: Send + 'static
+let data = Rc::new(5);
+thread::spawn(move || {
+    println!("{}", data);   // ❌ Rc 不是 Send
+});
+
+let data = Arc::new(5);
+thread::spawn(move || {
+    println!("{}", data);   // ✅ Arc 是 Send
+});
+
+// 'static 限制：
+//   不是说真的活一辈子
+//   是说"借用没有非 'static 的引用"
+//   实际：要么拥有数据，要么 borrow 'static
+</code></pre>
+</section>
+
+<section id="mutex" class="toc-link">
+  <h2><span class="num">04</span> Mutex / RwLock</h2>
+
+<pre><code>// Mutex&lt;T&gt; — 互斥锁
+use std::sync::Mutex;
+
+let m = Mutex::new(5);
+
+{
+    // lock() 返回 Result，防止 poison
+    let mut num = m.lock().unwrap();
+    *num = 6;
+}   // 自动 unlock（RAII）
+
+// 与 C/Rust lock 区别：
+//   lock() 返回 MutexGuard，drop 时自动 unlock
+//   不能忘记 unlock
+
+// poison：
+//   线程 panic 时持有 lock → Mutex 中毒
+//   后续 lock 返回 Err
+//   防止数据处于不一致状态
+
+// RwLock&lt;T&gt; — 读写锁
+use std::sync::RwLock;
+let lock = RwLock::new(5);
+
+// 多个 read
+{
+    let r1 = lock.read().unwrap();
+    let r2 = lock.read().unwrap();
+    println!("{}, {}", *r1, *r2);
+}
+
+// 独占 write
+{
+    let mut w = lock.write().unwrap();
+    *w += 1;
+}
+
+// RwLock vs Mutex：
+//   RwLock: 多读单写，读多写少场景
+//   Mutex: 简单，写多场景
+//   实际：现代 Mutex 性能已接近 RwLock
+
+// 公平性：
+//   std Mutex 不保证公平（写饥饿可能）
+//   parking_lot Mutex 支持公平锁
+
+// 第三方实现：
+//   parking_lot - 性能更好，API 类似
+//   spin        - 自旋锁（仅特定场景）
+</code></pre>
+
+  <p>parking_lot 库：</p>
+<pre><code>// [dependencies]
+// parking_lot = "0.12"
+
+use parking_lot::Mutex;
+let m = Mutex::new(5);
+let mut g = m.lock();   // 不返回 Result（无 poison）
+*g = 6;
+
+// 优势：
+//   - 性能更好（自旋 + park 组合）
+//   - API 更简洁
+//   - 无 poison 概念
+//   - 支持 const fn new
+//   - 支持 try_lock_for / lock_for
+
+// 劣势：
+//   - 第三方依赖
+//   - 失去 poison 安全网
+</code></pre>
+</section>
+
+<section id="arc" class="toc-link">
+  <h2><span class="num">05</span> Arc 引用计数</h2>
+
+<pre><code>// Arc&lt;T&gt; — 原子引用计数（多线程）
+use std::sync::Arc;
+
+let data = Arc::new(vec![1, 2, 3]);
+
+// 在主线程：Arc 计数 = 1
+let data_clone = Arc::clone(&amp;data);
+// 计数 = 2
+
+thread::spawn(move || {
+    println!("{:?}", data_clone);   // 计数 = 2 (this thread)
+}).join().unwrap();
+// 线程结束，计数 = 1
+
+// 完整例子：多线程共享可变状态
+let counter = Arc::new(Mutex::new(0));
+let mut handles = vec![];
+
+for _ in 0..10 {
+    let counter = Arc::clone(&amp;counter);
+    let handle = thread::spawn(move || {
+        let mut num = counter.lock().unwrap();
+        *num += 1;
+    });
+    handles.push(handle);
+}
+
+for h in handles {
+    h.join().unwrap();
+}
+
+println!("Result: {}", *counter.lock().unwrap());   // 10
+
+// Arc&lt;Mutex&lt;T&gt;&gt; 是 Rust 中的"共享可变状态"标准模式
+// Arc 提供共享所有权
+// Mutex 提供内部可变性
+
+// Weak&lt;T&gt; — 弱引用
+use std::sync::Weak;
+let strong = Arc::new(5);
+let weak: Weak&lt;_&gt; = Arc::downgrade(&amp;strong);
+
+// weak 不增加强引用计数
+// strong_count + weak_count 都为 0 时才释放
+
+// 防止循环引用：
+struct Node {
+    parent: Weak&lt;RefCell&lt;Node&gt;&gt;,    // 弱引用，避免循环
+    children: Vec&lt;Arc&lt;RefCell&lt;Node&gt;&gt;&gt;,
+}
+
+// upgrade() 返回 Option&lt;Arc&gt;
+if let Some(strong_again) = weak.upgrade() {
+    println!("{}", strong_again);
+}
+</code></pre>
+
+  <p>Arc vs Rc：</p>
+  <table>
+    <tr><th></th><th>Rc</th><th>Arc</th></tr>
+    <tr><td>引用计数</td><td>非原子</td><td>原子（atomic）</td></tr>
+    <tr><td>线程安全</td><td>否</td><td>是</td></tr>
+    <tr><td>性能</td><td>略快</td><td>略慢</td></tr>
+    <tr><td>跨线程</td><td>❌</td><td>✅</td></tr>
+  </table>
+</section>
+
+<section id="condvar" class="toc-link">
+  <h2><span class="num">06</span> Condvar 条件变量</h2>
+
+<pre><code>use std::sync::{Arc, Mutex, Condvar};
+use std::thread;
+
+let pair = Arc::new((Mutex::new(false), Condvar::new()));
+let pair2 = Arc::clone(&amp;pair);
+
+// 等待线程
+thread::spawn(move || {
+    let (lock, cvar) = &amp;*pair2;
+    let mut started = lock.lock().unwrap();
+    while !*started {
+        started = cvar.wait(started).unwrap();
+        // 自动 unlock + sleep，唤醒后重新 lock
+    }
+});
+
+// 通知线程
+thread::spawn(move || {
+    let (lock, cvar) = &amp;*pair;
+    let mut started = lock.lock().unwrap();
+    *started = true;
+    cvar.notify_one();   // 唤醒一个等待者
+    // cvar.notify_all() 唤醒所有
+});
+
+// 用法：
+// 1. wait_while 简化循环
+let guard = cvar.wait_while(lock, |g| !*g).unwrap();
+
+// 2. wait_timeout
+let (guard, timeout) = cvar.wait_timeout(guard, Duration::from_secs(1)).unwrap();
+
+// Barrier — 同步点
+use std::sync::Barrier;
+let barrier = Arc::new(Barrier::new(3));
+let mut handles = vec![];
+for _ in 0..3 {
+    let b = Arc::clone(&amp;barrier);
+    handles.push(thread::spawn(move || {
+        // 做一些工作
+        b.wait();   // 所有线程都到这里才继续
+        // 后续工作
+    }));
+}
+for h in handles { h.join().unwrap(); }
+
+// Once — 一次性初始化
+use std::sync::Once;
+static INIT: Once = Once::new();
+let val = INIT.call_once(|| {
+    // 只执行一次
+    expensive_init()
+});
+</code></pre>
+</section>
+
+<section id="channels" class="toc-link">
+  <h2><span class="num">07</span> 通道 (Channels)</h2>
+
+<pre><code>// "Don't communicate by sharing memory; share memory by communicating"
+
+use std::sync::mpsc;
+use std::thread;
+
+// 创建通道
+let (tx, rx) = mpsc::channel();
+
+// 发送端
+thread::spawn(move || {
+    let vals = vec!["hi", "from", "thread"];
+    for v in vals {
+        tx.send(v).unwrap();
+    }
+});
+
+// 接收端（主线程）
+for received in rx {
+    println!("Got: {}", received);
+}
+
+// 多生产者
+let (tx, rx) = mpsc::channel();
+let tx1 = tx.clone();
+thread::spawn(move || { tx1.send("from 1").unwrap(); });
+thread::spawn(move || { tx.send("from 2").unwrap(); });
+
+// 同步通道（有界，缓冲为 0）
+let (tx, rx) = mpsc::sync_channel(0);
+// send 会阻塞直到 recv
+
+// sync_channel(N) — 容量 N 的有界通道
+let (tx, rx) = mpsc::sync_channel(100);
+
+// rx 是 Iterator
+let (tx, rx) = mpsc::channel();
+thread::spawn(move || {
+    for i in 0..10 { tx.send(i).unwrap(); }
+    // tx drop 时关闭
+});
+let collected: Vec&lt;_&gt; = rx.iter().collect();
+
+// try_recv / recv_timeout
+match rx.try_recv() {
+    Ok(v) => println!("got {}", v),
+    Err(_) => println!("empty"),
+}
+</code></pre>
+
+  <p>crossbeam-channel（更强大的实现）：</p>
+<pre><code>// [dependencies]
+// crossbeam-channel = "0.5"
+
+use crossbeam_channel::{bounded, unbounded, select, tick, after};
+use std::time::Duration;
+
+// 无界
+let (s, r) = unbounded();
+s.send(1).unwrap();
+
+// 有界（同步）
+let (s, r) = bounded::&lt;i32&gt;(10);
+
+// select! 同时等待多个
+let (s1, r1) = unbounded::&lt;i32&gt;();
+let (s2, r2) = unbounded::&amp;'static str&gt;();
+
+select! {
+    recv(r1) -> msg =&gt; println!("r1: {:?}", msg),
+    recv(r2) -> msg =&gt; println!("r2: {:?}", msg),
+    default(Duration::from_secs(1)) =&gt; println!("timeout"),
+}
+
+// 高级：tick / after
+let ticker = tick(Duration::from_secs(1));
+let timeout = after(Duration::from_secs(5));
+
+// flume（另一优秀实现）：
+// [dependencies]
+// flume = "0.11"
+// 性能与 crossbeam 接近，async 支持
+</code></pre>
+</section>
+
+<section id="atomic" class="toc-link">
+  <h2><span class="num">08</span> 原子操作</h2>
+
+<pre><code>use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, AtomicPtr, Ordering};
+
+// 基本原子类型
+let counter = AtomicUsize::new(0);
+counter.fetch_add(1, Ordering::SeqCst);
+println!("{}", counter.load(Ordering::SeqCst));
+
+let flag = AtomicBool::new(false);
+flag.store(true, Ordering::Release);
+let old = flag.swap(false, Ordering::AcqRel);
+
+let ptr = AtomicPtr::new(std::ptr::null_mut());
+
+// 操作：
+//   load / store
+//   swap
+//   compare_exchange / compare_exchange_weak（CAS）
+//   fetch_add / fetch_sub / fetch_and / fetch_or / fetch_xor
+//   fetch_max / fetch_min / fetch_update
+
+// CAS（compare-and-swap）：
+let v = AtomicI32::new(5);
+match v.compare_exchange(5, 10, Ordering::SeqCst, Ordering::SeqCst) {
+    Ok(old) => println!("swapped from {}", old),
+    Err(actual) => println!("failed, was {}", actual),
+}
+
+// fetch_update（loop CAS）
+v.fetch_update(SeqCst, SeqCst, |x| Some(x * 2));
+
+// 无锁栈示例：
+use std::sync::atomic::{AtomicPtr, Ordering};
+struct Node&lt;T&gt; { data: T, next: *mut Node&lt;T&gt; }
+struct Stack&lt;T&gt; { head: AtomicPtr&lt;Node&lt;T&gt;&gt; }
+
+impl&lt;T&gt; Stack&lt;T&gt; {
+    fn push(&amp;self, data: T) {
+        let node = Box::into_raw(Box::new(Node { data, next: std::ptr::null_mut() }));
+        loop {
+            let head = self.head.load(Ordering::Relaxed);
+            unsafe { (*node).next = head; }
+            if self.head.compare_exchange_weak(head, node, Ordering::Release, Ordering::Relaxed).is_ok() {
+                break;
+            }
+        }
+    }
+}
+</code></pre>
+</section>
+
+<section id="memory-ordering" class="toc-link">
+  <h2><span class="num">09</span> 内存序</h2>
+
+<pre><code>// Ordering 控制原子操作周围的内存可见性
+
+// 5 种 Ordering：
+//   Relaxed       - 只保证本操作原子，无其他同步
+//   Release       - 之前的读写对获取同一变量的线程可见
+//   Acquire       - 看到 Release 写入后，所有之前的读写都可见
+//   AcqRel        - Acquire + Release（read-modify-write）
+//   SeqCst        - 全局顺序一致（最强、最贵）
+
+// 用例：
+
+// 1. 简单计数（Relaxed 足够）
+let counter = AtomicUsize::new(0);
+counter.fetch_add(1, Ordering::Relaxed);
+
+// 2. 发布订阅（Release/Acquire 配对）
+let data: AtomicBool = AtomicBool::new(false);
+let ready = AtomicBool::new(false);
+
+// 线程 A
+data.store(true, Ordering::Relaxed);   // 写数据
+ready.store(true, Ordering::Release);  // 发出"准备好了"
+
+// 线程 B
+while !ready.load(Ordering::Acquire) {}
+// 此处能看到 data 是 true
+println!("{}", data.load(Ordering::Relaxed));
+
+// 3. 全局顺序（SeqCst）
+// 罕见需要，多数 Release/Acquire 足够
+
+// 选择指南：
+//   简单计数 → Relaxed
+//   标志位 / flag → Release（写）+ Acquire（读）
+//   复杂场景 → 先用 SeqCst，profile 后降级
+//   几乎不用 SeqCst（90% 用 Relaxed + Acquire/Release）
+</code></pre>
+
+  <div class="callout">
+    <strong>使用建议:</strong><br>
+    如果你<strong>不确定</strong>用哪个 Ordering：<br>
+    用 SeqCst（最强但安全）。<br>
+    99% 场景 Release + Acquire 够用。<br>
+    Relaxed 仅用于不依赖顺序的简单计数。<br>
+    错误的 Ordering 不会编译报错，但可能导致<strong>难以调试的并发 bug</strong>。
+  </div>
+</section>
+
+<section id="patterns" class="toc-link">
+  <h2><span class="num">10</span> 并发模式</h2>
+
+<pre><code>// 1. 共享可变状态（Arc&lt;Mutex&lt;T&gt;&gt;）
+let state = Arc::new(Mutex::new(State::new()));
+let mut handles = vec![];
+for _ in 0..4 {
+    let state = Arc::clone(&amp;state);
+    handles.push(thread::spawn(move || {
+        let mut s = state.lock().unwrap();
+        s.process();
+    }));
+}
+for h in handles { h.join().unwrap(); }
+
+// 2. 消息传递（Channel）
+let (tx, rx) = crossbeam_channel::bounded(100);
+for i in 0..4 {
+    let tx = tx.clone();
+    thread::spawn(move || {
+        tx.send(work(i)).unwrap();
+    });
+}
+drop(tx);   // 关闭所有发送者
+for r in rx { println!("{}", r); }
+
+// 3. 工作窃取（Rayon）
+use rayon::prelude::*;
+let v: Vec&lt;i32&gt; = (1..1000).collect();
+let sum: i32 = v.par_iter().map(|&amp;x| x * 2).sum();
+// 自动并行
+
+// 4. 生产者-消费者
+let (work_tx, work_rx) = bounded(100);
+let (result_tx, result_rx) = bounded(100);
+
+// 生产者
+let producer = thread::spawn(move || {
+    for i in 0..1000 {
+        work_tx.send(i).unwrap();
+    }
+});
+
+// N 个消费者
+let consumers: Vec&lt;_&gt; = (0..4).map(|_| {
+    let work_rx = work_rx.clone();
+    let result_tx = result_tx.clone();
+    thread::spawn(move || {
+        for w in work_rx {
+            result_tx.send(process(w)).unwrap();
+        }
+    })
+}).collect();
+
+// 5. Map-Reduce
+let data = vec![1, 2, 3, 4, 5];
+let chunks: Vec&lt;_&gt; = data.chunks(2).collect();
+let partial: Vec&lt;_&gt; = chunks.into_iter().map(|c| {
+    let c = c.to_vec();
+    thread::spawn(move || c.iter().sum::&lt;i32&gt;())
+}).collect();
+let total: i32 = partial.into_iter().map(|h| h.join().unwrap()).sum();
+
+// 6. 读写模式
+// 多读 + 单写
+let data = Arc::new(RwLock::new(vec![]));
+// 多个读线程
+// 少量写线程
+
+// 7. Scoped threads（Rust 1.63+）
+// 借用局部变量，无需 'static
+let mut data = vec![1, 2, 3];
+std::thread::scope(|s| {
+    s.spawn(|| {
+        println!("{:?}", data);   // ✅ 借用，无需 move
+    });
+    s.spawn(|| {
+        println!("{:?}", data);
+    });
+});   // 作用域结束等待所有线程
+
+// 8. Async + Sync 桥接
+// tokio::task::spawn_blocking
+let result = tokio::task::spawn_blocking(|| {
+    expensive_sync_work()
+}).await?;
+</code></pre>
+
+  <p>测试并发代码：</p>
+<pre><code>// 1. loom：并发模型检查器
+// 模拟所有可能的线程交错
+#[loom::test]
+fn test_concurrent() {
+    loom::model(|| {
+        let m = Arc::new(Mutex::new(0));
+        let m2 = m.clone();
+        let h = loom::thread::spawn(move || {
+            *m2.lock().unwrap() += 1;
+        });
+        *m.lock().unwrap() += 1;
+        h.join().unwrap();
+    });
+}
+
+// 2. shuttle：随机调度测试
+
+// 3. ThreadSanitizer (TSan)
+// RUSTFLAGS="-Z sanitizer=thread" cargo +nightly run
+
+// 4. 普通测试 + 大量并行
+for _ in 0..1000 {
+    let mut hs = vec![];
+    for _ in 0..10 {
+        hs.push(thread::spawn(|| ...));
+    }
+    for h in hs { h.join().unwrap(); }
+}
+</code></pre>
+
+  <div class="callout">
+    <strong>并发总结:</strong><br>
+    1. <strong>Send/Sync</strong>：编译期阻止数据竞争<br>
+    2. <strong>Mutex / RwLock</strong>：共享可变状态（RAII）<br>
+    3. <strong>Arc</strong>：跨线程共享所有权<br>
+    4. <strong>Channels</strong>：消息传递替代共享内存<br>
+    5. <strong>Atomic + Ordering</strong>：无锁编程<br>
+    6. <strong>Scoped threads</strong>：1.63+，简化借用<br>
+    Rust 的并发原语 + 类型系统让"无畏并发"成为可能。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

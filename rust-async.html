@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust Async/Await 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Rust Async/Await 深度解析</h1>
+  <p class="subtitle">Future / Pin / Poll — 零成本异步抽象</p>
+  <span class="version">Rust 1.80 · std::future::Future</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#future">Future trait</a></li>
+    <li><a href="#poll">Poll 与 Waker</a></li>
+    <li><a href="#async-fn">async fn 语法</a></li>
+    <li><a href="#state-machine">状态机生成</a></li>
+    <li><a href="#pin">Pin 与自引用</a></li>
+    <li><a href="#cancel">取消与 drop</a></li>
+    <li><a href="#traits">关键 Async Trait</a></li>
+    <li><a href="#run-without-tokio">无 Tokio 的运行</a></li>
+    <li><a href="#pitfalls">常见陷阱</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Rust async 是<strong>零开销的异步抽象</strong>：编译期生成状态机，无需 GC，无需运行时虚拟机。</p>
+
+  <p>与其他语言对比：</p>
+  <table>
+    <tr><th>语言</th><th>实现</th><th>开销</th></tr>
+    <tr><td>JavaScript</td><td>Event loop + Promise</td><td>GC + 虚拟机</td></tr>
+    <tr><td>Python</td><td>Event loop + coroutine</td><td>解释器开销</td></tr>
+    <tr><td>Go</td><td>Goroutine + channel</td><td>runtime scheduler</td></tr>
+    <tr><td>C#</td><td>Task + async/await</td><td>runtime</td></tr>
+    <tr><td><strong>Rust</strong></td><td><strong>Future + 状态机</strong></td><td><strong>零开销（编译期生成）</strong></td></tr>
+  </table>
+
+  <p>核心组件：</p>
+  <ul>
+    <li><strong>Future trait</strong>：抽象异步计算</li>
+    <li><strong>async/await 语法</strong>：编写异步代码</li>
+    <li><strong>Pin</strong>：保证自引用安全</li>
+    <li><strong>Executor</strong>：运行 Future（Tokio/async-std）</li>
+    <li><strong>Reactor</strong>：处理 IO 事件（epoll/kqueue/IOCP）</li>
+  </ul>
+
+  <p>关键差异：</p>
+  <ul>
+    <li>Rust Future 是 <strong>惰性的</strong>（必须 poll 才会运行）</li>
+    <li>Go goroutine 是<strong>立即调度</strong>的</li>
+    <li>JS Promise 是<strong>立即开始</strong>的</li>
+  </ul>
+</section>
+
+<section id="future" class="toc-link">
+  <h2><span class="num">02</span> Future trait</h2>
+
+<pre><code>// std::future::Future
+// trait 核心定义
+pub trait Future {
+    type Output;
+    fn poll(self: Pin&lt;&mut Self&gt;, cx: &amp;mut Context&lt;'_&gt;) -> Poll&lt;Self::Output&gt;;
+}
+
+pub enum Poll&lt;T&gt; {
+    Ready(T),
+    Pending,
+}
+
+// Future 是个"状态查询"
+// poll 返回 Ready(value) 或 Pending
+// Pending 时会注册 waker
+</code></pre>
+
+  <p>手动实现 Future：</p>
+<pre><code>use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
+
+struct Delay {
+    when: Instant,
+}
+
+impl Future for Delay {
+    type Output = &amp;'static str;
+    
+    fn poll(self: Pin&lt;&mut Self&gt;, cx: &amp;mut Context&lt;'_&gt;) -> Poll&lt;&amp;'static str&gt; {
+        if Instant::now() &gt;= self.when {
+            Poll::Ready("done")
+        } else {
+            // 注册 waker
+            let waker = cx.waker().clone();
+            let when = self.when;
+            std::thread::spawn(move || {
+                let now = Instant::now();
+                if now &lt; when {
+                    std::thread::sleep(when - now);
+                }
+                waker.wake();
+            });
+            Poll::Pending
+        }
+    }
+}
+
+let d = Delay { when: Instant::now() + Duration::from_secs(1) };
+// 不 poll 不会运行！
+// 需要 executor
+</code></pre>
+</section>
+
+<section id="poll" class="toc-link">
+  <h2><span class="num">03</span> Poll 与 Waker</h2>
+
+<pre><code>// Poll 的语义：
+//   Ready(v) - 计算完成，返回 v
+//   Pending  - 还没好，会通过 waker 通知
+
+// Waker 机制：
+//   - 每次 poll 返回 Pending，需要提供 waker
+//   - executor 注册这个 waker
+//   - 当 IO 完成时，调用 waker.wake()
+//   - executor 重新 poll 这个 Future
+
+// 简化的 executor：
+fn block_on&lt;F: Future&lt;Output=T&gt;, T&gt;(mut future: F) -> T {
+    // 创建一个简单的 waker
+    let waker = create_waker();
+    let mut cx = Context::from_waker(&amp;waker);
+    let pin = unsafe { Pin::new_unchecked(&amp;mut future) };
+    
+    loop {
+        match pin.poll(&amp;mut cx) {
+            Poll::Ready(v) => return v,
+            Poll::Pending => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
+// 实际 executor 更复杂：
+//   - 用 mio（epoll/kqueue/IOCP）
+//   - 多线程调度
+//   - 工作窃取
+//   - 任务队列
+
+// Waker 实现：
+//   std::task::Waker 是 Clone + Send + Sync
+//   底层是 RawWaker（虚表 + data）
+//   不同 runtime 实现自己的 waker
+</code></pre>
+</section>
+
+<section id="async-fn" class="toc-link">
+  <h2><span class="num">04</span> async fn 语法</h2>
+
+<pre><code>// async fn：定义异步函数
+async fn fetch_data() -> String {
+    // 函数体返回 impl Future&lt;Output = String&gt;
+    do_async_op().await
+}
+
+// async block
+let f = async {
+    let a = step1().await;
+    let b = step2(a).await;
+    b
+};
+
+// await：暂停当前 Future，等待其他 Future 完成
+async fn example() {
+    let result = some_future().await;
+    println!("{}", result);
+}
+
+// 并发执行多个 Future
+use futures::future::join;
+let (a, b) = join(fut_a(), fut_b()).await;
+
+// select! — 第一个完成
+use futures::future::select;
+let result = select(Box::pin(fut_a()), Box::pin(fut_b())).await;
+
+// tokio::join! / tokio::select!
+tokio::select! {
+    v = fut_a() =&gt; println!("a done: {}", v),
+    _ = tokio::time::sleep(Duration::from_secs(1)) =&gt; {
+        println!("timeout");
+    }
+}
+</code></pre>
+</section>
+
+<section id="state-machine" class="toc-link">
+  <h2><span class="num">05</span> 状态机生成</h2>
+
+<pre><code>// async fn 编译为状态机
+// 
+// 源代码：
+async fn example() -> u32 {
+    let a = step1().await;   // 状态点 1
+    let b = step2(a).await;  // 状态点 2
+    a + b
+}
+
+// 编译器生成（伪代码）：
+enum ExampleFuture {
+    Start,
+    AwaitingStep1(/* step1 future */),
+    AwaitingStep2 { a: u32, /* step2 future */ },
+    Done,
+}
+
+impl Future for ExampleFuture {
+    type Output = u32;
+    
+    fn poll(mut self: Pin&lt;&mut Self&gt;, cx: &amp;mut Context&lt;'_&gt;) -> Poll&lt;u32&gt; {
+        loop {
+            match &amp;mut *self {
+                ExampleFuture::Start =&gt; {
+                    let fut = step1();
+                    *self = ExampleFuture::AwaitingStep1(fut);
+                }
+                ExampleFuture::AwaitingStep1(fut) =&gt; {
+                    let a = ready!(fut.poll(cx));
+                    let fut = step2(a);
+                    *self = ExampleFuture::AwaitingStep2 { a, fut };
+                }
+                ExampleFuture::AwaitingStep2 { a, fut } =&gt; {
+                    let b = ready!(fut.poll(cx));
+                    return Poll::Ready(*a + b);
+                }
+                ExampleFuture::Done =&gt; panic!("poll after completion"),
+            }
+        }
+    }
+}
+
+// 状态保存：
+//   - 每个状态保存了"跨 await 的变量"
+//   - a 跨越了 await，所以保存在状态里
+//   - b 不跨 await，不保存
+
+// 大小：
+//   - Future 大小取决于保存的变量数和大小
+//   - Box::pin 可以装箱（动态大小）
+//   - 用 futures::pin_mut! 可以栈分配
+</code></pre>
+
+  <p>async fn 的大小：</p>
+<pre><code>// 函数越大，状态越多，Future 越大
+async fn small() -> i32 { 1 }
+async fn large(db: &amp;Db) -> Vec&lt;User&gt; {
+    let a = db.get(1).await;
+    let b = db.get(2).await;
+    vec![a, b]
+}
+
+// large 的状态包含 a（User）+ db 引用 + DB future
+// 可能几百字节
+
+// 查看大小：
+println!("{}", std::mem::size_of::&lt;_&gt;());   // 不直接 work
+// 用 cargo expand 看生成的状态机
+
+// 优化：
+//   - Box::pin 把大 future 装箱
+//   - 把不跨 await 的操作移到 await 之前/之后
+</code></pre>
+</section>
+
+<section id="pin" class="toc-link">
+  <h2><span class="num">06</span> Pin 与自引用</h2>
+
+<pre><code>// Pin&lt;P&gt; 保证 P 指向的对象不会被 move
+// 这对自引用 Future 必需
+
+// 自引用问题：
+async fn self_referential() {
+    let s = String::from("hello");   // 栈上
+    let r = &amp;s;                       // r 引用 s
+    some_op(r).await;
+}
+// 编译生成的状态机里，r 引用 s（同一结构体内部）
+// 如果这个状态机被 move → r 仍指向旧地址 → UB！
+
+// Pin&lt;&amp;mut T&gt; 保证不会被 move
+// 函数签名要求 self: Pin&lt;&mut Self&gt;
+
+// Unpin trait：
+//   大多数类型是 Unpin（可以安全 move）
+//   自引用类型 !Unpin（不能 move）
+
+// Pin API：
+use std::pin::Pin;
+use std::marker::PhantomPinned;
+
+struct Pinned {
+    data: String,
+    ptr: *const String,    // 自引用
+    _pin: PhantomPinned,    // 标记 !Unpin
+}
+
+// Pinning：
+// 1. Box::pin（堆）
+let p: Pin&lt;Box&lt;_&gt;&gt; = Box::pin(my_future);
+
+// 2. pin_mut! 宏（栈，安全）
+futures::pin_mut!(my_future);
+my_future.as_mut().poll(&amp;mut cx);
+
+// 3. unsafe Pin::new_unchecked（手动）
+// 仅当你确认不会 move 才用
+
+// 用例：
+//   - Box&lt;dyn Future&lt;Output=T&gt;&gt; 通常需要 Pin
+//   - Vec&lt;Pin&lt;Box&lt;dyn Future&gt;&gt;&gt;
+//   - struct 持有 Future 字段
+</code></pre>
+</section>
+
+<section id="cancel" class="toc-link">
+  <h2><span class="num">07</span> 取消与 drop</h2>
+
+<pre><code>// Rust Future 取消 = drop
+// 简单粗暴但符合所有权语义
+
+// 例子：
+async fn task() {
+    let _g = acquire_resource().await;
+    long_running().await;
+    // _g 在这里 drop（释放资源）
+}
+
+// 如果 task() 在 long_running 时被 drop：
+//   - long_running 被 drop（连锁取消）
+//   - _g 被 drop（释放资源）✅
+//   - 一切正常
+
+// 但是！如果 await 点的资源管理不当：
+async fn bad() {
+    let conn = connect().await;
+    // 如果这里被 drop，conn 已经 drop ✅
+    // 但是 ...
+    update_db(&amp;conn).await;
+}
+
+// 问题：select! 中分支
+tokio::select! {
+    _ = tokio::time::sleep(Duration::from_secs(1)) =&gt; {
+        // 超时，另一个分支被 drop
+    }
+    v = long_op() =&gt; {
+        // 长操作完成
+    }
+}
+// long_op 被 drop 时，所有正在 await 的资源被释放
+
+// 取消的安全性：
+//   - 大多数异步函数是 cancel-safe
+//   - 但是状态可能丢失（如部分读取）
+//   - tokio mpsc::Receiver::recv() 是 cancel-safe
+//   - 文件读 100 字节后取消：状态丢失
+
+// 测试取消安全性：
+//   - 模糊测试
+//   - 模拟在每个 await 点取消
+//   - loom
+
+// 让 Future cancel-safe：
+//   - 状态要么完成要么完全没动
+//   - 不要"部分状态"
+//   - 用 Channel + 内部状态
+
+// 例子：cancel-safe receiver
+async fn listen(rx: Receiver&lt;Event&gt;) {
+    while let Some(event) = rx.recv().await {
+        // 如果在 recv 中被取消，无数据丢失
+        handle(event).await;
+    }
+}
+</code></pre>
+</section>
+
+<section id="traits" class="toc-link">
+  <h2><span class="num">08</span> 关键 Async Trait</h2>
+
+<pre><code>// 1. AsyncRead / AsyncWrite（tokio/async-std）
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+async fn read_all&lt;R: AsyncRead + Unpin&gt;(r: &amp;mut R) -> std::io::Result&lt;Vec&lt;u8&gt;&gt; {
+    let mut buf = Vec::new();
+    r.read_to_end(&amp;mut buf).await?;
+    Ok(buf)
+}
+
+// 2. Stream（异步迭代器）
+use futures::stream::{Stream, StreamExt};
+
+async fn consume&lt;S: Stream&lt;Item = i32&gt; + Unpin&gt;(s: &amp;mut S) {
+    while let Some(v) = s.next().await {
+        println!("{}", v);
+    }
+}
+
+// 3. Sink（异步发送端）
+use futures::sink::SinkExt;
+
+// 4. async trait（1.75+ 原生支持）
+pub trait Repository {
+    async fn get_user(&amp;self, id: u32) -> Option&lt;User&gt;;
+}
+
+struct DbRepository;
+impl Repository for DbRepository {
+    async fn get_user(&amp;self, id: u32) -> Option&lt;User&gt; {
+        // ...
+    }
+}
+
+// 关键：async fn in trait 限制
+//   - 不能直接 dyn Trait（dyn-compatible 问题）
+//   - 需要 #[async_trait] 或 Box&lt;dyn Future&gt;
+//   - 1.75+ 原生，但 dyn 需要 return-position-impl-trait
+
+// 5. AsyncDrop（仍未稳定）
+//   异步析构是 Rust 异步的开放问题
+//   目前用显式 close() async 方法替代
+</code></pre>
+</section>
+
+<section id="run-without-tokio" class="toc-link">
+  <h2><span class="num">09</span> 无 Tokio 的运行</h2>
+
+<pre><code>// Rust 标准库提供 async 抽象，但不提供 executor
+// 必须用第三方 runtime
+
+// 主要 runtime：
+//   tokio     - 最流行
+//   async-std - 标准库风格的异步
+//   smol      - 极简
+//   embassy   - 嵌入式（no_std）
+
+// 最小 executor 示例：
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+fn dummy_waker() -> Waker {
+    fn no_op(_: *const ()) {}
+    fn clone(p: *const ()) -> RawWaker { RawWaker::new(p, &amp;VTABLE) }
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
+    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &amp;VTABLE)) }
+}
+
+fn block_on&lt;F: Future&lt;Output = T&gt;, T&gt;(mut future: F) -> T {
+    let waker = dummy_waker();
+    let mut cx = Context::from_waker(&amp;waker);
+    let pin = unsafe { Pin::new_unchecked(&amp;mut future) };
+    loop {
+        match pin.poll(&amp;mut cx) {
+            Poll::Ready(v) => return v,
+            Poll::Pending =&gt; std::thread::yield_now(),
+        }
+    }
+}
+
+// 这个 executor 是 spin-loop，不实际
+// 真实 executor 需要：
+//   - IO 事件循环（mio）
+//   - Timer
+//   - 多线程调度
+//   - 任务队列
+
+// 用 futures crate 的执行器：
+use futures::executor::block_on;
+let result = block_on(my_async_fn());
+</code></pre>
+</section>
+
+<section id="pitfalls" class="toc-link">
+  <h2><span class="num">10</span> 常见陷阱</h2>
+
+<pre><code>// 1. 忘记 await
+async fn wrong() {
+    tokio::time::sleep(Duration::from_secs(1));   // ❌ 不执行！
+    println!("immediately");
+}
+
+async fn right() {
+    tokio::time::sleep(Duration::from_secs(1)).await;   // ✅
+    println!("after 1s");
+}
+
+// 2. 在同步代码中调用 async
+fn bad() {
+    let result = async_op().await;   // ❌ 同步函数不能 await
+}
+
+// 解决：用 block_on（不推荐在 async 上下文）
+use tokio::runtime::Runtime;
+let rt = Runtime::new().unwrap();
+let result = rt.block_on(async { async_op().await });
+
+// 3. 阻塞 executor
+async fn blocking() {
+    std::thread::sleep(Duration::from_secs(10));   // ❌ 阻塞线程
+}
+
+async fn correct() {
+    tokio::time::sleep(Duration::from_secs(10)).await;   // ✅ 不阻塞
+}
+
+// 真正的阻塞 IO：
+async fn read_file(path: &amp;str) -> String {
+    // 在 blocking 线程池执行
+    tokio::task::spawn_blocking(move || {
+        std::fs::read_to_string(path).unwrap()
+    }).await.unwrap()
+}
+
+// 4. .clone() Future
+let f = async_op();
+f.await;
+// f.await;   // ❌ Future 不是 Clone
+let f = async_op();   // 重新创建
+
+// 5. Future 在 'static 上下文
+tokio::spawn(async {
+    let local = String::from("hi");
+    println!("{}", local).await;   // ❌ local 不是 'static
+});
+// 解决：把 local move 进闭包
+tokio::spawn(async move {
+    let local = String::from("hi");
+    println!("{}", local);
+});
+
+// 6. 跨 .await 的 &amp;mut 引用
+async fn bad() {
+    let mut buf = vec![0u8; 1024];
+    let r = &amp;mut buf;
+    process(r).await;     // 借用 r
+    process(r).await;     // ❌ 第二次借用
+}
+
+// 7. recursion
+async fn recurse(n: u32) {
+    if n &gt; 0 { recurse(n - 1).await; }   // ❌ 无限大小
+}
+// 解决：Box::pin
+fn recurse(n: u32) -> Pin&lt;Box&lt;dyn Future&lt;Output = ()&gt;&gt;&gt; {
+    Box::pin(async move {
+        if n &gt; 0 { recurse(n - 1).await; }
+    })
+}
+
+// 8. tokio::main 在 lib 中
+// 不要在 lib 中用 #[tokio::main]
+// 让用户决定 runtime
+
+// 9. 多 runtime
+// 不要在一个 process 中创建多个 tokio runtime
+// 容易死锁
+
+// 10. send 要求
+// tokio::spawn 要求 Future: Send
+// 包含 !Send 数据（如 Rc）会失败
+</code></pre>
+
+  <div class="callout">
+    <strong>async/await 总结:</strong><br>
+    1. <strong>Future 是惰性的</strong>：必须 poll 才运行<br>
+    2. <strong>状态机生成</strong>：编译器把 async fn 转 enum<br>
+    3. <strong>Pin</strong>：保证自引用 Future 不被 move<br>
+    4. <strong>取消 = drop</strong>：注意 cancel-safety<br>
+    5. <strong>零开销</strong>：无 GC、无虚拟机<br>
+    6. <strong>需要 runtime</strong>：Tokio 是事实标准<br>
+    Rust 的 async 模型让"高效 + 安全"成为可能，比其他语言的实现更优雅。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

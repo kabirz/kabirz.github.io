@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust 所有权系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Rust 所有权系统深度解析</h1>
+  <p class="subtitle">Ownership / Borrow / Lifetime — Rust 内存安全的核心</p>
+  <span class="version">Rust 1.80 · 编译期保证内存安全</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#ownership">所有权规则</a></li>
+    <li><a href="#move">Move 语义</a></li>
+    <li><a href="#borrow">借用与引用</a></li>
+    <li><a href="#lifetime">生命周期</a></li>
+    <li><a href="#elision">生命周期省略</a></li>
+    <li><a href="#variance">协变与逆变</a></li>
+    <li><a href="#interior">内部可变性</a></li>
+    <li><a href="#smart">智能指针</a></li>
+    <li><a href="#codegen">底层代码生成</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>所有权 (Ownership) 是 Rust 的核心机制，通过<strong>编译期检查</strong>保证内存安全，无需 GC。这是 Rust 区别于其他语言的本质。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">C/C++ 方式</div>
+      <ul>
+        <li>手动 new/delete</li>
+        <li>双重释放、悬挂指针</li>
+        <li>内存泄漏</li>
+        <li>use-after-free</li>
+        <li>靠开发者纪律</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">GC 语言（Java/Go）</div>
+      <ul>
+        <li>运行时跟踪引用</li>
+        <li>stop-the-world 暂停</li>
+        <li>不可预测延迟</li>
+        <li>资源占用高</li>
+        <li>难以做实时系统</li>
+      </ul>
+    </div>
+  </div>
+
+  <p>Rust 的<strong>第三条路</strong>：</p>
+  <ul>
+    <li>编译期静态分析所有权转移</li>
+    <li>无运行时开销</li>
+    <li>无 GC</li>
+    <li>确定性析构（RAII）</li>
+    <li>并发安全（Send/Sync）</li>
+  </ul>
+
+  <p>三大核心概念：</p>
+  <table>
+    <tr><th>概念</th><th>含义</th><th>编译期检查</th></tr>
+    <tr><td><strong>Ownership</strong></td><td>每个值有唯一所有者</td><td>Move 时旧引用失效</td></tr>
+    <tr><td><strong>Borrowing</strong></td><td>临时借用引用</td><td>多个不可变 OR 一个可变</td></tr>
+    <tr><td><strong>Lifetime</strong></td><td>引用的有效范围</td><td>不能悬垂</td></tr>
+  </table>
+</section>
+
+<section id="ownership" class="toc-link">
+  <h2><span class="num">02</span> 所有权规则</h2>
+
+  <p>Rust 所有权三大规则：</p>
+<pre><code>// 规则 1: 每个值有所有者（变量）
+let s = String::from("hello");
+// s 拥有 String 的内存
+
+// 规则 2: 同一时刻只有一个所有者
+let s1 = s;          // s1 接管所有权，s 失效
+println!("{}", s);   // ❌ 编译错误：value borrowed after move
+
+// 规则 3: 所有者离开作用域时自动 drop
+{
+    let s = String::from("hello");
+}   // s 在这里 drop，内存释放
+
+// RAII 模式（资源获取即初始化）
+fn example() {
+    let f = File::open("a.txt")?;   // 析构时关闭
+    let mutex = Mutex::new(0);
+    let _g = mutex.lock().unwrap();  // 离开作用域自动解锁
+}
+</code></pre>
+
+  <p>Copy 与 Drop 类型：</p>
+<pre><code>// Copy 类型（栈上复制，不需要所有权转移）：
+// - 所有整数/浮点（i32, f64）
+// - bool, char
+// - 不含堆数据的 tuple
+let a = 5;
+let b = a;     // a 被复制（i32 是 Copy）
+println!("{}", a);  // ✅ 仍可用
+
+// 自定义 Copy：
+#[derive(Clone, Copy)]
+struct Point { x: i32, y: i32 }
+// 必须：所有字段都是 Copy
+// 不能：实现了 Drop
+
+// Move 类型（堆数据）：
+// - String, Vec, HashMap, Box
+// - 自定义 struct 默认 Move
+let s1 = String::from("a");
+let s2 = s1;   // s1 move 到 s2
+
+// 想复制：必须显式 clone
+let s3 = s2.clone();
+</code></pre>
+</section>
+
+<section id="move" class="toc-link">
+  <h2><span class="num">03</span> Move 语义</h2>
+
+  <p>Move 是<strong>所有权转移</strong>，不是内存复制：</p>
+
+<pre><code>// 函数参数：move 进函数
+fn take(s: String) {
+    println!("{}", s);
+}   // s 在这里 drop
+
+let s = String::from("hello");
+take(s);
+println!("{}", s);   // ❌ 已被 move
+
+// 想保留：传引用或 clone
+fn borrow(s: &amp;String) { println!("{}", s); }
+fn with_clone(s: String) { ... }
+
+let s = String::from("hello");
+borrow(&amp;s);          // ✅ 借用，s 仍可用
+with_clone(s.clone()); // ✅ 克隆
+
+// 返回值的所有权：
+fn make() -> String {
+    String::from("made")
+}
+let s = make();   // 所有权从函数 move 到调用方
+
+// 函数返回引用（必须标注 lifetime）：
+fn first_word(s: &amp;str) -> &amp;str {
+    &amp;s[0..5]
+}
+</code></pre>
+
+  <p>Move 在集合中的影响：</p>
+<pre><code>// Vec 内部是堆指针 + 长度 + 容量
+let v1 = vec![1, 2, 3];
+let v2 = v1;   // v1 整体 move
+// v1 完全失效（不只是数据，连指针都失效）
+
+// 引用 (&) 是 Copy（不拥有数据）
+let v = vec![1, 2, 3];
+let r1 = &amp;v;
+let r2 = &amp;v;   // r1 仍然有效
+
+// 部分移动：
+let p = (String::from("a"), 5);
+let s = p.0;   // p.0 被 move
+// println!("{:?}", p);  // ❌ p 部分被 move
+println!("{}", p.1);  // ✅ 未移动的部分仍可用
+</code></pre>
+
+  <p>Move 在闭包中：</p>
+<pre><code>let s = String::from("hello");
+let f = move || {           // move 关键字强制捕获所有权
+    println!("{}", s);
+};
+// s 被 move 进闭包
+// println!("{}", s);  // ❌
+
+// 不带 move 的闭包：按需借用
+let s = String::from("hello");
+let f = || println!("{}", s);   // 借用 s
+println!("{}", s);              // ✅ 仍可用
+f();
+</code></pre>
+</section>
+
+<section id="borrow" class="toc-link">
+  <h2><span class="num">04</span> 借用与引用</h2>
+
+  <p>借用 (Borrow) 通过引用 (&amp;) 临时访问数据，不获取所有权：</p>
+
+<pre><code>// 不可变引用 &T
+fn length(s: &amp;String) -> usize { s.len() }
+let s = String::from("hello");
+let n = length(&amp;s);   // 借用
+println!("{}", s);     // ✅ 仍可用
+
+// 可变引用 &mut T
+fn push(s: &amp;mut String) { s.push_str(" world"); }
+let mut s = String::from("hello");
+push(&amp;mut s);
+println!("{}", s);  // hello world
+
+// 引用规则：
+// 1. 任意数量的不可变引用
+// 2. 或一个可变引用
+// 3. 不能同时有
+
+let mut s = String::from("hello");
+let r1 = &amp;s;
+let r2 = &amp;s;        // ✅ 多个不可变
+let r3 = &amp;mut s;    // ❌ 不能同时
+
+let mut s = String::from("hello");
+{
+    let r1 = &amp;mut s;
+}   // r1 离开作用域
+let r2 = &amp;mut s;    // ✅ r1 已释放
+
+// NLL (Non-Lexical Lifetimes)：
+let mut s = String::from("hello");
+let r1 = &amp;s;
+let r2 = &amp;s;
+println!("{} {}", r1, r2);   // r1, r2 最后一次使用
+let r3 = &amp;mut s;             // ✅ NLL 知道 r1/r2 不再使用
+</code></pre>
+
+  <p>解引用与 Deref：</p>
+<pre><code>// * 操作符：解引用
+let x = 5;
+let r = &amp;x;
+assert_eq!(*r, 5);
+
+// Deref trait：自定义解引用（智能指针）
+use std::ops::Deref;
+
+struct MyBox&lt;T&gt;(T);
+impl&lt;T&gt; Deref for MyBox&lt;T&gt; {
+    type Target = T;
+    fn deref(&amp;self) -> &amp;Self::Target { &amp;self.0 }
+}
+
+let x = MyBox(String::from("hi"));
+// 自动 deref
+fn print(s: &amp;str) { println!("{}", s); }
+print(&amp;x);   // MyBox → String → str（多层 deref coercions）
+
+// DerefMut：可变解引用
+impl&lt;T&gt; DerefMut for MyBox&lt;T&gt; {
+    fn deref_mut(&amp;mut self) -> &amp;mut Self::Target { &amp;mut self.0 }
+}
+</code></pre>
+</section>
+
+<section id="lifetime" class="toc-link">
+  <h2><span class="num">05</span> 生命周期</h2>
+
+  <p>生命周期 (Lifetime) 是<strong>编译期对引用有效范围的标注</strong>，防止悬垂引用：</p>
+
+<pre><code>// 悬垂引用示例：
+{
+    let r;
+    {
+        let x = 5;
+        r = &amp;x;       // ❌ 编译错误：x 生命周期短于 r
+    }
+    println!("{}", r);
+}
+
+// 函数返回引用（必须标注）：
+// 这个引用的存活时间必须 ≥ 输入引用
+fn longest&lt;'a&gt;(x: &amp;'a str, y: &amp;'a str) -> &amp;'a str {
+    if x.len() > y.len() { x } else { y }
+}
+// 'a 是生命周期参数
+// 含义：返回引用的存活时间 = x 和 y 中较短的那个
+
+// 结构体中的引用：
+struct Excerpt&lt;'a&gt; {
+    part: &amp;'a str,
+}
+let novel = String::from("call me Ishmael...");
+let first_sentence;
+{
+    let words = novel.as_str();
+    let ex = Excerpt { part: &amp;words[0..4] };
+    first_sentence = ex.part;
+}   // ❌ ex 的 part 需要比 words 活得久
+
+// 'static 生命周期：
+// 存活整个程序期间
+let s: &amp;'static str = "hello";   // 字符串字面量是 'static
+fn static_fn() -> &amp;'static str { "hello" }
+</code></pre>
+
+  <p>生命周期可视化：</p>
+<pre><code>// 函数签名：
+// fn foo&lt;'a, 'b&gt;(x: &amp;'a i32, y: &amp;'b i32) -> &amp;'a i32
+//     │          │              │              │
+//     │          │              │              └─ 返回值寿命 &gt;= a
+//     │          │              └─ 第二个参数寿命 b（独立）
+//     │          └─ 第一个参数寿命 a
+//     └─ 生命周期参数声明
+
+// 函数体中编译器追踪：
+//   - 每个引用的"出生点"和"最后使用点"
+//   - 确保返回的引用在所有路径上都 valid
+//   - 失败 → E0597 / E0106 等编译错误
+
+// 借用检查器（Borrow Checker）：
+//   compiler/rustc_borrowck
+//   基于 MIR (Mid-level IR) 做流敏感分析
+</code></pre>
+</section>
+
+<section id="elision" class="toc-link">
+  <h2><span class="num">06</span> 生命周期省略</h2>
+
+  <p>为减少样板代码，编译器在三种规则下自动推导生命周期：</p>
+
+<pre><code>// 三条省略规则：
+
+// 规则 1: 每个引用参数自动获得独立 lifetime
+fn foo(x: &amp;i32)  ⟶  fn foo&lt;'a&gt;(x: &amp;'a i32)
+fn foo(x: &amp;i32, y: &amp;i32)  ⟶  fn foo&lt;'a, 'b&gt;(x: &amp;'a i32, y: &amp;'b i32)
+
+// 规则 2: 如果只有一个输入 lifetime，赋给所有输出
+fn foo(x: &amp;i32) -> &amp;i32  ⟶  fn foo&lt;'a&gt;(x: &amp;'a i32) -> &amp;'a i32
+
+// 规则 3: 如果有 &self 或 &mut self，self 的 lifetime 赋给所有输出
+fn foo(&amp;self, x: &amp;i32) -> &amp;i32
+   ⟶  fn foo&lt;'a, 'b&gt;(&amp;'a self, x: &amp;'b i32) -> &amp;'a i32
+
+// 不满足任何规则 → 必须显式标注
+fn longest(x: &amp;str, y: &amp;str) -> &amp;str  // ❌ 编译错误
+fn longest&lt;'a&gt;(x: &amp;'a str, y: &amp;'a str) -> &amp;'a str  // ✅
+
+// 例子：
+fn first_word(s: &amp;str) -> &amp;str { ... }   // 应用规则 1+2
+struct Parser { ... }
+impl Parser {
+    fn parse(&amp;self, input: &amp;str) -> &amp;str { ... }  // 规则 1+3
+}
+</code></pre>
+
+  <p>Lifetime in HRTB（Higher-Ranked Trait Bounds）：</p>
+<pre><code>// for&lt;'a&gt; 表示"对所有 lifetime 'a"
+// 常见于闭包类型：
+
+// 等价：
+fn f(x: &amp;i32) -> &amp;i32 { x }
+let _: fn(_) -&gt; _ = f;  // 类型推断
+
+// 显式 HRTB：
+fn apply&lt;F&gt;(f: F) where F: for&lt;'a&gt; Fn(&amp;'a str) -> &amp;'a str {}
+
+// 闭包类型自动有 HRTB
+let f = |x: &amp;str| x;
+apply(f);
+</code></pre>
+</section>
+
+<section id="variance" class="toc-link">
+  <h2><span class="num">07</span> 协变与逆变</h2>
+
+  <p>Variance 决定生命周期之间的<strong>子类型关系</strong>：</p>
+
+<pre><code>// 'static: 'a (static 是任何 'a 的子类型)
+// 即：'static 可以替代任何 'a
+
+// 三种 Variance：
+// - 协变 (covariant):     &'a T  -- 'a 长 → 可替代 'a 短
+// - 逆变 (contravariant): fn(T)  -- 参数相反
+// - 不变 (invariant):     &'a mut T -- 必须严格匹配
+
+// 协变（最常见）：
+fn covariant() {
+    let s: &'static str = "hi";
+    let r: &'a str = s;   // ✅ 'static 可替代 'a
+}
+
+// 逆变（函数参数）：
+fn contravariant(f1: fn(&'static str)) {
+    let f2: fn(&'a str) = ...;
+    f1 = f2;   // ✅ 接收更短 lifetime 的函数可替代
+}
+
+// 不变（&mut T）：
+fn invariant() {
+    let mut x: &'static str = "hi";
+    let y: &'a str = ...;
+    x = y;   // ❌ &mut 严格匹配，不能放宽
+}
+
+// Variance 表：
+//   &'a T          covariant in 'a and T
+//   &'a mut T      covariant in 'a, invariant in T
+//   Box&lt;T&gt;         covariant in T
+//   Vec&lt;T&gt;          covariant in T
+//   UnsafeCell&lt;T&gt;   invariant in T
+//   fn(T) -> R     contravariant in T, covariant in R
+//   *mut T         invariant
+</code></pre>
+</section>
+
+<section id="interior" class="toc-link">
+  <h2><span class="num">08</span> 内部可变性</h2>
+
+  <p>正常规则：不可变引用 → 不能改数据。<strong>内部可变性</strong>模式打破此规则，通过运行时检查实现安全修改：</p>
+
+<pre><code>// RefCell&lt;T&gt; — 单线程内部可变性
+use std::cell::RefCell;
+
+let cell = RefCell::new(5);
+{
+    let mut b = cell.borrow_mut();   // 运行时借用
+    *b += 1;
+}   // borrow 释放
+{
+    let b1 = cell.borrow();
+    let b2 = cell.borrow_mut();  // ❌ panic! 违反借用规则
+}
+
+// Cell&lt;T&gt; — Copy 类型的内部可变性
+use std::cell::Cell;
+let c = Cell::new(5);
+let v = c.get();
+c.set(10);
+
+// Mutex&lt;T&gt; — 多线程内部可变性
+use std::sync::Mutex;
+let m = Mutex::new(5);
+{
+    let mut g = m.lock().unwrap();
+    *g += 1;
+}
+
+// RwLock&lt;T&gt; — 读多写少
+use std::sync::RwLock;
+let lock = RwLock::new(5);
+{
+    let r1 = lock.read().unwrap();
+    let r2 = lock.read().unwrap();   // ✅ 多读
+}
+{
+    let w = lock.write().unwrap();
+    // 独占写
+}
+</code></pre>
+
+  <p>选择指南：</p>
+  <table>
+    <tr><th>类型</th><th>何时用</th><th>检查</th></tr>
+    <tr><td><code>&amp;T</code> / <code>&amp;mut T</code></td><td>默认</td><td>编译期</td></tr>
+    <tr><td><code>Cell&lt;T&gt;</code></td><td>Copy 类型</td><td>无（编译期保证）</td></tr>
+    <tr><td><code>RefCell&lt;T&gt;</code></td><td>单线程复杂借用</td><td>运行时</td></tr>
+    <tr><td><code>Mutex&lt;T&gt;</code></td><td>多线程</td><td>运行时（阻塞）</td></tr>
+    <tr><td><code>RwLock&lt;T&gt;</code></td><td>多线程读多</td><td>运行时（阻塞）</td></tr>
+    <tr><td><code>AtomicXxx</code></td><td>多线程简单值</td><td>硬件原子</td></tr>
+  </table>
+</section>
+
+<section id="smart" class="toc-link">
+  <h2><span class="num">09</span> 智能指针</h2>
+
+  <p>Rust 智能指针通过 Deref + Drop 实现 RAII 资源管理：</p>
+
+<pre><code>// Box&lt;T&gt; — 堆分配
+let b = Box::new(5);   // 在堆上分配
+// 适合：
+//   - 递归类型（链表、树）
+//   - 大数据避免栈拷贝
+//   - trait 对象（Box&lt;dyn Trait&gt;）
+
+// Rc&lt;T&gt; — 单线程引用计数
+use std::rc::Rc;
+let r1 = Rc::new(String::from("hi"));
+let r2 = Rc::clone(&amp;r1);   // 引用计数 +1
+let r3 = Rc::clone(&amp;r1);   // 引用计数 = 3
+// 最后一个 drop 时释放
+
+// Arc&lt;T&gt; — 原子引用计数（多线程）
+use std::sync::Arc;
+let a = Arc::new(vec![1, 2, 3]);
+let a2 = Arc::clone(&amp;a);
+std::thread::spawn(move || {
+    println!("{:?}", a2);
+});
+
+// RefCell&lt;T&gt; — 单线程内部可变性
+// 配合 Rc 形成可变共享：
+use std::rc::{Rc, Weak};
+use std::cell::RefCell;
+let shared = Rc::new(RefCell::new(0));
+let s1 = Rc::clone(&amp;shared);
+let s2 = Rc::clone(&amp;shared);
+std::thread::spawn(move || {
+    *s1.borrow_mut() = 5;   // ❌ Rc 跨线程！
+});
+
+// Arc&lt;Mutex&lt;T&gt;&gt; — 多线程共享可变
+let shared = Arc::new(Mutex::new(0));
+let s = Arc::clone(&amp;shared);
+std::thread::spawn(move || {
+    *s.lock().unwrap() = 5;
+});
+
+// Weak&lt;T&gt; — 弱引用（避免循环）
+use std::rc::{Rc, Weak};
+let strong = Rc::new(5);
+let weak: Weak&lt;_&gt; = Rc::downgrade(&amp;strong);
+if let Some(v) = weak.upgrade() {
+    println!("{}", v);
+}
+
+// Cow&lt;T&gt; — 写时复制
+use std::borrow::Cow;
+fn process(input: &amp;str) -> Cow&lt;str&gt; {
+    if input.contains("bad") {
+        Cow::Owned(input.replace("bad", "good"))
+    } else {
+        Cow::Borrowed(input)
+    }
+}
+</code></pre>
+</section>
+
+<section id="codegen" class="toc-link">
+  <h2><span class="num">10</span> 底层代码生成</h2>
+
+  <p>所有权在底层生成什么代码？</p>
+
+<pre><code>// 编译期 Rust：
+//   源代码 → HIR → MIR → LLVM IR → 机器码
+
+// MIR (Mid-level IR) 是 borrow checker 工作的 IR
+// 例子：
+fn example() {
+    let s = String::from("a");
+    let r = &amp;s;
+    println!("{}", r);
+}
+
+// MIR（简化）：
+//   let mut _0: ();
+//   let _1: String;
+//   let _2: &amp;String;
+//   
+//   bb0: {
+//       _1 = String::const("a");
+//       _2 = &amp;_1;
+//       ... (println 调用)
+//       drop(_1);          // 编译器插入 drop
+//       return;
+//   }
+
+// 借用检查在 MIR 上做：
+//   构建每个变量的"lifetime region"
+//   流敏感地分析每个借用
+//   确保引用不会比数据活得长
+
+// LLVM IR：
+//   - 引用变成普通指针
+//   - Drop 变成函数调用
+//   - 无 GC、无 runtime 检查
+//   - 接近手写 C++ 性能
+
+// 例：MIR → LLVM IR（简化）
+//   %s = alloca %String
+//   call void @String_new(%String* %s)
+//   %r = alloca %String*
+//   store %String* %s, %String** %r
+//   ; println!
+//   call void @drop_in_place(%String* %s)
+//   ret void
+
+// 零成本抽象验证：
+//   1. fn length(s: &amp;String) → 与 C 函数指针等价
+//   2. Vec&lt;T&gt; 操作 → C 数组操作
+//   3. Iterator chain → 编译期展开为循环
+//   4. Box → 等价 malloc/free
+</code></pre>
+
+  <p>借用检查器演进：</p>
+<pre><code>// 2015 (1.0): 词法 lifetime（按作用域）
+//   fn example() {
+//       let mut s = String::from("a");
+//       let r = &amp;s;
+//       // r 在作用域结束才失效
+//       s.push_str("b");  // ❌
+//   }
+
+// 2018 (NLL): 非词法 lifetime
+//   按使用点算 lifetime
+//   let mut s = String::from("a");
+//   let r = &amp;s;
+//   println!("{}", r);  // 最后使用 r
+//   s.push_str("b");    // ✅ NLL 允许
+
+// 2024+ (Polonius): 新一代 borrow checker
+//   更智能，支持更多模式
+//   处理之前需要 unsafe 的场景
+</code></pre>
+
+  <div class="callout">
+    <strong>所有权系统总结:</strong><br>
+    1. <strong>无运行时开销</strong>：所有检查在编译期完成<br>
+    2. <strong>无数据竞争</strong>：所有权规则 + Send/Sync 保证<br>
+    3. <strong>确定性析构</strong>：RAII 自动管理资源<br>
+    4. <strong>无内存泄漏</strong>：循环引用需显式 Weak 处理<br>
+    5. <strong>并发安全</strong>：编译期阻止 data race<br>
+    代价：学习曲线陡，但回报是<strong>编程级安全保证</strong>。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

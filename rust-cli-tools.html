@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust CLI 工具链深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Rust CLI 工具链深度解析</h1>
+  <p class="subtitle">clap / anyhow / indicatif / dialoguer — 现代 CLI 开发</p>
+  <span class="version">2024 · clap 4.x · anyhow 1.x</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#clap">clap 命令行解析</a></li>
+    <li><a href="#errors">错误处理</a></li>
+    <li><a href="#colors">彩色输出</a></li>
+    <li><a href="#progress">进度条</a></li>
+    <li><a href="#interactive">交互式输入</a></li>
+    <li><a href="#logging">日志</a></li>
+    <li><a href="#config">配置管理</a></li>
+    <li><a href="#templates">模板与扩展</a></li>
+    <li><a href="#examples">知名 CLI 案例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Rust 是<strong>编写 CLI 工具的理想语言</strong>：单二进制、零依赖、跨平台、极快。Rust CLI 生态比 Go 还丰富。</p>
+
+  <p>核心库组合：</p>
+  <table>
+    <tr><th>用途</th><th>首选库</th><th>替代</th></tr>
+    <tr><td>参数解析</td><td><code>clap</code></td><td>argh, pico-args</td></tr>
+    <tr><td>错误处理</td><td><code>anyhow</code></td><td>color-eyre, eyre</td></tr>
+    <tr><td>日志</td><td><code>tracing</code> 或 <code>env_logger</code></td><td>slog</td></tr>
+    <tr><td>颜色</td><td><code>colored</code>, <code>owo-colors</code></td><td>ansi_term</td></tr>
+    <tr><td>进度条</td><td><code>indicatif</code></td><td>progress-streams</td></tr>
+    <tr><td>交互</td><td><code>dialoguer</code>, <code>inquire</code></td><td>—</td></tr>
+    <tr><td>表格</td><td><code>comfy-table</code>, <code>tabled</code></td><td>prettytable-rs</td></tr>
+    <tr><td>TUI</td><td><code>ratatui</code></td><td>tui-rs (旧)</td></tr>
+    <tr><td>配置</td><td><code>config-rs</code></td><td>confy</td></tr>
+    <tr><td>目录</td><td><code>dirs</code></td><td>directories</td></tr>
+  </table>
+
+  <p>典型 Cargo.toml：</p>
+<pre><code>[dependencies]
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+colored = "2"
+indicatif = "0.17"
+dialoguer = "0.11"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+</code></pre>
+</section>
+
+<section id="clap" class="toc-link">
+  <h2><span class="num">02</span> clap 命令行解析</h2>
+
+<pre><code>// clap 是事实标准的 CLI 库
+// features = ["derive"] 提供 derive 宏
+
+use clap::{Parser, Subcommand};
+
+#[derive(Parser)]
+#[command(name = "myapp")]
+#[command(version = "1.0")]
+#[command(about = "Does awesome things", long_about = None)]
+struct Cli {
+    /// Configuration file
+    #[arg(short, long, default_value = "config.toml")]
+    config: String,
+    
+    /// Verbose mode (-v, -vv, -vvv)
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+    
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Add a new item
+    Add {
+        /// Item name
+        name: String,
+        
+        /// Tags
+        #[arg(short, long, value_name = "TAG")]
+        tags: Option&lt;Vec&lt;String&gt;&gt;,
+    },
+    
+    /// List items
+    List {
+        /// Filter by tag
+        #[arg(short, long)]
+        tag: Option&lt;String&gt;,
+        
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    
+    /// Remove an item
+    Remove {
+        id: u32,
+    },
+}
+
+fn main() -> anyhow::Result&lt;()&gt; {
+    let cli = Cli::parse();
+    
+    match &amp;cli.command {
+        Commands::Add { name, tags } => {
+            println!("Adding {}", name);
+            if let Some(tags) = tags {
+                println!("Tags: {:?}", tags);
+            }
+        }
+        Commands::List { tag, json } => {
+            // ...
+        }
+        Commands::Remove { id } => {
+            println!("Removing {}", id);
+        }
+    }
+    
+    Ok(())
+}
+
+// 命令行：
+// myapp add "Task" --tags work,urgent
+// myapp list --tag work --json
+// myapp remove 5
+// myapp --help
+</code></pre>
+
+  <p>常见用法：</p>
+<pre><code>// 1. 位置参数
+#[arg(num_args = 1..)]   // 至少一个
+files: Vec&lt;PathBuf&gt;,
+
+// 2. 可选
+name: Option&lt;String&gt;,
+
+// 3. 默认值
+#[arg(default_value = "0")]
+count: u32,
+
+// 4. 短/长选项
+#[arg(short = 'n', long = "name")]
+name: String,
+
+// 5. 多值
+#[arg(short, long, value_name = "FILE")]
+files: Vec&lt;PathBuf&gt;,
+
+// 6. Flag (bool)
+#[arg(short, long)]
+dry_run: bool,
+
+// 7. 数值范围
+#[arg(value_parser = clap::value_parser!(u16).range(1..))]
+port: u16,
+
+// 8. PathBuf
+file: PathBuf,
+
+// 9. 自定义类型解析
+#[arg(value_parser = parse_color)]
+color: Color,
+fn parse_color(s: &amp;str) -> Result&lt;Color, String&gt; {
+    Color::from_str(s).map_err(|e| e.to_string())
+}
+
+// 10. 子命令的子命令
+#[command(subcommand)]
+command: Commands,
+
+// 嵌套：
+// enum Commands {
+//     Db {
+//         #[command(subcommand)]
+//         db_cmd: DbCommands,
+//     },
+// }
+</code></pre>
+</section>
+
+<section id="errors" class="toc-link">
+  <h2><span class="num">03</span> 错误处理</h2>
+
+<pre><code>// anyhow：错误"包"，简单应用首选
+use anyhow::{Context, Result};
+
+fn main() -> Result&lt;()&gt; {
+    let config = read_config().context("failed to read config")?;
+    run(&amp;config)?;
+    Ok(())
+}
+
+fn read_config() -> Result&lt;Config&gt; {
+    let s = std::fs::read_to_string("config.toml")
+        .context("config file not found")?;
+    let config = toml::from_str(&amp;s)
+        .context("invalid config format")?;
+    Ok(config)
+}
+
+// 输出：
+// Error: failed to read config
+// 
+// Caused by:
+//     config file not found
+// 
+// Caused by:
+//     No such file or directory (os error 2)
+
+// thiserror：库的 Error derive
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum AppError {
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    
+    #[error("config error: {message}")]
+    Config { message: String },
+    
+    #[error("invalid input: {input}")]
+    InvalidInput { input: String },
+}
+
+// color-eyre：彩色错误报告
+// [dependencies]
+// color-eyre = "0.6"
+
+use color_eyre::Report;
+
+fn main() -> Result&lt;(), Report&gt; {
+    color_eyre::install()?;
+    
+    // 配置
+    color_eyre::config::HookBuilder::default()
+        .display_env_section(false)
+        .install()?;
+    
+    run()?;
+    Ok(())
+}
+</code></pre>
+</section>
+
+<section id="colors" class="toc-link">
+  <h2><span class="num">04</span> 彩色输出</h2>
+
+<pre><code>// colored - 简单
+use colored::*;
+
+println!("{}", "hello".red().bold());
+println!("{}", "warning".yellow());
+println!("{}", "error".red().on_bright_black());
+println!("{}", "success".green());
+
+// 检测 TTY（自动关闭非终端）
+// colored 自动检测
+// 或手动：
+if !atty::is(atty::Stream::Stdout) {
+    colored::control::set_override(false);
+}
+
+// owo-colors - 更快
+use owo_colors::OwoColorize;
+println!("{}", "hello".red().bold());
+
+// 终端光标 / 清屏
+use crossterm::{execute, terminal, cursor};
+execute!(std::io::stdout(), terminal::Clear(terminal::ClearType::All))?;
+execute!(std::io::stdout(), cursor::MoveTo(0, 0))?;
+
+// 自定义 ANSI：
+print!("\x1b[31m{}\x1b[0m", "red");
+// \x1b[31m = 红色开始
+// \x1b[0m  = 重置
+</code></pre>
+</section>
+
+<section id="progress" class="toc-link">
+  <h2><span class="num">05</span> 进度条</h2>
+
+<pre><code>// indicatif - 进度条
+use indicatif::{ProgressBar, ProgressStyle};
+
+let pb = ProgressBar::new(1000);
+for _ in 0..1000 {
+    pb.inc(1);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+}
+pb.finish_with_message("done");
+
+// 自定义样式：
+let pb = ProgressBar::new(1000);
+pb.set_style(ProgressStyle::with_template(
+    "{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} ({eta})"
+).unwrap()
+.progress_chars("#>-"));
+
+// 多进度条（MultiProgress）：
+use indicatif::MultiProgress;
+let m = MultiProgress::new();
+let pb1 = m.add(ProgressBar::new(100));
+let pb2 = m.add(ProgressBar::new(200));
+
+// 在多线程中：
+std::thread::scope(|s| {
+    s.spawn(|| for _ in 0..100 { pb1.inc(1); });
+    s.spawn(|| for _ in 0..200 { pb2.inc(1); });
+});
+
+// Spinner：
+let spinner = ProgressBar::new_spinner();
+spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+spinner.set_message("Loading...");
+// ...
+spinner.finish_with_message("Done");
+
+// 配合 Iterator：
+let v: Vec&lt;_&gt; = (0..1000).progress_count(1000).collect();
+
+// 配合 Read：
+let reader = std::fs::File::open("big")?;
+let pb = ProgressBar::new(file_size);
+let mut reader = pb.wrap_read(reader);
+let mut buf = Vec::new();
+reader.read_to_end(&amp;mut buf)?;
+</code></pre>
+</section>
+
+<section id="interactive" class="toc-link">
+  <h2><span class="num">06</span> 交互式输入</h2>
+
+<pre><code>// dialoguer - 经典
+use dialoguer::{Input, Select, Confirm, Password, MultiSelect, theme::ColorfulTheme};
+
+// 文本输入
+let name: String = Input::new()
+    .with_prompt("Your name")
+    .default("Anonymous".into())
+    .interact_text()?;
+
+// 选择
+let items = vec!["Red", "Green", "Blue"];
+let selection = Select::new()
+    .with_prompt("Pick color")
+    .items(&amp;items)
+    .default(0)
+    .interact()?;
+println!("You chose: {}", items[selection]);
+
+// 多选
+let multiselect = MultiSelect::new()
+    .items(&amp;["Option 1", "Option 2", "Option 3"])
+    .interact()?;
+
+// 确认
+let confirmed = Confirm::new()
+    .with_prompt("Continue?")
+    .default(true)
+    .interact()?;
+
+// 密码
+let password = Password::new()
+    .with_prompt("Password")
+    .interact()?;
+
+// inquire - 更现代
+use inquire::{Text, Select, Confirm, Password as InqPassword, DateSelect, MultiSelect};
+
+let name = Text::new("What is your name?").prompt()?;
+let ans = Select::new("Direction?", vec!["North", "South", "East", "West"]).prompt()?;
+let date = DateSelect::new("When?").prompt()?;
+</code></pre>
+</section>
+
+<section id="logging" class="toc-link">
+  <h2><span class="num">07</span> 日志</h2>
+
+<pre><code>// 1. log + env_logger（简单）
+// [dependencies]
+// log = "0.4"
+// env_logger = "0.11"
+
+fn main() {
+    env_logger::init();
+    log::info!("starting");
+    log::debug!("debug info: {}", 42);
+    log::error!("error");
+}
+
+// 运行：
+// RUST_LOG=debug ./myapp
+// RUST_LOG=myapp=debug ./myapp
+
+// 2. tracing（推荐，结构化）
+use tracing::{info, debug, error, trace, warn, span, Level};
+
+fn main() {
+    tracing_subscriber::fmt()
+        .with_max_level(Level::INFO)
+        .with_target(false)
+        .compact()
+        .init();
+    
+    info!("starting app");
+    
+    let span = span!(Level::INFO, "task");
+    let _enter = span.enter();
+    do_work();
+}
+
+#[tracing::instrument]
+fn do_work() {
+    debug!("working");
+}
+
+// JSON 格式：
+tracing_subscriber::fmt()
+    .json()
+    .init();
+
+// 3. 自定义输出
+// fern（更强配置）
+// flexi_logger（log 文件）
+</code></pre>
+</section>
+
+<section id="config" class="toc-link">
+  <h2><span class="num">08</span> 配置管理</h2>
+
+<pre><code>// config-rs - 多来源配置
+// [dependencies]
+// config = "0.14"
+// serde = { version = "1", features = ["derive"] }
+
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Config {
+    server: ServerConfig,
+    database: DbConfig,
+}
+
+#[derive(Deserialize)]
+struct ServerConfig {
+    host: String,
+    port: u16,
+}
+
+#[derive(Deserialize)]
+struct DbConfig {
+    url: String,
+}
+
+fn main() -> Result&lt;(), config::ConfigError&gt; {
+    let config = config::Config::builder()
+        // 默认值
+        .set_default("server.host", "0.0.0.0")?
+        .set_default("server.port", 8080)?
+        // 文件
+        .add_source(config::File::with_name("config.toml").required(false))
+        .add_source(config::File::with_name("config.local.toml").required(false))
+        // 环境变量（前缀 APP_）
+        .add_source(config::Environment::with_prefix("APP").separator("__"))
+        .build()?;
+    
+    let config: Config = config.try_deserialize()?;
+    
+    println!("{}:{}", config.server.host, config.server.port);
+    
+    Ok(())
+}
+
+// 简单配置（confy）：
+// [dependencies]
+// confy = "0.6"
+// serde = { version = "1", features = ["derive"] }
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Config {
+    name: String,
+    count: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { name: "anon".into(), count: 0 }
+    }
+}
+
+let cfg: Config = confy::load("myapp", None)?;
+// 自动管理 ~/.config/myapp/default-config.toml
+</code></pre>
+
+  <p>路径与目录：</p>
+<pre><code>// dirs - 跨平台标准目录
+use dirs::*;
+
+let home: Option&lt;PathBuf&gt; = home_dir();        // ~
+let config: Option&lt;PathBuf&gt; = config_dir();     // ~/.config (linux)
+let cache: Option&lt;PathBuf&gt; = cache_dir();        // ~/.cache
+let data: Option&lt;PathBuf&gt; = data_dir();          // ~/.local/share
+let documents: Option&lt;PathBuf&gt; = document_dir();
+
+// 项目特定：
+use directories::ProjectDirs;
+
+if let Some(proj_dirs) = ProjectDirs::from("com", "mycompany", "My App") {
+    let config_dir = proj_dirs.config_dir();   // ~/.config/my app
+    let data_dir = proj_dirs.data_dir();
+    let cache_dir = proj_dirs.cache_dir();
+}
+</code></pre>
+</section>
+
+<section id="templates" class="toc-link">
+  <h2><span class="num">09</span> 模板与扩展</a></h2>
+
+<pre><code>// 1. 文本模板
+// tinytemplate - 极简
+// handlebars - 功能完整
+use handlebars::Handlebars;
+
+let mut handlebars = Handlebars::new();
+handlebars.register_template_string("t1", "Hello {{name}}")?;
+
+let data = serde_json::json!({"name": "World"});
+println!("{}", handlebars.render("t1", &amp;data)?);
+
+// 2. 表格输出
+// comfy-table - 跨平台表格
+use comfy_table::{Table, ContentArrangement, presets::UTF8_FULL};
+
+let mut table = Table::new();
+table
+    .load_preset(UTF8_FULL)
+    .set_content_arrangement(ContentArrangement::Dynamic)
+    .set_header(vec!["Name", "Age", "City"])
+    .add_row(vec!["Alice", "30", "NYC"])
+    .add_row(vec!["Bob", "25", "LA"]);
+
+println!("{}", table);
+
+// tabled - 另一选项
+use tabled::{Table, Tabled};
+
+#[derive(Tabled)]
+struct Person { name: &'static str, age: u8 }
+let people = [Person { name: "A", age: 1 }, Person { name: "B", age: 2 }];
+let table = Table::new(people);
+println!("{}", table);
+
+// 3. 日期时间
+use chrono::{DateTime, Utc, NaiveDateTime, Duration};
+
+let now: DateTime&lt;Utc&gt; = Utc::now();
+let dt = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")?;
+let tomorrow = now + Duration::days(1);
+
+// 4. 时区
+use chrono_tz::US::Eastern;
+let utc = Utc::now();
+let eastern = utc.with_timezone(&amp;Eastern);
+
+// 5. 文件 glob
+use glob::glob;
+for entry in glob("./data/**/*.json").expect("Failed") {
+    if let Ok(path) = entry {
+        println!("{:?}", path);
+    }
+}
+
+// 6. 正则
+use regex::Regex;
+let re = Regex::new(r"^\w+@\w+\.\w+$")?;
+if re.is_match("user@example.com") {
+    println!("valid email");
+}
+
+// 7. notify（文件监视）
+use notify::{Watcher, RecursiveMode, Event};
+let mut watcher = notify::recommended_watcher(|res: Result&lt;Event, _&gt; {
+    println!("{:?}", res);
+})?;
+watcher.watch("./src", RecursiveMode::Recursive)?;
+
+// 8. HTTP
+use reqwest;
+let body = reqwest::get("https://api.example.com/data").await?.text().await?;
+</code></pre>
+</section>
+
+<section id="examples" class="toc-link">
+  <h2><span class="num">10</span> 知名 CLI 案例</h2>
+
+  <p>知名 Rust CLI 工具：</p>
+  <table>
+    <tr><th>工具</th><th>用途</th><th>替换</th></tr>
+    <tr><td><code>ripgrep</code> (rg)</td><td>文件搜索</td><td>grep</td></tr>
+    <tr><td><code>fd</code></td><td>文件查找</td><td>find</td></tr>
+    <tr><td><code>bat</code></td><td>cat 增强</td><td>cat</td></tr>
+    <tr><td><code>exa</code> / <code>eza</code></td><td>ls 增强</td><td>ls</td></tr>
+    <tr><td><code>zoxide</code></td><td>目录跳转</td><td>cd/z</td></tr>
+    <tr><td><code>starship</code></td><td>Shell prompt</td><td>—</td></tr>
+    <tr><td><code>tokei</code></td><td>代码统计</td><td>cloc</td></tr>
+    <tr><td><code>hyperfine</code></td><td>性能基准</td><td>time</td></tr>
+    <tr><td><code>xsv</code> / <code>qsv</code></td><td>CSV 处理</td><td>awk</td></tr>
+    <tr><td><code>jq 替代</code> (jaq, rawler)</td><td>JSON</td><td>jq</td></tr>
+    <tr><td><code>gitui</code></td><td>Git TUI</td><td>lazygit</td></tr>
+    <tr><td><code>delta</code></td><td>diff viewer</td><td>diff</td></tr>
+    <tr><td><code>dust</code></td><td>磁盘分析</td><td>du</td></tr>
+    <tr><td><code>procs</code></td><td>进程</td><td>ps</td></tr>
+    <tr><td><code>bottom</code></td><td>系统监控</td><td>top</td></tr>
+    <tr><td><code>bandwhich</code></td><td>网络监控</td><td>—</td></tr>
+    <tr><td><code>cargo</code></td><td>Rust 包管理</td><td>—</td></tr>
+    <tr><td><code>rustup</code></td><td>工具链管理</td><td>—</td></tr>
+    <tr><td><code>rust-analyzer</code></td><td>LSP</td><td>—</td></tr>
+  </table>
+
+  <p>项目模板：</p>
+<pre><code>// cargo-generate - 项目模板工具
+cargo install cargo-generate
+cargo generate rust-cli/cli-template myapp
+
+// 官方模板（rust-cli/cli-template）包含：
+//   - clap derive
+//   - anyhow 错误
+//   - env_logger 日志
+//   - 完整 README
+//   - GitHub Actions CI
+//   - 测试结构
+//   - rustfmt + clippy 配置
+
+// 结构：
+// myapp/
+// ├── Cargo.toml
+// ├── README.md
+// ├── LICENSE
+// ├── .github/workflows/
+// ├── src/
+// │   ├── main.rs
+// │   ├── lib.rs
+// │   └── commands/
+// ├── tests/
+// └── assets/
+</code></pre>
+
+  <p>常见 CLI 模式：</p>
+<pre><code>// 1. 长选项 + 短选项 + 环境变量
+#[arg(short = 'p', long = "port", env = "APP_PORT", default_value = "8080")]
+port: u16,
+
+// 2. 版本信息
+#[command(version, about)]
+// 来自 Cargo.toml 的 version + about
+
+// 3. 帮助文字
+#[command(about = "Brief description", long_about = "Longer description with examples")]
+
+// 4. Shell 补全
+// clap_complete crate
+use clap::CommandFactory;
+use clap_complete::{generate, Shell};
+
+let mut cmd = Cli::command();
+generate(Shell::Bash, &amp;mut cmd, "myapp", &amp;mut std::io::stdout());
+
+// 发布时附带：
+// myapp --print-completions bash > /etc/bash_completion.d/myapp
+// 或：
+// myapp completions zsh
+
+// 5. manpage
+// clap_mangen crate
+let cmd = Cli::command();
+let man = clap_mangen::Man::new(cmd);
+man.render(&amp;mut std::io::stdout())?;
+
+// 6. 信号处理（Ctrl+C）
+use tokio::signal;
+
+#[tokio::main]
+async fn main() {
+    tokio::spawn(async {
+        // 主工作
+    });
+    
+    signal::ctrl_c().await.unwrap();
+    println!("Ctrl+C received, shutting down...");
+}
+
+// 7. 退出码
+use std::process::exit;
+
+fn main() {
+    if let Err(e) = run() {
+        eprintln!("error: {}", e);
+        exit(1);
+    }
+}
+
+// 8. 信号清理
+// 使用 ctrlc crate
+ctrlc::set_handler(|| {
+    // cleanup
+    std::process::exit(0);
+}).expect("Error setting Ctrl-C handler");
+</code></pre>
+
+  <div class="callout">
+    <strong>CLI 工具链总结:</strong><br>
+    1. <strong>clap</strong>：CLI 解析事实标准（derive 模式）<br>
+    2. <strong>anyhow</strong>：错误处理简单方案<br>
+    3. <strong>tracing</strong>：结构化日志<br>
+    4. <strong>indicatif</strong>：进度条<br>
+    5. <strong>dialoguer</strong> / <strong>inquire</strong>：交互输入<br>
+    6. <strong>cargo-generate</strong>：项目模板<br>
+    7. <strong>知名案例</strong>：ripgrep、fd、bat、starship 等<br>
+    Rust 已是 CLI 工具开发的<strong>首选语言</strong>，超过 Go。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

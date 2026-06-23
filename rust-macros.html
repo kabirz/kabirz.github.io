@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust 宏系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Rust 宏系统深度解析</h1>
+  <p class="subtitle">声明式宏 + 过程宏 — 编译期代码生成</p>
+  <span class="version">Rust 1.80 · macro_rules! + proc-macro</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#declarative">声明式宏 macro_rules!</a></li>
+    <li><a href="#patterns">模式与匹配</a></li>
+    <li><a href="#hygiene">宏卫生性</a></li>
+    <li><a href="#proc-macro">过程宏</a></li>
+    <li><a href="#derive">Derive 宏</a></li>
+    <li><a href="#attribute">Attribute 宏</a></li>
+    <li><a href="#function-like">Function-like 宏</a></li>
+    <li><a href="#ecosystem">生态工具</a></li>
+    <li><a href="#best-practices">最佳实践</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Rust 宏是<strong>编译期代码生成</strong>，分两类：</p>
+
+  <table>
+    <tr><th>类型</th><th>定义</th><th>用例</th></tr>
+    <tr><td><strong>声明式宏</strong></td><td><code>macro_rules!</code></td><td>vec![], println!(), format!()</td></tr>
+    <tr><td><strong>过程宏</strong> Derive</td><td><code>#[derive(MyMacro)]</code></td><td>Debug, Clone, serde::Serialize</td></tr>
+    <tr><td><strong>过程宏</strong> Attribute</td><td><code>#[my_macro]</code></td><td>#[tokio::main], #[get("/")]</td></tr>
+    <tr><td><strong>过程宏</strong> Function-like</td><td><code>my_macro!()</code></td><td>sqlx::query!()</td></tr>
+  </table>
+
+  <p>宏 vs 函数：</p>
+  <table>
+    <tr><th></th><th>函数</th><th>宏</th></tr>
+    <tr><td>时机</td><td>运行时</td><td>编译期</td></tr>
+    <tr><td>参数个数</td><td>固定</td><td>可变</td></tr>
+    <tr><td>参数类型</td><td>固定</td><td>任意 token</td></tr>
+    <tr><td>性能</td><td>调用开销</td><td>展开 + 编译</td></tr>
+    <tr><td>调试</td><td>容易</td><td>需要 cargo expand</td></tr>
+  </table>
+
+  <p>典型场景：</p>
+  <ul>
+    <li>减少样板代码（#[derive(Debug)]）</li>
+    <li>DSL（领域特定语言，如 SQL、HTML 模板）</li>
+    <li>编译期检查（如 sqlx::query!）</li>
+    <li>配置生成（lazy_static!）</li>
+    <li>自动实现 trait</li>
+  </ul>
+</section>
+
+<section id="declarative" class="toc-link">
+  <h2><span class="num">02</span> 声明式宏 macro_rules!</h2>
+
+<pre><code>// 基本语法
+macro_rules! my_macro {
+    // 模式 => 展开
+    ($x:expr) => { println!("{}", $x) };
+}
+
+my_macro!(5);   // println!("{}", 5)
+
+// 多个模式（重载）
+macro_rules! greet {
+    () => { println!("Hello!") };
+    ($name:expr) => { println!("Hello, {}!", $name) };
+}
+
+greet!();              // Hello!
+greet!("World");       // Hello, World!
+
+// vec! 宏的实现（简化）：
+macro_rules! vec {
+    ($($x:expr),* $(,)?) => {{
+        let mut v = Vec::new();
+        $(
+            v.push($x);
+        )*
+        v
+    }};
+}
+
+let v = vec![1, 2, 3];
+let v = vec![1, 2, 3,];   // 末尾逗号 OK
+
+// println! 的实现（简化）：
+macro_rules! println {
+    () => { $crate::print!("\n") };
+    ($($arg:tt)*) => {{
+        $crate::io::_print(format_args!($($arg)*));
+        $crate::io::_print(format_args_nl!());
+    }};
+}
+</code></pre>
+</section>
+
+<section id="patterns" class="toc-link">
+  <h2><span class="num">03</span> 模式与匹配</h2>
+
+<pre><code>// 元变量（fragment）类型：
+//   $x:expr     表达式
+//   $x:ident    标识符
+//   $x:ty       类型
+//   $x:path     路径（a::b::c）
+//   $x:stmt     语句
+//   $x:block    代码块
+//   $x:pat      模式
+//   $x:literal  字面量（数字、字符串）
+//   $x:meta     属性
+//   $x:lifetime 生命周期
+//   $x:vis      可见性
+//   $x:tt       单个 token tree
+
+macro_rules! example {
+    ($e:expr) => { println!("expr: {}", $e) };
+    ($i:ident) => { println!("ident: {}", stringify!($i)) };
+    ($t:ty) => { println!("type: {}", stringify!($t)) };
+    ($($i:ident),*) => { println!("idents: $( $i ),*") };
+}
+
+example!(5);          // expr: 5
+example!(foo);        // ident: foo
+example!(Vec&lt;i32&gt;);   // type: Vec&lt;i32&gt;
+example!(a, b, c);    // idents: $( $i ),*
+
+// 重复：
+//   $($x)...* 重复
+//   分隔符：, ; 等
+//   量词：* (0+), + (1+), ? (0 或 1)
+
+macro_rules! sum {
+    // 0 个
+    () => { 0 };
+    // 1+
+    ($first:expr $(, $rest:expr)*) => {
+        $first + sum!($($rest),*)
+    };
+}
+
+sum!()           // 0
+sum!(1)          // 1
+sum!(1, 2, 3)    // 6
+
+// 高级：嵌套重复
+macro_rules! matrix {
+    ($($($x:expr),*);*) => {{
+        vec![
+            $(
+                vec![$($x),*],
+            )*
+        ]
+    }};
+}
+let m = matrix![1, 2, 3; 4, 5, 6];
+// vec![vec![1,2,3], vec![4,5,6]]
+
+// 递归深度限制：默认 64，可通过 #![recursion_limit] 调整
+#![recursion_limit = "256"]
+</code></pre>
+</section>
+
+<section id="hygiene" class="toc-link">
+  <h2><span class="num">04</span> 宏卫生性</h2>
+
+<pre><code>// 卫生宏：宏展开不污染调用方作用域
+
+macro_rules! using_x {
+    ($e:expr) => { x + $e };
+}
+
+let x = 5;
+// using_x!(1) 不会引用这个 x（因为宏内部的 x 不存在）
+
+// 这避免了名字捕获问题
+// 例子：C 的宏 #define SQUARE(x) x*x 不卫生
+// SQUARE(1+2) → 1+2*1+2 = 5（错误）
+// Rust 宏不会这样
+
+// 展开示例：
+macro_rules! log {
+    ($msg:expr) => {
+        println!("[{}] {}", "LOG", $msg)
+    };
+}
+// 展开为字面量 "LOG"，不会与调用方的 LOG 变量冲突
+
+// 跨边界的 hygiene：
+//   $crate — 指向定义宏的 crate
+//   用于引用宏 crate 中的其他项
+
+macro_rules! my_macro {
+    () => {
+        $crate::helper::do_something()  // 总是指向 my_macro 所在 crate
+    };
+}
+
+// 局部 hygiene：
+//   宏内 let 创建的变量，外部不可见
+macro_rules! swap {
+    ($a:expr, $b:expr) => {{
+        let tmp = $a;
+        $a = $b;
+        $b = tmp;
+    }};
+}
+// 调用方看不到 tmp
+
+// 反例：需要"非卫生"的场景
+//   使用 ident 元变量传入名字
+macro_rules! make_var {
+    ($name:ident, $val:expr) => {
+        let $name = $val;
+    };
+}
+make_var!(my_var, 5);
+println!("{}", my_var);  // 5
+</code></pre>
+</section>
+
+<section id="proc-macro" class="toc-link">
+  <h2><span class="num">05</span> 过程宏</h2>
+
+<pre><code>// 过程宏是 Rust 编译器调用的函数
+// 接收 TokenStream 输入，返回 TokenStream 输出
+
+// 三种类型：
+// 1. derive     - 在 struct/enum 上添加 trait 实现
+// 2. attribute  - 修改被标注的项
+// 3. function-like - 像函数调用 my_macro!()
+
+// Cargo.toml:
+// [package]
+// name = "my_macros"
+// 
+// [lib]
+// proc-macro = true   # 必需
+
+// 依赖：
+// [dependencies]
+// syn = "2.0"    # 解析
+// quote = "1.0"  # 生成
+// proc-macro2 = "1.0"
+
+// 最小 derive 例子：
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::{parse_macro_input, DeriveInput};
+
+#[proc_macro_derive(HelloMacro)]
+pub fn hello_macro_derive(input: TokenStream) -> TokenStream {
+    // 1. 解析输入
+    let ast = parse_macro_input!(input as DeriveInput);
+    
+    // 2. 获取名字
+    let name = &amp;ast.ident;
+    
+    // 3. 生成代码
+    let expanded = quote! {
+        impl HelloMacro for #name {
+            fn hello() {
+                println!("Hello from {}!", stringify!(#name));
+            }
+        }
+    };
+    
+    // 4. 返回
+    expanded.into()
+}
+
+// 使用方：
+// [dependencies]
+// my_macros = { path = "../my_macros" }
+
+#[derive(HelloMacro)]
+struct Pancakes;
+
+fn main() {
+    Pancakes::hello();  // Hello from Pancakes!
+}
+</code></pre>
+</section>
+
+<section id="derive" class="toc-link">
+  <h2><span class="num">06</span> Derive 宏</h2>
+
+<pre><code>// 内置 derive：
+//   Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash
+//   Default
+
+// 自定义 derive 用 #[derive(MyMacro)]
+
+// 带 helper 属性：
+#[proc_macro_derive(HelloMacro, attributes(hello))]
+pub fn hello_macro_derive(input: TokenStream) -> TokenStream {
+    // 可以读取 #[hello] 属性
+}
+
+// 使用：
+#[derive(HelloMacro)]
+#[hello(name = "My Type")]
+struct MyType;
+
+// 著名 derive 库：
+//   serde::Serialize, Deserialize
+//   thiserror::Error
+//   clap::Parser
+//   tokio::main（实际是 attribute，不是 derive）
+//   diesel::Queryable
+
+// serde::Serialize 实现（简化）：
+#[proc_macro_derive(Serialize)]
+pub fn derive_serialize(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    
+    match &amp;ast.data {
+        syn::Data::Struct(s) => derive_struct(&amp;ast, s),
+        syn::Data::Enum(e) => derive_enum(&amp;ast, e),
+        syn::Data::Union(_) => panic!("unions not supported"),
+    }
+}
+
+fn derive_struct(ast: &amp;DeriveInput, s: &amp;syn::DataStruct) -> TokenStream {
+    let name = &amp;ast.ident;
+    let fields = s.fields.iter().map(|f| {
+        let fname = f.ident.as_ref().unwrap();
+        quote! {
+            out.serialize_field(stringify!(#fname), &amp;self.#fname)?;
+        }
+    });
+    
+    (quote! {
+        impl Serialize for #name {
+            fn serialize&lt;S&gt;(&amp;self, ser: S) -> Result&lt;S::Ok, S::Error&gt;
+                where S: Serializer
+            {
+                use serde::ser::SerializeStruct;
+                let mut out = ser.serialize_struct(stringify!(#name), 3)?;
+                #(#fields)*
+                out.end()
+            }
+        }
+    }).into()
+}
+</code></pre>
+</section>
+
+<section id="attribute" class="toc-link">
+  <h2><span class="num">07</span> Attribute 宏</h2>
+
+<pre><code>// Attribute 宏：修改或替换被标注的代码
+
+#[proc_macro_attribute]
+pub fn log_calls(attr: TokenStream, item: TokenStream) -> TokenStream {
+    // attr: 属性参数 #[log_calls(name = "MyFn")]
+    // item: 被标注的函数
+    
+    let mut input = parse_macro_input!(item as syn::ItemFn);
+    let name = &amp;input.sig.ident;
+    let block = &amp;input.block;
+    
+    let expanded = quote! {
+        fn #name() {
+            println!("calling {}", stringify!(#name));
+            #block
+            println!("called {}", stringify!(#name));
+        }
+    };
+    
+    expanded.into()
+}
+
+// 使用：
+#[log_calls]
+fn my_function() {
+    println!("hello");
+}
+
+// 著名 attribute 宏：
+//   #[tokio::main]
+//   #[get("/path")]          (rocket, axum)
+//   #[pyo3::pyfunction]      (pyo3)
+//   #[wasm_bindgen]          (wasm-bindgen)
+//   #[test]
+//   #[cfg(...)]
+
+// tokio::main 例子：
+#[tokio::main]
+async fn main() {
+    println!("hello");
+}
+
+// 展开为：
+fn main() {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            println!("hello");
+        });
+}
+</code></pre>
+</section>
+
+<section id="function-like" class="toc-link">
+  <h2><span class="num">08</span> Function-like 宏</h2>
+
+<pre><code>// Function-like 宏：像函数调用，但参数是任意 token
+
+#[proc_macro]
+pub fn sql(input: TokenStream) -> TokenStream {
+    // 解析 SQL，编译期检查
+    let query = parse_sql(input);
+    let expanded = generate_query_code(query);
+    expanded.into()
+}
+
+// 使用：
+let users = sql!("SELECT * FROM users WHERE id = $1");
+
+// 著名 function-like 宏：
+//   println!, format!, eprintln!, write!
+//   vec!, vec_of_strings!
+//   concat!, env!, include!, include_str!
+//   sqlx::query!
+//   tracing::instrument! (实际是 attribute)
+
+// sqlx::query! 实现（简化）：
+#[proc_macro]
+pub fn query(input: TokenStream) -> TokenStream {
+    // 1. 解析 SQL 字符串
+    let sql = parse_to_string(input);
+    
+    // 2. 连接数据库（编译期！）
+    let conn = connect_to_db();
+    
+    // 3. PREPARE 查询，获取 schema
+    let prepared = conn.prepare(&amp;sql);
+    
+    // 4. 生成强类型代码
+    let expanded = quote! {
+        sqlx::query_as!(#sql)
+            // 强类型 row
+    };
+    
+    expanded.into()
+}
+// 编译期就能发现 SQL 错误
+
+// include_str! 实现：
+// 编译期读文件内容，嵌入为 'static str
+const SOURCE: &amp;'static str = include_str!("input.txt");
+
+// env!：读环境变量（编译期）
+const VERSION: &amp;'static str = env!("CARGO_PKG_VERSION");
+</code></pre>
+</section>
+
+<section id="ecosystem" class="toc-link">
+  <h2><span class="num">09</span> 生态工具</h2>
+
+  <p>编写过程宏的"圣三位一体"：</p>
+  <table>
+    <tr><th>库</th><th>用途</th></tr>
+    <tr><td><code>syn</code></td><td>解析 TokenStream 为 AST</td></tr>
+    <tr><td><code>quote</code></td><td>从 AST 生成 TokenStream</td></tr>
+    <tr><td><code>proc-macro2</code></td><td>proc_macro 的稳定版本</td></tr>
+  </table>
+
+<pre><code>// 常用 syn 类型：
+//   DeriveInput       - struct/enum 用于 derive
+//   ItemFn            - 函数
+//   ItemStruct        - 结构体
+//   ItemEnum          - 枚举
+//   Fields, Field     - 字段
+//   Type, Path        - 类型
+//   Attribute         - 属性
+//   Lit               - 字面量
+
+// quote! 宏：构造 TokenStream
+let name = format_ident!("Foo");
+let expanded = quote! {
+    struct #name {
+        x: i32,
+    }
+    
+    impl #name {
+        fn new() -> Self { Self { x: 0 } }
+    }
+};
+
+// 常用 quote 操作：
+//   #var            - 插入变量
+//   #(#field)*      - 重复（类似 macro_rules）
+//   #(#field,)*     - 带分隔符的重复
+//   stringify!(...) - 转字符串
+
+// 高级 quote：
+let fields = vec!["a", "b", "c"];
+let field_idents: Vec&lt;_&gt; = fields.iter().map(|f| format_ident!("{}", f)).collect();
+let expanded = quote! {
+    struct Foo {
+        #(#field_idents: i32,)*
+    }
+};
+</code></pre>
+
+  <p>辅助库：</p>
+  <table>
+    <tr><th>库</th><th>用途</th></tr>
+    <tr><td><code>darling</code></td><td>声明式属性解析</td></tr>
+    <tr><td><code>proc-macro-error</code></td><td>更好的错误报告</td></tr>
+    <tr><td><code>proc-macro-crate</code></td><td>查找 crate 路径</td></tr>
+    <tr><td><code>Inflector</code></td><td>大小写转换</td></tr>
+    <tr><td><code>synstructure</code></td><td>复杂 derive 支持</td></tr>
+  </table>
+
+  <p>cargo expand — 调试工具：</p>
+<pre><code>// 安装
+rustup component add rustc-codegen-cranelift-preview  # 可选
+cargo install cargo-expand
+
+// 使用
+cargo expand
+cargo expand --lib
+cargo expand --bin my_app
+
+// 输出宏展开后的代码
+// 非常有用，看 serde、clap 等做了什么
+
+// 在 IDE 中：
+// rust-analyzer 支持 inline macro expansion
+</code></pre>
+</section>
+
+<section id="best-practices" class="toc-link">
+  <h2><span class="num">10</span> 最佳实践</h2>
+
+<pre><code>// 1. 优先用函数，必要时才用宏
+//   - 宏调试困难
+//   - 增加编译时间
+//   - 错误信息可能晦涩
+
+// 2. macro_rules! 优先于 proc-macro
+//   - 更快编译
+//   - 不需要额外 crate
+//   - 适用：简单文本替换
+
+// 3. proc-macro 必须在独立 crate
+//   - 项目结构：
+//     my_lib/             # 用户用的 crate
+//     my_lib_derive/      # proc-macro crate
+//     my_lib_macros/      # 内部 helper
+
+// 4. 错误信息
+use proc_macro_error::{abort, proc_macro_error};
+
+#[proc_macro_derive(MyMacro)]
+#[proc_macro_error]
+pub fn my_macro_derive(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    
+    if !is_supported(&amp;ast) {
+        abort!(ast.ident, "not supported");
+    }
+    // ...
+}
+
+// 5. 提供 span 信息（错误定位）
+use quote::ToTokens;
+let name_str = ast.ident.to_token_stream();
+let expanded = quote_spanned! {name_str.span() =>
+    // 错误会指向原始位置
+};
+
+// 6. 文档化
+/// My awesome macro.
+/// 
+/// # Example
+/// 
+/// ```
+/// use my_macros::MyMacro;
+/// 
+/// #[derive(MyMacro)]
+/// struct Foo;
+/// ```
+#[proc_macro_derive(MyMacro)]
+pub fn ...
+
+// 7. 测试
+// 内联 doctest（最简单）
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_macro() {
+        let v = my_macro!(1, 2, 3);
+        assert_eq!(v, vec![1, 2, 3]);
+    }
+}
+
+// trybuild：测试编译错误
+// tests/ui/my_macro_fail.rs:
+//   fn main() { my_macro!(invalid) }
+// tests/ui/my_macro_fail.stderr:
+//   expected error output
+
+#[test]
+fn compile_fail() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/ui/my_macro_fail.rs");
+}
+</code></pre>
+
+  <p>常见陷阱：</p>
+<pre><code>// 1. 宏展开顺序
+//   - 不保证多次展开顺序
+//   - 依赖副作用：危险
+
+// 2. 递归深度
+//   默认 64，超出错误
+//   #![recursion_limit = "1024"] 调整
+
+// 3. 跨 crate 的 hygiene
+//   总是用 $crate 引用本 crate
+//   避免名字冲突
+
+// 4. 与 trait 方法的冲突
+//   derive 可能添加 trait 方法
+//   与用户实现冲突
+
+// 5. 不应该用宏做的：
+//   - 简单包装（用函数）
+//   - 类型转换（用 From/Into）
+//   - 配置（用 const fn）
+</code></pre>
+
+  <div class="callout">
+    <strong>宏系统总结:</strong><br>
+    1. <strong>声明式宏</strong>：macro_rules!，pattern 匹配，简单场景<br>
+    2. <strong>过程宏</strong>：syn + quote，三种类型（derive/attribute/function-like）<br>
+    3. <strong>编译期代码生成</strong>：零运行时开销<br>
+    4. <strong>卫生性</strong>：避免名字捕获<br>
+    5. <strong>工具链</strong>：cargo expand、trybuild<br>
+    Rust 宏比 C 的 #define 强百倍，是现代语言中最强的元编程系统之一。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

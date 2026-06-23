@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cargo 包管理器深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Cargo 包管理器深度解析</h1>
+  <p class="subtitle">Rust 官方构建工具 — 项目、依赖、发布</p>
+  <span class="version">Cargo 1.80 · rust-lang/cargo</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#manifest">Cargo.toml 清单</a></li>
+    <li><a href="#deps">依赖管理</a></li>
+    <li><a href="#features">Feature Flags</a></li>
+    <li><a href="#workspace">Workspace</a></li>
+    <li><a href="#build">构建系统</a></li>
+    <li><a href="#testing">测试</a></li>
+    <li><a href="#publishing">发布</a></li>
+    <li><a href="#profiles">Profiles</a></li>
+    <li><a href="#advanced">高级用法</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Cargo 是 Rust 官方构建工具，集成<strong>包管理、构建系统、测试运行、文档生成、发布</strong>。</p>
+
+  <p>主要功能：</p>
+  <table>
+    <tr><th>命令</th><th>用途</th></tr>
+    <tr><td><code>cargo new</code></td><td>创建新项目</td></tr>
+    <tr><td><code>cargo build</code></td><td>编译</td></tr>
+    <tr><td><code>cargo run</code></td><td>编译并运行</td></tr>
+    <tr><td><code>cargo test</code></td><td>运行测试</td></tr>
+    <tr><td><code>cargo check</code></td><td>快速检查（不生成可执行）</td></tr>
+    <tr><td><code>cargo doc</code></td><td>生成文档</td></tr>
+    <tr><td><code>cargo fmt</code></td><td>格式化代码</td></tr>
+    <tr><td><code>cargo clippy</code></td><td>lint</td></tr>
+    <tr><td><code>cargo publish</code></td><td>发布到 crates.io</td></tr>
+    <tr><td><code>cargo update</code></td><td>更新依赖</td></tr>
+    <tr><td><code>cargo add</code></td><td>添加依赖</td></tr>
+    <tr><td><code>cargo tree</code></td><td>查看依赖树</td></tr>
+    <tr><td><code>cargo vendor</code></td><td>离线依赖</td></tr>
+  </table>
+
+  <p>项目类型：</p>
+  <ul>
+    <li><strong>binary</strong>：可执行（cargo new 默认）</li>
+    <li><strong>library</strong>：库（cargo new --lib）</li>
+    <li><strong>mixed</strong>：同时是 lib + 多个 bin</li>
+    <li><strong>workspace</strong>：多 crate 共同管理</li>
+  </ul>
+</section>
+
+<section id="manifest" class="toc-link">
+  <h2><span class="num">02</span> Cargo.toml 清单</h2>
+
+<pre><code>[package]
+name = "myapp"
+version = "0.1.0"
+edition = "2021"          # Rust 版本（2015/2018/2021/2024）
+authors = ["Name &lt;email&gt;"]
+description = "My application"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/user/myapp"
+documentation = "https://docs.rs/myapp"
+readme = "README.md"
+keywords = ["web", "framework"]
+categories = ["web-programming::http-server"]
+publish = true
+include = ["src/**", "Cargo.toml", "README.md"]
+
+# 版本元数据
+[package.metadata]
+spdx = "MIT"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+
+[dev-dependencies]
+proptest = "1"
+
+[build-dependencies]
+cc = "1.0"
+
+[[bin]]
+name = "myapp"
+path = "src/main.rs"
+
+[lib]
+name = "myapp"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["std"]
+std = []
+async = ["dep:tokio"]
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+
+[profile.dev]
+debug = 0
+</code></pre>
+
+  <p>版本号语义化：</p>
+<pre><code>// 语义化版本 (SemVer):
+// MAJOR.MINOR.PATCH
+// 1.4.2
+//  ↑ ↑ ↑
+//  │ │ └── 兼容性修复
+//  │ └──── 向后兼容的新功能
+//  └────── 不兼容的变更
+
+// Cargo 解析：
+"1.0.0"    # 等价 ^1.0.0
+"=1.0.0"   # 精确版本
+"&gt;=1.0.0"  # 范围
+"~1.4"     # &gt;=1.4.0, &lt;1.5.0
+"*"        # 任意
+
+// 预发布：
+"1.0.0-beta.1"
+
+// 来源：
+[dependencies]
+foo = "1.0"                                  # crates.io
+foo = { git = "https://github.com/x/foo" }   # Git
+foo = { path = "../foo" }                    # 本地路径
+foo = { version = "1.0", registry = "myreg" } # 自定义 registry
+</code></pre>
+</section>
+
+<section id="deps" class="toc-link">
+  <h2><span class="num">03</span> 依赖管理</h2>
+
+<pre><code>// Cargo.lock：
+//   锁定所有依赖的精确版本
+//   保证构建可重现
+//
+// binary 项目：提交 Cargo.lock
+// library 项目：不提交 Cargo.lock
+
+// 依赖解析：
+//   默认用 SemVer 兼容性
+//   使用 PubGrub 算法（最近）
+
+// Cargo.lock 内容：
+[[package]]
+name = "serde"
+version = "1.0.197"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ac1..."
+
+// 添加依赖：
+cargo add serde
+cargo add serde --features derive
+cargo add tokio --features full
+cargo add proptest --dev
+
+// 升级：
+cargo update                    # 升级所有（符合 SemVer）
+cargo update -p serde           # 仅升级 serde
+cargo update -p serde --precise 1.0.198
+
+// 查看依赖树：
+cargo tree
+cargo tree -i serde   # 反向（谁依赖 serde）
+cargo tree -e features   # 显示 features
+
+// 检查过期依赖：
+cargo install cargo-outdated
+cargo outdated
+</code></pre>
+
+  <p>依赖类型：</p>
+<pre><code>[dependencies]
+# 普通依赖
+serde = "1"
+
+# 平台条件
+[target.'cfg(unix)'.dependencies]
+nix = "0.27"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser"] }
+
+# Optional 依赖（受 feature 控制）
+[dependencies]
+tokio = { version = "1", optional = true }
+
+[features]
+async = ["dep:tokio"]   # 1.60+ 语法
+
+# workspace 共享
+[dependencies]
+serde.workspace = true
+</code></pre>
+</section>
+
+<section id="features" class="toc-link">
+  <h2><span class="num">04</span> Feature Flags</h2>
+
+<pre><code>// Features 是条件编译开关
+[features]
+default = ["std"]
+std = []
+no_std = []
+tls = ["dep:rustls", "dep:tokio-rustls"]
+async = ["dep:tokio", "dep:async-trait"]
+json = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+rustls = { version = "0.21", optional = true }
+tokio = { version = "1", optional = true }
+serde = { version = "1", optional = true }
+
+// 使用：
+cargo build --no-default-features --features async,tls
+
+// 条件编译：
+#[cfg(feature = "tls")]
+mod tls;
+
+#[cfg(all(feature = "tls", feature = "async"))]
+async fn fetch() { ... }
+
+// Features 规则（Rust 1.60+）：
+// 1. 不能命名冲突
+// 2. dep: 前缀明确可选依赖
+// 3. feature 累加（union）
+
+// 反例（旧式，不推荐）：
+[features]
+tls = []   # 隐式启用 rustls（如果有 optional dep）
+</code></pre>
+
+  <p>Feature Unification（重要）</p>
+<pre><code>// Cargo 把所有 features 合并
+// 即使只在某依赖中用，最终都启用
+
+// 例子：
+// A 依赖 C with feature "x"
+// B 依赖 C with feature "y"
+// 你依赖 A + B
+// → C 编译时启用 x + y
+
+// 后果：
+//   - 依赖图兼容性高
+//   - 不能"按需编译"
+//   - 不能在 lib 中区分 caller
+
+// 替代方案：
+//   - 把 C 拆成多个 crate
+//   - 或用 generic + trait（运行期多态）
+</code></pre>
+</section>
+
+<section id="workspace" class="toc-link">
+  <h2><span class="num">05</span> Workspace</h2>
+
+<pre><code>// Workspace: 多个 crate 共享 Cargo.lock + target
+// 
+// myproject/
+// ├── Cargo.toml          # workspace 根
+// ├── crates/
+// │   ├── core/
+// │   │   └── Cargo.toml
+// │   ├── api/
+// │   │   └── Cargo.toml
+// │   ├── web/
+// │   │   └── Cargo.toml
+// │   └── utils/
+// │       └── Cargo.toml
+
+// 根 Cargo.toml:
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.dependencies]
+serde = "1"
+tokio = "1"
+anyhow = "1"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Team"]
+license = "MIT"
+
+// 子 crate:
+[package]
+name = "myproject-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+myproject-utils = { path = "../utils" }
+
+// 优势：
+//   - 统一依赖版本
+//   - 共享 target 目录
+//   - cargo build 一次构建所有
+//   - 跨 crate 重构方便
+</code></pre>
+</section>
+
+<section id="build" class="toc-link">
+  <h2><span class="num">06</span> 构建系统</h2>
+
+<pre><code>// 编译流程：
+// 1. 解析 Cargo.toml
+// 2. 下载依赖到 ~/.cargo
+// 3. 解析依赖图
+// 4. 编译每个 crate（依赖顺序）
+// 5. 链接
+
+// 增量编译：
+//   cargo 只重新编译修改的部分
+//   fingerprint 机制（哈希每个文件）
+//   metadata/.fingerprint/
+
+// 并行编译：
+//   依赖图无依赖的 crate 可并行
+//   proc-macro 必须串行
+
+// Build Script（build.rs）：
+//   编译前执行
+//   用途：
+//     - 编译 C 代码
+//     - 生成代码
+//     - 检测环境
+
+// build.rs:
+fn main() {
+    cc::Build::new()
+        .file("src/native.c")
+        .compile("native");
+    
+    println!("cargo:rustc-link-lib=ssl");
+    println!("cargo:rerun-if-changed=src/native.c");
+}
+
+// 输出（环境变量）：
+//   OUT_DIR - 生成代码目录
+//   CARGO_FEATURE_* - features
+//   TARGET - 目标三元组
+
+// 生成代码：
+fn main() {
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let dest = format!("{}/generated.rs", out_dir);
+    std::fs::write(&amp;dest, "pub fn generated() {}").unwrap();
+}
+
+// 在 lib.rs：
+include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+</code></pre>
+
+  <p>交叉编译：</p>
+<pre><code>// 目标三元组：arch-vendor-os-env
+// 例：x86_64-unknown-linux-gnu
+
+// 添加 target：
+rustup target add aarch64-unknown-linux-gnu
+
+// 编译：
+cargo build --target aarch64-unknown-linux-gnu
+
+// 需要正确 linker：
+// ~/.cargo/config.toml:
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+
+// 常见 target：
+//   x86_64-unknown-linux-gnu   (Linux x86_64)
+//   aarch64-apple-darwin       (Apple Silicon macOS)
+//   x86_64-pc-windows-msvc     (Windows MSVC)
+//   wasm32-unknown-unknown     (WebAssembly)
+//   armv7-unknown-linux-gnueabihf (Raspberry Pi)
+</code></pre>
+</section>
+
+<section id="testing" class="toc-link">
+  <h2><span class="num">07</span> 测试</h2>
+
+<pre><code>// 1. 单元测试（同模块内）
+pub fn add(a: i32, b: i32) -> i32 { a + b }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_add() {
+        assert_eq!(add(1, 2), 3);
+    }
+}
+
+// 2. 集成测试（tests/ 目录）
+// tests/integration.rs:
+#[test]
+fn it_works() {
+    assert_eq!(2 + 2, 4);
+}
+
+// 3. 文档测试（doctest）
+/// Adds two numbers.
+/// 
+/// # Example
+/// 
+/// ```
+/// use mycrate::add;
+/// assert_eq!(add(1, 2), 3);
+/// ```
+pub fn add(a: i32, b: i32) -> i32 { a + b }
+
+// 运行：
+cargo test                  # 所有测试
+cargo test test_add         # 名字过滤
+cargo test --test integration  # 仅某个集成测试文件
+cargo test --doc            # 仅 doctest
+cargo test -- --nocapture   # 显示 println!
+cargo test -- --test-threads=4
+
+// 测试组织：
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    mod happy_path {
+        use super::*;
+        #[test]
+        fn basic() { ... }
+    }
+    
+    mod error_cases { ... }
+}
+
+// Property-based testing
+// [dev-dependencies]
+// proptest = "1.0"
+
+proptest! {
+    #[test]
+    fn test_add_commutative(a in -1000i32..1000, b in -1000i32..1000) {
+        prop_assert_eq!(add(a, b), add(b, a));
+    }
+}
+
+// 基准测试：
+// 1. Rust 内置 #[bench] 已弃用
+// 2. criterion（推荐）
+//    [dev-dependencies]
+//    criterion = { version = "0.5", features = ["html_reports"] }
+//    [[bench]]
+//    name = "my_benchmark"
+//    harness = false
+
+// benches/my_benchmark.rs:
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn benchmark(c: &amp;mut Criterion) {
+    c.bench_function("add", |b| b.iter(|| add(black_box(1), black_box(2))));
+}
+
+criterion_group!(benches, benchmark);
+criterion_main!(benches);
+
+// 运行：
+cargo bench
+</code></pre>
+</section>
+
+<section id="publishing" class="toc-link">
+  <h2><span class="num">08</span> 发布</h2>
+
+<pre><code>// 发布到 crates.io：
+// 1. 注册：https://crates.io
+// 2. 获取 API token
+// 3. cargo login &lt;token&gt;
+
+// 发布：
+cargo publish
+
+// 检查（dry-run）：
+cargo publish --dry-run
+
+// 流程：
+// 1. 验证 Cargo.toml
+// 2. 打包源码（git tracked files）
+// 3. 上传到 crates.io
+// 4. 自动索引
+// 5. 文档自动生成（docs.rs）
+
+// 版本撤销（5 个版本内）：
+cargo yank --vers 1.0.0
+
+// 注意：
+// - 不可删除已发布版本
+// - 仅可 yank（防止新项目用）
+// - 已有的依赖仍可用
+
+// 私有 registry：
+// ~/.cargo/config.toml:
+[registries]
+myreg = { index = "https://myreg.com/git/index" }
+
+// 使用：
+[dependencies]
+private-lib = { version = "0.1", registry = "myreg" }
+
+// 发布到私有 registry：
+cargo publish --registry myreg
+
+// 替代 registry：
+//  私有：Cloudsmith、JFrog、AWS CodeArtifact
+//   自托管：katano、cenaproxy
+</code></pre>
+
+  <p>CI/CD 集成：</p>
+<pre><code>// GitHub Actions：
+// .github/workflows/ci.yml
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --verbose
+      - run: cargo test --verbose
+      - run: cargo fmt --check
+      - run: cargo clippy
+
+// 自动发布：
+// .github/workflows/release.yml
+- run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+// 跨平台测试矩阵：
+strategy:
+  matrix:
+    os: [ubuntu-latest, macos-latest, windows-latest]
+    rust: [stable, beta, nightly
+</code></pre>
+</section>
+
+<section id="profiles" class="toc-link">
+  <h2><span class="num">09</span> Profiles</h2>
+
+<pre><code>// Profile：控制构建配置
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+overflow-checks = true
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = true           # 链接时优化
+panic = "abort"      # panic 不 unwind
+codegen-units = 1    # 编译单元数（更少更优化）
+strip = true         # 去符号
+
+[profile.bench]
+inherits = "release"
+
+[profile.test]
+inherits = "dev"
+
+// 自定义 profile（1.57+）：
+[profile.release-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+opt-level = 2
+
+// 使用：
+cargo build --profile release-fast
+
+// LTO 详解：
+//   lto = false (默认)    - 不 LTO
+//   lto = "thin"          - 轻量 LTO（快）
+//   lto = "fat" or true   - 完整 LTO（最慢，最小二进制）
+//   适合：最终发布
+//   不适合：开发
+
+// strip：
+//   strip = false  - 不去
+//   strip = true   - 全去（symbol + debuginfo）
+//   strip = "debuginfo"
+//   strip = "symbols"
+
+// 跨 profile 依赖：
+// cargo build 时不同 profile 的 dep
+[profile.dev.package."*"]
+opt-level = 3   # 依赖在 dev 下用 opt 3（快运行）
+</code></pre>
+
+  <p>条件编译：</p>
+<pre><code>// cfg 属性：
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "windows")]
+mod windows;
+
+#[cfg(feature = "tls")]
+use rustls;
+
+#[cfg(debug_assertions)]
+fn debug_only() {}
+
+#[cfg(test)]
+mod tests;
+
+// 条件依赖：
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = "0.27"
+
+// cfg_if 宏（更可读）：
+// [dependencies]
+// cfg-if = "1"
+cfg_if::cfg_if! {
+    if #[cfg(target_os = "linux")] {
+        mod linux;
+    } else if #[cfg(target_os = "windows")] {
+        mod windows;
+    } else {
+        mod other;
+    }
+}
+</code></pre>
+</section>
+
+<section id="advanced" class="toc-link">
+  <h2><span class="num">10</span> 高级用法</h2>
+
+<pre><code>// 1. .cargo/config.toml — 项目级配置
+[build]
+target = "x86_64-unknown-linux-gnu"
+jobs = 8
+
+[env]
+RUST_LOG = "info"
+
+[alias]
+b = "build"
+t = "test"
+r = "run"
+br = "build --release"
+
+// 2. 全局配置
+// ~/.cargo/config.toml
+[source.crates-io]
+replace-with = "ustc"
+
+[source.ustc]
+registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
+
+// 3. Vendor（离线）
+cargo vendor &gt; .cargo/config.toml
+// 现在 ~/.cargo/registry 可以省略
+
+// 4. Cargo 子命令扩展
+cargo install cargo-edit        # cargo add/rm
+cargo install cargo-watch       # 文件变化自动 rebuild
+cargo install cargo-expand      # 展开宏
+cargo install cargo-outdated    # 过期检查
+cargo install cargo-audit       # 安全漏洞
+cargo install cargo-bloat       # 二进制大小分析
+cargo install cargo-nextest     # 更快的 test runner
+cargo install cargo-deny        # 依赖检查（license、advisory）
+cargo install cargo-udeps       # 未使用依赖检测
+
+// 5. Workspace 内 link
+// 子 crate 间互相引用
+[dependencies]
+myproject-utils = { path = "../utils" }
+
+// 6. examples/ 目录
+// examples/my_example.rs:
+use my_crate::api;
+fn main() { api(); }
+
+// 运行：
+cargo run --example my_example
+
+// 7. benches/
+// 单独 benchmark 文件
+
+// 8. [[bin]] 多可执行
+[[bin]]
+name = "server"
+path = "src/server.rs"
+
+[[bin]]
+name = "client"
+path = "src/client.rs"
+
+cargo run --bin server
+cargo run --bin client
+</code></pre>
+
+  <p>常见 cargo 命令组合：</p>
+<pre><code># 开发循环
+cargo check                 # 最快反馈
+cargo clippy --all-targets  # lint
+cargo test                  # 测试
+cargo fmt -- --check        # 格式检查
+
+# 发布前
+cargo build --release
+cargo test --release
+cargo doc --no-deps --open
+
+# CI
+cargo deny check
+cargo audit
+cargo bench
+
+# 调试
+cargo tree -d                # 重复依赖
+cargo bloat --release        # 二进制分析
+cargo build --timings        # 构建时间报告
+
+# 修复
+cargo update
+cargo fix --edition
+cargo fix --clippy
+</code></pre>
+
+  <p>性能优化提示：</p>
+<pre><code>// 1. 增量编译
+//   开发时 incremental = true（默认）
+//   关闭：cargo build --release
+
+// 2. sccache（编译缓存）
+//   RUSTC_WRAPPER=sccache cargo build
+
+// 3. mold linker（快 5x）
+//   ~/.cargo/config.toml:
+//   [target.x86_64-unknown-linux-gnu]
+//   linker = "clang"
+//   rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+// 4. cranelift backend（快速 dev 编译）
+//   rustup component add rustc-codegen-cranelift-preview
+//   RUSTC_BOOTSTRAP=1 cargo build
+
+// 5. 减少依赖
+//   用 cargo bloat --crates 看哪些库大
+//   替换：reqwest → hyper；tokio → smol
+</code></pre>
+
+  <div class="callout">
+    <strong>Cargo 总结:</strong><br>
+    1. <strong>一站式工具</strong>：build、test、doc、publish<br>
+    2. <strong>SemVer</strong>：依赖管理基于语义版本<br>
+    3. <strong>Workspace</strong>：多 crate 项目<br>
+    4. <strong>Features</strong>：条件编译<br>
+    5. <strong>Profiles</strong>：dev/release 配置分离<br>
+    6. <strong>crates.io</strong>：全球公共 registry<br>
+    7. <strong>扩展丰富</strong>：cargo-edit、cargo-watch 等<br>
+    Cargo 是 Rust 生态成功的关键之一，让依赖管理"开箱即用"。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

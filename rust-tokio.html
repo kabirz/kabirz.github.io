@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tokio 异步运行时深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Tokio 异步运行时深度解析</h1>
+  <p class="subtitle">Reactor / Executor / IO 驱动 — Rust 异步的事实标准</p>
+  <span class="version">Tokio 1.36 · tokio-rs/tokio</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#architecture">架构组件</a></li>
+    <li><a href="#runtime">Runtime 类型</a></li>
+    <li><a href="#scheduler">Scheduler</a></li>
+    <li><a href="#reactor">Reactor 与 IO</a></li>
+    <li><a href="#timer">Timer</a></li>
+    <li><a href="#spawn">Task 管理</a></li>
+    <li><a href="#channels">Tokio Channels</a></li>
+    <li><a href="#blocking">阻塞任务处理</a></li>
+    <li><a href="#internals">内部实现</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Tokio 是 Rust 最流行的异步运行时，是<strong>事实标准</strong>。提供 IO 驱动、定时器、任务调度、并发原语。</p>
+
+  <p>核心组件：</p>
+  <table>
+    <tr><th>组件</th><th>职责</th></tr>
+    <tr><td>Runtime</td><td>总入口，包含 reactor + scheduler</td></tr>
+    <tr><td>Reactor</td><td>OS 事件循环（epoll/kqueue/IOCP）</td></tr>
+    <tr><td>Scheduler</td><td>多线程工作窃取调度</td></tr>
+    <tr><td>Timer</td><td>时间轮 + heap 定时器</td></tr>
+    <tr><td>Tasks</td><td>green threads（轻量协程）</td></tr>
+    <tr><td>Channels</td><td>异步 mpsc/oneshot/broadcast</td></tr>
+    <tr><td>Async IO</td><td>AsyncRead/Write、文件、网络</td></tr>
+  </table>
+
+  <p>主要用户：</p>
+  <ul>
+    <li>Hyper（HTTP 服务器/客户端）</li>
+    <li>Tonic（gRPC）</li>
+    <li>Reqwest（HTTP 客户端）</li>
+    <li>Axum（Web 框架）</li>
+    <li>SQLx（数据库）</li>
+    <li>Warp（Web 框架）</li>
+    <li>千千万万的应用</li>
+  </ul>
+</section>
+
+<section id="architecture" class="toc-link">
+  <h2><span class="num">02</span> 架构组件</h2>
+
+<pre><code>┌─────────────────────────────────────────┐
+│            Tokio Runtime                 │
+│                                          │
+│  ┌────────────────────────────────────┐ │
+│  │       Scheduler                    │ │
+│  │  ┌──────────┐  ┌──────────┐       │ │
+│  │  │ Worker 0 │  │ Worker 1 │  ...  │ │
+│  │  │ (Thread) │  │ (Thread) │       │ │
+│  │  └────┬─────┘  └────┬─────┘       │ │
+│  │       │              │             │ │
+│  │       └──────┬───────┘             │ │
+│  │              │                      │ │
+│  │       ┌──────▼──────┐              │ │
+│  │       │  Task Queue  │ (work-steal)│ │
+│  │       └─────────────┘              │ │
+│  └────────────────────────────────────┘ │
+│                                          │
+│  ┌────────────────────────────────────┐ │
+│  │       Reactor (IO Driver)          │ │
+│  │       基于 mio (epoll/kqueue)       │ │
+│  │       监听数千个 socket             │ │
+│  └────────────────────────────────────┘ │
+│                                          │
+│  ┌────────────────────────────────────┐ │
+│  │       Timer Wheel                  │ │
+│  │       精确度 ~1μs                   │ │
+│  └────────────────────────────────────┘ │
+│                                          │
+│  ┌────────────────────────────────────┐ │
+│  │       Blocking Pool                │ │
+│  │       同步阻塞任务的隔离             │ │
+│  └────────────────────────────────────┘ │
+└─────────────────────────────────────────┘
+</code></pre>
+
+  <p>核心 trait：</p>
+<pre><code>// tokio::runtime
+pub struct Runtime {
+    scheduler: Scheduler,
+    handle: Handle,
+}
+
+// Handle 提供对 runtime 的引用
+let handle = tokio::runtime::Handle::try_current().unwrap();
+handle.spawn(async { ... });
+
+// tokio::task::JoinHandle
+let handle: JoinHandle&lt;T&gt; = tokio::spawn(async { 42 });
+let result: T = handle.await.unwrap();
+</code></pre>
+</section>
+
+<section id="runtime" class="toc-link">
+  <h2><span class="num">03</span> Runtime 类型</h2>
+
+<pre><code>// 1. Current Thread（单线程）
+let rt = tokio::runtime::Builder::new_current_thread()
+    .enable_all()
+    .build()
+    .unwrap();
+
+// 适合：
+//   - 嵌入式
+//   - 简单工具
+//   - 严格确定性测试
+
+// 2. Multi-Thread（默认）
+let rt = tokio::runtime::Runtime::new().unwrap();
+// 或：
+let rt = tokio::runtime::Builder::new_multi_thread()
+    .worker_threads(4)
+    .enable_all()
+    .build()
+    .unwrap();
+
+// 3. #[tokio::main] 宏
+#[tokio::main]
+async fn main() {
+    // 默认 multi-thread
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() { ... }
+
+#[tokio::main(workers = 4)]
+async fn main() { ... }
+
+// Runtime 使用模式：
+let rt = Runtime::new()?;
+
+// 模式 1: block_on（顶层）
+let result = rt.block_on(async {
+    println!("in runtime");
+    42
+});
+
+// 模式 2: handle + spawn
+let handle = rt.handle();
+handle.spawn(async {
+    // 后台任务
+});
+
+// 模式 3: enter（影响全局）
+let _enter = rt.enter();
+// 当前线程进入 runtime 上下文
+// 可以调用 tokio::spawn 等
+
+rt.shutdown_background();   // 后台关闭
+rt.shutdown_timeout(Duration::from_secs(30));
+</code></pre>
+</section>
+
+<section id="scheduler" class="toc-link">
+  <h2><span class="num">04</span> Scheduler</h2>
+
+<pre><code>// Tokio 调度器：work-stealing scheduler
+// 
+// 类似 Go 的 GMP 模型
+// 每个 Worker thread 有本地队列
+// 空闲时从其他 Worker "偷" 任务
+
+// 内部结构（简化）：
+struct Scheduler {
+    workers: Vec&lt;Worker&gt;,        // worker 数 = CPU 数（默认）
+    global_queue: Mutex&lt;Vec&lt;Task&gt;&gt;,
+    run_queue: Vec&lt;LocalQueue&gt;,  // 每 worker 一个本地队列
+}
+
+struct Worker {
+    id: usize,
+    local_queue: LocalQueue,    // 最多 256 个 task
+    // ...
+}
+
+// Task 调度：
+// 1. spawn: 加入 global_queue
+// 2. Worker 拿 task 优先从自己的 local_queue
+// 3. 本地空 → 从 global_queue 拿一批
+// 4. 还空 → 从其他 worker 偷一半
+
+// 优势：
+//   - 本地队列无锁（性能好）
+//   - work-stealing 负载均衡
+//   - 缓存友好
+
+// Task 状态：
+//   Scheduled → Running → Idle (waiting) → Scheduled
+//                       → Done
+
+// Task 唤醒：
+//   - Waker::wake() 把 task 放回队列
+//   - 通常放进唤醒它的 worker 的本地队列
+//   - 减少 cross-worker 偷取
+
+// Yield（让出 CPU）：
+tokio::task::yield_now().await;
+
+// 优先级：
+//   task 没有内建优先级
+//   通过 spawn_different_runtime 实现
+</code></pre>
+</section>
+
+<section id="reactor" class="toc-link">
+  <h2><span class="num">05</span> Reactor 与 IO</h2>
+
+<pre><code>// Reactor 基于 mio
+// mio 是 epoll/kqueue/IOCP 的抽象
+// 
+// 平台：
+//   Linux: epoll
+//   macOS: kqueue
+//   Windows: IOCP
+//   WASI: poll_oneof
+
+// mio API（简化）：
+struct Poll {
+    registry: Registry,
+}
+
+// 注册 fd：
+let mut io = mio::Interest::READABLE;
+poll.registry().register(&amp;mut source, token, io)?;
+
+// 事件循环：
+loop {
+    poll.poll(&amp;mut events, Some(timeout))?;
+    for event in &amp;events {
+        if event.is_readable() {
+            // 通知对应的 task
+            task.wake();
+        }
+    }
+}
+
+// Tokio 的 AsyncFd 包装：
+use tokio::io::unix::AsyncFd;
+
+let async_fd = AsyncFd::new(my_fd)?;
+
+// 在 task 中：
+loop {
+    let mut guard = async_fd.readable().await?;
+    let buf = ...;
+    let r = guard.get_inner().read(buf);
+    if r.is_would_block() {
+        guard.clear_ready();
+        continue;
+    }
+    break;
+}
+
+// 网络类型：
+//   tokio::net::TcpListener / TcpStream
+//   tokio::net::UdpSocket
+//   tokio::net::UnixListener / UnixStream
+
+use tokio::net::TcpListener;
+
+#[tokio::main]
+async fn main() {
+    let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
+    loop {
+        let (socket, addr) = listener.accept().await.unwrap();
+        tokio::spawn(async move {
+            handle_connection(socket).await;
+        });
+    }
+}
+</code></pre>
+</section>
+
+<section id="timer" class="toc-link">
+  <h2><span class="num">06</span> Timer</h2>
+
+<pre><code>// Tokio Timer 基于 timing wheel + heap
+// 精度：毫秒级
+// 支持海量并发定时器
+
+use tokio::time::{sleep, timeout, interval, Instant, Duration};
+
+// 1. sleep
+sleep(Duration::from_secs(1)).await;
+
+// 2. timeout（包装 future）
+match timeout(Duration::from_secs(5), long_op()).await {
+    Ok(result) => println!("done: {}", result),
+    Err(_) => println!("timeout"),
+}
+
+// 3. interval（周期）
+let mut ticker = interval(Duration::from_secs(1));
+loop {
+    ticker.tick().await;
+    do_periodic();
+}
+
+// 4. Instant（tokio 自己的）
+let start = Instant::now();
+do_work();
+let elapsed = start.elapsed();
+
+// 内部实现：
+// tokio::time::driver
+//   - Driver task 监听最早到期 timer
+//   - 使用最小堆组织 timers
+//   - wake 时通知所有到期 timer
+
+// 高精度：
+//   1ms 精度（足够大多数场景）
+//   子毫秒需要直接 OS（如 timerfd）
+
+// Timer 注意的：
+//   - 不保证精确（受调度影响）
+//   - 长时间 sleep 可能被取消
+//   - 系统时钟跳变会影响（用 CLOCK_MONOTONIC）
+</code></pre>
+</section>
+
+<section id="spawn" class="toc-link">
+  <h2><span class="num">07</span> Task 管理</h2>
+
+<pre><code>// spawn 启动一个 task
+let handle = tokio::spawn(async {
+    // 这段代码异步执行
+    42
+});
+
+let result = handle.await.unwrap();
+
+// JoinHandle: Send + 'static
+// 任务返回值通过它获取
+
+// 取消：
+handle.abort();   // 主动取消
+
+// 监控：
+let handle = tokio::spawn(async { panic!("oops") });
+if let Err(e) = handle.await {
+    if e.is_panic() {
+        println!("task panicked");
+    }
+}
+
+// 任务命名（1.34+）：
+tokio::spawn(async { ... }).instrument(tracing::info_span!("my_task"));
+
+// TaskSet（管理多个任务）：
+use tokio::task::JoinSet;
+let mut set = JoinSet::new();
+for i in 0..10 {
+    set.spawn(async move { i * 2 });
+}
+while let Some(res) = set.join_next().await {
+    println!("{}", res.unwrap());
+}
+
+// Local task（不 Send）：
+// 只能在当前线程跑
+tokio::task::spawn_local(async {
+    let rc = Rc::new(5);   // ✅ 不是 Send
+    println!("{}", rc);
+});
+
+// 必须在 LocalSet 内：
+let local = tokio::task::LocalSet;
+local.run_until(async {
+    tokio::task::spawn_local(async { ... }).await;
+}).await;
+
+// Blocking：
+// 在 blocking pool 执行同步任务
+let result = tokio::task::spawn_blocking(|| {
+    expensive_sync()
+}).await.unwrap();
+</code></pre>
+</section>
+
+<section id="channels" class="toc-link">
+  <h2><span class="num">08</span> Tokio Channels</h2>
+
+<pre><code>// 4 种 channel：
+// 1. mpsc - 多生产者，单消费者
+use tokio::sync::mpsc;
+let (tx, mut rx) = mpsc::channel(100);
+
+tokio::spawn(async move {
+    for i in 0..10 {
+        tx.send(i).await.unwrap();
+    }
+});
+
+while let Some(v) = rx.recv().await {
+    println!("{}", v);
+}
+
+// 2. oneshot - 单生产者，单消费者（一次性）
+use tokio::sync::oneshot;
+let (tx, rx) = oneshot::channel();
+tokio::spawn(async move {
+    tx.send("result").unwrap();
+});
+let result = rx.await.unwrap();
+
+// 3. broadcast - 多生产者，多消费者（广播）
+use tokio::sync::broadcast;
+let (tx, mut rx1) = broadcast::channel(100);
+let mut rx2 = tx.subscribe();
+tx.send(1).unwrap();
+// rx1 和 rx2 都收到 1
+
+// 4. watch - 单生产者，多消费者（仅最新值）
+use tokio::sync::watch;
+let (tx, mut rx) = watch::channel(0);
+tx.send(1);   // 仅保留最新
+tx.send(2);   // 1 被丢弃
+let v = *rx.borrow();   // 2
+
+// 选择：
+//   单向流 → mpsc
+//   单次响应 → oneshot
+//   广播事件 → broadcast
+//   状态共享 → watch
+
+// unbounded (无界)：
+let (tx, rx) = mpsc::unbounded_channel();
+// 不限制缓冲
+// 风险：内存爆炸（生产快于消费）
+
+// permit（容量检查）：
+let permit = tx.reserve().await?;   // 等待空位
+permit.send("data");
+</code></pre>
+</section>
+
+<section id="blocking" class="toc-link">
+  <h2><span class="num">09</span> 阻塞任务处理</h2>
+
+<pre><code>// 问题：阻塞操作（CPU 密集、同步 IO）会卡住 async runtime
+
+// 错误做法：
+async fn bad() {
+    std::thread::sleep(Duration::from_secs(1));   // ❌ 阻塞 worker
+    // 这个 worker 1 秒内无法处理其他 task
+}
+
+// 正确做法 1: spawn_blocking
+async fn correct() {
+    tokio::task::spawn_blocking(|| {
+        std::thread::sleep(Duration::from_secs(1));
+        "done"
+    }).await.unwrap();
+}
+
+// spawn_blocking 任务在独立线程池：
+//   - 默认 512 个线程
+//   - 任务队列
+//   - 不影响 async worker
+
+// 正确做法 2: 用 async 版本
+tokio::time::sleep(Duration::from_secs(1)).await;
+
+// tokio::task::yield_now
+// 让出当前 worker 给其他 task
+async fn long_loop() {
+    for i in 0..1000000 {
+        if i % 1000 == 0 {
+            tokio::task::yield_now().await;
+        }
+    }
+}
+
+// spawn_blocking 使用场景：
+//   1. 同步 IO（文件、阻塞网络）
+//   2. CPU 密集计算
+//   3. 调用非 async 库
+//   4. 等待锁（如标准 Mutex::lock）
+
+// 性能考虑：
+//   spawn_blocking 有线程切换开销
+//   短任务（&lt; 1ms）用 async
+//   长任务（&gt; 10ms）用 spawn_blocking
+</code></pre>
+</section>
+
+<section id="internals" class="toc-link">
+  <h2><span class="num">10</span> 内部实现</h2>
+
+<pre><code>// Tokio 内部模块：
+// tokio/src/
+
+// 1. runtime/
+//    runtime/mod.rs        Runtime 入口
+//    runtime/scheduler/    调度器
+//       multi_thread/      多线程 work-stealing
+//    runtime/handle.rs     Handle
+//    runtime/io/           IO driver
+//    runtime/time/         Timer driver
+//    runtime/blocking/     Blocking pool
+
+// 2. Task 结构（简化）：
+struct Task {
+    header: Header,        // 元数据
+    future: FutureObj,    // 内部 future
+    schedule: Schedule,    // 调度回调
+}
+
+struct Header {
+    state: AtomicUsize,    // 状态机
+    queue_next: AtomicPtr&lt;Task&gt;,  // 队列链
+    vtable: &'static Vtable,  // 虚表
+}
+
+// State 包含：
+//   - SCHEDULED / RUNNING / IDLE
+//   - 引用计数
+//   - waker ref count
+
+// 3. io/ - IO driver
+//    基于 mio
+//    每个线程一个 reactor（或共享）
+//    IO 事件 → 唤醒对应 task
+
+// 4. time/ - Timer driver
+//    用最小堆组织 timers
+//    每次 wake 时计算下一个最近 deadline
+//    sleep 直到 deadline
+//    wake 后处理所有到期 timer
+
+// 5. sync/ - 异步原语
+//    Mutex, RwLock, Semaphore, Notify, Barrier
+//    这些是 async 版本（不像 std 是阻塞）
+//    Mutex::lock() 返回 Future
+
+// 6. net/ - 网络类型
+//    TcpListener, TcpStream, UdpSocket
+//    UnixListener, UnixStream
+//    都是 AsyncRead/AsyncWrite
+
+// 7. fs/ - 文件操作
+//    File 包装（用 spawn_blocking 实际 IO）
+//    注意：每次 IO 都 spawn_blocking
+//    高性能场景考虑 tokio-uring（io_uring）
+
+// 8. process/ - 子进程
+//    Command API（同步 + 异步）
+//    Child, ChildStdin/Stdout/Stderr
+
+// 9. signal/ - 信号处理
+//    tokio::signal::ctrl_c()
+//    unix::signal(...)
+</code></pre>
+
+  <p>Tokio vs async-std vs smol：</p>
+  <table>
+    <tr><th></th><th>Tokio</th><th>async-std</th><th>smol</th></tr>
+    <tr><td>定位</td><td>全功能</td><td>std 风格</td><td>极简</td></tr>
+    <tr><td>调度</td><td>work-stealing</td><td>work-stealing</td><td>work-stealing</td></tr>
+    <tr><td>性能</td><td>最佳</td><td>好</td><td>好</td></tr>
+    <tr><td>生态</td><td>最大</td><td>中等</td><td>小</td></tr>
+    <tr><td>文档</td><td>优秀</td><td>好</td><td>有限</td></tr>
+    <tr><td>用例</td><td>大多数</td><td>偏好 std 风格</td><td>实验/教学</td></tr>
+  </table>
+
+  <p>Tokio-uring（io_uring 支持）：</p>
+<pre><code>// 用 io_uring 减少系统调用
+// 适合高 IO 场景
+
+use tokio_uring::fs::File;
+
+let file = File::open("test.txt").await?;
+let buf = vec![0; 4096];
+let (res, buf) = file.read_at(buf, 0).await;
+println!("{}", res.unwrap());
+
+// 优势：
+//   - 无 spawn_blocking
+//   - 真 async IO
+//   - 显著提升 IO 密集场景
+
+// 限制：
+//   - 仅 Linux 5.1+
+//   - API 不完全兼容 tokio
+//   - 仍在发展中
+</code></pre>
+
+  <p>Tokio Console（调试工具）：</p>
+<pre><code>// tokio-console 实时监控
+// 类似 htop，但是是 task 级别
+
+// 启用：
+// [dependencies]
+// tokio = { version = "1", features = ["tracing"] }
+// console-subscriber = "0.2"
+
+#[tokio::main]
+async fn main() {
+    console_subscriber::init();
+    // ...
+}
+
+// 运行：
+tokio-console
+
+// 显示：
+//   每个 task 的状态、运行时间、waker
+//   每个 task 的 await 点
+//   资源使用情况
+</code></pre>
+
+  <div class="callout">
+    <strong>Tokio 总结:</strong><br>
+    1. <strong>事实标准</strong>：90%+ Rust async 项目用 Tokio<br>
+    2. <strong>work-stealing</strong>：高效多线程调度<br>
+    3. <strong>Reactor + Timer + Blocking Pool</strong>：完整 runtime<br>
+    4. <strong>cancel-safety</strong>：API 设计考虑取消<br>
+    5. <strong>生态丰富</strong>：Hyper、Axum、Tonic 都基于它<br>
+    6. <strong>调试工具</strong>：tokio-console 让 task 可见<br>
+    Tokio 是 Rust 异步生态的基石。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

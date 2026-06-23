@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust Unsafe 与内存模型深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Rust Unsafe 与内存模型深度解析</h1>
+  <p class="subtitle">unsafe 边界 — 未定义行为与 Soundness</p>
+  <span class="version">Rust 1.80 · Stacked Borrows · Miri</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#operations">unsafe 操作</a></li>
+    <li><a href="#ub">未定义行为 (UB)</a></li>
+    <li><a href="#stacked">Stacked Borrows</a></li>
+    <li><a href="#send-sync">Send/Sync 的 unsafe</a></li>
+    <li><a href="#ffi">FFI 外部函数接口</a></li>
+    <li><a href="#raw-ptr">原始指针操作</a></li>
+    <li><a href="#soundness">Soundness</a></li>
+    <li><a href="#tools">工具链</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Rust 安全模型：<strong>safe 代码永远不触发 UB</strong>。但很多场景（FFI、底层操作、性能优化）必须绕过编译器检查 — 这就是 unsafe。</p>
+
+  <p>unsafe 不是"关闭 Rust 安全"，而是<strong>开发者承担额外责任</strong>。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">Safe Rust</div>
+      <ul>
+        <li>编译期保证内存安全</li>
+        <li>无 UB（未定义行为）</li>
+        <li>无数据竞争</li>
+        <li>不 panic（除显式外）</li>
+        <li>常规业务代码 95%</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Unsafe Rust</div>
+      <ul>
+        <li>绕过借用检查</li>
+        <li>调用外部代码</li>
+        <li>手动内存管理</li>
+        <li>开发者保证 Soundness</li>
+        <li>库底层 / 性能关键 5%</li>
+      </ul>
+    </div>
+  </div>
+
+  <p>unsafe Rust 不是 C++：</p>
+  <ul>
+    <li>仍受 borrow checker 约束（部分场景）</li>
+    <li>RAII 仍生效（drop 自动）</li>
+    <li>仍要遵守 Soundness 契约</li>
+    <li>unsafe 块/函数只是<strong>明示风险</strong></li>
+  </ul>
+</section>
+
+<section id="operations" class="toc-link">
+  <h2><span class="num">02</span> unsafe 操作</h2>
+
+  <p>五类 unsafe 操作：</p>
+
+<pre><code>// 1. 解引用原始指针 (*const T / *mut T)
+let x = 5;
+let p: *const i32 = &amp;x;
+unsafe {
+    println!("{}", *p);
+}
+
+// 2. 调用 unsafe 函数（包括 FFI）
+unsafe fn dangerous() -> i32 { 42 }
+unsafe {
+    dangerous();
+}
+
+extern "C" {
+    fn abs(x: i32) -> i32;
+}
+unsafe {
+    abs(-5);
+}
+
+// 3. 实现 unsafe trait
+unsafe trait MyTrait { ... }
+unsafe impl MyTrait for MyType { ... }
+
+// 4. 访问可变 static
+static mut COUNTER: i32 = 0;
+unsafe {
+    COUNTER += 1;
+}
+
+// 5. 访问 union 字段
+union MyUnion {
+    f1: u32,
+    f2: f32,
+}
+let u = MyUnion { f1: 1 };
+unsafe {
+    let f = u.f1;   // 访问 union 字段
+}
+</code></pre>
+
+  <p>unsafe 块的语义：</p>
+<pre><code>// unsafe 块只影响其内部代码
+let x = 5;
+unsafe {
+    // 这里允许 unsafe 操作
+}
+// 离开块后，所有 safe 操作正常
+
+// unsafe fn：整个函数体是 unsafe 上下文
+unsafe fn risky() {
+    // 这里无需再写 unsafe
+    let p: *const i32 = ...;
+    println!("{}", *p);
+}
+
+// 调用 unsafe fn 必须 unsafe 块
+fn caller() {
+    unsafe { risky(); }
+}
+
+// unsafe trait：实现时需要 unsafe impl
+unsafe trait Trusted { fn trust(&amp;self); }
+struct Foo;
+unsafe impl Trusted for Foo {
+    fn trust(&amp;self) {}
+}
+</code></pre>
+</section>
+
+<section id="ub" class="toc-link">
+  <h2><span class="num">03</span> 未定义行为 (UB)</h2>
+
+  <p>Rust 中的 UB 列表：</p>
+
+<pre><code>// 1. 数据竞争 (Data Race)
+// 多线程并发读写同一位置，至少一个是写
+
+// 2. 解引用空指针 / 悬垂指针
+let p: *const i32 = std::ptr::null();
+unsafe { println!("{}", *p); }   // ❌ segfault / UB
+
+// 3. 读未初始化内存
+let v: Vec&lt;u8&gt; = Vec::with_capacity(10);
+unsafe {
+    let x = v.get_unchecked(0);  // ❌ UB（未初始化）
+}
+
+// 4. 违反别名规则
+let mut x = 5;
+let r1 = &amp;mut x;
+let r2 = &amp;x;     // ❌ 不能同时有 &mut 和 &
+*r1;
+
+// 5. 创建无效值
+let x: bool = unsafe { std::mem::transmute(3u8) };   // ❌ bool 只能 0 或 1
+let x: char = unsafe { std::mem::transmute(0x110000u32) };  // ❌ 超出 char 范围
+
+// 6. 从错误类型 transmute
+let x: i64 = unsafe { std::mem::transmute(&amp;5) };  // 引用 → i64
+
+// 7. panic 跨 FFI 边界
+extern "C" fn callback() {
+    panic!("oops");   // ❌ C 不懂 unwind
+}
+// C 调用 callback → UB
+
+// 8. 错误的对齐
+let bytes = [0u8; 8];
+let p = bytes.as_ptr() as *const u64;
+unsafe { println!("{}", *p); }   // 可能 UB（对齐不保证）
+
+// 9. 越界 slice
+let v = vec![1, 2, 3];
+unsafe {
+    let _ = v.get_unchecked(5);  // ❌ UB
+}
+
+// 10. 大于 isize 的分配 / 偏移
+let huge: *const u8 = std::ptr::null();
+unsafe {
+    let p = huge.offset(isize::MAX);  // ❌ UB
+}
+</code></pre>
+
+  <p>UB 的后果：</p>
+<pre><code>// UB = 编译器假设代码不发生 UB
+// 一旦发生，编译器可以做"任何事"
+
+// 实际后果：
+// 1. 编译器优化可能删除看似有效的代码
+// 2. 程序随机崩溃
+// 3. 安全漏洞（如 buffer overflow）
+// 4. 不同编译器/版本结果不同
+
+// Rust 比 C/C++ 严格：
+//   - 多了"违反别名"的明确规则
+//   -多了"数据竞争是 UB"
+//   - 多了类型 invariant
+</code></pre>
+</section>
+
+<section id="stacked" class="toc-link">
+  <h2><span class="num">04</span> Stacked Borrows</h2>
+
+  <p>Rust 内存模型（Ralf Jung 等提出）— 明确 unsafe 代码的正确性标准。</p>
+
+<pre><code>// Aliasing 模型：规定何时两个引用可以共存
+//
+// 核心规则：
+//   1. &mut T 唯一（exclusive）
+//   2. &T 共享，但不能修改（除 UnsafeCell）
+//   3. 原始指针可以打破规则，但需明确 unsafe
+
+// Stacked Borrows 模型：
+// 每个位置有一个"借用栈"
+// 顶部的引用是活跃的，下面的被"冻结"
+
+// 示例：
+let mut x = 0;
+let r1 = &amp;mut x;
+let r2 = &amp;mut x;   // 在 SB 模型中
+// r1 被推入栈底，r2 在栈顶
+// 此时使用 r1 → "弹出" r2，r2 失效
+// 后续使用 r2 = UB
+
+// Tree Borrows（新一代模型）：
+// - 用树结构组织借用
+// - 更宽松，支持更多模式
+// - 仍实验中
+
+// 实际意义：
+//   - 编译器据此优化（如假设 &mut 唯一）
+//   - Miri 工具检查违反
+//   - 库作者写 unsafe 时遵守
+</code></pre>
+</section>
+
+<section id="send-sync" class="toc-link">
+  <h2><span class="num">05</span> Send/Sync 的 unsafe</h2>
+
+<pre><code>// Send: 类型可以跨线程移动
+// Sync: &T 可以跨线程共享
+
+// Auto trait：编译器自动派生
+//   - 所有字段都是 Send → 类型是 Send
+//   - 所有字段都是 Sync → 类型是 Sync
+
+// 非 Send/Sync 的类型：
+//   Rc&lt;T&gt;         不是 Send（非原子引用计数）
+//   Cell&lt;T&gt;       不是 Sync（非线程安全的内部可变）
+//   RefCell&lt;T&gt;    不是 Sync
+//   *const T/*mut T 不是 Send/Sync（避免误用）
+
+// 强制实现（unsafe）：
+struct MyWrapper(*mut u8);
+unsafe impl Send for MyWrapper {}
+unsafe impl Sync for MyWrapper {}
+
+// 何时需要？
+//   1. 包装 C 库返回的指针，期望跨线程使用
+//   2. 实现自定义原子操作
+//   3. FFI 类型
+
+// 正确性要求：
+//   unsafe impl Send for X 意味着：
+//     - 我保证 X 可以安全地跨线程移动
+//     - 即使 X 内部有 *mut，也不会引起数据竞争
+
+// 反例：
+struct BadCounter(usize);
+unsafe impl Sync for BadCounter {}
+// ❌ 即使声明 Sync，并发 ++self.0 也是数据竞争
+// Sync 只是承诺，实际操作还要用原子
+
+// 检查：loom 工具（并发测试）
+</code></pre>
+</section>
+
+<section id="ffi" class="toc-link">
+  <h2><span class="num">06</span> FFI 外部函数接口</h2>
+
+<pre><code>// extern 块：声明外部函数
+extern "C" {
+    fn abs(x: i32) -> i32;
+}
+
+fn main() {
+    let x = unsafe { abs(-5) };
+}
+
+// extern 函数：Rust 函数对外暴露
+#[no_mangle]
+pub extern "C" fn double(x: i32) -> i32 {
+    x * 2
+}
+// no_mangle: 防止名字被 mangle（C 兼容）
+
+// ABI（调用约定）：
+//   "C"        - 标准 C ABI
+//   "stdcall"  - Windows API
+//   "system"   - 平台默认（Linux: C, Windows: stdcall）
+//   "Rust"     - Rust 调用约定（不稳定）
+//   "aapcs", "cdecl", "fastcall", "win64"...
+
+// 回调函数（C 调用 Rust）
+type Callback = extern "C" fn(i32) -&gt; i32;
+extern "C" fn rust_callback(x: i32) -> i32 { x * 2 }
+
+extern "C" { fn register_callback(cb: Callback); }
+unsafe {
+    register_callback(rust_callback);
+}
+
+// 字符串：
+//   Rust &amp;str 不能直接传给 C
+//   用 CString / CStr
+use std::ffi::{CString, CStr};
+let c_str = CString::new("hello").unwrap();
+let raw: *const c_char = c_str.as_ptr();
+unsafe {
+    some_c_function(raw);
+}
+// 注意：CString 必须 outlive C 调用
+
+// 错误处理：
+//   Rust panic 不能跨 FFI 边界
+//   用 catch_unwind 拦截
+use std::panic::catch_unwind;
+
+#[no_mangle]
+pub extern "C" fn rust_api(x: i32) -> i32 {
+    let result = catch_unwind(|| {
+        do_rust_work(x)
+    });
+    match result {
+        Ok(v) => v,
+        Err(_) => -1,  // panic 转 -1
+    }
+}
+</code></pre>
+
+  <p>bindgen：自动生成 FFI 绑定：</p>
+<pre><code>// bindgen 从 C 头文件生成 Rust
+// bindgen input.h -o bindings.rs
+
+// C 头文件：
+// typedef struct { int x; int y; } Point;
+// int do_something(Point* p);
+
+// bindgen 生成：
+#[repr(C)]
+pub struct Point { pub x: c_int, pub y: c_int }
+extern "C" {
+    pub fn do_something(p: *mut Point) -> c_int;
+}
+
+// cbindgen：从 Rust 生成 C 头文件（反向）
+</code></pre>
+</section>
+
+<section id="raw-ptr" class="toc-link">
+  <h2><span class="num">07</span> 原始指针操作</h2>
+
+<pre><code>// *const T 和 *mut T
+//   - 可复制（不像 &mut）
+//   - 不受借用检查
+//   - 不能直接解引用（需 unsafe）
+//   - 可能 null、未对齐
+
+// 创建：
+let x = 5;
+let p1: *const i32 = &amp;x;
+let p2: *const i32 = p1;   // 直接复制
+let p3 = std::ptr::null::&lt;i32&gt;();
+
+// 解引用：
+unsafe { println!("{}", *p1); }
+
+// 偏移：
+let v = vec![1, 2, 3, 4];
+let p = v.as_ptr();
+unsafe {
+    println!("{}", *p.add(2));   // 3
+    println!("{}", *p.offset(1)); // 2
+}
+// 注意：add/offset/sub 都需 unsafe
+// 必须保证结果在原 allocation 内（或越界一格）
+
+// 转换：
+let r: &amp;i32 = &amp;5;
+let p: *const i32 = r;        // 引用 → 指针（安全）
+let r2: &amp;i32 = unsafe { &amp;*p };  // 指针 → 引用（unsafe）
+
+// 写入：
+let mut x = 0;
+let p: *mut i32 = &amp;mut x;
+unsafe { ptr::write(p, 42); }   // 不读旧值
+
+// 读取：
+let v = unsafe { ptr::read(p) };
+
+// 替换：
+let old = unsafe { ptr::replace(p, 99) };
+
+// swap：
+unsafe { ptr::swap(p1, p2); }
+
+// 未初始化：
+let p = std::mem::MaybeUninit::&lt;i32&gt;::uninit();
+let v = unsafe { p.assume_init() };   // ❌ 假设已初始化（开发者责任）
+</code></pre>
+
+  <p>实现 Vec 的简化示例：</p>
+<pre><code>struct MyVec&lt;T&gt; {
+    ptr: *mut T,
+    cap: usize,
+    len: usize,
+}
+
+impl&lt;T&gt; MyVec&lt;T&gt; {
+    fn push(&amp;mut self, val: T) {
+        if self.len == self.cap {
+            self.grow();
+        }
+        unsafe {
+            std::ptr::write(self.ptr.add(self.len), val);
+        }
+        self.len += 1;
+    }
+    
+    fn get(&amp;self, i: usize) -> &amp;T {
+        unsafe { &amp;*self.ptr.add(i) }
+    }
+    
+    fn grow(&amp;mut self) {
+        let new_cap = self.cap * 2;
+        let new_ptr = unsafe {
+            std::alloc::realloc(
+                self.ptr as *mut u8,
+                self.cap * std::mem::size_of::&lt;T&gt;(),
+                new_cap * std::mem::size_of::&lt;T&gt;(),
+            ) as *mut T
+        };
+        self.ptr = new_ptr;
+        self.cap = new_cap;
+    }
+}
+</code></pre>
+</section>
+
+<section id="soundness" class="toc-link">
+  <h2><span class="num">08</span> Soundness</h2>
+
+  <p>Soundness（健全性）：safe API 不能让 safe 代码触发 UB。</p>
+
+<pre><code>// Sound API 的承诺：
+//   只要用 safe 代码调用此 API，不会触发 UB
+//   即使 API 内部有 unsafe
+
+// Unsound 的 API（反例）：
+pub fn read_first&lt;T&gt;(slice: &amp;[T]) -> &amp;T {
+    let p = slice.as_ptr();
+    unsafe { &amp;*p }   // ❌ slice 可能为空，p 可能未定义
+}
+
+// 修复：
+pub fn read_first&lt;T&gt;(slice: &amp;[T]) -> Option&lt;&T&gt; {
+    slice.first()
+}
+
+// 标准库的 Soundness 漏洞历史：
+//   - Bug in mem::forget（导致 Leak 漏洞）
+//   - VecDeque 的缓冲区计算
+//   - 某些 unsafe trait 实现
+
+// 自检：
+//   1. 我的 unsafe 块是否暴露 UB 给 safe 调用？
+//   2. 是否检查了所有 precondition？
+//   3. 是否依赖未文档化的假设？
+
+// 文档化 unsafe：
+/// # Safety
+/// 
+/// 调用者必须保证 ptr 是有效的、非空、已初始化的。
+pub unsafe fn dangerous(ptr: *const u8) -> u8 {
+    *ptr
+}
+
+// 内部 unsafe，外部 safe：
+pub fn safe_wrapper(ptr: *const u8) -> Option&lt;u8&gt; {
+    if ptr.is_null() {
+        None
+    } else {
+        unsafe { Some(dangerous(ptr)) }
+    }
+}
+</code></pre>
+
+  <p>RustSec advisory database：</p>
+<pre><code>// https://rustsec.org
+// 查找已知 unsound 的 crate
+// cargo audit 检查依赖
+
+// 历史上的 unsound 例子：
+//   - smallvec 1.8.0 (insert_from_slice)
+//   - trait-set (soundness)
+//   - 部分 async crate
+
+// 警惕任何"绕过 borrow checker"的库
+// 除非有充分理由和严格测试
+</code></pre>
+</section>
+
+<section id="tools" class="toc-link">
+  <h2><span class="num">09</span> 工具链</h2>
+
+  <p>Miri — UB 检测器：</p>
+<pre><code>// Miri 是 Rust 的 UB 检测器
+// 基于 Stacked Borrows / Tree Borrows 模型
+
+// 安装：
+rustup +nightly component add miri
+
+// 运行：
+cargo +nightly miri run
+cargo +nightly miri test
+
+// 检测项：
+//   - 越界访问
+//   - 未初始化内存读取
+//   - 违反别名规则
+//   - 数据竞争
+//   - 整数溢出（部分）
+//   - invalid 值
+
+// 示例：
+fn main() {
+    let mut x = 0;
+    let r1 = &amp;mut x;
+    let r2 = &amp;x;
+    *r1 = 1;
+    println!("{}", *r2);  // ❌ Miri 报错：违反别名
+}
+
+// 输出：
+// error: Undefined Behavior: trying to reborrow for SharedReadOnly 
+// at alloc784, but parent tag &lt;untagged&gt; does not have an appropriate item
+</code></pre>
+
+  <p>其他工具：</p>
+  <table>
+    <tr><th>工具</th><th>用途</th></tr>
+    <tr><td><code>miri</code></td><td>运行时 UB 检测</td></tr>
+    <tr><td><code>loom</code></td><td>并发模型测试</td></tr>
+    <tr><td><code>shiny</code></td><td>形式化验证（实验）</td></tr>
+    <tr><td><code>Prusti</code></td><td>形式化验证（学术）</td></tr>
+    <tr><td><code>cargo-audit</code></td><td>已知漏洞扫描</td></tr>
+    <tr><td><code>cargo-geiger</code></td><td>unsafe 用量统计</td></tr>
+    <tr><td><code>bindgen</code></td><td>C 头 → Rust FFI</td></tr>
+    <tr><td><code>cbindgen</code></td><td>Rust → C 头</td></tr>
+    <tr><td><code>clippy</code></td><td>lint（含 unsafe 建议）</td></tr>
+  </table>
+
+  <p>编写 unsafe 的最佳实践：</p>
+<pre><code>// 1. 隔离 unsafe
+//   - 把 unsafe 集中在少数模块
+//   - 暴露的 API 是 safe 的
+//   - 内部 unsafe + 文档
+
+// 2. 文档化
+//   - 每个 unsafe 块注释说明为什么 safe
+//   - 每个 unsafe fn 加 # Safety 节
+//   - 解释 precondition
+
+// 3. 测试
+//   - Miri 跑测试
+//   - loom 测并发
+//   - fuzz 测试（cargo-fuzz）
+
+// 4. 减少使用
+//   - 优先用标准库 / 成熟库
+//   - unsafe 不等于性能（可能编译器优化更慢）
+//   - 先测后用 unsafe
+
+// 5. 最小权限
+//   - unsafe 块尽可能小
+//   - 避免 unsafe fn（强制调用方 unsafe）
+//   - 用 unsafe trait 时清晰注释
+
+// 例：好的隔离
+mod internal {
+    // 这里有 unsafe
+    pub fn safe_api() { unsafe { ... } }
+}
+
+// 调用方只看到 safe_api
+</code></pre>
+
+  <div class="callout">
+    <strong>unsafe 总结:</strong><br>
+    1. <strong>unsafe 是明示责任</strong>，不是关闭安全<br>
+    2. <strong>五类 unsafe 操作</strong>：原始指针、unsafe fn、unsafe trait、static mut、union<br>
+    3. <strong>UB 列表</strong>：数据竞争、悬垂指针、invalid 值、违反别名<br>
+    4. <strong>Soundness</strong>：safe API 不能暴露 UB 给 safe 调用<br>
+    5. <strong>工具链</strong>：Miri、loom、cargo-audit、bindgen<br>
+    Rust 的 unsafe 让它既有"安全子集"又有"逃逸舱"。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

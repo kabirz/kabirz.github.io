@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rust 嵌入式开发深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ce422b'/><stop offset='100%25' stop-color='%23f74c00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>R</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Rust 嵌入式开发深度解析</h1>
+  <p class="subtitle">no_std / embedded-hal / RTIC / Embassy — 嵌入式 Rust 生态</p>
+  <span class="version">2024 · Rust on RP2040 / STM32 / ESP32 / nRF</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#no-std">no_std 环境</a></li>
+    <li><a href="#hal">embedded-hal 抽象</a></li>
+    <li><a href="#pac">PAC / HAL / BSP</a></li>
+    <li><a href="#memory">内存布局</a></li>
+    <li><a href="#rtic">RTIC 框架</a></li>
+    <li><a href="#embassy">Embassy 异步</a></li>
+    <li><a href="#debug">调试与烧录</a></li>
+    <li><a href="#boards">主流开发板</a></li>
+    <li><a href="#ecosystem">生态工具</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>嵌入式 Rust 是 Rust 在<strong>资源受限的微控制器</strong>（MCU）上的应用。提供 C/C++ 的性能 + Rust 的安全。</p>
+
+  <p>嵌入式 vs 桌面：</p>
+  <table>
+    <tr><th></th><th>桌面 Rust</th><th>嵌入式 Rust</th></tr>
+    <tr><td>内存</td><td>GB</td><td>KB（2KB-1MB）</td></tr>
+    <tr><td>存储</td><td>GB</td><td>KB-MB（8KB-4MB）</td></tr>
+    <tr><td>OS</td><td>Linux/Windows</td><td>裸机 / RTOS</td></tr>
+    <tr><td>标准库</td><td>完整</td><td><code>no_std</code></td></tr>
+    <tr><td>分配器</td><td>malloc/free</td><td>无（或 alloc）</td></tr>
+    <tr><td>典型平台</td><td>x86_64</td><td>ARM Cortex-M, RISC-V</td></tr>
+    <tr><td>线程</td><td>OS 线程</td><td>中断 + 协程</td></tr>
+  </table>
+
+  <p>嵌入式 Rust 分层：</p>
+<pre><code>┌─────────────────────────────────────────┐
+│   Application Code                      │
+├─────────────────────────────────────────┤
+│   Framework（RTIC / Embassy / 自管）     │
+├─────────────────────────────────────────┤
+│   BSP（Board Support Package）           │
+│   (板级支持，如 rp-pico)                 │
+├─────────────────────────────────────────┤
+│   HAL（Hardware Abstraction Layer）      │
+│   (芯片级，如 rp2040-hal)                │
+├─────────────────────────────────────────┤
+│   PAC（Peripheral Access Crate）         │
+│   (寄存器级，svd2rust 生成)              │
+├─────────────────────────────────────────┤
+│   MCU（微控制器硬件）                    │
+└─────────────────────────────────────────┘
+</code></pre>
+</section>
+
+<section id="no-std" class="toc-link">
+  <h2><span class="num">02</span> no_std 环境</h2>
+
+<pre><code>// #![no_std] 移除 std 依赖
+// 只能用 core + alloc（可选）
+
+#![no_std]
+#![no_main]   // 不用标准 main
+
+use core::panic::PanicInfo;
+
+#[panic_handler]
+fn panic(_info: &amp;PanicInfo) -> ! {
+    // 自定义 panic 处理
+    loop {}
+}
+
+// 自定义入口（Cortex-M）：
+#[cortex_m_rt::entry]
+fn main() -> ! {
+    // 应用代码
+    loop {}
+}
+
+// core crate：
+//   - 类型：i32, f32, Option, Result, ...
+//   - 操作：Add, Eq, Iterator, ...
+//   - mem, convert, slice, ...
+
+// alloc crate（需要 alloc）：
+//   - Vec, String, Box, Arc, ...
+//   - 需要实现 #[global_allocator]
+//   - 嵌入式很少用（耗内存）
+
+// common no_std deps：
+//   heapless  - 无堆数据结构（Vec, String, Map）
+//   nb        - 非阻塞 IO
+//   embedded-hal - 硬件抽象
+//   void      - Void 类型
+//   bitflags  - 位标志
+</code></pre>
+
+  <p>无堆数据结构：</p>
+<pre><code>// heapless：基于数组的容器
+use heapless::spsc::Queue;
+use heapless::Vec as HVec;
+use heapless::String as HString;
+
+let mut queue: Queue&lt;u8, 16&gt; = Queue::new();
+queue.enqueue(1).unwrap();
+let v = queue.dequeue().unwrap();
+
+let mut vec: HVec&lt;u8, 8&gt; = HVec::new();
+vec.push(1).unwrap();
+vec.push(2).unwrap();
+// vec.push(3).unwrap();   // 第 9 个会失败
+
+let mut s: HString&lt;16&gt; = HString::new();
+s.push_str("hello").unwrap();
+</code></pre>
+</section>
+
+<section id="hal" class="toc-link">
+  <h2><span class="num">03</span> embedded-hal 抽象</h2>
+
+<pre><code>// embedded-hal 是嵌入式 Rust 的核心 trait 库
+// 类似 std::io::Read/Write，但针对硬件
+
+// 主要 trait：
+// digital::
+//   InputPin   - 数字输入
+//   OutputPin  - 数字输出
+//   StatefulOutputPin  - 状态输出
+//   ToggleableOutputPin
+// 
+// i2c::I2c    - I2C 主机
+// spi::SpiBus / SpiDevice
+// serial::Read / Write  - 串口
+// 
+// blocking vs nb vs async：
+//   blocking::Read / Write - 阻塞 API
+//   nb::Read / Write - non-blocking
+//   async（embedded-hal-async）
+
+// 使用 trait：
+use embedded_hal::digital::OutputPin;
+
+fn blink_led&lt;LED: OutputPin&gt;(led: &amp;mut LED, times: u8) {
+    for _ in 0..times {
+        led.set_high().ok();
+        delay(100);
+        led.set_low().ok();
+        delay(100);
+    }
+}
+
+// 任何实现了 OutputPin 的都可以
+struct MyLed;
+impl OutputPin for MyLed {
+    type Error = ();
+    fn set_low(&amp;mut self) -> Result&lt;(), Self::Error&gt; { Ok(()) }
+    fn set_high(&amp;mut self) -> Result&lt;(), Self::Error&gt; { Ok(()) }
+}
+
+blink_led(&amp;mut MyLed, 5);
+</code></pre>
+
+  <p>I2C 示例（温度传感器）：</p>
+<pre><code>use embedded_hal::i2c::I2c;
+
+const TMP102_ADDR: u8 = 0x48;
+
+fn read_temperature&lt;I2C: I2c&gt;(i2c: &amp;mut I2C) -> Result&lt;f32, I2C::Error&gt; {
+    let mut buf = [0u8; 2];
+    i2c.write_read(TMP102_ADDR, &amp;[0x00], &amp;mut buf)?;
+    let raw = ((buf[0] as u16) &lt;&lt; 4) | (buf[1] as u16 &gt;&gt; 4);
+    Ok(raw as f32 * 0.0625)
+}
+</code></pre>
+</section>
+
+<section id="pac" class="toc-link">
+  <h2><span class="num">04</span> PAC / HAL / BSP</h2>
+
+<pre><code>// PAC (Peripheral Access Crate)
+//   - 由 SVD 文件自动生成
+//   - 直接访问寄存器
+//   - svd2rust 工具
+//   - 例：rp2040-pac, stm32f4-pac
+
+// PAC 使用：
+use rp2040_pac;
+
+let p = rp2040_pac::Peripherals::take().unwrap();
+p.IO_BANK0.gpio[25].gpio_ctrl.write(|w| w.funcsel().sio_25());
+p.SIO.gpio_oe_set.write(|w| w.bits(1 &lt;&lt; 25));
+p.SIO.gpio_out_set.write(|w| w.bits(1 &lt;&lt; 25));
+
+// 优点：最细粒度控制
+// 缺点：繁琐、易错、与硬件绑定
+
+// HAL (Hardware Abstraction Layer)
+//   - 包装 PAC，提供高层 API
+//   - 例：rp2040-hal, stm32f4xx-hal
+//   - 实现 embedded-hal trait
+
+use rp2040_hal::{
+    clocks::{Clock, ClockSource},
+    gpio::{Pins, Output},
+    pac,
+    sio::Sio,
+    watchdog::Watchdog,
+};
+
+let mut pac = pac::Peripherals::take().unwrap();
+let mut watchdog = Watchdog::new(pac.WATCHDOG);
+
+// 配置时钟
+let clocks = clocks::init_clocks_and_plls(
+    12_000_000,   // 外部晶振
+    pac.XOSC,
+    pac.CLOCKS,
+    pac.PLL_SYS,
+    pac.PLL_USB,
+    &amp;mut pac.RESETS,
+    &amp;mut watchdog,
+).ok().unwrap();
+
+// 配置 GPIO
+let sio = Sio::new(pac.SIO);
+let pins = Pins::new(pac.IO_BANK0, pac.PADS_BANK0, sio.gpio_bank0, &amp;mut pac.RESETS);
+let mut led = pins.gpio25.into_push_pull_output();
+led.set_high().unwrap();
+
+// BSP (Board Support Package)
+//   - 特定板子的封装
+//   - 例：rp-pico (Raspberry Pi Pico)
+//   - 预配置时钟、关键外设
+
+use rp_pico::hal::prelude::*;
+use rp_pico::{Pins, XOSC_CRYSTAL_FREQ};
+
+let mut pac = hal::pac::Peripherals::take().unwrap();
+let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
+let clocks = hal::clocks::init_clocks_and_plls(
+    XOSC_CRYSTAL_FREQ,
+    pac.XOSC,
+    pac.CLOCKS,
+    pac.PLL_SYS,
+    pac.PLL_USB,
+    &amp;mut pac.RESETS,
+    &amp;mut watchdog,
+).ok().unwrap();
+
+let pins = Pins::new(
+    pac.IO_BANK0, pac.PADS_BANK0,
+    sio.gpio_bank0, &amp;mut pac.RESETS,
+);
+let mut led = pins.led.into_push_pull_output();
+</code></pre>
+</section>
+
+<section id="memory" class="toc-link">
+  <h2><span class="num">05</span> 内存布局</h2>
+
+<pre><code>// 嵌入式可执行文件 = ELF + 自定义段
+
+// 内存映射（典型 Cortex-M）：
+// 0x00000000 +----------+
+//            | .vector  |  (中断向量表)
+//            +----------+
+// 0x08000000 | .text    |  (代码 in flash)
+//  | .rodata |  (只读数据)
+//            +----------+
+// 0x20000000 | .data    |  (初始化的全局)
+//            | .bss     |  (零初始化的全局)
+//            | heap     |  (可选)
+//            | stack    |
+//            +----------+
+// 0x2000FFFF (RAM 顶)
+
+// linker script：memory.x
+MEMORY {
+    FLASH : ORIGIN = 0x10000000, LENGTH = 2048K
+    RAM   : ORIGIN = 0x20000000, LENGTH = 256K
+}
+
+// link.x：
+//   - 自动生成（cortex-m-rt）
+//   - 定义段位置
+
+// 中断向量表：
+//   cortex-m-rt::entry / exception / interrupt 宏注册
+
+// 静态可变：
+static mut COUNTER: u32 = 0;
+
+#[entry]
+fn main() -> ! {
+    unsafe { COUNTER += 1; }   // unsafe，单线程但编译器保守
+    loop {}
+}
+</code></pre>
+
+  <p>alloc 在嵌入式：</p>
+<pre><code>// 需要实现 #[global_allocator]
+// 用 linked_list_allocator 或 alloc-cortex-m
+
+use alloc_cortex_m::CortexMHeap;
+
+#[global_allocator]
+static ALLOCATOR: CortexMHeap = CortexMHeap::empty();
+
+fn init_heap() {
+    let start = ...;
+    let size = 1024 * 16;   // 16KB
+    unsafe {
+        ALLOCATOR.init(start, size);
+    }
+}
+
+// 之后可以用 Vec, Box, ...
+extern crate alloc;
+use alloc::vec::Vec;
+
+let v: Vec&lt;u8&gt; = Vec::new();
+v.push(1);
+</code></pre>
+</section>
+
+<section id="rtic" class="toc-link">
+  <h2><span class="num">06</span> RTIC 框架</h2>
+
+  <p>RTIC (Real-Time Interrupt-driven Concurrency) 是 Rust 嵌入式<strong>主要并发框架</strong>。</p>
+
+<pre><code>// [dependencies]
+// cortex-m-rtic = "1.0"
+// 
+// 关键概念：
+// - resources: 共享状态
+// - tasks: 中断处理
+// - spawn: 软件触发任务
+// - schedule: 定时触发
+
+#![no_std]
+#![no_main]
+
+use rtic::app;
+
+#[app(device = rp_pico::hal::pac)]
+mod app {
+    use super::*;
+    
+    #[shared]
+    struct Shared {
+        counter: u32,
+    }
+    
+    #[local]
+    struct Local {}
+    
+    #[init]
+    fn init(_: init::Context) -> (Shared, Local) {
+        // 配置硬件、注册中断
+        (Shared { counter: 0 }, Local {})
+    }
+    
+    // 中断任务
+    #[task(binds = TIMER_IRQ, shared = [counter])]
+    fn timer_irq(ctx: timer_irq::Context) {
+        (ctx.shared.counter).lock(|c| *c += 1);
+    }
+    
+    // 软件任务（spawn 触发）
+    #[task(shared = [counter])]
+    fn process(ctx: process::Context) {
+        let c = (ctx.shared.counter).lock(|c| *c);
+        // ...
+    }
+    
+    #[idle]
+    fn idle(_: idle::Context) -> ! {
+        loop {
+            cortex_m::asm::wfi();
+        }
+    }
+}
+</code></pre>
+
+  <p>RTIC 优势：</p>
+  <ul>
+    <li><strong>编译期分析</strong>：无数据竞争（类似 ownership）</li>
+    <li><strong>无锁优先</strong>：高优先级抢占时不阻塞</li>
+    <li><strong>无 OS</strong>：直接跑在裸机</li>
+    <li><strong>静态分析</strong>：worst-case execution time 可分析</li>
+    <li><strong>资源使用</strong>：无堆、无 OS</li>
+  </ul>
+
+  <p>优先级抢占：</p>
+<pre><code>// RTIC 通过 priority 实现抢占：
+#[task(binds = IRQ_LOW, priority = 1)]
+fn low(ctx: low::Context) { ... }
+
+#[task(binds = IRQ_HIGH, priority = 3)]
+fn high(ctx: high::Context) { ... }
+
+// high 抢占 low
+// 中断嵌套由 RTIC 自动处理
+
+// 共享资源用 lock：
+(ctx.shared.counter).lock(|c| *c += 1);
+// lock 自动屏蔽低于当前优先级的中断
+// 高优先级仍可抢占
+</code></pre>
+</section>
+
+<section id="embassy" class="toc-link">
+  <h2><span class="num">07</span> Embassy 异步</h2>
+
+  <p>Embassy 是基于 Rust async/await 的<strong>异步嵌入式框架</strong>。</p>
+
+<pre><code>// [dependencies]
+// embassy-executor = { version = "0.5", features = ["arch-cortex-m", "executor-thread"] }
+// embassy-time = "0.3"
+// embassy-rp = { version = "0.1", features = ["time-driver"] }
+// 
+// Embassy 核心：
+// - async/await 替代中断
+// - 多任务并发
+// - 类型安全的 HAL
+// - 内置 USB、网络、蓝牙协议栈
+
+#![no_std]
+#![no_main]
+
+use embassy_executor::Spawner;
+use embassy_rp::gpio::{Level, Output};
+use embassy_time::Timer;
+
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    let p = embassy_rp::init(Default::default());
+    let mut led = Output::new(p.PIN_25, Level::Low);
+    
+    loop {
+        led.set_high();
+        Timer::after_millis(500).await;
+        led.set_low();
+        Timer::after_millis(500).await;
+    }
+}
+
+// 多任务：
+#[embassy_executor::task]
+async fn blinker(mut led: Output) {
+    loop {
+        led.set_high();
+        Timer::after_millis(500).await;
+        led.set_low();
+        Timer::after_millis(500).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn logger() {
+    loop {
+        log_info!("tick");
+        Timer::after_secs(1).await;
+    }
+}
+
+#[embassy_executor::main]
+async fn main(spawner: Spawner) {
+    let p = embassy_rp::init(Default::default());
+    let led = Output::new(p.PIN_25, Level::Low);
+    spawner.spawn(blinker(led)).unwrap();
+    spawner.spawn(logger()).unwrap();
+}
+</code></pre>
+
+  <p>Embassy 优势：</p>
+  <ul>
+    <li><strong>async 替代中断</strong>：代码更线性</li>
+    <li><strong>无 dynamic allocation</strong>：栈固定大小</li>
+    <li><strong>多个任务并发</strong>：单核也能高效</li>
+    <li><strong>丰富生态</strong>：USB、网络、蓝牙</li>
+    <li><strong>编译期分析</strong>：内存使用可预测</li>
+  </ul>
+
+  <p>协议栈：</p>
+<pre><code>// Embassy 提供完整网络栈
+use embassy_net::{
+    Stack, StackResources, Config,
+    Ipv4Address, StaticConfigurator,
+};
+use embassy_rp::peripherals::{PIO0};
+use embassy_rp::pio::Pio;
+
+// cyw43 (Pico W WiFi)
+let (mut control, stack) = embassy_rp::init_wifi(p.PIO0, p.DMA_CH0, p.CYW43_PWR, ...);
+
+spawner.spawn(net_task(stack)).unwrap();
+
+control.init().await;
+control.join("SSID", "password").await;
+
+// TCP/UDP
+use embassy_net::tcp::TcpSocket;
+let mut rx = [0; 4096];
+let mut tx = [0; 4096];
+let mut socket = TcpSocket::new(stack, &amp;mut rx, &amp;mut tx);
+socket.connect(8080, Ipv4Address::new(192, 168, 1, 1)).await.unwrap();
+socket.write(b"hello").await.unwrap();
+</code></pre>
+</section>
+
+<section id="debug" class="toc-link">
+  <h2><span class="num">08</span> 调试与烧录</h2>
+
+<pre><code>// 烧录工具：
+// 1. probe-rs（推荐）
+//    cargo install probe-rs-tools
+//    
+//    probe-rs run --chip RP2040 target/thumbv6m-none-eabi/release/blink
+//    
+//    或 cargo-embed:
+//    cargo install cargo-embed
+//    cargo embed --target thumbv6m-none-eabi
+
+// 2. openocd
+//    openocd -f interface/cmsis-dap.cfg -f target/rp2040.cfg
+//    # 终端 2：
+//    gdb-multiarch target/.../blink
+//    (gdb) target remote :3333
+//    (gdb) load
+//    (gdb) continue
+
+// 3. ELF → bin
+//    cargo objcopy -- -O binary blink.bin
+
+// 配置文件 .cargo/config.toml：
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-rs run --chip RP2040"
+
+[build]
+target = "thumbv6m-none-eabi"   # Cortex-M0+
+
+// 加 target：
+rustup target add thumbv6m-none-eabi   # M0/M0+
+rustup target add thumbv7m-none-eabi   # M3
+rustup target add thumbv7em-none-eabi  # M4/M7 (soft float)
+rustup target add thumbv7em-none-eabihf # M4/M7 (hard float)
+
+// cargo run：
+cargo run --release
+
+// defmt（日志）：
+// [dependencies]
+// defmt = "0.3"
+// defmt-rtt = "0.4"
+// 
+// 代码：
+// defmt::info!("count = {}", count);
+
+// 接收：
+// cargo install probe-rs-tools
+// probe-rs attach --chip RP2040 --log defmt
+</code></pre>
+</section>
+
+<section id="boards" class="toc-link">
+  <h2><span class="num">09</span> 主流开发板</h2>
+
+  <table>
+    <tr><th>板子</th><th>MCU</th><th>Rust 生态</th></tr>
+    <tr><td><strong>RP2040 (Pico)</strong></td><td>RP2040 (Cortex-M0+)</td><td>rp-pico, rp2040-hal, embassy-rp, cyw43</td></tr>
+    <tr><td><strong>Pico W</strong></td><td>RP2040 + CYW43439</td><td>WiFi/BT 通过 cyw43</td></tr>
+    <tr><td><strong>STM32F4 Discovery</strong></td><td>STM32F407 (M4)</td><td>stm32f4xx-hal</td></tr>
+    <tr><td><strong>STM32H7</strong></td><td>STM32H7 (M7)</td><td>stm32h7xx-hal</td></tr>
+    <tr><td><strong>nRF52840</strong></td><td>nRF52840 (M4)</td><td>nrf52840-hal, nrf-softdevice</td></tr>
+    <tr><td><strong>ESP32-C3</strong></td><td>RISC-V</td><td>esp-hal, esp-wifi</td></tr>
+    <tr><td><strong>ESP32</strong></td><td>Xtensa</td><td>esp-rs (custom rustc)</td></tr>
+    <tr><td><strong>Micro:bit V2</strong></td><td>nRF52833</td><td>microbit-v2</td></tr>
+    <tr><td><strong>Teensy 4</strong></td><td>i.MX RT1062 (M7)</td><td>imxrt-hal</td></tr>
+  </table>
+
+  <p>选择建议：</p>
+<pre><code>初学者 → Raspberry Pi Pico ($4)
+   - 文档完善
+   - 社区活跃
+   - Rust 生态最完整
+   - 内置 LED + USB
+   - Pico W 加 WiFi
+
+进阶 → STM32 Discovery
+   - 工业标准
+   - 性能强
+   - Rust 生态成熟
+
+无线 → nRF52840 Dongle / Pico W
+   - BLE / WiFi
+   - Rust 协议栈完整
+
+成本敏感 → ESP32 系列
+   - 极便宜
+   - 内置 WiFi/BT
+   - 注意 Xtensa 需要特殊 rustc
+</code></pre>
+</section>
+
+<section id="ecosystem" class="toc-link">
+  <h2><span class="num">10</span> 生态工具</h2>
+
+  <table>
+    <tr><th>工具</th><th>用途</th></tr>
+    <tr><td><code>cargo-embed</code></td><td>烧录 + 调试</td></tr>
+    <tr><td><code>probe-rs</code></td><td>烧录器（多平台）</td></tr>
+    <tr><td><code>svd2rust</code></td><td>SVD → PAC 生成</td></tr>
+    <tr><td><code>svdtools</code></td><td>SVD 处理</td></tr>
+    <tr><td><code>cargo-binutils</code></td><td>objcopy, nm, size</td></tr>
+    <tr><td><code>flip-link</code></td><td>栈保护（Stack Overflow）</td></tr>
+    <tr><td><code>defmt</code></td><td>高效日志</td></tr>
+    <tr><td><code>probe-run</code></td><td>defmt 集成的 runner</td></tr>
+    <tr><td><code>cargo-hf2</code></td><td>UF2 烧录（Microsoft MakeCode）</td></tr>
+    <tr><td><code>elf2uf2-rs</code></td><td>ELF → UF2</td></tr>
+    <tr><td><code>cargo-bloat</code></td><td>分析二进制大小</td></tr>
+  </table>
+
+  <p>常用 crate：</p>
+<pre><code>// 内存
+heapless          - 无堆容器
+alloc-cortex-m    - Cortex-M allocator
+linked_list_allocator
+
+// 实时
+rtic              - RTIC 框架
+embassy-*         - Embassy 异步生态
+rtt-target        - RTT 输出
+panic-probe       - panic 处理
+panic-halt        - panic 时停机
+panic-rtt-target
+
+// 通信
+embedded-hal      - 硬件抽象 trait
+embedded-hal-async
+embedded-io       - IO trait
+embedded-nal       - 网络 trait
+postcard          - 序列化（no_std）
+serde-json-core   - JSON
+
+// 协议
+usb-device        - USB 设备栈
+usbd-serial       - USB CDC
+usbd-hid          - USB HID
+smoltcp           - TCP/IP 栈
+embassy-net       - Embassy 网络栈
+
+// 算法
+micromath         - 数学函数（精简）
+fixed             - 定点数
+cordic            - CORDIC 算法
+libm              - libm Rust 移植
+
+// 显示
+embedded-graphics - 图形库
+ssd1306           - OLED 驱动
+st7789            - LCD 驱动
+ili9341           - LCD 驱动
+
+// 传感器
+bme680            - 温湿度
+mpu6050           - 加速度计
+lis3dh            - 加速度计
+
+// 板级支持
+rp-pico
+stm32f4xx-hal
+nrf52840-hal
+esp-rs
+
+// 调试
+defmt
+defmt-rtt
+probe-run
+</code></pre>
+
+  <p>调试技巧：</p>
+<pre><code>// 1. probe-rs + defmt（推荐）
+// .cargo/config.toml:
+[env]
+DEFMT_LOG = "debug"
+
+// 代码：
+defmt::info!("value = {}", value);
+defmt::warn!("unexpected");
+defmt::error!("error: {:?}", err);
+
+// 2. ITM（旧）
+// 通过 SWO 引脚
+// itm-tools
+
+// 3. semihosting（最慢）
+// 通过 debugger
+// cortex-m-semihosting
+// hprintln!("value = {}", value);
+
+// 4. RTT（中等）
+// 通过 SWD 引脚
+// rtt-target
+// rprintln!("value = {}", value);
+</code></pre>
+
+  <p>优化大小：</p>
+<pre><code>// release 模式
+cargo build --release
+
+// Cargo.toml:
+[profile.release]
+opt-level = "z"   # 最小化
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+// 检查：
+cargo size --release -- -A
+
+// cargo-bloat 分析：
+cargo bloat --release
+
+// 优化技巧：
+//   - 用 u8/u16 代替 usize
+//   - 避免 heap（用 heapless）
+//   - 使用 const generics
+//   - 移除未用 feature
+//   - 用 core:: ... 替代 std:: ...
+</code></pre>
+
+  <div class="callout">
+    <strong>嵌入式 Rust 总结:</strong><br>
+    1. <strong>no_std</strong>：无 OS、无标准库环境<br>
+    2. <strong>embedded-hal</strong>：硬件抽象 trait（生态核心）<br>
+    3. <strong>PAC → HAL → BSP</strong>：分层抽象<br>
+    4. <strong>RTIC</strong>：实时并发框架（同步）<br>
+    5. <strong>Embassy</strong>：异步嵌入式框架<br>
+    6. <strong>probe-rs + defmt</strong>：调试标准工具链<br>
+    Rust 嵌入式生态已相当成熟，2024 起 NASA、SpaceX、特斯拉都在生产用 Rust 嵌入式。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>
