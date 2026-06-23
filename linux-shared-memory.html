@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 共享内存 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 共享内存 深度解析</h1>
+  <p class="subtitle">最快的 IPC — 进程间零拷贝数据共享</p>
+  <span class="version">Linux 7.0.12 · ipc/shm.c (1880 行) · mm/shmem.c (6022 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">三种共享内存</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">创建与映射流程</a></li>
+    <li><a href="#sync">同步机制</a></li>
+    <li><a href="#compare">IPC 性能对比</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<!-- ============================================================ -->
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>共享内存是 Linux 中<strong>性能最高的 IPC 机制</strong>。多个进程将同一块物理内存映射到各自的虚拟地址空间，读写时无需内核介入（无 memcpy、无上下文切换）。数据库（PostgreSQL、Redis）和高性能应用大量使用共享内存。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">共享内存核心特性</div>
+      <ul>
+        <li><strong>零拷贝</strong>：进程直接读写共享页面</li>
+        <li><strong>最高性能</strong>：无系统调用开销（写入后）</li>
+        <li><strong>多进程共享</strong>：任意数量进程映射</li>
+        <li><strong>需要同步</strong>：无内建同步，需配合信号量/锁</li>
+        <li><strong>按需分配</strong>：通过 page fault 懒分配</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">核心文件</div>
+      <table>
+        <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+        <tr><td>ipc/shm.c</td><td>1880</td><td>SysV 共享内存</td></tr>
+        <tr><td>mm/shmem.c</td><td>6022</td><td>shmem/tmpfs 实现</td></tr>
+        <tr><td>ipc/mqueue.c</td><td>1680</td><td>POSIX 消息队列</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 三种共享内存</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">1. POSIX 共享内存（推荐）：</span>
+
+  fd = shm_open("/myshm", O_CREAT|O_RDWR, 0666);
+  ftruncate(fd, SIZE);
+  ptr = mmap(NULL, SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+  // 多进程 shm_open 同一名称 → 共享同一页面
+
+  优势：接口简洁、文件系统可见、可持久化
+
+<span style="color:#1a7f37">2. SysV 共享内存（传统）：</span>
+
+  key = ftok("/tmp", 'a');
+  shmid = shmget(key, SIZE, IPC_CREAT|0666);
+  ptr = shmat(shmid, NULL, 0);
+  // 多进程通过 shmid 映射
+
+  优势：兼容旧代码
+  劣势：接口复杂、需要手动清理
+
+<span style="color:#8250df">3. mmap + MAP_SHARED + 匿名映射：</span>
+
+  ptr = mmap(NULL, SIZE, PROT_READ|PROT_WRITE,
+             MAP_SHARED|MAP_ANONYMOUS, -1, 0);
+  fork() → 子进程继承映射 → 共享内存
+
+  优势：最简单、无需文件系统
+  劣势：仅限父子进程
+</pre></div>
+
+  <h3>三者对比</h3>
+  <table>
+    <tr><th>特性</th><th>POSIX shm</th><th>SysV shm</th><th>mmap ANON</th></tr>
+    <tr><td>接口</td><td>shm_open + mmap</td><td>shmget + shmat</td><td>mmap(MAP_SHARED|MAP_ANON)</td></tr>
+    <tr><td>命名</td><td>/dev/shm/name</td><td>key + shmid</td><td>无（fork 继承）</td></tr>
+    <tr><td>持久性</td><td>需手动删除</td><td>需手动删除</td><td>进程退出自动释放</td></tr>
+    <tr><td>跨进程</td><td>任意进程</td><td>任意进程</td><td>仅父子进程</td></tr>
+    <tr><td>底层</td><td>tmpfs</td><td>shmem</td><td>匿名页面</td></tr>
+    <tr><td>推荐</td><td><strong>推荐</strong></td><td>遗留代码</td><td>简单场景</td></tr>
+  </table>
+</section>
+
+<!-- ============================================================ -->
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+
+  <div class="card">
+    <pre><code><span class="cm">// ipc/shm.c — SysV 共享内存段</span>
+<span class="kw">struct</span> <span class="ty">shmid_kernel</span> {
+    <span class="kw">struct</span> <span class="ty"> kern_ipc_perm</span>  shm_perm;
+    <span class="kw">struct</span> <span class="ty">file</span>          *shm_file;    <span class="cm">// ★ 关联的 tmpfs 文件</span>
+    <span class="ty">unsigned long</span>        shm_nattch;   <span class="cm">// 当前附着的进程数</span>
+    <span class="ty">unsigned long</span>        shm_segsz;    <span class="cm">// 段大小</span>
+    <span class="ty">time64_t</span>             shm_atim;     <span class="cm">// 最后 attach 时间</span>
+    <span class="ty">time64_t</span>             shm_dtim;     <span class="cm">// 最后 detach 时间</span>
+    <span class="ty">time64_t</span>             shm_ctim;     <span class="cm">// 创建时间</span>
+    <span class="kw">struct</span> <span class="ty">pid</span>           *shm_cprid;   <span class="cm">// 创建者 PID</span>
+    <span class="kw">struct</span> <span class="ty">pid</span>           *shm_lprid;   <span class="cm">// 最后操作者 PID</span>
+};</code></pre>
+  </div>
+
+  <h3>底层机制</h3>
+  <div class="ascii-diagram"><pre>
+  POSIX shm 和 SysV shm 底层都使用 <span style="color:#cf222e">shmem</span>（tmpfs）：
+
+  进程 A                        进程 B
+  mmap(fd, MAP_SHARED)          mmap(fd, MAP_SHARED)
+       │                            │
+       ↓                            ↓
+  ┌──────────┐                ┌──────────┐
+  │ VMA      │                │ VMA      │
+  │ vm_file ─┼──→ 同一个 tmpfs inode ←──┼── vm_file │
+  └────┬─────┘                └────┬─────┘
+       │                           │
+       ↓                           ↓
+  ┌──────────────────────────────────────────┐
+  │     共享物理页面（tmpfs / shmem）          │
+  │     address_space.i_pages → page 数组     │
+  └──────────────────────────────────────────┘
+
+  tmpfs 是基于内存的文件系统：
+  - 不写磁盘（除非显式 swap）
+  - 页面按需分配（首次访问时 fault）
+  - 进程退出后自动释放
+  - /dev/shm 是 tmpfs 的挂载点
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 创建与映射流程</h2>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">POSIX 共享内存完整流程：</span>
+
+  <span style="color:#8250df">进程 A（服务端）：</span>
+  1. shm_open("/myshm", O_CREAT|O_RDWR, 0666)
+     → 创建 /dev/shm/myshm（tmpfs 文件）
+     → 返回 fd
+  2. ftruncate(fd, 4096)
+     → 设置文件大小
+  3. ptr = mmap(NULL, 4096, PROT_READ|PROT_WRITE,
+               MAP_SHARED, fd, 0)
+     → 建立虚拟地址到 tmpfs 页面的映射
+  4. 初始化共享数据结构（锁、队列等）
+  5. fork() 或通知其他进程
+
+  <span style="color:#1a7f37">进程 B（客户端）：</span>
+  1. shm_open("/myshm", O_RDWR, 0)
+     → 打开已存在的共享内存
+     → 返回 fd
+  2. fstat(fd, &amp;st)
+     → 获取大小
+  3. ptr = mmap(NULL, st.st_size, PROT_READ|PROT_WRITE,
+               MAP_SHARED, fd, 0)
+     → 映射到自己的地址空间
+  4. 访问共享数据（直接读写内存，无系统调用！）
+
+  <span style="color:#8250df">进程 A：</span>
+  6. munmap(ptr, 4096)
+  7. shm_unlink("/myshm")  <span class="cm">// 删除共享内存对象</span>
+  8. close(fd)
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 代码示例</span>
+<span class="kw">#include</span> <span class="st">&lt;sys/mman.h&gt;</span>
+<span class="kw">#include</span> <span class="st">&lt;sys/stat.h&gt;</span>
+<span class="kw">#include</span> <span class="st">&lt;fcntl.h&gt;</span>
+
+<span class="cm">// 服务端</span>
+<span class="ty">int</span> fd = <span class="fn">shm_open</span>(<span class="st">"/myshm"</span>, O_CREAT|O_RDWR, <span class="num">0666</span>);
+<span class="fn">ftruncate</span>(fd, <span class="kw">sizeof</span>(<span class="kw">struct</span> <span class="ty">shared_data</span>));
+<span class="kw">struct</span> <span class="ty">shared_data</span> *data = <span class="fn">mmap</span>(NULL, <span class="kw">sizeof</span>(*data),
+    PROT_READ|PROT_WRITE, MAP_SHARED, fd, <span class="num">0</span>);
+<span class="fn">pthread_mutex_init</span>(&amp;data-&gt;mutex, NULL);  <span class="cm">// 初始化锁</span>
+
+<span class="cm">// 客户端</span>
+<span class="ty">int</span> fd = <span class="fn">shm_open</span>(<span class="st">"/myshm"</span>, O_RDWR, <span class="num">0</span>);
+<span class="kw">struct</span> <span class="ty">shared_data</span> *data = <span class="fn">mmap</span>(NULL, <span class="kw">sizeof</span>(*data),
+    PROT_READ|PROT_WRITE, MAP_SHARED, fd, <span class="num">0</span>);
+<span class="fn">pthread_mutex_lock</span>(&amp;data-&gt;mutex);   <span class="cm">// 加锁访问</span>
+data-&gt;counter++;                      <span class="cm">// 直接操作共享内存</span>
+<span class="fn">pthread_mutex_unlock</span>(&amp;data-&gt;mutex);</code></pre>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="sync" class="toc-link">
+  <h2><span class="num">05</span> 同步机制</h2>
+
+  <div class="callout warn">
+    <strong>共享内存无内建同步</strong><br>
+    两个进程同时写入同一地址会导致<strong>数据竞争</strong>。必须使用外部同步机制：
+  </div>
+
+  <table>
+    <tr><th>同步方式</th><th>开销</th><th>适用场景</th></tr>
+    <tr><td><strong>pthread_mutex</strong></td><td>低</td><td>简单互斥访问</td></tr>
+    <tr><td><strong>POSIX 信号量</strong></td><td>低</td><td>生产者-消费者</td></tr>
+    <tr><td><strong>spinlock</strong></td><td>极低</td><td>极短临界区</td></tr>
+    <tr><td><strong>无锁队列</strong></td><td>最低</td><td>高性能队列（需 CAS）</td></tr>
+    <tr><td><strong>futex</strong></td><td>低</td><td>混合模式（用户态快路径+内核态慢路径）</td></tr>
+    <tr><td><strong>读写锁</strong></td><td>低</td><td>读多写少</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">典型共享内存 + 信号量模式（生产者-消费者）：</span>
+
+  生产者进程                          消费者进程
+  │                                    │
+  ├── sem_wait(&amp;empty)                │  <span style="color:#656d76">// 等待空槽位</span>
+  ├── sem_wait(&amp;mutex)                │  <span style="color:#656d76">// 加锁</span>
+  ├── ring[write_idx] = data          │  <span style="color:#656d76">// 写入共享内存</span>
+  ├── write_idx = (write_idx+1) % N   │
+  ├── sem_post(&amp;mutex)                │  <span style="color:#656d76">// 解锁</span>
+  ├── sem_post(&amp;full)                 │  <span style="color:#656d76">// 通知消费者</span>
+  │                                    │
+  │                                    ├── sem_wait(&amp;full)    <span style="color:#656d76">// 等待数据</span>
+  │                                    ├── sem_wait(&amp;mutex)   <span style="color:#656d76">// 加锁</span>
+  │                                    ├── data = ring[read_idx] <span style="color:#656d76">// 读共享内存</span>
+  │                                    ├── read_idx = (read_idx+1) % N
+  │                                    ├── sem_post(&amp;mutex)   <span style="color:#656d76">// 解锁</span>
+  │                                    ├── sem_post(&amp;empty)   <span style="color:#656d76">// 通知生产者</span>
+</pre></div>
+</section>
+
+<!-- ============================================================ -->
+<section id="compare" class="toc-link">
+  <h2><span class="num">06</span> IPC 性能对比</h2>
+
+  <table>
+    <tr><th>IPC 机制</th><th>带宽</th><th>延迟</th><th>数据拷贝</th><th>适用场景</th></tr>
+    <tr><td><strong>共享内存</strong></td><td>极高</td><td>极低</td><td><strong>0 次</strong></td><td>数据库、高频交易</td></tr>
+    <tr><td>UNIX Domain Socket</td><td>高</td><td>低</td><td>2 次</td><td>Docker、API</td></tr>
+    <tr><td>Pipe</td><td>高</td><td>低</td><td>2 次</td><td>shell 管道</td></tr>
+    <tr><td>消息队列</td><td>中</td><td>中</td><td>2 次</td><td>异步任务</td></tr>
+    <tr><td>Socket (TCP)</td><td>高</td><td>高</td><td>3+ 次</td><td>跨主机</td></tr>
+    <tr><td>Signal</td><td>无数据</td><td>中</td><td>0 次</td><td>异步通知</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>为什么共享内存最快？</strong><br>
+    ① 写入后<strong>无需系统调用</strong>——直接修改内存<br>
+    ② 读取方无需 <code>read()</code>——直接访问映射的虚拟地址<br>
+    ③ 唯一开销是 page fault（首次访问时）和同步原语
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">ipc/</span>
+├── <span class="file">shm.c</span>             <span class="cmt">SysV 共享内存 (1880 行)</span>
+│     └── shmget()           <span class="cmt">创建/获取共享内存段</span>
+│     └── shmat()            <span class="cmt">附加（映射到进程地址空间）</span>
+│     └── shmdt()            <span class="cmt">分离（取消映射）</span>
+│     └── shmctl()           <span class="cmt">控制操作（删除等）</span>
+└── <span class="file">mqueue.c</span>          <span class="cmt">POSIX 消息队列 (1680 行)</span>
+
+<span class="dir">mm/</span>
+└── <span class="file">shmem.c</span>           <span class="cmt">shmem/tmpfs 核心 (6022 行)</span>
+      └── shmem_file_setup()      <span class="cmt">创建 tmpfs 文件</span>
+      └── shmem_get_folio()       <span class="cmt">分配页面</span>
+      └── shmem_write_begin/end() <span class="cmt">写入操作</span>
+
+<span class="dir">mm/</span>
+├── <span class="file">mmap.c</span>            <span class="cmt">mmap 系统调用 (1922 行)</span>
+└── <span class="file">memory.c</span>          <span class="cmt">缺页异常 (7522 行)</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">shmem_fs.h</span>        <span class="cmt">shmem 内部接口</span>
+
+<span class="dir">include/uapi/linux/</span>
+└── <span class="file">shm.h</span>             <span class="cmt">SysV 共享内存用户态接口</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/shmem.c</code> — shmem 核心，理解共享内存底层如何使用 tmpfs。<br>
+    <code>ipc/shm.c</code> — SysV 共享内存 API 实现。<br>
+    <code>mm/mmap.c</code> — mmap 如何建立虚拟地址到 tmpfs 页面的映射。<br>
+    <code>mm/memory.c</code> — 缺页异常如何按需分配共享页面。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · ipc/shm.c · mm/shmem.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

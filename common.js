@@ -72,6 +72,7 @@
     { t:"Linux IPv6", f:"linux-ipv6.html", top:"net" },
     { t:"Linux mmap", f:"linux-mmap.html", top:"linux" },
     { t:"Linux Page Cache", f:"linux-page-cache.html", top:"linux" },
+    { t:"Linux 共享内存", f:"linux-shared-memory.html", top:"linux" },
     { t:"select/poll/epoll", f:"linux-select-poll-epoll.html", top:"linux" },
     { t:"Linux ftrace", f:"linux-ftrace.html", top:"linux" },
     { t:"Linux io_uring", f:"linux-io-uring.html", top:"linux" },
