@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Watchdog 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Watchdog 深度解析</h1>
+  <p class="subtitle">看门狗 — 系统健康监控与自动重启</p>
+  <span class="version">Linux 7.0.12 · drivers/watchdog/ (62659 行总计)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#hw">硬件看门狗</a></li>
+    <li><a href="#sw">软件看门狗（softdog）</a></li>
+    <li><a href="#api">API 与配置</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Watchdog（看门狗）是硬件或软件定时器，用于监控系统是否正常运行。如果在超时时间内没有"喂狗"（kick），看门狗会触发系统重启。Linux 支持硬件看门狗（CPU/芯片内置）和软件看门狗（softdog），是嵌入式系统和服务器高可用的关键机制。</p>
+</section>
+
+<section id="hw" class="toc-link">
+  <h2><span class="num">02</span> 硬件看门狗</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">硬件看门狗工作原理：</span>
+
+  ┌──────────────┐        ┌──────────────┐
+  │    CPU       │        │   Watchdog   │
+  │   (正常)     │        │   (定时器)   │
+  │              │  kick  │              │
+  │  定期喂狗 ──→│──────→ │  重置计数器  │
+  │              │        │              │
+  └──────────────┘        └──────┬───────┘
+                                 │
+                          超时未 kick?
+                                 │
+                                 ↓
+                          ┌──────────────┐
+                          │   系统重启    │
+                          └──────────────┘
+
+<span style="color:#1a7f37">常见硬件看门狗：</span>
+
+  Intel iTCO      → Intel 主板
+  NVIDIA Tegra    → ARM SoC
+  Broadcom WDT    → 树莓派
+  Qualcomm WDT    → 手机 SoC
+  Synopsys DW-WDT → 通用 SoC
+</pre></div>
+</section>
+
+<section id="sw" class="toc-link">
+  <h2><span class="num">03</span> 软件看门狗（softdog）</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#8250df">softdog（纯软件实现）：</span>
+
+  加载 softdog 模块
+  $ sudo modprobe softdog
+
+  用户态守护进程定期喂狗
+  $ echo 1 > /dev/watchdog
+
+  如果守护进程挂了 → 内核 softdog 超时 → 重启
+
+  适用场景：没有硬件看门狗的服务器
+</pre></div>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">04</span> API 与配置</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看可用的看门狗设备</span>
+$ ls /dev/watchdog*
+/dev/watchdog  /dev/watchdog0
+
+<span class="cm"># 查看看门狗信息</span>
+$ cat /sys/class/watchdog/watchdog0/identity
+i6300ESB watchdog
+
+<span class="cm"># 查看超时时间</span>
+$ cat /sys/class/watchdog/watchdog0/timeout
+<span class="num">30</span>  <span class="cm"># 30 秒</span>
+
+<span class="cm"># 使用 watchdog（喂狗）</span>
+$ echo 1 > /dev/watchdog   <span class="cm"># 喂狗一次</span>
+$ echo V > /dev/watchdog   <span class="cm"># 停用看门狗（Magic 字符 'V'）</span>
+
+<span class="cm"># 使用 watchdog-test 工具</span>
+$ sudo modprobe softdog
+$ sudo watchdog-test /dev/watchdog
+
+<span class="cm"># systemd watchdog 集成</span>
+$ systemctl status watchdog.service</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/watchdog/</span>     <span class="cmt">总计 62659 行（数百个驱动）</span>
+├── <span class="file">softdog.c</span>        <span class="cmt">软件看门狗</span>
+├── <span class="file">watchdog_core.c</span>  <span class="cmt">看门狗框架核心</span>
+├── <span class="file">watchdog_dev.c</span>   <span class="cmt">/dev/watchdog 设备</span>
+├── <span class="file">i6300esb.c</span>       <span class="cmt">Intel ESB 看门狗</span>
+└── <span class="file">dw_wdt.c</span>         <span class="cmt">DesignWare 看门狗</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">watchdog.h</span>        <span class="cmt">watchdog_device 结构</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>drivers/watchdog/watchdog_core.c</code> — 看门狗框架核心。<br>
+    <code>drivers/watchdog/softdog.c</code> — 软件看门狗实现，理解喂狗机制。<br>
+    <code>include/linux/watchdog.h</code> — <code>struct watchdog_device</code> 定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · drivers/watchdog/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

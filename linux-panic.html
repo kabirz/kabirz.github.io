@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Panic 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Panic 深度解析</h1>
+  <p class="subtitle">内核崩溃 — Oops、Panic、Kdump 与错误恢复</p>
+  <span class="version">Linux 7.0.12 · kernel/panic.c (1222 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">崩溃类型</a></li>
+    <li><a href="#flow">Panic 处理流程</a></li>
+    <li><a href="#kdump">Kdump 与转储</a></li>
+    <li><a href="#tuning">配置与调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 内核崩溃是系统最严重的故障。内核提供了多级错误处理机制：Oops（非致命）→ Panic（致命）→ Kdump（转储分析）。理解这些机制对于内核开发、驱动调试和生产环境问题排查至关重要。</p>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 崩溃类型</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Oops（非致命内核错误）：</span>
+
+  内核尝试执行非法操作（如空指针解引用）
+        │
+        ├── 打印 Oops 信息（寄存器、调用栈、错误地址）
+        │
+        ├── 发生在用户上下文 → 发送 SIGSEGV，进程被杀死
+        └── 发生在中断上下文 → 可能升级为 Panic
+
+<span style="color:#1a7f37">Panic（致命内核崩溃）：</span>
+
+  内核检测到无法恢复的错误
+        │
+        ├── 停止所有正常处理
+        ├── 关闭中断
+        ├── 打印 Panic 信息
+        └── 根据配置：重启 / 挂起 / 等待 Kdump
+
+<span style="color:#8250df">Kdump（内核崩溃转储）：</span>
+
+  Panic 触发 → 启动 kexec 引导的"捕获内核"
+        │
+        ├── 捕获内核读取崩溃内存
+        ├── 生成 vmcore 转储文件
+        └── 重启系统，分析 vmcore
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> Panic 处理流程</h2>
+  <div class="ascii-diagram"><pre>
+  内核检测到致命错误
+        │
+        ↓
+  <span style="color:#8250df">panic()</span> — kernel/panic.c
+        │
+        ├── 1. 设置 panic_cpu（防止重入）
+        ├── 2. 关闭本地中断
+        ├── 3. 打印 Panic 信息
+        │       "Kernel panic - not syncing: ..."
+        │       函数名、错误描述
+        ├── 4. 打印调用栈（dump_stack）
+        ├── 5. 通知所有 CPU 停止
+        │       smp_send_stop()
+        ├── 6. 检查 panic_on_oops
+        │       如果 Oops 触发 → 已在 Panic 中
+        ├── 7. 执行 panic_notify（通知 Kdump）
+        │       kexec 镜像加载，切换到捕获内核
+        ├── 8. 最终动作（由配置决定）
+        │   ├── 等待 Kdump 完成
+        │   ├── 重启（reboot）
+        │   └── 挂起（halt）
+        └── 9. 无限循环（如果没有配置重启）
+</pre></div>
+</section>
+
+<section id="kdump" class="toc-link">
+  <h2><span class="num">04</span> Kdump 与转储</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Kdump 架构：</span>
+
+  正常运行的内核（production kernel）
+  ├── 保留一块内存给捕获内核
+  ├── 加载 kexec 引导的捕获内核
+  │
+  └── Panic 发生 →
+      │
+      ↓ kexec 切换
+  捕获内核（capture kernel）
+  ├── 独立运行的精简内核
+  ├── 读取崩溃时的内存
+  ├── 生成 /proc/vmcore 转储
+  ├── 保存到磁盘（/var/crash/）
+  └── 重启系统
+</pre></div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">05</span> 配置与调优</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看 Panic 配置</span>
+$ cat /proc/sys/kernel/panic
+<span class="num">0</span>  <span class="cm"># 0=挂起, >0=N秒后重启</span>
+
+$ cat /proc/sys/kernel/panic_on_oops
+<span class="num">1</span>  <span class="cm"># Oops 后是否触发 Panic</span>
+
+<span class="cm"># 配置 Kdump</span>
+$ sudo yum install kexec-tools crash   <span class="cm"># 安装工具</span>
+$ sudo systemctl enable kdump
+$ sudo systemctl start kdump
+
+<span class="cm"># 配置 Panic 后重启</span>
+$ echo <span class="num">1</span> > /proc/sys/kernel/panic     <span class="cm"># 1秒后重启</span>
+$ sysctl -w kernel.panic=<span class="num">10</span>            <span class="cm"># 10秒后重启</span>
+
+<span class="cm"># 查看历史 Oops/Panic</span>
+$ dmesg | grep -i "oops\|panic\|bug\|error"
+$ journalctl -k | grep -i "oops\|panic"
+
+<span class="cm"># 分析 vmcore</span>
+$ crash /usr/lib/debug/lib/modules/$(uname -r)/vmlinux /var/crash/*/vmcore</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+├── <span class="file">panic.c</span>          <span class="cmt">Panic 核心 (1222 行)</span>
+│     └── panic()          <span class="cmt">Panic 入口</span>
+│     └── oops_enter()     <span class="cmt">Oops 处理</span>
+│     └── print_oops_end_marker() <span class="cmt">打印结束标记</span>
+├── <span class="file">oops.c</span>           <span class="cmt">Oops 打印</span>
+└── <span class="file">kexec.c</span>          <span class="cmt">Kexec 引导</span>
+
+<span class="dir">kernel/kexec/</span>
+├── <span class="file">core.c</span>           <span class="cmt">Kexec 核心</span>
+└── <span class="file">crashdump.c</span>      <span class="cmt">崩溃转储</span>
+
+<span class="dir">fs/proc/</span>
+└── <span class="file">vmcore.c</span>         <span class="cmt">/proc/vmcore 实现</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/panic.c</code> — 从 <code>panic()</code> 理解崩溃处理全流程。<br>
+    <code>kernel/oops.c</code> — Oops 信息打印逻辑。<br>
+    <code>kernel/kexec/core.c</code> — Kexec 如何切换到捕获内核。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/panic.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

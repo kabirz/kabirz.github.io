@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux CPUFreq 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux CPUFreq 深度解析</h1>
+  <p class="subtitle">CPU 频率调节 — 性能与功耗的平衡</p>
+  <span class="version">Linux 7.0.12 · drivers/cpufreq/cpufreq.c (3081 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#govs">频率调节器</a></li>
+    <li><a href="#flow">调节流程</a></li>
+    <li><a href="#tuning">配置与调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>CPUFreq 是 Linux 的<strong>CPU 频率动态调节框架</strong>。它根据系统负载自动调整 CPU 频率，在性能和功耗之间取得平衡。笔记本电脑使用它延长续航，服务器使用它降低散热成本。</p>
+</section>
+
+<section id="govs" class="toc-link">
+  <h2><span class="num">02</span> 频率调节器</h2>
+  <table>
+    <tr><th>调节器</th><th>策略</th><th>适用场景</th></tr>
+    <tr><td><strong>performance</strong></td><td>始终最高频率</td><td>基准测试、低延迟</td></tr>
+    <tr><td><strong>powersave</strong></td><td>始终最低频率</td><td>省电、低负载</td></tr>
+    <tr><td><strong>ondemand</strong></td><td>按需快速升频</td><td>通用（传统）</td></tr>
+    <tr><td><strong>conservative</strong></td><td>渐进式升频/降频</td><td>保守策略</td></tr>
+    <tr><td><strong>schedutil</strong></td><td>基于调度器负载</td><td><strong>推荐</strong>（现代内核）</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">schedutil（推荐的现代调节器）：</span>
+
+  调度器检测到 CPU 负载变化
+        │
+        ├── 负载高 → 请求升频
+        │       → cpufreq 驱动设置新频率
+        │       → CPU 运行更快
+        │
+        └── 负载低 → 请求降频
+                → cpufreq 驱动设置新频率
+                → CPU 功耗降低
+
+  优势：直接使用调度器的利用率信息
+  比 ondemand/conservative 更准确、响应更快
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 调节流程</h2>
+  <div class="ascii-diagram"><pre>
+  调节器检测到负载变化
+        │
+        ↓
+  计算目标频率
+  target_freq = f(load, policy)
+        │
+        ↓
+  调用 cpufreq_driver->target_index()
+        │
+        ├── 软件调节（如 ACPI P-state）
+        │       写入 ACPI 寄存器 → CPU 切换频率
+        │
+        └── 硬件调节（如 Intel HWP）
+            硬件自动根据负载调节
+        │
+        ↓
+  CPU 在新频率下运行
+        │
+        ↓
+  监控功耗/温度
+        │
+        ├── 过热 → 降低频率（thermal throttling）
+        └── 正常 → 继续调节
+</pre></div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">04</span> 配置与调优</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看当前频率</span>
+$ cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq
+<span class="num">2400000</span>  <span class="cm"># 2.4 GHz</span>
+
+<span class="cm"># 查看可用频率</span>
+$ cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies
+<span class="num">800000 1200000 1600000 2000000 2400000</span>
+
+<span class="cm"># 查看当前调节器</span>
+$ cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+schedutil
+
+<span class="cm"># 切换调节器</span>
+$ sudo cpupower frequency-set -g performance
+$ sudo cpupower frequency-set -g powersave
+
+<span class="cm"># 设置最大/最小频率</span>
+$ sudo cpupower -c 0 frequency-set -f <span class="num">2400000</span>  <span class="cm"># 最大</span>
+$ sudo cpupower -c 0 frequency-set -f <span class="num">800000</span>   <span class="cm"># 最小</span>
+
+<span class="cm"># 查看 CPU 信息</span>
+$ cpupower frequency-info</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/cpufreq/</span>
+├── <span class="file">cpufreq.c</span>        <span class="cmt">CPUFreq 核心 (3081 行)</span>
+│     └── cpufreq_set_policy()   <span class="cmt">设置调节策略</span>
+│     └── cpufreq_target()       <span class="cmt">频率切换</span>
+├── <span class="file">cpufreq_stats.c</span>  <span class="cmt">频率统计</span>
+├── <span class="file">schedutil.c</span>      <span class="cmt">schedutil 调节器</span>
+├── <span class="file">ondemand.c</span>       <span class="cmt">ondemand 调节器</span>
+├── <span class="file">conservative.c</span>   <span class="cmt">conservative 调节器</span>
+└── <span class="file">intel_pstate.c</span>   <span class="cmt">Intel P-state 驱动</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">cpufreq.h</span>         <span class="cmt">CPUFreq API</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>drivers/cpufreq/cpufreq.c</code> — CPUFreq 核心框架，理解策略和频率切换。<br>
+    <code>drivers/cpufreq/schedutil.c</code> — schedutil 调节器，理解基于调度器的频率调节。<br>
+    <code>drivers/cpufreq/intel_pstate.c</code> — Intel P-state 驱动，理解硬件频率调节。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · drivers/cpufreq/cpufreq.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
