@@ -487,21 +487,25 @@
   css.href = cdn + '/themes/' + (initTheme === 'dark' ? 'prism-tomorrow.min.css' : 'prism.min.css');
   document.head.appendChild(css);
 
-  function load(src, cb) {
+  var toolbarCss = document.createElement('link');
+  toolbarCss.rel = 'stylesheet';
+  toolbarCss.href = cdn + '/plugins/toolbar/prism-toolbar.min.css';
+  document.head.appendChild(toolbarCss);
+
+  var allScripts = [
+    cdn + '/prism.min.js',
+    cdn + '/plugins/toolbar/prism-toolbar.min.js',
+    cdn + '/plugins/copy-to-clipboard/prism-copy-to-clipboard.min.js',
+  ];
+  add.forEach(function(l) { allScripts.push(cdn + '/components/prism-' + l + '.min.js'); });
+
+  function loadNext(i) {
+    if (i >= allScripts.length) { Prism.highlightAll(); return; }
     var s = document.createElement('script');
-    s.src = src;
-    s.onload = cb;
+    s.src = allScripts[i];
     s.async = false;
+    s.onload = function() { loadNext(i + 1); };
     document.body.appendChild(s);
   }
-
-  load(cdn + '/prism.min.js', function() {
-    var n = 0;
-    add.forEach(function(l) {
-      load(cdn + '/components/prism-' + l + '.min.js', function() {
-        n++;
-        if (n === add.length) Prism.highlightAll();
-      });
-    });
-  });
+  loadNext(0);
 })();
