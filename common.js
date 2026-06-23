@@ -292,8 +292,35 @@
         var items = hdr.nextElementSibling;
         hdr.classList.toggle('collapsed');
         items.classList.toggle('collapsed');
+        saveCollapseState();
       });
     });
+
+    var SB_SCROLL_KEY = 'doc-sidebar-scroll';
+    var SB_COLLAPSE_KEY = 'doc-sidebar-collapsed';
+
+    function saveCollapseState() {
+      var collapsed = [];
+      sidebar.querySelectorAll('.sidebar-cat-header.collapsed').forEach(function(h) {
+        collapsed.push(h.parentElement.getAttribute('data-top'));
+      });
+      try { localStorage.setItem(SB_COLLAPSE_KEY, JSON.stringify(collapsed)); } catch(e) {}
+    }
+
+    try {
+      var saved = JSON.parse(localStorage.getItem(SB_COLLAPSE_KEY) || '[]');
+      if (saved.length) {
+        saved.forEach(function(top) {
+          var cat = sidebar.querySelector('.sidebar-cat[data-top="' + top + '"]');
+          if (cat) {
+            var hdr = cat.querySelector('.sidebar-cat-header');
+            var items = cat.querySelector('.sidebar-cat-items');
+            hdr.classList.add('collapsed');
+            items.classList.add('collapsed');
+          }
+        });
+      }
+    } catch(e) {}
 
     var searchInput = document.getElementById('sb-search-input');
     if (searchInput) {
@@ -311,15 +338,20 @@
       });
     }
 
-    requestAnimationFrame(function() {
-      var cur = sidebar.querySelector('.sidebar-item.current');
-      if (!cur) return;
-      var scroller = sidebar.querySelector('.doc-sidebar-nav') || sidebar;
-      var sR = scroller.getBoundingClientRect();
-      var cR = cur.getBoundingClientRect();
-      if (cR.top >= sR.top - 1 && cR.bottom <= sR.bottom + 1) return;
-      scroller.scrollTop += cR.top - sR.top - (sR.height - cR.height) / 2;
-    });
+    var nav = sidebar.querySelector('.doc-sidebar-nav');
+    if (nav) {
+      try {
+        var savedScroll = parseInt(localStorage.getItem(SB_SCROLL_KEY) || '0', 10);
+        if (savedScroll > 0) nav.scrollTop = savedScroll;
+      } catch(e) {}
+      var scrollTimer;
+      nav.addEventListener('scroll', function() {
+        clearTimeout(scrollTimer);
+        scrollTimer = setTimeout(function() {
+          try { localStorage.setItem(SB_SCROLL_KEY, nav.scrollTop); } catch(e) {}
+        }, 200);
+      });
+    }
 
     // 展开按钮
     var expandBtn = document.createElement('button');

@@ -4,63 +4,18 @@
 
 ## 📊 文档统计
 
-- **28 篇**深度解析文档
-- **120+** 个章节
-- **10000+** 行代码分析
+- **174 篇**深度解析文档
+- **4 大领域**：Linux 内核 / Docker 容器 / Rust / Windows
+- **基于 Linux 7.0.12** 内核源码
 
-## 📂 文档列表
+## 📂 文档分布
 
-### 内核核心
-
-| 文档 | 主题 |
-|------|------|
-| [MMU 实现详解](linux-mmu.html) | 五级页表、缺页处理、TLB 管理 |
-| [内存管理](linux-mm.html) | 伙伴系统、SLUB、VMA、回收、OOM |
-| [调度器](linux-scheduler.html) | CFS/EEVDF、RT、Deadline、sched_ext |
-| [原子操作](linux-atomic.html) | Atomic / Refcount / Memory Barrier |
-| [自旋锁](linux-spinlock.html) | Spinlock / Rwlock / Seqlock |
-| [CAS vs Spinlock](linux-cas-vs-spinlock.html) | 如何选择同步原语 |
-| [互斥锁](linux-mutex.html) | Mutex — 可睡眠排他锁 |
-| [信号量](linux-semaphore.html) | Semaphore / Rwsem |
-| [读写锁](linux-rwlock.html) | Rwlock / Rwsem |
-| [RCU](linux-rcu.html) | Tree RCU、SRCU、宽限期 |
-| [cgroup](linux-cgroup.html) | v1/v2、控制器、BPF 集成 |
-
-### 文件系统
-
-| 文档 | 主题 |
-|------|------|
-| [procfs](linux-procfs.html) | seq_file、/proc/[pid]、/proc/sys |
-| [VFS](linux-vfs.html) | 四大对象、DCache、路径查找 |
-
-### 设备与驱动
-
-| 文档 | 主题 |
-|------|------|
-| [设备模型](linux-devmodel.html) | bus/device/driver、Probe |
-| [pinctrl](linux-pinctrl.html) | 引脚复用、设备树集成 |
-| [GPIO](linux-gpio.html) | gpio_chip、gpiolib |
-| [I2C](linux-i2c.html) | i2c_adapter、SMBus |
-| [SPI](linux-spi.html) | spi_device、SPI-MEM |
-| [串口](linux-serial.html) | uart_ops、控制台、earlycon |
-| [MMC](linux-mmc.html) | SD/eMMC/SDIO |
-| [LED](linux-led.html) | led_classdev、触发器 |
-| [PWM](linux-pwm.html) | pwm_chip、pwm_ops |
-| [时钟](linux-clk.html) | clk_ops、PLL、门控 |
-| [DMA](linux-dma.html) | SWIOTLB、IOMMU |
-
-### 网络
-
-| 文档 | 主题 |
-|------|------|
-| [网络子系统](linux-network.html) | sk_buff、TCP/IP、XDP、NAPI |
-
-### 硬件与平台
-
-| 文档 | 主题 |
-|------|------|
-| [设备树](linux-devtree.html) | DTB 格式、语法、Overlay |
-| [ARM 内存管理](linux-arm-mm.html) | 页表、MTE/PAN/GCS |
+| 领域 | 数量 | 说明 |
+|------|------|------|
+| 🐧 [Linux 内核](linux-mmu.html) | 140 篇 | 内核核心、文件系统、进程、设备驱动、网络、安全、IPC、跟踪调试、硬件平台 |
+| 🐳 Docker / 容器 | 12 篇 | 命名空间、cgroups、OCI、runc、containerd、BuildKit、网络、存储等 |
+| 🦀 Rust | 13 篇 | 所有权、trait、unsafe、async、Tokio、Web/GUI/Embedded 框架 |
+| 🪟 Windows | 9 篇 | Win32、MFC、ATL/WTL、COM、UWP、WinUI3、MAUI、WPF、WebView2 |
 
 ## 🚀 快速开始
 
@@ -79,12 +34,15 @@
 
 ```
 docs/
-├── index.html           # 导航页（左侧栏 + 搜索）
-├── common.css           # 公共样式（220+ 行）
-├── common.js            # 公共脚本（侧边栏、主题切换）
-├── linux-*.html         # 27 篇深度解析文档
-├── AGENTS.md            # 文档生成规范
-└── README.md            # 本文件
+├── index.html            # 导航页（左侧栏 + 搜索，数据驱动渲染）
+├── common.css            # 公共样式（主题、侧边栏、所有组件）
+├── common.js             # 公共脚本（主题切换、侧边栏生成、滚动高亮）
+├── AGENTS.md             # 文档生成规范
+├── README.md             # 本文件
+├── linux-*.html          # 140 篇 Linux 内核深度解析
+├── docker-*.html         # 12 篇 Docker / 容器技术解析
+├── rust-*.html           # 13 篇 Rust 语言深度解析
+└── windows-*.html        # 9 篇 Windows 平台技术解析
 ```
 
 ## 📖 技术栈
