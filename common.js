@@ -322,6 +322,20 @@
       }
     } catch(e) {}
 
+    var curItem = sidebar.querySelector('.sidebar-item.current');
+    if (curItem) {
+      var curCat = curItem.closest('.sidebar-cat');
+      if (curCat) {
+        var curHdr = curCat.querySelector('.sidebar-cat-header');
+        var curItems = curCat.querySelector('.sidebar-cat-items');
+        if (curHdr && curHdr.classList.contains('collapsed')) {
+          curHdr.classList.remove('collapsed');
+          curItems.classList.remove('collapsed');
+          saveCollapseState();
+        }
+      }
+    }
+
     var searchInput = document.getElementById('sb-search-input');
     if (searchInput) {
       searchInput.addEventListener('input', function() {
