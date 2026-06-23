@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核模块 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核模块 深度解析</h1>
+  <p class="subtitle">可加载模块 — 运行时扩展内核功能</p>
+  <span class="version">Linux 7.0.12 · kernel/module/main.c (3924 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#lifecycle">模块生命周期</a></li>
+    <li><a href="#api">模块 API</a></li>
+    <li><a href="#build">编译与加载</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>内核模块（kernel module）是<strong>可动态加载和卸载的内核代码</strong>。驱动程序、文件系统、网络协议等通常以内核模块形式实现，无需重新编译整个内核。模块通过 <code>insmod</code>/<code>modprobe</code> 加载，通过 <code>rmmod</code> 卸载。</p>
+</section>
+
+<section id="lifecycle" class="toc-link">
+  <h2><span class="num">02</span> 模块生命周期</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">内核模块完整生命周期：</span>
+
+  <span style="color:#8250df">insmod mymodule.ko</span>
+        │
+        ├── 1. 分配内存，读取 ELF 文件
+        │
+        ├── 2. 解析符号引用（resolve symbols）
+        │       找到内核导出的函数地址
+        │
+        ├── 3. 重定位代码和数据
+        │
+        ├── 4. 调用 init 函数
+        │       module_init(my_init)
+        │       → my_init() 执行初始化
+        │
+        └── 5. 模块注册成功，内核功能扩展
+
+  <span style="color:#1a7f37">模块运行中...</span>
+  │
+  │  模块注册的函数被内核调用
+  │  如：驱动 probe、网络协议、文件系统
+  │
+  ↓
+
+  <span style="color:#8250df">rmmod mymodule</span>
+        │
+        ├── 1. 检查模块引用计数
+        │       module_refcount == 0 → 可以卸载
+        │       module_refcount > 0 → 拒绝（有用户在使用）
+        │
+        ├── 2. 调用 exit 函数
+        │       module_exit(my_exit)
+        │       → my_exit() 执行清理
+        │
+        ├── 3. 注销模块注册的所有功能
+        │       驱动注销、网络协议移除等
+        │
+        └── 4. 释放模块内存
+</pre></div>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 模块 API</h2>
+  <div class="card">
+    <pre><code><span class="cm">// 最简单的内核模块</span>
+<span class="kw">#include</span> <span class="st">&lt;linux/module.h&gt;</span>
+<span class="kw">#include</span> <span class="st">&lt;linux/kernel.h&gt;</span>
+
+<span class="kw">static int</span> __init <span class="fn">my_init</span>(<span class="ty">void</span>)
+{
+    <span class="fn">printk</span>(KERN_INFO <span class="st">"mymodule loaded\n"</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="kw">static void</span> __exit <span class="fn">my_exit</span>(<span class="ty">void</span>)
+{
+    <span class="fn">printk</span>(KERN_INFO <span class="st">"mymodule unloaded\n"</span>);
+}
+
+<span class="fn">module_init</span>(my_init);
+<span class="fn">module_exit</span>(my_exit);
+<span class="fn">MODULE_LICENSE</span>(<span class="st">"GPL"</span>);
+<span class="fn">MODULE_AUTHOR</span>(<span class="st">"Author"</span>);
+<span class="fn">MODULE_DESCRIPTION</span>(<span class="st">"A simple module"</span>);</code></pre>
+  </div>
+
+  <h3>关键 API</h3>
+  <table>
+    <tr><th>API</th><th>功能</th></tr>
+    <tr><td><code>module_init(func)</code></td><td>注册模块初始化函数</td></tr>
+    <tr><td><code>module_exit(func)</code></td><td>注册模块清理函数</td></tr>
+    <tr><td><code>try_module_get(mod)</code></td><td>增加模块引用计数</td></tr>
+    <tr><td><code>module_put(mod)</code></td><td>减少模块引用计数</td></tr>
+    <tr><td><code>EXPORT_SYMBOL_GPL(sym)</code></td><td>导出符号供其他模块使用</td></tr>
+  </table>
+</section>
+
+<section id="build" class="toc-link">
+  <h2><span class="num">04</span> 编译与加载</h2>
+  <div class="card">
+    <pre><code><span class="cm"># Makefile</span>
+obj-m := mymodule.o
+mymodule-objs := main.o helper.o
+
+<span class="cm"># 编译</span>
+$ make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
+
+<span class="cm"># 加载/卸载</span>
+$ sudo insmod mymodule.ko      <span class="cm"># 加载</span>
+$ sudo modprobe mymodule       <span class="cm"># 加载（自动处理依赖）</span>
+$ sudo rmmod mymodule          <span class="cm"># 卸载</span>
+$ sudo modprobe -r mymodule    <span class="cm"># 卸载（自动处理依赖）</span>
+
+<span class="cm"># 查看已加载模块</span>
+$ lsmod
+$ lsmod | grep mymodule
+
+<span class="cm"># 查看模块信息</span>
+$ modinfo mymodule.ko
+
+<span class="cm"># 查看模块日志</span>
+$ dmesg | tail -5</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/module/</span>
+├── <span class="file">main.c</span>            <span class="cmt">模块核心 (3924 行)</span>
+│     └── load_module()       <span class="cmt">加载模块</span>
+│     └── init_module()       <span class="cmt">初始化模块</span>
+│     └── delete_module()     <span class="cmt">卸载模块</span>
+├── <span class="file">verifier.c</span>       <span class="cmt">符号验证</span>
+├── <span class="file">signing.c</span>        <span class="cmt">模块签名</span>
+└── <span class="file">krealloc.c</span>       <span class="cmt">内存分配</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">module.h</span>         <span class="cmt">struct module / module API</span>
+└── <span class="file">export.h</span>         <span class="cmt">EXPORT_SYMBOL 定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/module/main.c</code> — 从 <code>load_module()</code> 理解模块加载过程。<br>
+    <code>include/linux/module.h</code> — <code>struct module</code> 和模块 API 定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/module/main.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

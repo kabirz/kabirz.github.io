@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux debugfs 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux debugfs 深度解析</h1>
+  <p class="subtitle">调试文件系统 — 驱动开发的调试利器</p>
+  <span class="version">Linux 7.0.12 · fs/debugfs/ (929+ 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#vs">debugfs vs sysfs vs procfs</a></li>
+    <li><a href="#api">API 与使用</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>debugfs 是 Linux 内核提供的<strong>调试专用虚拟文件系统</strong>，挂载在 <code>/sys/kernel/debug</code>。它允许驱动开发者暴露任意调试信息和控制接口，不受 sysfs 的结构化约束。生产环境通常关闭 debugfs 以减少攻击面。</p>
+</section>
+
+<section id="vs" class="toc-link">
+  <h2><span class="num">02</span> debugfs vs sysfs vs procfs</h2>
+  <table>
+    <tr><th>特性</th><th>debugfs</th><th>sysfs</th><th>procfs</th></tr>
+    <tr><td>挂载点</td><td>/sys/kernel/debug</td><td>/sys</td><td>/proc</td></tr>
+    <tr><td>目标用户</td><td>驱动开发者</td><td>用户空间工具</td><td>系统管理</td></tr>
+    <tr><td>结构化</td><td>随意</td><td>严格（kobject）</td><td>半结构化</td></tr>
+    <tr><td>生产环境</td><td>建议关闭</td><td>必需</td><td>必需</td></tr>
+    <tr><td>安全性</td><td>低（0644）</td><td>中</td><td>中</td></tr>
+    <tr><td>API</td><td>debugfs_create_*</td><td>device_attr</td><td>seq_file</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> API 与使用</h2>
+  <div class="card">
+    <pre><code><span class="cm">// debugfs API</span>
+<span class="kw">#include</span> <span class="st">&lt;linux/debugfs.h&gt;</span>
+
+<span class="cm">// 创建目录</span>
+<span class="kw">struct</span> <span class="ty">dentry</span> *dir = <span class="fn">debugfs_create_dir</span>(<span class="st">"my_driver"</span>, NULL);
+
+<span class="cm">// 创建文件（可读写）</span>
+<span class="ty">u32</span> counter = <span class="num">0</span>;
+<span class="fn">debugfs_create_u32</span>(<span class="st">"counter"</span>, <span class="num">0644</span>, dir, &amp;counter);
+
+<span class="cm">// 创建文件（只读）</span>
+<span class="fn">debugfs_create_u32</span>(<span class="st">"status"</span>, <span class="num">0444</span>, dir, &amp;status);
+
+<span class="cm">// 创建 blob 文件（大块数据）</span>
+<span class="kw">struct</span> <span class="ty">debugfs_blob_wrapper</span> blob = {
+    .data = my_buffer,
+    .size = my_buffer_size,
+};
+<span class="fn">debugfs_create_blob</span>(<span class="st">"dump"</span>, <span class="num">0444</span>, dir, &amp;blob);
+
+<span class="cm">// 创建符号链接</span>
+<span class="fn">debugfs_create_symlink</span>(<span class="st">"link"</span>, dir, <span class="st">"/sys/class/net/eth0"</span>);
+
+<span class="cm">// 清理</span>
+<span class="fn">debugfs_remove_recursive</span>(dir);</code></pre>
+  </div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 应用场景</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看 debugfs 内容</span>
+$ sudo mount -t debugfs none /sys/kernel/debug
+$ ls /sys/kernel/debug/
+$ ls /sys/kernel/debug/dri/      <span class="cm"># GPU 驱动调试</span>
+$ ls /sys/kernel/debug/btrfs/    <span class="cm"># Btrfs 调试</span>
+$ ls /sys/kernel/debug/tracing/  <span class="cmt"># ftrace（已在 ftrace 文章介绍）</span></code></pre>
+  </div>
+
+  <h3>典型用途</h3>
+  <table>
+    <tr><th>驱动</th><th>debugfs 内容</th></tr>
+    <tr><td>DRM/GPU</td><td>/sys/kernel/debug/dri/ — GPU 寄存器、缓冲区状态</td></tr>
+    <tr><td>Btrfs</td><td>/sys/kernel/debug/btrfs/ — 文件系统内部状态</td></tr>
+    <tr><td>网络</td><td>调试计数器、状态 dump</td></tr>
+    <tr><td>自定义驱动</td><td>任意调试变量、运行时控制</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">fs/debugfs/</span>
+├── <span class="file">inode.c</span>           <span class="cmt">debugfs 核心 (929 行)</span>
+│     └── debugfs_create_dir()    <span class="cmt">创建目录</span>
+│     └── debugfs_create_file()   <span class="cmt">创建文件</span>
+│     └── debugfs_create_u32()     <span class="cmt">创建 u32 文件</span>
+├── <span class="file">file.c</span>           <span class="cmt">debugfs 文件操作</span>
+└── <span class="file">internal.h</span>       <span class="cmt">内部定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>fs/debugfs/inode.c</code> — debugfs 核心，理解 create/remove API。<br>
+    <code>include/linux/debugfs.h</code> — debugfs API 定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · fs/debugfs/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
