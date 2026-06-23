@@ -395,6 +395,33 @@ function toggleCat(h) {
   h.classList.toggle('collapsed');
   if (items.classList.contains('collapsed')) { items.classList.remove('collapsed'); items.style.maxHeight = items.scrollHeight+'px'; }
   else { items.style.maxHeight = items.scrollHeight+'px'; requestAnimationFrame(()=>items.classList.add('collapsed')); }
+  saveSidebarState();
+}
+
+function saveSidebarState() {
+  var collapsed = [];
+  document.querySelectorAll('.sidebar-cat-header.collapsed').forEach(function(h) {
+    collapsed.push(h.closest('.sidebar-cat').getAttribute('data-top'));
+  });
+  try { localStorage.setItem('doc-sidebar-collapsed', JSON.stringify(collapsed)); } catch(e) {}
+}
+
+function restoreSidebarState() {
+  try {
+    var saved = JSON.parse(localStorage.getItem('doc-sidebar-collapsed') || '[]');
+    if (!saved.length) return;
+    saved.forEach(function(top) {
+      var cat = document.querySelector('.sidebar-cat[data-top="' + top + '"]');
+      if (cat) {
+        var hdr = cat.querySelector('.sidebar-cat-header');
+        var items = cat.querySelector('.sidebar-cat-items');
+        if (hdr && items && !hdr.classList.contains('collapsed')) {
+          hdr.classList.add('collapsed');
+          items.classList.add('collapsed');
+        }
+      }
+    });
+  } catch(e) {}
 }
 
 const searchInput = document.getElementById('search');
@@ -443,6 +470,7 @@ document.getElementById('total-count').textContent = DOCS.length;
 document.getElementById('total-topics').textContent = [...new Set(DOCS.map(d=>d.top))].length;
 renderSidebar();
 renderMain();
+restoreSidebarState();
 </script>
 <script src="common.js"></script>
 </body>
