@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux splice 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux splice 深度解析</h1>
+  <p class="subtitle">零拷贝数据传输 — 页面移动而非复制</p>
+  <span class="version">Linux 7.0.12 · fs/splice.c (1994 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#zero">零拷贝原理</a></li>
+    <li><a href="#api">API 与使用</a></li>
+    <li><a href="#sendfile">sendfile 与 vmsplice</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>splice 是 Linux 提供的<strong>零拷贝数据传输</strong>系统调用，可以在文件描述符和管道之间移动数据，<strong>无需在用户态和内核态之间复制数据</strong>。它是 nginx、redis、kafka 等高性能应用的核心优化手段。</p>
+</section>
+
+<section id="zero" class="toc-link">
+  <h2><span class="num">02</span> 零拷贝原理</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">传统 read/write（两次拷贝）：</span>
+
+  磁盘 → 内核 Page Cache → <span style="color:#cf222e">copy_to_user()</span> → 用户态 buf
+  写：用户态 buf → <span style="color:#cf222e">copy_from_user()</span> → 内核 socket 缓冲区 → 网卡
+  总共 2-4 次数据拷贝
+
+<span style="color:#1a7f37">splice（零拷贝）：</span>
+
+  文件 → Page Cache → <span style="color:#1a7f37">页面引用移动</span> → pipe buffer → 网卡
+  总共 0 次数据拷贝！
+  只修改 page 引用计数和指针
+
+<span style="color:#8250df">sendfile（零拷贝发送）：</span>
+
+  文件 fd → Page Cache → <span style="color:#8250df">零拷贝</span> → socket
+  nginx sendfile on; 配置启用
+</pre></div>
+
+  <h3>性能对比</h3>
+  <table>
+    <tr><th>方式</th><th>拷贝次数</th><th>上下文切换</th><th>适用场景</th></tr>
+    <tr><td>read + write</td><td>4 次</td><td>4 次</td><td>通用</td></tr>
+    <tr><td>mmap + write</td><td>3 次</td><td>4 次</td><td>大文件</td></tr>
+    <tr><td>sendfile</td><td>2 次</td><td>2 次</td><td>文件→socket</td></tr>
+    <tr><td>splice</td><td><strong>0 次</strong></td><td>2 次</td><td>任意 fd 对</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> API 与使用</h2>
+  <div class="card">
+    <pre><code><span class="cm">// splice — 在 fd_in 和 pipe 之间移动数据</span>
+<span class="ty">ssize_t</span> <span class="fn">splice</span>(<span class="ty">int</span> fd_in, <span class="ty">loff_t</span> *off_in,
+               <span class="ty">int</span> pipe_out, <span class="ty">loff_t</span> *off_out,
+               <span class="ty">size_t</span> len, <span class="ty">unsigned int</span> flags);
+
+<span class="cm">// 典型用法：文件 → pipe → socket</span>
+<span class="ty">int</span> pipefd[<span class="num">2</span>];
+<span class="fn">pipe</span>(pipefd);
+
+<span class="cm">// 文件 → pipe（零拷贝）</span>
+<span class="fn">splice</span>(filefd, NULL, pipefd[<span class="num">1</span>], NULL, len, SPLICE_F_MOVE);
+
+<span class="cm">// pipe → socket（零拷贝）</span>
+<span class="fn">splice</span>(pipefd[<span class="num">0</span>], NULL, sockfd, NULL, len, SPLICE_F_MOVE);
+
+<span class="cm">// 总共：文件 → socket 零拷贝传输！</span></code></pre>
+  </div>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">splice 内部机制（只移动页面引用）：</span>
+
+  splice(filefd → pipe)
+        │
+        ↓
+  从文件 Page Cache 获取页面
+        │
+        ↓
+  pipe_buffer.page = file_page
+  <span style="color:#1a7f37">get_page(file_page)  ← 仅增加引用计数</span>
+        │
+        ↓
+  splice(pipe → socket)
+        │
+        ↓
+  从 pipe_buffer 取出页面
+        │
+        ↓
+  传递给 socket 发送
+  <span style="color:#1a7f37">put_page(file_page) ← 仅减少引用计数</span>
+
+  整个过程不复制任何数据！
+  只是页面指针在不同缓冲区之间传递
+</pre></div>
+</section>
+
+<section id="sendfile" class="toc-link">
+  <h2><span class="num">04</span> sendfile 与 vmsplice</h2>
+  <table>
+    <tr><th>系统调用</th><th>功能</th><th>限制</th></tr>
+    <tr><td><code>splice</code></td><td>任意 fd ↔ pipe</td><td>需要 pipe 作为中间人</td></tr>
+    <tr><td><code>sendfile</code></td><td>文件 → socket（专用）</td><td>只能发到 socket</td></tr>
+    <tr><td><code>vmsplice</code></td><td>用户态内存 → pipe</td><td>只能到 pipe</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>nginx 如何使用 sendfile</strong><br>
+    nginx 配置 <code>sendfile on;</code> 后，发送静态文件时：<br>
+    ① 读取文件 → Page Cache<br>
+    ② <code>sendfile(fd_file, fd_socket, ...)</code> → 零拷贝发送<br>
+    ③ 不经过 nginx 用户态 → 减少内存拷贝和 CPU 开销
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">fs/</span>
+├── <span class="file">splice.c</span>          <span class="cmt">splice 核心 (1994 行)</span>
+│     └── splice_direct_to_actor() <span class="cmt">直接 splice</span>
+│     └── do_splice()       <span class="cmt">splice 核心逻辑</span>
+│     └── copy_page_to_iter() <span class="cmt">页面传递</span>
+├── <span class="file">pipe.c</span>            <span class="cmt">管道（splice 中间人）</span>
+└── <span class="file">read_write.c</span>      <span class="cmt">read/write/sendfile</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>fs/splice.c</code> — <code>do_splice()</code> 理解 splice 核心逻辑。<br>
+    <code>fs/pipe.c</code> — 管道作为 splice 的中间缓冲区。<br>
+    <code>include/linux/splice.h</code> — SPLICE_F_MOVE 等标志定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · fs/splice.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

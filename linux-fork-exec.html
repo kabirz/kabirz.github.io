@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux fork/exec 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux fork/exec 深度解析</h1>
+  <p class="subtitle">进程创建 — 从 fork() 到 execve() 的完整旅程</p>
+  <span class="version">Linux 7.0.12 · kernel/fork.c (3313 行) · fs/exec.c (2008 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#fork">fork 流程</a></li>
+    <li><a href="#cow">写时复制 (COW)</a></li>
+    <li><a href="#exec">exec 流程</a></li>
+    <li><a href="#clone">clone 与线程</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>fork/exec 是 UNIX/Linux 创建新进程的两大系统调用。<code>fork()</code> 创建当前进程的副本（COW），<code>execve()</code> 用新程序替换当前进程的地址空间。两者组合实现了 shell 中 <code>./program</code> 的完整过程。</p>
+</section>
+
+<section id="fork" class="toc-link">
+  <h2><span class="num">02</span> fork 流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">fork() 完整流程（kernel/fork.c）：</span>
+
+  pid = fork()
+        │
+        ↓
+  <span style="color:#8250df">kernel_clone()</span>
+        │
+        ├── 1. copy_process() — 创建子进程描述符
+        │       │
+        │       ├── dup_task_struct()
+        │       │   复制 task_struct + 内核栈
+        │       │   子进程的寄存器上下文 = 父进程
+        │       │
+        │       ├── copy_mm()  ← <span style="color:#cf222e">关键！COW</span>
+        │       │   不复制页表！
+        │       │   子进程 mm_struct 指向父进程的 mm
+        │       │   所有页表项标记为只读
+        │       │
+        │       ├── copy_files()  — 复制文件描述符表
+        │       ├── copy_sighand() — 复制信号处理
+        │       ├── copy_signal()  — 复制信号信息
+        │       ├── copy_namespaces() — 复制/创建命名空间
+        │       ├── copy_io()     — 复制 IO 上下文
+        │       ├── copy_thread() — 设置子进程内核栈
+        │       │   子进程 fork 返回值 = 0
+        │       │   父进程 fork 返回值 = 子进程 PID
+        │       │
+        │       └── alloc_pid() — 分配子进程 PID
+        │
+        ├── 2. wake_up_new_task() — 唤醒子进程
+        │       子进程就绪，等待调度
+        │
+        └── 3. 返回子进程 PID 给父进程
+</pre></div>
+</section>
+
+<section id="cow" class="toc-link">
+  <h2><span class="num">03</span> 写时复制 (COW)</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">COW 机制（fork 的核心优化）：</span>
+
+  fork 后（无 COW）：
+  父进程页面 → [page 1][page 2][page 3]  ← refcount=2（共享）
+  子进程页面 →   ↑       ↑       ↑
+
+  父/子进程都指向同一物理页面，页表标记为 <span style="color:#cf222e">只读</span>
+
+  父进程写入 page 2 → 缺页异常
+        │
+        ↓
+  <span style="color:#8250df">do_wp_page()</span> — mm/memory.c
+        │
+        ├── 检查 page refcount
+        │   refcount > 1 → 有人共享 → 需要 COW
+        │
+        ├── 分配新页面
+        │   alloc_page()
+        │
+        ├── 复制旧页面内容到新页面
+        │   copy_page(new, old)
+        │
+        ├── 更新父进程页表 → 指向新页面（可写）
+        │
+        └── 旧页面 refcount--
+            refcount=0 → 释放旧页面
+
+  结果：
+  父进程 page 2 → [new copy]  ← 独立副本
+  子进程 page 2 → [old page]  ← 不变
+
+  优势：
+  - fork 极快（只复制页表，不复制数据）
+  - 大多数 fork 后立即 exec → 页表也白复制了
+  - 70% 的 fork 后不修改大部分页面 → 大量页面保持共享
+</pre></div>
+</section>
+
+<section id="exec" class="toc-link">
+  <h2><span class="num">04</span> exec 流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">execve() 完整流程（fs/exec.c）：</span>
+
+  execve("/bin/ls", argv, envp)
+        │
+        ↓
+  <span style="color:#8250df">do_execveat_common()</span>
+        │
+        ├── 1. 打开可执行文件
+        │       kernel_read_file() → 读取 ELF 头
+        │
+        ├── 2. 验证文件格式
+        │       检查 ELF magic number
+        │       检查架构（x86_64 / ARM64）
+        │       检查权限（setuid/setgid）
+        │
+        ├── 3. 加载 ELF 段
+        │       load_elf_binary()
+        │       ├── .text 段 → mmap(PROT_READ|PROT_EXEC)
+        │       ├── .data 段 → mmap(PROT_READ|PROT_WRITE)
+        │       ├── .bss 段  → mmap(PROT_READ|PROT_WRITE)
+        │       ├── 栈      → mmap(向下增长)
+        │       └── 堆      → mmap(向上增长)
+        │
+        ├── 4. 设置新进程参数
+        │       argv（命令行参数）
+        │       envp（环境变量）
+        │       auxv（ELF 辅助向量）
+        │
+        ├── 5. 设置新进程入口
+        │       设置 RIP = ELF entry point
+        │       设置 RSP = 新栈顶
+        │
+        └── 6. 返回用户态 → 从 entry point 开始执行
+                <span style="color:#1a7f37">新程序"替换"了旧进程</span>
+</pre></div>
+
+  <div class="callout tip">
+    <strong>fork + exec 的经典模式</strong><br>
+    Shell 执行 <code>ls</code> 命令时：<br>
+    ① <code>fork()</code> → 创建子进程（COW，几乎无开销）<br>
+    ② 子进程调用 <code>execve("/bin/ls", ...)</code> → 替换地址空间<br>
+    ③ 父进程（shell）调用 <code>wait()</code> 等待子进程结束<br>
+    fork 的 COW 优化使得 exec 时不需要复制任何页面——因为 exec 会完全替换地址空间。
+  </div>
+</section>
+
+<section id="clone" class="toc-link">
+  <h2><span class="num">05</span> clone 与线程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">fork vs clone vs pthread：</span>
+
+  fork()    → clone(CLONE_VM|CLONE_FS|CLONE_FILES|SIGHAND|SIGCHLD)
+             子进程独立（COW），共享文件描述符
+
+  vfork()   → clone(CLONE_VM|CLONE_VFORK|SIGCHLD)
+             子进程共享父进程地址空间（不 COW！）
+             父进程阻塞直到子进程 exec 或 exit
+
+  pthread_create() → clone(CLONE_VM|CLONE_FS|CLONE_FILES|
+                           CLONE_SIGHAND|CLONE_THREAD|...)
+             线程共享地址空间、文件、信号处理
+             同一进程中的不同线程
+
+  clone 的灵活性：
+  通过 flags 精确控制共享哪些资源
+  这是 Linux 实现 POSIX 线程的基础
+</pre></div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+├── <span class="file">fork.c</span>            <span class="cmt">fork/clone 实现 (3313 行)</span>
+│     └── kernel_clone()      <span class="cmt">核心入口</span>
+│     └── copy_process()      <span class="cmt">进程复制</span>
+│     └── copy_mm()           <span class="cmt">内存空间（COW）</span>
+│     └── copy_files()        <span class="cmt">文件描述符</span>
+├── <span class="file">exec.c</span>            <span class="cmt">execve 实现 (2008 行)</span>
+│     └── do_execveat_common() <span class="cmt">exec 入口</span>
+│     └── load_elf_binary()    <span class="cmt">ELF 加载器</span>
+└── <span class="file">exit.c</span>            <span class="cmt">进程退出</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">sched.h</span>           <span class="cmt">task_struct 定义</span>
+└── <span class="file">clone.h</span>           <span class="cmt">CLONE_* 标志</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/fork.c</code> — 从 <code>kernel_clone()</code> 开始，重点看 <code>copy_mm()</code> 理解 COW。<br>
+    <code>fs/exec.c</code> — <code>load_elf_binary()</code> 是 ELF 加载器的核心。<br>
+    <code>include/linux/sched.h</code> — <code>task_struct</code> 是进程的核心数据结构。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/fork.c · fs/exec.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
