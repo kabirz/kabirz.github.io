@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux NUMA 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux NUMA 深度解析</h1>
+  <p class="subtitle">非统一内存访问 — 多路服务器的内存架构</p>
+  <span class="version">Linux 7.0.12 · mm/migrate.c (2767 行) · mm/memory-failure.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">NUMA 架构</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#policy">NUMA 策略</a></li>
+    <li><a href="#balancing">NUMA 平衡</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>NUMA（Non-Uniform Memory Access）是多路服务器的内存架构。每个 CPU 直连自己的本地内存，访问其他 CPU 的本地内存需要通过互联总线，延迟更高。Linux 内核自动管理 NUMA 拓扑，优化内存分配位置。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> NUMA 架构</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">UMA（统一内存访问）：</span>
+
+  CPU 0 ←──→ CPU 1 ←──→ CPU 2 ←──→ CPU 3
+    │            │          │          │
+    └────────────┴──────────┴──────────┘
+                    │
+              ┌─────┴─────┐
+              │  共享内存   │  <span style="color:#cf222e">所有 CPU 访问延迟相同</span>
+              └───────────┘
+
+<span style="color:#1a7f37">NUMA（非统一内存访问）：</span>
+
+  ┌─────────────┐  ┌─────────────┐
+  │   Node 0    │  │   Node 1    │
+  │ ┌───┐ ┌───┐│  │ ┌───┐ ┌───┐│
+  │ │C0 │ │C1 ││  │ │C2 │ │C3 ││
+  │ └───┘ └───┘│  │ └───┘ └───┘│
+  │     │       │  │      │     │
+  │ ┌───┴───┐   │  │  ┌───┴───┐ │
+  │ │内存 64G│   │  │  │内存 64G│ │
+  │ └───────┘   │  │  └───────┘ │
+  └──────┬──────┘  └──────┬─────┘
+         │                │
+         └──── 互联总线 ───┘
+               │
+         <span style="color:#1a7f37">本地访问 ~100ns</span>
+         <span style="color:#cf222e">远程访问 ~300ns（3 倍延迟）</span>
+</pre></div>
+</section>
+
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/mmzone.h — NUMA 节点</span>
+<span class="kw">struct</span> <span class="ty">pglist_data</span> {  <span class="cm">// 每个 NUMA 节点一个</span>
+    <span class="kw">struct</span> <span class="ty">list_head</span>  <span class="ty">zonelists</span>;    <span class="cm">// Zone 回退链表</span>
+    <span class="ty">u32</span>               nr_zones;      <span class="cm">// Zone 数量</span>
+    <span class="kw">struct</span> <span class="ty">zone</span>       node_zones[<span class="num">MAX_NR_ZONES</span>]; <span class="cm">// Zone 数组</span>
+    <span class="ty">unsigned long</span>     node_start_pfn; <span class="cm">// 起始页帧号</span>
+    <span class="ty">unsigned long</span>     node_spanned_pages; <span class="cm">// 跨越的页面数</span>
+    <span class="ty">unsigned long</span>     node_present_pages; <span class="cm">// 实际页面数</span>
+    <span class="ty">int</span>               node_id;       <span class="cm">// 节点 ID</span>
+    <span class="kw">struct</span> <span class="ty">memblock</span>   *mnode;        <span class="cm">// memblock 节点</span>
+};
+
+<span class="cm">// 读取节点间距离</span>
+<span class="cm">// /sys/devices/system/node/node0/distance</span></code></pre>
+  </div>
+</section>
+
+<section id="policy" class="toc-link">
+  <h2><span class="num">04</span> NUMA 策略</h2>
+  <table>
+    <tr><th>策略</th><th>说明</th><th>适用场景</th></tr>
+    <tr><td><strong>default</strong></td><td>从当前 CPU 的本地节点分配</td><td>通用</td></tr>
+    <tr><td><strong>bind</strong></td><td>绑定到指定节点</td><td>性能关键应用</td></tr>
+    <tr><td><strong>interleave</strong></td><td>在指定节点间轮询分配</td><td>大内存应用</td></tr>
+    <tr><td><strong>firsttouch</strong></td><td>首次访问时分配到本地节点</td><td>通用</td></tr>
+    <tr><td><strong>weight</strong></td><td>按权重在节点间分配</td><td>精细控制</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm"># 设置进程的 NUMA 策略</span>
+$ numactl --membind=0 ./myapp         <span class="cm"># 绑定到 Node 0</span>
+$ numactl --interleave=all ./myapp    <span class="cm"># 交错分配</span>
+$ numactl --cpunodebind=0 ./myapp     <span class="cm"># 绑定 CPU 到 Node 0</span>
+
+<span class="cm"># 查看 NUMA 拓扑</span>
+$ numactl --hardware
+available: 2 nodes (0-1)
+node 0 cpus: 0 1 2 3
+node 0 size: 65536 MB
+node 1 cpus: 4 5 6 7
+node 1 size: 65536 MB
+node 0 dist: 10 21
+node 1 dist: 21 10
+
+<span class="cm"># 查看进程的 NUMA 内存分布</span>
+$ numastat -p &lt;pid&gt;</code></pre>
+  </div>
+</section>
+
+<section id="balancing" class="toc-link">
+  <h2><span class="num">05</span> NUMA 平衡</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">NUMA 自动平衡（kernel numad）：</span>
+
+  进程在 Node 0 运行，频繁访问 Node 1 的内存
+        │
+        ↓
+  NUMA balancing 采样
+        │
+        ├── 检测到远程访问
+        │
+        ├── 迁移页面到本地节点
+        │   migrate_pages() → 从 Node 1 复制到 Node 0
+        │
+        └── 更新页表 → 新分配在本地节点
+
+  开启 NUMA balancing：
+  $ sysctl -w kernel.numa_balancing=1
+
+  禁用 NUMA balancing：
+  $ sysctl -w kernel.numa_balancing=0
+  <span style="color:#656d76">// 对已知 NUMA 优化的应用（如数据库）可能更好</span>
+</pre></div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">migrate.c</span>        <span class="cmt">页面迁移 (2767 行)</span>
+├── <span class="file">memory-failure.c</span> <span class="cmt">内存故障处理</span>
+├── <span class="file">mempolicy.c</span>      <span class="cmt">NUMA 内存策略</span>
+└── <span class="file">mempool.c</span>        <span class="cmt">内存池</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">mmzone.h</span>         <span class="cmt">struct pglist_data (NUMA 节点)</span>
+├── <span class="file">mm_inline.h</span>      <span class="cmt">内联函数</span>
+└── <span class="file">mempolicy.h</span>      <span class="cmt">NUMA 策略定义</span>
+
+<span class="dir">mm/numa/</span>
+├── <span class="file">balancing.c</span>     <span class="cmt">NUMA 自动平衡</span>
+└── <span class="file">migrate.c</span>       <span class="cmt">NUMA 页面迁移</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/mempolicy.c</code> — NUMA 内存策略实现（bind/interleave/default）。<br>
+    <code>mm/migrate.c</code> — 页面迁移机制，理解 NUMA balancing。<br>
+    <code>include/linux/mmzone.h</code> — <code>struct pglist_data</code>，理解 NUMA 节点结构。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/mempolicy.c · mm/migrate.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

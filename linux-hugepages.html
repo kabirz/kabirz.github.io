@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Huge Pages 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Huge Pages 深度解析</h1>
+  <p class="subtitle">大页内存 — 减少 TLB miss 的性能优化</p>
+  <span class="version">Linux 7.0.12 · mm/huge_memory.c (4983 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">大页类型</a></li>
+    <li><a href="#tlb">TLB 与性能</a></li>
+    <li><a href="#flow">使用流程</a></li>
+    <li><a href="#tuning">调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Huge Pages（大页）是 Linux 支持的<strong>大于 4KB 的内存页面</strong>。标准页面为 4KB，大页可以是 2MB（PMD 级）或 1GB（PUD 级）。大页减少了 TLB（Translation Lookaside Buffer）的条目数量，降低 TLB miss 率，显著提升内存密集型应用（如数据库、HPC、KVM）的性能。</p>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 大页类型</h2>
+  <table>
+    <tr><th>类型</th><th>大小</th><th>用途</th><th>管理方式</th></tr>
+    <tr><td><strong>THP</strong></td><td>2MB（可合并/拆分）</td><td>透明大页（默认启用）</td><td>内核自动管理</td></tr>
+    <tr><td><strong>静态大页</strong></td><td>2MB / 1GB</td><td>HugeTLBFS</td><td>手动预留</td></tr>
+    <tr><td><strong>Contiguous PTE</strong></td><td>16 个连续 4KB</td><td>ARM64 优化</td><td>内核自动</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">标准 4KB 页面 vs 2MB 大页：</span>
+
+  TLB（翻译后备缓冲器）容量固定，比如 64 条目
+
+  <span style="color:#cf222e">4KB 页面：</span>
+  64 条目 × 4KB = 256KB 覆盖范围
+  1GB 内存需要 262144 条目 → TLB miss 频繁
+
+  <span style="color:#1a7f37">2MB 大页：</span>
+  64 条目 × 2MB = 128MB 覆盖范围
+  1GB 内存只需 512 条目 → TLB miss 极少
+
+  性能提升：数据库查询加速 5-15%
+</pre></div>
+</section>
+
+<section id="tlb" class="toc-link">
+  <h2><span class="num">03</span> TLB 与性能</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">TLB miss 的代价：</span>
+
+  CPU 访问虚拟地址 → TLB 命中 → 1-2 周期
+  CPU 访问虚拟地址 → TLB 未命中 → 需要遍历页表
+                                        │
+                                        ├── 4 级页表遍历 → 24+ 次内存访问
+                                        ├── 每次内存访问 ~100ns
+                                        └── 总计 ~400ns（vs 1-2ns TLB 命中）
+
+  <span style="color:#1a7f37">大页减少 TLB miss：</span>
+  每个大页 TLB 条目覆盖更大范围
+  相同条目数 → 覆盖更多内存 → miss 率更低
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 使用流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">静态大页（HugeTLBFS）：</span>
+
+  <span class="cm"># 1. 预留大页（启动时或运行时）</span>
+  echo 1024 > /proc/sys/vm/nr_hugepages   <span class="cm"># 预留 1024 × 2MB = 2GB</span>
+
+  <span class="cm"># 2. 挂载 HugeTLBFS</span>
+  mount -t hugetlbfs nodev /mnt/huge
+
+  <span class="cm"># 3. 应用使用</span>
+  mmap(NULL, 2*1024*1024, PROT_READ|PROT_WRITE,
+       MAP_SHARED|MAP_HUGETLB, fd, <span class="num">0</span>);
+  <span class="cm"># 或使用 libhugetlbfs</span>
+
+<span style="color:#1a7f37">透明大页（THP）— 自动管理：</span>
+
+  <span class="cm"># 查看 THP 状态</span>
+  $ cat /sys/kernel/mm/transparent_hugepage/enabled
+  [always] madvise never
+
+  <span class="cm"># 内核自动合并/拆分</span>
+  <span class="cm"># 2MB 连续 4KB 页面 → 自动合并为大页</span>
+  <span class="cm"># 碎片化时 → 自动拆分为 4KB 页面</span>
+  <span class="cm"># 无需应用修改</span>
+</pre></div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">05</span> 调优</h2>
+  <table>
+    <tr><th>参数</th><th>说明</th></tr>
+    <tr><td><code>vm.nr_hugepages</code></td><td>预留的大页数量</td></tr>
+    <tr><td><code>vm.hugetlb_shm_group</code></td><td>允许使用大页的用户组</td></tr>
+    <tr><td><code>transparent_hugepage/enabled</code></td><td>THP 启用模式：always/madvise/never</td></tr>
+    <tr><td><code>transparent_hugepage/defrag</code></td><td>碎片整理策略</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>什么时候不用 THP？</strong><br>
+    <strong>Redis</strong>：THP 可能导致 fork() 时 COW 开销增加（2MB 页面的 COW 比 4KB 更贵）。<br>
+    <strong>数据库</strong>：MySQL/PostgreSQL 建议 <code>madvise</code> 模式或关闭 THP。<br>
+    <strong>HPC</strong>：计算密集型应用通常推荐开启 THP。
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">huge_memory.c</span>    <span class="cmt">THP 核心 (4983 行)</span>
+│     └── __do_huge_pmd_anonymous_page() <span class="cmt">匿名 THP</span>
+│     └── collapse_huge_page()   <span class="cmt">页面合并</span>
+│     └── split_huge_page()      <span class="cmt">页面拆分</span>
+├── <span class="file">hugetlb.c</span>        <span class="cmt">HugeTLBFS 实现</span>
+└── <span class="file">khugepaged.c</span>     <span class="cmt">THP 后台合并线程</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/huge_memory.c</code> — THP 核心，理解大页合并/拆分机制。<br>
+    <code>mm/hugetlb.c</code> — HugeTLBFS 静态大页管理。<br>
+    <code>mm/khugepaged.c</code> — khugepaged 线程，后台 THP 合并。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/huge_memory.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

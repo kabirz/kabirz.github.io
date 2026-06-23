@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Overcommit 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Overcommit 深度解析</h1>
+  <p class="subtitle">内存超分配 — 虚拟内存与物理内存的博弈</p>
+  <span class="version">Linux 7.0.12 · mm/mmap.c · mm/oom_kill.c (1273 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#modes">三种模式</a></li>
+    <li><a href="#flow">overcommit 检查流程</a></li>
+    <li><a href="#oom">OOM Killer</a></li>
+    <li><a href="#tuning">调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Overcommit（内存超分配）是 Linux 内核允许<strong>进程申请的虚拟内存超过物理内存总量</strong>的策略。大多数程序 malloc 了大量内存但只使用一小部分，overcommit 利用这一特性提高内存利用率。但如果超分配过多，可能导致 OOM Killer 杀死进程。</p>
+</section>
+
+<section id="modes" class="toc-link">
+  <h2><span class="num">02</span> 三种模式</h2>
+  <table>
+    <tr><th>模式</th><th>vm.overcommit_memory</th><th>行为</th></tr>
+    <tr><td><strong>启发式（默认）</strong></td><td>0</td><td>内核估计是否合理，过度分配时拒绝</td></tr>
+    <tr><td><strong>总是允许</strong></td><td>1</td><td>总是允许 overcommit（Redis 推荐）</td></tr>
+    <tr><td><strong>严格限制</strong></td><td>2</td><td>可用 RAM + swap × overcommit_ratio% 才允许</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">overcommit_memory = 0（默认，启发式）：</span>
+
+  进程 mmap(1GB)
+        │
+        ↓
+  内核检查 overcommit 可用量
+        │
+        ├── 可用量 > 0 → 允许，虚拟内存增加
+        │
+        └── 可用量 ≤ 0 → 检查申请是否"合理"
+            │
+            ├── 合理（单次大量分配）→ 允许
+            └── 不合理（疯狂小分配）→ 拒绝，返回 ENOMEM
+
+<span style="color:#1a7f37">overcommit_memory = 1（总是允许）：</span>
+
+  任何 mmap/brk 请求都允许
+  适合：Redis、数据库等"我知道自己在做什么"的应用
+  风险：进程可能分配远超物理内存的虚拟内存
+
+<span style="color:#8250df">overcommit_memory = 2（严格限制）：</span>
+
+  可用内存 = SwapTotal × overcommit_ratio/100 + CommitLimit
+  每次分配都检查：已提交 + 新请求 ≤ CommitLimit
+  超过 → 立即拒绝 ENOMEM
+  适合：对内存稳定性要求极高的场景
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> overcommit 检查流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">__vm_enough_memory() — overcommit 检查入口：</span>
+
+  进程申请内存（mmap / brk / malloc）
+        │
+        ↓
+  <span style="color:#8250df">__vm_enough_memory()</span>
+        │
+        ├── overcommit_memory == 1 → <span style="color:#1a7f37">总是返回 0（允许）</span>
+        │
+        ├── overcommit_memory == 2 →
+        │       计算 allowed = SwapTotal × ratio/100
+        │       如果 committed + pages > allowed → 拒绝
+        │
+        └── overcommit_memory == 0（默认）→
+                计算 available = free + buffers + cached - commit_limit
+                │
+                ├── available > 0 → 允许
+                │
+                └── available ≤ 0 → 估算"合理性"
+                    │
+                    ├── 申请量 < 总内存 / 8 → 允许（小分配通常安全）
+                    ├── 申请量 < 总内存 / 4 → 可能允许
+                    └── 申请量 > 总内存 / 4 → 拒绝
+</pre></div>
+</section>
+
+<section id="oom" class="toc-link">
+  <h2><span class="num">04</span> OOM Killer</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">OOM Killer 触发条件：</span>
+
+  overcommit 允许了过多分配
+        │
+        ↓
+  进程实际访问页面 → 缺页异常
+        │
+        ↓
+  物理内存不足，无法分配页面
+        │
+        ├── 已有 swap → 换出页面（kswapd）
+        │
+        └── 无 swap 或 swap 也满
+            │
+            ↓
+  <span style="color:#cf222e">out_of_memory()</span> → OOM Killer
+        │
+        ├── 计算每个进程的 oom_score
+        │       oom_score = RSS + swap + page_table + oom_score_adj
+        │
+        ├── 分数最高的进程被选中
+        │
+        ├── 发送 SIGKILL
+        │
+        └── 进程退出 → 释放内存 → 恢复
+
+  oom_score_adj（用户可调）：
+    -1000 = 永不 OOM（如 oom_score_adj=-1000）
+       0 = 默认（大多数进程）
+    1000 = 最先被 OOM 杀死
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm"># 查看进程 OOM 分数</span>
+$ cat /proc/self/oom_score
+0
+
+<span class="cm"># 设置 OOM 优先级</span>
+$ echo -1000 > /proc/self/oom_score_adj  <span class="cm"># 保护自己</span>
+$ echo 1000 > /proc/self/oom_score_adj   <span class="cm"># 优先被杀</span>
+
+<span class="cm"># 查看 OOM 日志</span>
+$ dmesg | grep -i "out of memory"</code></pre>
+  </div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">05</span> 调优</h2>
+  <table>
+    <tr><th>参数</th><th>默认值</th><th>说明</th></tr>
+    <tr><td><code>vm.overcommit_memory</code></td><td>0</td><td>overcommit 模式（0/1/2）</td></tr>
+    <tr><td><code>vm.overcommit_ratio</code></td><td>50</td><td>overcommit_memory=2 时的比率</td></tr>
+    <tr><td><code>vm.oom_kill_allocating_task</code></td><td>0</td><td>1=杀死申请者而非最高分进程</td></tr>
+    <tr><td><code>vm.panic_on_oom</code></td><td>0</td><td>1=OOM 时内核 panic</td></tr>
+    <tr><td><code>vm.min_free_kbytes</code></td><td>~3%RAM</td><td>保留的最低空闲内存</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>Redis 推荐配置</strong><br>
+    Redis 建议设置 <code>vm.overcommit_memory=1</code>，因为 Redis fork() 时需要大量内存（COW），启发式模式可能误判拒绝。
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">oom_kill.c</span>       <span class="cmt">OOM Killer (1273 行)</span>
+│     └── out_of_memory()     <span class="cmt">OOM 入口</span>
+│     └── oom_kill_process()  <span class="cmt">杀死进程</span>
+│     └── oom_badness()       <span class="cmt">计算 oom_score</span>
+├── <span class="file">mmap.c</span>           <span class="cmt">mmap（触发 overcommit 检查）</span>
+├── <span class="file">vmscan.c</span>         <span class="cmt">页面回收（kswapd）</span>
+└── <span class="file">memory.c</span>         <span class="cmt">缺页异常处理</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/oom_kill.c</code> — <code>out_of_memory()</code> 和 <code>oom_badness()</code> 理解 OOM 机制。<br>
+    <code>mm/vmscan.c</code> — kswapd 页面回收，理解内存压力缓解。<br>
+    <code>mm/mmap.c</code> — overcommit 检查在 mmap 中的调用位置。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/oom_kill.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
