@@ -7,12 +7,12 @@
 
   // 文档列表
   var DOCS = [
-    { t:"Linux 内核 MMU", f:"linux-mmu.html", top:"linux" },
-    { t:"Linux 内存管理", f:"linux-mm.html", top:"linux" },
+    { t:"Linux 内核 MMU 实现详解", f:"linux-mmu.html", top:"linux" },
+    { t:"Linux 内核内存管理", f:"linux-mm.html", top:"linux" },
     { t:"Linux 调度器", f:"linux-scheduler.html", top:"linux" },
     { t:"Linux 原子操作", f:"linux-atomic.html", top:"linux" },
     { t:"Linux 自旋锁", f:"linux-spinlock.html", top:"linux" },
-    { t:"Linux CAS vs Spinlock", f:"linux-cas-vs-spinlock.html", top:"linux" },
+    { t:"Linux CAS 与自旋锁区别", f:"linux-cas-vs-spinlock.html", top:"linux" },
     { t:"Linux 互斥锁", f:"linux-mutex.html", top:"linux" },
     { t:"Linux 信号量", f:"linux-semaphore.html", top:"linux" },
     { t:"Linux 读写锁", f:"linux-rwlock.html", top:"linux" },
@@ -28,22 +28,55 @@
     { t:"Linux kref", f:"linux-kref.html", top:"linux" },
     { t:"Linux XArray", f:"linux-xarray.html", top:"linux" },
     { t:"Linux sched_ext", f:"linux-sched-ext.html", top:"linux" },
-    { t:"Linux procfs", f:"linux-procfs.html", top:"fs" },
-    { t:"Linux VFS", f:"linux-vfs.html", top:"fs" },
-    { t:"Linux 设备模型", f:"linux-devmodel.html", top:"driver" },
-    { t:"Linux 设备树", f:"linux-devtree.html", top:"other" },
-    { t:"Linux ARM 内存管理", f:"linux-arm-mm.html", top:"other" },
-    { t:"Linux pinctrl", f:"linux-pinctrl.html", top:"driver" },
-    { t:"Linux GPIO", f:"linux-gpio.html", top:"driver" },
-    { t:"Linux I2C", f:"linux-i2c.html", top:"driver" },
-    { t:"Linux SPI", f:"linux-spi.html", top:"driver" },
-    { t:"Linux 串口", f:"linux-serial.html", top:"driver" },
-    { t:"Linux MMC", f:"linux-mmc.html", top:"driver" },
-    { t:"Linux LED", f:"linux-led.html", top:"driver" },
-    { t:"Linux PWM", f:"linux-pwm.html", top:"driver" },
-    { t:"Linux 时钟", f:"linux-clk.html", top:"driver" },
-    { t:"Linux DMA", f:"linux-dma.html", top:"driver" },
-    { t:"Linux 网络", f:"linux-network.html", top:"net" },
+    { t:"Linux io_uring", f:"linux-io-uring.html", top:"linux" },
+    { t:"Linux 通用中断子系统", f:"linux-irq.html", top:"linux" },
+    { t:"Linux eBPF", f:"linux-ebpf.html", top:"linux" },
+    { t:"Linux 时间子系统", f:"linux-timers.html", top:"linux" },
+    { t:"Linux 块设备子系统", f:"linux-block.html", top:"linux" },
+    { t:"Linux PCI/PCIe", f:"linux-pci.html", top:"linux" },
+    { t:"Linux 电源管理", f:"linux-pm.html", top:"linux" },
+    { t:"Linux 性能监控", f:"linux-perf.html", top:"linux" },
+    { t:"Linux 安全模块", f:"linux-lsm.html", top:"linux" },
+    { t:"Docker Namespaces 与容器隔离", f:"docker-namespaces.html", top:"docker" },
+    { t:"Docker Capabilities 与权限", f:"docker-capabilities.html", top:"docker" },
+    { t:"Docker OverlayFS 镜像存储", f:"docker-overlayfs.html", top:"docker" },
+    { t:"Docker OCI 规范", f:"docker-oci.html", top:"docker" },
+    { t:"Docker 引擎架构", f:"docker-arch.html", top:"docker" },
+    { t:"Docker containerd", f:"docker-containerd.html", top:"docker" },
+    { t:"Docker runc", f:"docker-runc.html", top:"docker" },
+    { t:"Docker BuildKit", f:"docker-buildkit.html", top:"docker" },
+    { t:"Docker 网络模型", f:"docker-network.html", top:"docker" },
+    { t:"Docker 存储卷", f:"docker-volume.html", top:"docker" },
+    { t:"Docker Compose", f:"docker-compose.html", top:"docker" },
+    { t:"Docker 容器安全", f:"docker-security.html", top:"docker" },
+    { t:"Rust 所有权系统深度解析", f:"rust-ownership.html", top:"rust" },
+    { t:"Rust Trait 系统深度解析", f:"rust-trait.html", top:"rust" },
+    { t:"Rust Unsafe 与内存模型", f:"rust-unsafe.html", top:"rust" },
+    { t:"Rust 宏系统深度解析", f:"rust-macros.html", top:"rust" },
+    { t:"Rust 并发原语深度解析", f:"rust-concurrency.html", top:"rust" },
+    { t:"Rust Async/Await 深度解析", f:"rust-async.html", top:"rust" },
+    { t:"Tokio 异步运行时深度解析", f:"rust-tokio.html", top:"rust" },
+    { t:"Cargo 包管理器深度解析", f:"rust-cargo.html", top:"rust" },
+    { t:"Rust Web 框架深度对比", f:"rust-web-frameworks.html", top:"rust" },
+    { t:"Rust GUI 框架深度对比", f:"rust-gui-frameworks.html", top:"rust" },
+    { t:"Rust 嵌入式开发深度解析", f:"rust-embedded.html", top:"rust" },
+    { t:"Rust CLI 工具链深度解析", f:"rust-cli-tools.html", top:"rust" },
+    { t:"Linux procfs", f:"linux-procfs.html", top:"linux" },
+    { t:"Linux VFS", f:"linux-vfs.html", top:"linux" },
+    { t:"Linux 设备模型", f:"linux-devmodel.html", top:"linux" },
+    { t:"Linux 设备树", f:"linux-devtree.html", top:"linux" },
+    { t:"Linux ARM 内存管理", f:"linux-arm-mm.html", top:"linux" },
+    { t:"Linux pinctrl", f:"linux-pinctrl.html", top:"linux" },
+    { t:"Linux GPIO", f:"linux-gpio.html", top:"linux" },
+    { t:"Linux I2C", f:"linux-i2c.html", top:"linux" },
+    { t:"Linux SPI", f:"linux-spi.html", top:"linux" },
+    { t:"Linux 串口", f:"linux-serial.html", top:"linux" },
+    { t:"Linux MMC", f:"linux-mmc.html", top:"linux" },
+    { t:"Linux LED", f:"linux-led.html", top:"linux" },
+    { t:"Linux PWM", f:"linux-pwm.html", top:"linux" },
+    { t:"Linux 时钟", f:"linux-clk.html", top:"linux" },
+    { t:"Linux DMA", f:"linux-dma.html", top:"linux" },
+    { t:"Linux 网络", f:"linux-network.html", top:"linux" },
     { t:"Linux Bridge", f:"linux-bridge.html", top:"net" },
     { t:"Linux veth", f:"linux-veth.html", top:"net" },
     { t:"Linux tun/tap", f:"linux-tun-tap.html", top:"net" },
@@ -74,11 +107,11 @@
     { t:"Linux Page Cache", f:"linux-page-cache.html", top:"linux" },
     { t:"Linux 共享内存", f:"linux-shared-memory.html", top:"linux" },
     { t:"Linux FIFO", f:"linux-fifo.html", top:"linux" },
-    { t:"Linux sysfs", f:"linux-sysfs.html", top:"driver" },
-    { t:"Linux ext4", f:"linux-ext4.html", top:"fs" },
+    { t:"Linux sysfs", f:"linux-sysfs.html", top:"linux" },
+    { t:"Linux ext4", f:"linux-ext4.html", top:"linux" },
     { t:"Linux 伙伴系统", f:"linux-buddy.html", top:"linux" },
     { t:"Linux Namespace", f:"linux-namespace.html", top:"linux" },
-    { t:"Linux tmpfs", f:"linux-tmpfs.html", top:"fs" },
+    { t:"Linux tmpfs", f:"linux-tmpfs.html", top:"linux" },
     { t:"Linux fork/exec", f:"linux-fork-exec.html", top:"linux" },
     { t:"Linux splice", f:"linux-splice.html", top:"linux" },
     { t:"Linux seccomp", f:"linux-seccomp.html", top:"linux" },
@@ -138,27 +171,18 @@
     { t:"Linux 调试技术全景", f:"linux-debugging-overview.html", top:"linux" },
     { t:"Linux 进程间通信全景", f:"linux-ipc-overview.html", top:"linux" },
     { t:"select/poll/epoll", f:"linux-select-poll-epoll.html", top:"linux" },
-    { t:"Linux io_uring", f:"linux-io-uring.html", top:"linux" },
-    { t:"Linux 通用中断", f:"linux-irq.html", top:"linux" },
-    { t:"Linux eBPF", f:"linux-ebpf.html", top:"linux" },
-    { t:"Linux 时间子系统", f:"linux-timers.html", top:"linux" },
-    { t:"Linux 块设备子系统", f:"linux-block.html", top:"linux" },
-    { t:"Linux PCI/PCIe", f:"linux-pci.html", top:"linux" },
-    { t:"Linux 电源管理", f:"linux-pm.html", top:"linux" },
-    { t:"Linux 性能监控", f:"linux-perf.html", top:"linux" },
-    { t:"Linux 安全模块", f:"linux-lsm.html", top:"linux" },
-    { t:"Windows MFC", f:"windows-mfc.html", top:"windows" },
-    { t:"Windows Win32 API", f:"windows-win32.html", top:"windows" },
-    { t:"Windows ATL/WTL", f:"windows-atl-wtl.html", top:"windows" },
-    { t:"Windows Forms", f:"windows-winforms.html", top:"windows" },
-    { t:"Windows WPF", f:"windows-wpf.html", top:"windows" },
-    { t:"Windows UWP", f:"windows-uwp.html", top:"windows" },
-    { t:"Windows WinUI 3", f:"windows-winui3.html", top:"windows" },
-    { t:".NET MAUI", f:"windows-maui.html", top:"windows" },
-    { t:"Windows WebView2", f:"windows-webview2.html", top:"windows" },
-    { t:"Dioxus", f:"rust-dioxus.html", top:"rust" }
+    { t:"Windows MFC 深度解析", f:"windows-mfc.html", top:"windows" },
+    { t:"Windows Win32 API 深度解析", f:"windows-win32.html", top:"windows" },
+    { t:"Windows ATL/WTL 深度解析", f:"windows-atl-wtl.html", top:"windows" },
+    { t:"Windows Forms 深度解析", f:"windows-winforms.html", top:"windows" },
+    { t:"Windows WPF 深度解析", f:"windows-wpf.html", top:"windows" },
+    { t:"Windows UWP 深度解析", f:"windows-uwp.html", top:"windows" },
+    { t:"Windows WinUI 3 深度解析", f:"windows-winui3.html", top:"windows" },
+    { t:".NET MAUI 深度解析", f:"windows-maui.html", top:"windows" },
+    { t:"Windows WebView2 深度解析", f:"windows-webview2.html", top:"windows" },
+    { t:"Dioxus 深度解析", f:"rust-dioxus.html", top:"rust" },
   ];
-  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", other:"硬件与平台" };
+  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", other:"硬件与平台" };
 
   // 主题切换
   var STORAGE_KEY = 'kernel-docs-theme';
@@ -216,22 +240,45 @@
 
     // 文档页面侧边栏
     if (!document.querySelector('.hero')) return;
+
+    var ICON_MAP = {
+      linux: { emoji: "🐧", color: "#0969da" },
+      windows: { emoji: "🪟", color: "#0078d4" },
+      rust: { emoji: "🦀", color: "#dea584" },
+      docker: { emoji: "🐳", color: "#2496ed" },
+      net: { emoji: "🌐", color: "#0969da" },
+      fs: { emoji: "📁", color: "#1a7f37" },
+      driver: { emoji: "🔌", color: "#8250df" },
+      other: { emoji: "📦", color: "#656d76" }
+    };
+
     var currentFile = window.location.pathname.split('/').pop() || 'index.html';
     var tops = {};
     DOCS.forEach(function(d) {
-      if (!tops[d.top]) tops[d.top] = [];
-      tops[d.top].push(d);
+      if (!tops[d.top]) tops[d.top] = { label: TOP_LABELS[d.top] || d.top, items: [] };
+      tops[d.top].items.push(d);
     });
 
-    var html = '<div class="doc-sidebar-hdr"><a class="back" href="index.html">← 导航页</a><div class="btns"><button class="hdr-btn" id="sb-collapse" title="收起">‹</button></div></div><nav class="doc-sidebar-nav">';
-    ['linux','fs','driver','net','windows','rust','other'].forEach(function(top) {
-      var items = tops[top];
-      if (!items || !items.length) return;
-      html += '<div class="doc-sidebar-cat">' + (TOP_LABELS[top]||top) + '</div>';
-      items.forEach(function(d) {
-        var cls = d.f === currentFile ? 'doc-sidebar-item current' : 'doc-sidebar-item';
-        html += '<a href="' + d.f + '" class="' + cls + '">' + d.t + '</a>';
+    var html = '<div class="doc-sidebar-hdr"><a class="back" href="index.html">← 导航页</a><div class="btns"><button class="hdr-btn" id="sb-collapse" title="收起">‹</button></div></div>';
+    html += '<div class="sidebar-search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input type="text" id="sb-search-input" placeholder="搜索文档..."></div>';
+    html += '<nav class="doc-sidebar-nav">';
+    Object.keys(tops).forEach(function(top) {
+      var cat = tops[top];
+      if (!cat || !cat.items || !cat.items.length) return;
+      var info = ICON_MAP[top] || ICON_MAP.other;
+      html += '<div class="sidebar-cat" data-top="' + top + '">';
+      html += '<div class="sidebar-cat-header">';
+      html += '<div class="sidebar-cat-icon" style="background:' + info.color + '20;color:' + info.color + '">' + info.emoji + '</div>';
+      html += '<span class="sidebar-cat-title">' + cat.label + '</span>';
+      html += '<span class="sidebar-cat-count">' + cat.items.length + '</span>';
+      html += '<span class="arrow">▾</span>';
+      html += '</div>';
+      html += '<div class="sidebar-cat-items">';
+      cat.items.forEach(function(d) {
+        var cls = d.f === currentFile ? 'sidebar-item current' : 'sidebar-item';
+        html += '<a href="' + d.f + '" class="' + cls + '" data-search="' + d.t.toLowerCase() + '">' + d.t + '</a>';
       });
+      html += '</div></div>';
     });
     html += '</nav>';
 
@@ -240,16 +287,37 @@
     sidebar.innerHTML = html;
     document.body.appendChild(sidebar);
 
-    // 将当前文档项滚动到侧边栏可见区域（避免每次打开都停在顶部）
+    sidebar.querySelectorAll('.sidebar-cat-header').forEach(function(hdr) {
+      hdr.addEventListener('click', function() {
+        var items = hdr.nextElementSibling;
+        hdr.classList.toggle('collapsed');
+        items.classList.toggle('collapsed');
+      });
+    });
+
+    var searchInput = document.getElementById('sb-search-input');
+    if (searchInput) {
+      searchInput.addEventListener('input', function() {
+        var q = searchInput.value.toLowerCase().trim();
+        sidebar.querySelectorAll('.sidebar-cat').forEach(function(cat) {
+          var visible = 0;
+          cat.querySelectorAll('.sidebar-item').forEach(function(item) {
+            var match = !q || item.getAttribute('data-search').indexOf(q) >= 0;
+            item.style.display = match ? '' : 'none';
+            if (match) visible++;
+          });
+          cat.style.display = visible > 0 ? '' : 'none';
+        });
+      });
+    }
+
     requestAnimationFrame(function() {
-      var cur = sidebar.querySelector('.doc-sidebar-item.current');
+      var cur = sidebar.querySelector('.sidebar-item.current');
       if (!cur) return;
       var scroller = sidebar.querySelector('.doc-sidebar-nav') || sidebar;
       var sR = scroller.getBoundingClientRect();
       var cR = cur.getBoundingClientRect();
-      // 已在可视区则无需滚动
       if (cR.top >= sR.top - 1 && cR.bottom <= sR.bottom + 1) return;
-      // 让当前项尽量居中显示（仅滚动侧边栏容器，不影响主窗口）
       scroller.scrollTop += cR.top - sR.top - (sR.height - cR.height) / 2;
     });
 

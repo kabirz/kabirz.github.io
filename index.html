@@ -154,6 +154,36 @@ const DOCS = [
   { t:"Linux 电源管理", f:"linux-pm.html", d:"系统休眠、Runtime PM、cpufreq、cpuidle、PM 域", i:"green", tags:["PM","suspend","cpufreq","cpuidle"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
   { t:"Linux 性能监控", f:"linux-perf.html", d:"perf_events、Tracepoint、kprobe/uprobe", i:"purple", tags:["perf","tracepoint","kprobe","uprobe","PMU"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
   { t:"Linux 安全模块", f:"linux-lsm.html", d:"LSM 框架 — SELinux、AppArmor、seccomp、Landlock", i:"red", tags:["LSM","SELinux","AppArmor","seccomp","Landlock"], top:"linux", topLabel:"Linux 内核", cat:"core", catLabel:"内核核心" },
+
+  // ── Docker 容器 ──
+  { t:"Docker Namespaces 与容器隔离", f:"docker-namespaces.html", d:"八种命名空间、隔离机制、clone/unshare/setns", i:"orange", tags:["namespace","容器隔离","PID","network"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"容器底层" },
+  { t:"Docker Capabilities 与权限", f:"docker-capabilities.html", d:"root 权限细分、最小权限、exec 继承、ambient", i:"orange", tags:["capabilities","权限","root","安全"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"容器底层" },
+  { t:"Docker OverlayFS 镜像存储", f:"docker-overlayfs.html", d:"联合文件系统、分层模型、写时复制、whiteout", i:"orange", tags:["overlayfs","unionfs","镜像分层","copy-up"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"容器底层" },
+  { t:"Docker OCI 规范", f:"docker-oci.html", d:"Runtime/Image/Distribution Spec、容器生态标准", i:"blue", tags:["OCI","spec","标准","manifest"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"容器底层" },
+  { t:"Docker 引擎架构", f:"docker-arch.html", d:"dockerd → containerd → runc — 完整调用链", i:"blue", tags:["dockerd","架构","containerd","runc"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"引擎实现" },
+  { t:"Docker containerd", f:"docker-containerd.html", d:"CNCF 工业级容器运行时、CRI、Sandbox", i:"blue", tags:["containerd","CNCF","CRI","snapshotter"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"引擎实现" },
+  { t:"Docker runc", f:"docker-runc.html", d:"OCI Runtime 参考实现、namespace/cgroup/rootfs", i:"blue", tags:["runc","OCI","runtime","libcontainer"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"引擎实现" },
+  { t:"Docker BuildKit", f:"docker-buildkit.html", d:"并行构建、LLB DAG、缓存复用、多平台", i:"purple", tags:["BuildKit","Dockerfile","LLB","并行构建"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"构建与编排" },
+  { t:"Docker 网络模型", f:"docker-network.html", d:"bridge/host/overlay/macvlan — 全模式", i:"orange", tags:["network","bridge","overlay","macvlan"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"构建与编排" },
+  { t:"Docker 存储卷", f:"docker-volume.html", d:"Volume / Bind Mount / tmpfs、Plugin、CSI", i:"orange", tags:["volume","bind","tmpfs","CSI"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"构建与编排" },
+  { t:"Docker Compose", f:"docker-compose.html", d:"多容器编排、YAML 模型、Swarm 模式", i:"purple", tags:["Compose","YAML","Swarm","编排"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"构建与编排" },
+  { t:"Docker 容器安全", f:"docker-security.html", d:"纵深防御、镜像安全、运行时隔离、CIS Benchmark", i:"red", tags:["安全","CIS","seccomp","签名"], top:"docker", topLabel:"Docker 容器", cat:"docker", catLabel:"安全" },
+
+  // ── Rust ──
+  { t:"Rust 所有权系统深度解析", f:"rust-ownership.html", d:"Ownership / Borrow / Lifetime — Rust 内存安全核心", i:"orange", tags:["ownership","borrow","lifetime","内存安全"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"语言核心" },
+  { t:"Rust Trait 系统深度解析", f:"rust-trait.html", d:"trait、dyn、Sized、关联类型、Auto Trait", i:"orange", tags:["trait","dyn","Sized","type-classes"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"语言核心" },
+  { t:"Rust Unsafe 与内存模型", f:"rust-unsafe.html", d:"unsafe 边界、UB、Stacked Borrows、Miri", i:"red", tags:["unsafe","UB","Miri","FFI","Send/Sync"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"语言核心" },
+  { t:"Rust 宏系统深度解析", f:"rust-macros.html", d:"macro_rules!、proc-macro（derive/attribute/function-like）", i:"purple", tags:["宏","proc-macro","derive","macro_rules"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"语言核心" },
+  { t:"Rust 并发原语深度解析", f:"rust-concurrency.html", d:"Thread / Mutex / Arc / Channel / Atomic", i:"red", tags:["并发","Mutex","Arc","Channel","原子"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"并发与异步" },
+  { t:"Rust Async/Await 深度解析", f:"rust-async.html", d:"Future / Pin / Poll — 零成本异步抽象", i:"red", tags:["async","await","Future","Pin"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"并发与异步" },
+  { t:"Tokio 异步运行时深度解析", f:"rust-tokio.html", d:"Reactor / Executor / IO 驱动 — 异步事实标准", i:"purple", tags:["Tokio","runtime","reactor","异步"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"并发与异步" },
+  { t:"Cargo 包管理器深度解析", f:"rust-cargo.html", d:"项目、依赖、Features、Workspace、发布", i:"orange", tags:["Cargo","包管理","SemVer","crates.io"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"工具链与生态" },
+  { t:"Rust Web 框架深度对比", f:"rust-web-frameworks.html", d:"Axum / Actix-web / Rocket / Hyper 选型", i:"blue", tags:["Web","Axum","Actix","Rocket","Hyper"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"应用领域" },
+  { t:"Rust GUI 框架深度对比", f:"rust-gui-frameworks.html", d:"Tauri / Iced / egui / Slint / Dioxus", i:"blue", tags:["GUI","Tauri","Iced","egui","Slint"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"应用领域" },
+  { t:"Rust 嵌入式开发深度解析", f:"rust-embedded.html", d:"no_std / embedded-hal / RTIC / Embassy", i:"green", tags:["嵌入式","no_std","RTIC","Embassy","RP2040"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"应用领域" },
+  { t:"Rust CLI 工具链深度解析", f:"rust-cli-tools.html", d:"clap / anyhow / indicatif / dialoguer", i:"orange", tags:["CLI","clap","anyhow","indicatif"], top:"rust", topLabel:"Rust 开发", cat:"rust", catLabel:"应用领域" },
+
+
   { t:"Linux procfs", f:"linux-procfs.html", d:"伪文件系统 — seq_file、/proc/[pid]", i:"green", tags:["procfs","文件系统"], top:"linux", topLabel:"Linux 内核", cat:"fs", catLabel:"文件系统" },
   { t:"Linux VFS", f:"linux-vfs.html", d:"四大对象、DCache、路径查找、读写", i:"purple", tags:["VFS","文件系统","dcache"], top:"linux", topLabel:"Linux 内核", cat:"fs", catLabel:"文件系统" },
   { t:"Linux 设备模型", f:"linux-devmodel.html", d:"bus/device/driver、Probe、sysfs", i:"blue", tags:["设备模型","驱动","sysfs"], top:"linux", topLabel:"Linux 内核", cat:"driver", catLabel:"设备与驱动" },
