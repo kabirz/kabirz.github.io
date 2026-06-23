@@ -1,0 +1,1175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python 并发编程深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>🐍 Python 并发编程深度解析</h1>
+  <p class="subtitle">GIL · threading · multiprocessing · concurrent.futures · 场景对比</p>
+  <span class="version">Python 3.13 · 含 free-threaded 模式</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#sec1">GIL 机制</a></li>
+    <li><a href="#sec2">threading 基础</a></li>
+    <li><a href="#sec3">threading 高级</a></li>
+    <li><a href="#sec4">multiprocessing</a></li>
+    <li><a href="#sec5">进程池与线程池</a></li>
+    <li><a href="#sec6">concurrent.futures</a></li>
+    <li><a href="#sec7">异步 vs 多线程 vs 多进程</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="sec1" class="toc-link">
+  <h2><span class="num">01</span> GIL 机制</h2>
+
+  <p>全局解释器锁（Global Interpreter Lock）是 CPython 的一个核心设计决策。它确保任何时候只有一个线程在执行 Python 字节码。</p>
+
+  <h3>GIL 的实现原理</h3>
+
+<pre><code class="language-python"># GIL 的核心机制（CPython 3.12 之前的实现）
+# - GIL 是一个互斥锁，保护解释器内部状态
+# - 每执行 100 条字节码（或 5 毫秒）检查是否有其他线程等待
+# - 使用"检查间隔"（check interval）机制
+
+import sys
+import time
+import threading
+
+# 检查当前的检查间隔
+print(sys.getswitchinterval())  # 默认 0.005 秒（5ms）
+
+# GIL 导致 CPU 密集型线程无法并行
+def cpu_intensive():
+    """CPU 密集型任务：大量计算"""
+    count = 0
+    for i in range(50_000_000):
+        count += i ** 2
+    return count
+
+# 即使有多个线程，CPU 密集型任务只会使用一个核心
+# 因为 GIL 阻止了真正的并行执行
+
+# I/O 密集型任务不受 GIL 影响
+def io_intensive():
+    """I/O 密集型任务：等待外部操作"""
+    time.sleep(1)  # I/O 操作释放 GIL
+    # 在调用 C 实现的 I/O 函数时，GIL 被释放
+    # 其他线程可以运行
+
+# GIL 释放的场景：
+# 1. I/O 操作（read/write/send/recv）
+# 2. C 扩展中明确释放 GIL
+# 3. 调用 time.sleep()
+# 4. 线程主动让出（sys.checkinterval 到达）
+</code></pre>
+
+  <h3>为什么需要 GIL</h3>
+
+<pre><code class="language-python"># GIL 存在的核心原因：
+
+# 1. 内存管理：引用计数不是线程安全的
+import sys
+
+class MyObj:
+    pass
+
+obj = MyObj()
+print(sys.getrefcount(obj))  # 引用计数
+
+# 如果两个线程同时增减引用计数，会导致竞态条件
+# 结果：对象被过早释放（use-after-free）或内存泄漏
+
+# 2. C 扩展兼容性：大量 C 扩展假设 GIL 存在
+#    - NumPy / Pandas / PyTorch 等库依赖 GIL 进行线程安全保证
+#    - 移除 GIL 需要重写这些扩展
+
+# 3. 实现简单性：解释器内部状态不需要细粒度锁
+#    - dict / list 等内置类型不需要额外的锁
+#    - 简化了 CPython 解释器的实现
+
+# GIL 的利与弊
+advantages = """
+✅ 单线程性能更好（不需要获取/释放细粒度锁）
+✅ C 扩展简单安全
+✅ 内置类型线程安全（无需外部锁）
+"""
+disadvantages = """
+❌ CPU 密集型任务无法利用多核
+❌ 多线程对 CPU 计算无加速
+❌ 与无锁数据结构不兼容
+"""
+</code></pre>
+
+  <h3>3.13 移除 GIL 计划（free-threaded）</h3>
+
+<pre><code class="language-python"># Python 3.13 引入了 free-threaded 模式（PEP 703）
+# 这是 CPython 历史上最重大的变化之一
+
+# 3.13 free-threaded 的关键点：
+
+# 1. 编译时选项
+# --disable-gil 编译 CPython 得到 free-threaded 版本
+# 默认版本仍然启用 GIL，保证向后兼容
+
+# 2. 隐式安全与显式不安全
+# - 大多数代码无需修改即可运行
+# - C 扩展需要显式声明 GIL 安全
+
+# 3. 性能改进
+# - CPU 密集型任务可获得多核加速
+# - 但单线程场景有轻微性能损失（约 5-10%）
+
+# 4. 迁移策略
+# 使用 sys._is_gil_enabled() 检查 GIL 状态
+import sys
+
+try:
+    is_gil_disabled = not sys._is_gil_enabled()
+except AttributeError:
+    is_gil_disabled = False
+
+print(f"GIL 已禁用: {is_gil_disabled}")
+
+# 5. 细粒度锁的引入
+# - 每个对象使用独立的锁替代 GIL
+# - 引用计数改为"偏执引用计数"（biased reference counting）
+# - 字典、列表等容器使用读写锁
+
+# 6. 对开发者的影响
+# - 多线程代码需要更谨慎（真正的竞态条件）
+# - threading 模块的使用场景大幅扩展
+# - concurrent.futures.ThreadPoolExecutor 可真正并行
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    GIL 只影响 CPU 密集型多线程代码。I/O 密集型任务（网络请求、文件读写、数据库查询）使用多线程可以显著提高吞吐量。3.13 free-threaded 是实验性功能，生产环境建议等待 3.14+ 稳定版。
+  </div>
+</section>
+
+<section id="sec2" class="toc-link">
+  <h2><span class="num">02</span> threading 基础</h2>
+
+  <h3>Thread 的创建与生命周期</h3>
+
+<pre><code class="language-python">import threading
+import time
+from typing import Any
+
+# 创建线程的两种方式
+
+# 方式 1：传递目标函数
+def worker(name: str, delay: float):
+    print(f"线程 {name} 启动")
+    time.sleep(delay)
+    print(f"线程 {name} 完成")
+
+t = threading.Thread(target=worker, args=("A", 1.0))
+t.start()  # 启动线程
+t.join()   # 等待线程完成
+
+# 方式 2：继承 Thread 类
+class MyThread(threading.Thread):
+    def __init__(self, name: str, delay: float):
+        super().__init__(name=name)
+        self.delay = delay
+
+    def run(self):
+        print(f"线程 {self.name} 启动")
+        time.sleep(self.delay)
+        self.result = f"结果来自 {self.name}"
+        print(f"线程 {self.name} 完成")
+
+threads = []
+for i in range(3):
+    t = MyThread(f"Worker-{i}", 1.0)
+    t.start()
+    threads.append(t)
+
+for t in threads:
+    t.join()
+    print(t.result)  # 获取线程结果
+
+# 守护线程（Daemon Thread）
+daemon = threading.Thread(
+    target=lambda: time.sleep(10),
+    daemon=True  # 主程序退出时自动终止
+)
+daemon.start()
+# 主程序不会等待 daemon 线程
+</code></pre>
+
+  <h3>Lock 与 RLock</h3>
+
+<pre><code class="language-python">import threading
+
+# Lock（互斥锁）— 不可重入
+lock = threading.Lock()
+shared_counter = 0
+
+def increment(n: int):
+    global shared_counter
+    for _ in range(n):
+        lock.acquire()
+        try:
+            shared_counter += 1
+        finally:
+            lock.release()
+
+# 推荐：使用上下文管理器
+def safe_increment(n: int):
+    global shared_counter
+    for _ in range(n):
+        with lock:  # 自动 acquire/release
+            shared_counter += 1
+
+# RLock（可重入锁）— 同一线程可多次获取
+rlock = threading.RLock()
+
+def recursive_lock_example(n: int):
+    """RLock 允许同一线程多次获取"""
+    with rlock:
+        if n > 0:
+            recursive_lock_example(n - 1)
+        # 不会死锁：RLock 跟踪拥有者和重入次数
+        # 普通 Lock 在这里会死锁
+
+# Lock vs RLock
+# Lock：一次只能被一个线程获取一次
+# RLock：同一线程可以 acquire 多次（必须 release 相同次数）
+</code></pre>
+
+  <h3>Semaphore / Event / Condition</h3>
+
+<pre><code class="language-python">import threading
+import time
+
+# Semaphore（信号量）— 限制并发数
+sem = threading.Semaphore(3)  # 最多 3 个线程同时运行
+
+def limited_worker(n: int):
+    with sem:
+        print(f"工作 {n} 开始")
+        time.sleep(1)
+        print(f"工作 {n} 完成")
+
+# BoundedSemaphore — 不会超过初始值
+bsem = threading.BoundedSemaphore(5)
+# 如果 release 次数超过 acquire 次数，抛出 ValueError
+
+# Event（事件）— 线程间信号通知
+event = threading.Event()
+
+def waiter():
+    print("等待事件...")
+    event.wait()  # 阻塞直到 event.set()
+    print("收到事件")
+
+def setter():
+    time.sleep(2)
+    print("设置事件")
+    event.set()
+
+# Condition（条件变量）— 更复杂的等待/通知模式
+cv = threading.Condition()
+items = []
+
+def consumer():
+    with cv:
+        while not items:
+            cv.wait()  # 释放锁并等待
+        item = items.pop(0)
+        print(f"消费: {item}")
+        return item
+
+def producer():
+    with cv:
+        items.append("new")
+        cv.notify()  # 唤醒一个等待线程
+</code></pre>
+
+  <h3>线程安全的最佳实践</h3>
+
+<pre><code class="language-python">import threading
+from queue import Queue
+
+# 推荐：使用 Queue 进行线程间通信
+# Queue 内部使用 Condition，是线程安全的
+work_queue: Queue[int] = Queue(maxsize=10)
+
+def producer():
+    for i in range(20):
+        work_queue.put(i)  # 如果已满则阻塞
+        time.sleep(0.1)
+
+def consumer():
+    while True:
+        item = work_queue.get()  # 如果为空则阻塞
+        print(f"处理: {item}")
+        work_queue.task_done()
+
+# 使用锁的正确模式
+class ThreadSafeCounter:
+    def __init__(self):
+        self._value = 0
+        self._lock = threading.Lock()
+
+    def increment(self):
+        with self._lock:  # 始终使用上下文管理器
+            self._value += 1
+
+    def decrement(self):
+        with self._lock:
+            self._value -= 1
+
+    @property
+    def value(self):
+        with self._lock:  # 读操作也需要保护
+            return self._value
+
+# 避免死锁的规则
+# 1. 固定加锁顺序
+# 2. 使用超时锁
+lock1 = threading.Lock()
+lock2 = threading.Lock()
+
+def acquire_locks():
+    """固定顺序：先 lock1 后 lock2"""
+    with lock1:
+        if lock2.acquire(timeout=2.0):  # 带超时
+            try:
+                pass
+            finally:
+                lock2.release()
+</code></pre>
+</section>
+
+<section id="sec3" class="toc-link">
+  <h2><span class="num">03</span> threading 高级</h2>
+
+  <h3>Barrier（屏障）</h3>
+
+<pre><code class="language-python">import threading
+import time
+
+# Barrier：所有线程到达屏障点后才继续执行
+def worker_barrier(barrier: threading.Barrier, name: str):
+    print(f"{name} 到达第一阶段")
+    time.sleep(threading.get_ident() % 3)
+    barrier.wait()  # 等待所有线程到达
+    print(f"{name} 通过第一阶段")
+
+    time.sleep(threading.get_ident() % 2)
+    barrier.wait()  # 重复使用
+    print(f"{name} 通过第二阶段")
+
+barrier = threading.Barrier(3)  # 3 个线程同步
+threads = [
+    threading.Thread(target=worker_barrier, args=(barrier, f"W{i}"))
+    for i in range(3)
+]
+
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+
+# Barrier 的 abort 机制
+def worker_abort(barrier: threading.Barrier, name: str):
+    try:
+        barrier.wait()
+    except threading.BrokenBarrierError:
+        print(f"{name}: 屏障已损坏")
+</code></pre>
+
+  <h3>TLS（线程局部存储）</h3>
+
+<pre><code class="language-python">import threading
+
+# TLS：每个线程有独立的数据副本
+thread_local = threading.local()
+
+def set_session(user: str):
+    thread_local.user = user
+    thread_local.request_id = threading.get_ident()
+
+def get_user() -> str | None:
+    return getattr(thread_local, "user", None)
+
+class RequestContext:
+    """使用 TLS 的请求上下文"""
+    _context = threading.local()
+
+    @classmethod
+    def set(cls, **kwargs):
+        for key, value in kwargs.items():
+            setattr(cls._context, key, value)
+
+    @classmethod
+    def get(cls, key: str, default=None):
+        return getattr(cls._context, key, default)
+
+    @classmethod
+    def clear(cls):
+        cls._context.__dict__.clear()
+
+# 在不同线程中测试 TLS
+def worker_tls(name: str):
+    RequestContext.set(user=name, request_id=threading.get_ident())
+    time.sleep(0.1)
+    print(f"线程 {name}: user={RequestContext.get('user')}, "
+          f"id={RequestContext.get('request_id')}")
+
+threads = [
+    threading.Thread(target=worker_tls, args=(f"User-{i}",))
+    for i in range(3)
+]
+
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+</code></pre>
+
+  <h3>ThreadPoolExecutor</h3>
+
+<pre><code class="language-python">from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+
+def process_item(item: int) -> int:
+    time.sleep(0.5)
+    return item ** 2
+
+# 使用线程池
+with ThreadPoolExecutor(max_workers=4) as executor:
+    # 方式 1：submit 单个任务
+    futures = [executor.submit(process_item, i) for i in range(10)]
+
+    # 按完成顺序处理结果
+    for future in as_completed(futures):
+        result = future.result()
+        print(f"完成: {result}")
+
+    # 方式 2：map（保持顺序）
+    results = list(executor.map(process_item, range(10)))
+    print(results)
+
+# 线程池的上下文管理
+class ThreadPoolManager:
+    def __init__(self, max_workers: int = None):
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+
+    def __enter__(self):
+        return self.executor
+
+    def __exit__(self, *args):
+        self.executor.shutdown(wait=True)  # 等待所有任务完成
+
+with ThreadPoolManager(4) as pool:
+    future = pool.submit(time.sleep, 1)
+    future.result(timeout=2)  # 带超时获取结果
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    TLS 在 Web 框架中广泛用于请求上下文。Barrier 适合分阶段并行计算。ThreadPoolExecutor 是 threading 模块的高层封装，推荐替代手动管理线程生命周期。
+  </div>
+</section>
+
+<section id="sec4" class="toc-link">
+  <h2><span class="num">04</span> multiprocessing</h2>
+
+  <p>multiprocessing 模块通过创建独立进程绕过 GIL 限制，实现真正的并行计算。每个进程有独立的 Python 解释器和内存空间。</p>
+
+  <h3>Process 基础</h3>
+
+<pre><code class="language-python">import multiprocessing
+import os
+import time
+
+def worker_process(name: str, delay: float):
+    print(f"进程 {name} 启动, PID={os.getpid()}")
+    time.sleep(delay)
+    print(f"进程 {name} 完成")
+    return f"结果 {name}"
+
+# 创建进程
+def main_process():
+    processes = []
+    for i in range(4):
+        p = multiprocessing.Process(
+            target=worker_process,
+            args=(f"P{i}", 1.0)
+        )
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join(timeout=5)  # 带超时的等待
+
+    # 检查进程是否存活
+    for p in processes:
+        print(f"进程 {p.pid} 存活: {p.is_alive()}")
+
+# 守护进程
+daemon_proc = multiprocessing.Process(
+    target=lambda: time.sleep(10),
+    daemon=True
+)
+
+# 进程标识
+print(f"当前进程 ID: {os.getpid()}")
+print(f"父进程 ID: {os.getppid()}")
+</code></pre>
+
+  <h3>进程间通信：Queue / Pipe</h3>
+
+<pre><code class="language-python">import multiprocessing
+import time
+
+# Queue — 进程安全的 FIFO 队列
+def producer(q: multiprocessing.Queue):
+    for i in range(5):
+        q.put(f"消息 {i}")
+        print(f"生产: 消息 {i}")
+        time.sleep(0.1)
+    q.put(None)  # 结束信号
+
+def consumer(q: multiprocessing.Queue):
+    while True:
+        msg = q.get()
+        if msg is None:
+            break
+        print(f"消费: {msg}")
+
+# Pipe — 两个端点的双向通信
+def pipe_sender(conn: multiprocessing.Connection):
+    conn.send("Hello")
+    conn.send([1, 2, 3])
+    conn.close()
+
+def pipe_receiver(conn: multiprocessing.Connection):
+    while True:
+        try:
+            msg = conn.recv()
+            print(f"收到: {msg}")
+        except EOFError:
+            break
+
+# 使用示例
+if __name__ == "__main__":
+    # Queue
+    q = multiprocessing.Queue()
+    p1 = multiprocessing.Process(target=producer, args=(q,))
+    p2 = multiprocessing.Process(target=consumer, args=(q,))
+    p1.start()
+    p2.start()
+    p1.join()
+    p2.join()
+
+    # Pipe
+    parent_conn, child_conn = multiprocessing.Pipe()
+    sender = multiprocessing.Process(target=pipe_sender, args=(parent_conn,))
+    receiver = multiprocessing.Process(target=pipe_receiver, args=(child_conn,))
+    sender.start()
+    receiver.start()
+    sender.join()
+    receiver.join()
+</code></pre>
+
+  <h3>Manager — 共享复杂对象</h3>
+
+<pre><code class="language-python">from multiprocessing import Manager, Process
+
+# Manager 在服务端进程中维护共享对象
+def worker(shared_dict: dict, shared_list: list, name: str):
+    shared_dict[name] = len(shared_dict)
+    shared_list.append(name)
+
+if __name__ == "__main__":
+    with Manager() as manager:
+        # 创建共享对象
+        shared_dict = manager.dict()
+        shared_list = manager.list()
+        shared_counter = manager.Value('i', 0)
+        shared_lock = manager.Lock()
+
+        processes = []
+        for i in range(5):
+            p = Process(target=worker, args=(shared_dict, shared_list, f"P{i}"))
+            p.start()
+            processes.append(p)
+
+        for p in processes:
+            p.join()
+
+        print(f"字典: {dict(shared_dict)}")
+        print(f"列表: {list(shared_list)}")
+
+# Manager 支持的对象类型：
+# - dict, list, set, Queue
+# - Value, Array
+# - Lock, RLock, Semaphore, Event, Condition
+# - Namespace（自定义属性容器）
+</code></pre>
+
+  <h3>共享内存（Shared Memory）</h3>
+
+<pre><code class="language-python">from multiprocessing import shared_memory, Process
+import numpy as np
+
+# Python 3.8+ 的共享内存
+def create_shared_array(name: str, size: int):
+    shm = shared_memory.SharedMemory(name=name, create=True, size=size)
+    arr = np.ndarray((size // 8,), dtype=np.float64, buffer=shm.buf)
+    arr[:] = np.random.rand(size // 8)
+    return shm, arr
+
+def process_array(shm_name: str, size: int):
+    shm = shared_memory.SharedMemory(name=shm_name)
+    arr = np.ndarray((size // 8,), dtype=np.float64, buffer=shm.buf)
+    arr *= 2  # 原地翻倍
+    shm.close()
+
+if __name__ == "__main__":
+    # 创建共享内存
+    size = 1024 * 1024  # 1MB
+    shm, arr = create_shared_array("my_shm", size)
+
+    # 在子进程中修改
+    p = Process(target=process_array, args=("my_shm", size))
+    p.start()
+    p.join()
+
+    print(f"修改后的第一个值: {arr[0]}")
+
+    # 清理
+    shm.close()
+    shm.unlink()
+
+# SharedMemoryManager
+from multiprocessing.managers import SharedMemoryManager
+
+with SharedMemoryManager() as smm:
+    sl = smm.ShareableList([1, 2, "hello", 3.14])
+    print(sl[2])  # hello
+    sl[0] = 100
+</code></pre>
+
+  <h3>Value / Array（ctypes 共享内存）</h3>
+
+<pre><code class="language-python">from multiprocessing import Process, Value, Array
+
+# 共享基本类型
+counter = Value('i', 0)       # 整数（有符号 int）
+temperature = Value('d', 36.5)  # 双精度浮点
+flag = Value('b', False)      # 布尔值
+
+# 共享数组
+int_array = Array('i', [1, 2, 3, 4, 5])  # int 数组
+double_array = Array('d', [1.0, 2.0])     # double 数组
+
+# 类型码对应：
+# 'b' — signed char    'B' — unsigned char
+# 'h' — signed short   'H' — unsigned short
+# 'i' — signed int     'I' — unsigned int
+# 'l' — signed long    'L' — unsigned long
+# 'f' — float          'd' — double
+
+def worker(counter: Value, arr: Array):
+    with counter.get_lock():  # Value 自带锁
+        counter.value += 1
+    for i in range(len(arr)):
+        arr[i] *= 2
+
+if __name__ == "__main__":
+    counter = Value('i', 0)
+    arr = Array('i', range(5))
+
+    p = Process(target=worker, args=(counter, arr))
+    p.start()
+    p.join()
+
+    print(f"Counter: {counter.value}")  # 1
+    print(f"Array: {list(arr)}")        # [0, 2, 4, 6, 8]
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    Manager 使用方便但性能较差（通过 IPC 序列化/反序列化）。共享内存适合大数据量传输（如 NumPy 数组）。Pipe 适用于双节点通信，Queue 适用于多生产者/消费者场景。
+  </div>
+</section>
+
+<section id="sec5" class="toc-link">
+  <h2><span class="num">05</span> 进程池与线程池</h2>
+
+  <h3>进程池的选择与配置</h3>
+
+<pre><code class="language-python">from multiprocessing import Pool, cpu_count
+import time
+
+# 进程池 — 适合 CPU 密集型任务
+def cpu_heavy_task(n: int) -> int:
+    """CPU 密集型计算"""
+    return sum(i ** i for i in range(n))
+
+# 获取 CPU 核心数
+cores = cpu_count()
+print(f"CPU 核心数: {cores}")
+
+# 创建进程池
+with Pool(processes=cores) as pool:
+    # map — 保持顺序
+    results = pool.map(cpu_heavy_task, [100, 200, 300, 400])
+
+    # imap — 惰性求值，节省内存
+    for result in pool.imap(cpu_heavy_task, range(100)):
+        pass
+
+    # imap_unordered — 结果按完成顺序返回
+    for result in pool.imap_unordered(cpu_heavy_task, range(100)):
+        pass
+
+    # apply_async — 异步提交
+    future = pool.apply_async(cpu_heavy_task, args=(500,))
+    result = future.get(timeout=10)
+
+    # starmap — 支持多个参数
+    pairs = [(1, 2), (3, 4), (5, 6)]
+    results = pool.starmap(lambda a, b: a + b, pairs)
+
+# 进程池的初始化
+def init_pool():
+    """每个进程启动时执行一次"""
+    global RESOURCE
+    RESOURCE = expensive_init()
+
+RESOURCE = None
+
+def worker_with_init(x: int) -> int:
+    return RESOURCE.process(x)
+
+with Pool(
+    processes=4,
+    initializer=init_pool,
+    maxtasksperchild=100  # 每个子进程最多处理 100 个任务后重启
+) as pool:
+    results = pool.map(worker_with_init, range(100))
+</code></pre>
+
+  <h3>线程池与进程池的选择</h3>
+
+<pre><code class="language-python">from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+import time
+
+# 线程池 — I/O 密集型
+def io_task(n: int) -> int:
+    time.sleep(0.1)  # 模拟 I/O 操作（GIL 释放）
+    return n ** 2
+
+# 进程池 — CPU 密集型
+def cpu_task(n: int) -> int:
+    count = 0
+    for i in range(n * 1000000):
+        count += i ** 2
+    return count
+
+# 对比测试
+def benchmark():
+    tasks = list(range(10))
+
+    # 线程池
+    start = time.time()
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        list(ex.map(io_task, tasks))
+    thread_time = time.time() - start
+
+    # 进程池
+    start = time.time()
+    with ProcessPoolExecutor(max_workers=4) as ex:
+        list(ex.map(io_task, tasks))
+    process_time = time.time() - start
+
+    print(f"线程池: {thread_time:.3f}s")
+    print(f"进程池: {process_time:.3f}s")
+
+# 选择策略：
+# ┌─────────────────────┬──────────────────────┐
+# │ 场景                │ 推荐                │
+# ├─────────────────────┼──────────────────────┤
+# │ I/O 密集型（网络）  │ ThreadPoolExecutor   │
+# │ CPU 密集型（计算）  │ ProcessPoolExecutor  │
+# │ 内存密集型          │ ProcessPoolExecutor  │
+# │ 大量小任务          │ ThreadPoolExecutor   │
+# │ 共享状态            │ ThreadPoolExecutor   │
+# │ NumPy/Pandas        │ ProcessPoolExecutor  │
+# └─────────────────────┴──────────────────────┘
+</code></pre>
+</section>
+
+<section id="sec6" class="toc-link">
+  <h2><span class="num">06</span> concurrent.futures</h2>
+
+  <p>concurrent.futures 模块提供了统一的高层异步执行接口，支持线程池和进程池。</p>
+
+  <h3>Future 基础</h3>
+
+<pre><code class="language-python">from concurrent.futures import (
+    Future, ThreadPoolExecutor, ProcessPoolExecutor,
+    as_completed, wait, ALL_COMPLETED, FIRST_COMPLETED
+)
+import time
+
+def task(n: int, delay: float) -> int:
+    time.sleep(delay)
+    return n ** 2
+
+# submit 单个任务
+with ThreadPoolExecutor(max_workers=3) as executor:
+    future: Future = executor.submit(task, 5, 1.0)
+
+    # 检查状态
+    print(f"running: {future.running()}")
+    print(f"done: {future.done()}")
+
+    # 获取结果
+    result = future.result(timeout=2.0)  # 带超时
+    print(f"result: {result}")
+
+    # 取消（未启动的任务可取消）
+    future2 = executor.submit(task, 10, 5.0)
+    cancelled = future2.cancel()  # 如果尚未开始执行
+    print(f"cancelled: {cancelled}")
+
+# 异常处理
+def faulty_task():
+    raise ValueError("出错了")
+
+with ThreadPoolExecutor() as ex:
+    future = ex.submit(faulty_task)
+    try:
+        future.result()
+    except ValueError as e:
+        print(f"捕获异常: {e}")
+        print(f"异常原始信息: {future.exception()}")
+</code></pre>
+
+  <h3>as_completed 与 wait</h3>
+
+<pre><code class="language-python">def slow_task(n: int) -> str:
+    time.sleep(n)
+    return f"Task {n} done"
+
+with ThreadPoolExecutor(max_workers=4) as executor:
+    # 提交多个任务
+    futures = [
+        executor.submit(slow_task, delay)
+        for delay in [3, 1, 2, 4]
+    ]
+
+    # as_completed：按完成顺序处理
+    print("按完成顺序：")
+    for future in as_completed(futures):
+        print(f"  {future.result()}")
+
+    # wait：等待特定条件
+    futures2 = [
+        executor.submit(slow_task, delay)
+        for delay in [2, 2, 2, 5]
+    ]
+
+    # 等待所有完成
+    done, not_done = wait(futures2, timeout=3.0)
+    print(f"\n{len(done)} 个已完成, {len(not_done)} 个未完成")
+
+    # 取消未完成的
+    for f in not_done:
+        f.cancel()
+
+    # FIRST_COMPLETED：第一个完成后返回
+    done, _ = wait(futures2, return_when=FIRST_COMPLETED)
+    print(f"第一个完成: {done.pop().result()}")
+</code></pre>
+
+  <h3>ProcessPoolExecutor 的特殊注意事项</h3>
+
+<pre><code class="language-python">from concurrent.futures import ProcessPoolExecutor
+import os
+
+# 注意：ProcessPoolExecutor 的工作进程会 fork
+# 在 __main__ 模块中保护入口点
+
+# 正确的模式
+def cpu_work(n: int) -> int:
+    return sum(i ** 2 for i in range(n))
+
+if __name__ == "__main__":
+    with ProcessPoolExecutor(max_workers=4) as executor:
+        results = executor.map(cpu_work, [1000000, 2000000, 3000000])
+        print(list(results))
+
+# ProcessPoolExecutor 的限制：
+# 1. 参数必须可 pickle 序列化
+# 2. 函数必须是模块级别（不能在闭包中）
+# 3. 不能传递 lambda 函数
+# 4. Windows 上需要 if __name__ == "__main__"
+
+# 使用初始化器
+def init_worker(data: dict):
+    """每个工作进程初始化时调用"""
+    global SHARED_CONFIG
+    SHARED_CONFIG = data
+
+def worker_with_config(n: int) -> int:
+    # 每个进程有独立的 SHARED_CONFIG 副本
+    return n * SHARED_CONFIG.get("multiplier", 1)
+
+if __name__ == "__main__":
+    config = {"multiplier": 2, "mode": "fast"}
+    with ProcessPoolExecutor(
+        max_workers=4,
+        initializer=init_worker,
+        initargs=(config,)
+    ) as executor:
+        results = executor.map(worker_with_config, range(10))
+</code></pre>
+
+  <h3>Future 回调</h3>
+
+<pre><code class="language-python">from concurrent.futures import ThreadPoolExecutor
+
+def on_complete(future: Future):
+    """Future 完成时的回调"""
+    try:
+        result = future.result()
+        print(f"回调收到: {result}")
+    except Exception as e:
+        print(f"回调收到异常: {e}")
+
+def work(n: int) -> int:
+    return n * 10
+
+with ThreadPoolExecutor() as ex:
+    future = ex.submit(work, 42)
+
+    # 注册回调（在 future 完成时调用）
+    future.add_done_callback(on_complete)
+
+    # 可以有多个回调
+    future.add_done_callback(
+        lambda f: print(f"第二个回调: {f.result()}")
+    )
+
+# 使用回调链实现流水线
+def stage1(n: int) -> int:
+    return n + 1
+
+def stage2(n: int) -> int:
+    return n * 2
+
+def stage3(n: int) -> int:
+    return n ** 2
+
+with ThreadPoolExecutor() as ex:
+    # 异步流水线
+    f1 = ex.submit(stage1, 5)
+    f2 = ex.submit(stage2, f1.result())  # 阻塞
+    # 更好的方式：使用链式回调
+    future = ex.submit(stage1, 5)
+    future.add_done_callback(
+        lambda f: ex.submit(stage2, f.result())
+            .add_done_callback(
+                lambda f: ex.submit(stage3, f.result())
+            )
+    )
+</code></pre>
+</section>
+
+<section id="sec7" class="toc-link">
+  <h2><span class="num">07</span> 异步 vs 多线程 vs 多进程</h2>
+
+  <p>Python 提供了三种并发模型，各有适用场景。理解它们的差异是正确选型的关键。</p>
+
+  <h3>核心对比表</h3>
+
+<pre><code class="language-python"># ┌────────────────┬─────────────┬──────────────┬──────────────┐
+# │ 特性            │ asyncio     │ threading    │ multiprocess │
+# ├────────────────┼─────────────┼──────────────┼──────────────┤
+# │ 并行性          │ 单线程      │ 单核         │ 多核         │
+# │ GIL 影响        │ 无（单线程）│ 有（受限）   │ 无           │
+# │ 内存占用        │ 低          │ 中           │ 高           │
+# │ 创建开销        │ 极低        │ 中           │ 高           │
+# │ 上下文切换      │ 用户态      │ 内核态       │ 内核态       │
+# │ 数据共享        │ 直接访问    │ 需要锁       │ IPC          │
+# │ CPU 密集型      │ ❌          │ ❌           │ ✅           │
+# │ I/O 密集型      │ ✅✅        │ ✅           │ ✅           │
+# │ 高并发连接      │ ✅✅        │ ✅           │ ⚠️           │
+# │ 代码复杂度      │ 中          │ 低           │ 低           │
+# └────────────────┴─────────────┴──────────────┴──────────────┘
+
+# 场景选择指南
+def choose_concurrency_model():
+    """根据场景选择合适的并发模型"""
+    scenario = """
+1. 网络服务（高并发 HTTP/WebSocket）
+   → asyncio（异步框架：FastAPI, aiohttp）
+
+2. CPU 密集型计算（图像处理、数值计算）
+   → multiprocessing / ProcessPoolExecutor
+
+3. I/O 密集型（文件读写、数据库操作）
+   → threading / ThreadPoolExecutor
+
+4. 混合负载（既有 I/O 又有计算）
+   → asyncio + run_in_executor
+
+5. 微服务编排（多个 HTTP 调用）
+   → asyncio + aiohttp
+
+6. 大量并行请求（几千以上）
+   → asyncio（线程池上限 ~1000）
+    """
+    print(scenario)
+</code></pre>
+
+  <h3>性能对比代码</h3>
+
+<pre><code class="language-python">import asyncio
+import threading
+import multiprocessing
+import time
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+
+# I/O 密集型任务
+async def io_bound_async(n: float):
+    await asyncio.sleep(n)
+
+def io_bound_sync(n: float):
+    time.sleep(n)
+
+# CPU 密集型任务
+def cpu_bound(n: int) -> int:
+    count = 0
+    for i in range(n * 1000000):
+        count += i
+    return count
+
+# 基准测试
+def benchmark_io():
+    """I/O 密集型场景对比"""
+    N = 100
+    delay = 0.05
+
+    # asyncio
+    async def async_test():
+        tasks = [io_bound_async(delay) for _ in range(N)]
+        start = time.time()
+        await asyncio.gather(*tasks)
+        return time.time() - start
+
+    # threading
+    def thread_test():
+        threads = [
+            threading.Thread(target=io_bound_sync, args=(delay,))
+            for _ in range(N)
+        ]
+        start = time.time()
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return time.time() - start
+
+    # 进程池 (I/O 用进程池浪费资源)
+    def process_test():
+        with ProcessPoolExecutor(max_workers=8) as ex:
+            start = time.time()
+            list(ex.map(io_bound_sync, [delay] * N))
+            return time.time() - start
+
+    asyncio_time = asyncio.run(async_test())
+    thread_time = thread_test()
+    process_time = process_test()
+
+    print(f"I/O 密集型 ({N} 次):")
+    print(f"  asyncio:      {asyncio_time:.3f}s  ✅ 推荐")
+    print(f"  threading:    {thread_time:.3f}s  ✅ 可用")
+    print(f"  multiprocess: {process_time:.3f}s  ❌ 过重")
+</code></pre>
+
+  <h3>综合对比总结</h3>
+
+<pre><code class="language-python"># 1. 并发（Concurrency）vs 并行（Parallelism）
+#    - 并发：多个任务在同一时间段内交替执行（asyncio / threading）
+#    - 并行：多个任务在同一时刻同时执行（multiprocessing）
+
+# 2. 开销层级
+#    - asyncio 协程: ~2KB 内存，切换 ~100ns
+#    - threading 线程: ~8MB 内存，切换 ~1us
+#    - multiprocessing 进程: ~50MB+ 内存，切换 ~5us
+
+# 3. 代码模式建议
+concurrency_guide = """
+🔹 90% 场景：asyncio
+   - Web 服务、API 网关、爬虫、聊天服务
+   - WebSocket、gRPC 流式处理
+   - 数据库连接池操作
+
+🔹 8% 场景：threading
+   - 调用阻塞式 C 扩展
+   - GUI 事件循环（Tkinter/Qt）
+   - 简单的并发 I/O 操作
+
+🔹 2% 场景：multiprocessing
+   - 数值计算、机器学习训练
+   - 图像/视频处理
+   - 并行数据处理（MapReduce 风格）
+"""
+
+# 4. 混用策略
+# asyncio + 线程池：处理阻塞 I/O
+async def mixed_strategy():
+    loop = asyncio.get_running_loop()
+
+    # 将阻塞操作放入线程池
+    result = await loop.run_in_executor(
+        None,  # 默认 ThreadPoolExecutor
+        cpu_bound, 100
+    )
+
+    # 将计算密集任务放入进程池
+    with ProcessPoolExecutor() as pool:
+        result = await loop.run_in_executor(
+            pool, cpu_bound, 100
+        )
+
+    return result
+
+# 5. 3.13 free-threaded 的深远影响
+#    - threading 可以获得真正的并行
+#    - ThreadPoolExecutor 可用于 CPU 密集任务
+#    - 但 asyncio 的轻量级优势仍在
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    选型优先级：默认选择 asyncio。遇到阻塞式 I/O 库时使用 threading。遇到 CPU 密集型任务时使用 multiprocessing。Python 3.13+ free-threaded 模式将改变 threading 的能力边界，但 asyncio 在 I/O 密集场景的高并发优势仍然无法替代。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

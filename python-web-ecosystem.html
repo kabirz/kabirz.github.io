@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python Web 框架对比深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Python Web 框架对比深度解析</h1>
+  <p class="subtitle">Django · Flask · FastAPI · ASGI vs WSGI · 生态选型指南</p>
+  <span class="version">Python 3.12+ · Django 5.x · Flask 3.x · FastAPI 0.115.x</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#django">Django 全栈框架</a></li>
+    <li><a href="#flask">Flask 微框架</a></li>
+    <li><a href="#fastapi">FastAPI 异步框架</a></li>
+    <li><a href="#comparison">核心框架对比表</a></li>
+    <li><a href="#middleware">中间件与扩展体系</a></li>
+    <li><a href="#benchmark">性能基准</a></li>
+    <li><a href="#asgi">ASGI vs WSGI 演进</a></li>
+    <li><a href="#guide">选型指南</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="django" class="toc-link">
+  <h2><span class="num">01</span> Django 全栈框架</h2>
+
+  <p>Django 是 Python Web 领域历史最悠久、生态最完整的全栈框架。它遵循"batteries included"理念，提供了从 ORM 到 Admin 后台再到安全防护的一站式解决方案。</p>
+
+  <h3>MTV 架构</h3>
+  <p>Django 使用 MTV（Model-Template-View）架构。Model 负责数据层，Template 负责展示层，View 负责业务逻辑。与 MVC 模式相比，Django 的 View 相当于 Controller，Template 相当于 View。</p>
+  <pre><code># models.py — 数据模型
+from django.db import models
+
+class BlogPost(models.Model):
+    title = models.CharField(max_length=200)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    author = models.ForeignKey('auth.User', on_delete=models.CASCADE)
+
+# views.py — 业务逻辑
+from django.views.generic import ListView
+from .models import BlogPost
+
+class BlogListView(ListView):
+    model = BlogPost
+    template_name = 'blog/list.html'
+    context_object_name = 'posts'
+    paginate_by = 10
+
+# urls.py — URL 路由
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('blog/', views.BlogListView.as_view(), name='blog-list'),
+]</code></pre>
+
+  <h3>ORM 与查询</h3>
+  <p>Django ORM 提供了丰富的查询 API，支持链式调用、懒加载、预加载（select_related/prefetch_related）和聚合查询。</p>
+  <pre><code># 基本查询
+posts = BlogPost.objects.filter(
+    author__username='admin',
+    created_at__year=2025
+).select_related('author').order_by('-created_at')
+
+# 聚合
+from django.db.models import Count, Avg
+stats = BlogPost.objects.values('author__username').annotate(
+    count=Count('id'),
+    avg_content_length=Avg('content__length')
+)
+
+# 批量更新
+from django.db.models import F
+BlogPost.objects.filter(published=False).update(
+    status='draft',
+    version=F('version') + 1
+)</code></pre>
+
+  <h3>Django Admin</h3>
+  <p>Admin 是 Django 的标志性功能。通过简单的配置即可生成功能完整的数据管理后台。</p>
+  <pre><code># admin.py
+from django.contrib import admin
+from .models import BlogPost
+
+@admin.register(BlogPost)
+class BlogPostAdmin(admin.ModelAdmin):
+    list_display = ('title', 'author', 'created_at', 'is_published')
+    list_filter = ('is_published', 'created_at')
+    search_fields = ('title', 'content')
+    date_hierarchy = 'created_at'
+    actions = ['make_published']
+
+    def make_published(self, request, queryset):
+        queryset.update(is_published=True)
+    make_published.short_description = "标记为已发布"</code></pre>
+
+  <h3>Django REST Framework</h3>
+  <p>DRF 是 Django 生态中最流行的 API 框架，提供了 Serializer、ViewSet、Router、认证、权限、限流、版本控制等完整功能集。</p>
+  <pre><code>from rest_framework import serializers, viewsets, routers
+from .models import BlogPost
+
+class BlogPostSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BlogPost
+        fields = '__all__'
+
+class BlogPostViewSet(viewsets.ModelViewSet):
+    queryset = BlogPost.objects.all()
+    serializer_class = BlogPostSerializer
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+# urls.py
+router = routers.DefaultRouter()
+router.register('posts', BlogPostViewSet)
+urlpatterns = router.urls</code></pre>
+
+  <h3>Django Channels</h3>
+  <p>Channels 让 Django 支持 WebSocket、HTTP/2、后台任务等异步能力。它将 Django 从 WSGI 扩展到 ASGI，通过 Channel Layer 实现跨进程通信。</p>
+  <pre><code># consumers.py
+import json
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+class ChatConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self.room_name = self.scope['url_route']['kwargs']['room_name']
+        await self.channel_layer.group_add(self.room_name, self.channel_name)
+        await self.accept()
+
+    async def receive(self, text_data):
+        data = json.loads(text_data)
+        await self.channel_layer.group_send(
+            self.room_name,
+            {'type': 'chat.message', 'message': data['message']}
+        )
+
+    async def chat_message(self, event):
+        await self.send(text_data=json.dumps({'message': event['message']}))</code></pre>
+</section>
+
+<section id="flask" class="toc-link">
+  <h2><span class="num">02</span> Flask 微框架</h2>
+
+  <p>Flask 是 Python 最流行的微框架，核心仅包含路由、请求/响应对象和模板渲染。其他功能通过扩展按需集成。它的设计哲学是"简洁而不简单"。</p>
+
+  <h3>Werkzeug 与 Jinja2</h3>
+  <p>Flask 建立在 Werkzeug（WSGI 工具包）和 Jinja2（模板引擎）之上。Werkzeug 提供了路由、调试器、中间件等底层能力，Jinja2 提供了灵活的模板语法。</p>
+  <pre><code>from flask import Flask, render_template, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return render_template('index.html', title='首页')
+
+@app.route('/api/data', methods=['POST'])
+def create_data():
+    data = request.get_json()
+    if not data or 'name' not in data:
+        return jsonify({'error': '无效数据'}), 400
+    return jsonify({'id': 1, **data}), 201
+
+@app.route('/user/<int:user_id>')
+def user_detail(user_id):
+    return f"用户 ID: {user_id}"</code></pre>
+
+  <h3>Blueprint 模块化</h3>
+  <p>Blueprint 是 Flask 的组织大型应用的方式。它将相关路由、模板和静态文件组织到独立模块中，然后注册到主应用。</p>
+  <pre><code># blog/__init__.py
+from flask import Blueprint, render_template
+
+blog_bp = Blueprint('blog', __name__, url_prefix='/blog',
+                    template_folder='templates',
+                    static_folder='static')
+
+@blog_bp.route('/')
+def list_posts():
+    return render_template('blog/list.html')
+
+@blog_bp.route('/<int:post_id>')
+def post_detail(post_id):
+    return render_template('blog/detail.html', post_id=post_id)
+
+# app.py 注册
+from blog import blog_bp
+app.register_blueprint(blog_bp)</code></pre>
+
+  <h3>Flask 插件生态</h3>
+  <p>Flask 的扩展通过 <code>flask-*</code> 命名约定发布。核心扩展包括 Flask-SQLAlchemy、Flask-Login、Flask-Migrate、Flask-Mail、Flask-Caching 等。</p>
+  <pre><code>from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user
+from flask_migrate import Migrate
+
+db = SQLAlchemy()
+login_manager = LoginManager()
+migrate = Migrate()
+
+def create_app():
+    app = Flask(__name__)
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://localhost/db'
+    app.config['SECRET_KEY'] = 'secret-key'
+
+    db.init_app(app)
+    login_manager.init_app(app)
+    migrate.init_app(app, db)
+
+    return app
+
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True)
+    password_hash = db.Column(db.String(128))</code></pre>
+
+  <h3>SQLAlchemy 集成模式</h3>
+  <p>Flask-SQLAlchemy 是 Flask 和 SQLAlchemy 之间的桥梁。它提供了自动 session 管理、scoped session、模型基类和便捷的查询代理。</p>
+  <pre><code>class Post(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text)
+    comments = db.relationship('Comment', backref='post', lazy='dynamic')
+
+class Comment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    body = db.Column(db.Text, nullable=False)
+    post_id = db.Column(db.Integer, db.ForeignKey('post.id'))
+
+# 在请求上下文中自动管理 session
+@app.route('/posts')
+def posts():
+    posts = Post.query.filter(
+        Post.published == True
+    ).order_by(Post.created_at.desc()).paginate(
+        page=request.args.get('page', 1, type=int),
+        per_page=20
+    )
+    return render_template('posts.html', posts=posts)</code></pre>
+</section>
+
+<section id="fastapi" class="toc-link">
+  <h2><span class="num">03</span> FastAPI 异步框架</h2>
+
+  <p>FastAPI 是近年崛起最快的 Python Web 框架。它基于 Starlette（ASGI 框架）和 Pydantic（数据验证），开创性地将类型注解用于 API 定义和文档生成。在性能上，FastAPI 接近 Node.js 和 Go 的水平。</p>
+
+  <h3>Starlette 基础</h3>
+  <p>Starlette 是轻量级的 ASGI 框架，提供了路由、中间件、WebSocket、后台任务、Server-Sent Events 等能力。FastAPI 在 Starlette 之上增加了 OpenAPI 文档生成和数据验证。</p>
+  <pre><code>from fastapi import FastAPI, HTTPException, BackgroundTasks
+from pydantic import BaseModel
+
+app = FastAPI(title="API 服务", version="1.0.0")
+
+class Item(BaseModel):
+    name: str
+    price: float
+    description: str | None = None
+
+# 路径参数、查询参数、请求体——全自动校验和文档化
+@app.post("/items/{item_id}")
+async def create_item(item_id: int, item: Item, q: str | None = None):
+    if item_id <= 0:
+        raise HTTPException(status_code=400, detail="无效 ID")
+    return {"item_id": item_id, **item.model_dump(), "query": q}</code></pre>
+
+  <h3>Pydantic 集成</h3>
+  <p>FastAPI 深度集成 Pydantic v2。请求体、路径参数、查询参数、响应模型都使用 Pydantic 模型定义，自动获得验证、序列化和 OpenAPI Schema。</p>
+  <pre><code>from pydantic import BaseModel, Field, EmailStr
+from datetime import datetime
+from typing import Literal
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    email: EmailStr
+    role: Literal['admin', 'user'] = 'user'
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+@app.post("/users", response_model=UserResponse)
+async def create_user(user: UserCreate):
+    db_user = await db.create_user(user)  # 异步数据库操作
+    return db_user
+
+# 自动生成 OpenAPI Schema
+# GET /docs 查看 Swagger UI
+# GET /redoc 查看 ReDoc</code></pre>
+
+  <h3>依赖注入系统</h3>
+  <p>FastAPI 的依赖注入系统是最受赞誉的特性之一。依赖可以是函数、类、生成器（用于资源管理），支持嵌套、可缓存、异步。</p>
+  <pre><code>from fastapi import Depends, FastAPI, Query
+from typing import Annotated
+
+async def get_db():
+    async with async_session() as session:
+        yield session
+
+async def get_current_user(token: str = Query(...)):
+    user = await verify_token(token)
+    if not user:
+        raise HTTPException(status_code=401)
+    return user
+
+# 类型别名简化重复的依赖声明
+DbDep = Annotated[AsyncSession, Depends(get_db)]
+UserDep = Annotated[User, Depends(get_current_user)]
+
+@app.get("/profile")
+async def get_profile(
+    db: DbDep,
+    current_user: UserDep
+):
+    result = await db.execute(
+        select(Profile).where(Profile.user_id == current_user.id)
+    )
+    return result.scalar_one_or_none()
+
+# 支持不同依赖作用域
+# Depends(use_cache=False) 每次重新调用
+# yield fixture 支持清理操作</code></pre>
+
+  <h3>OpenAPI 自动生成</h3>
+  <p>FastAPI 自动从类型注解生成完整的 OpenAPI 规范。包括请求体 Schema、响应 Schema、参数描述、错误响应的 JSON Schema。</p>
+  <pre><code>from fastapi import FastAPI, Query, Path, Body
+from pydantic import Field
+
+app = FastAPI(
+    title="商品管理系统",
+    description="完整的商品增删改查 API",
+    version="2.0.0",
+    contact={"name": "Admin", "email": "admin@example.com"},
+    license_info={"name": "MIT"}
+)
+
+@app.get(
+    "/products",
+    summary="获取商品列表",
+    response_description="分页的商品列表",
+    tags=["products"]
+)
+async def list_products(
+    page: int = Query(1, ge=1, description="页码"),
+    size: int = Query(20, ge=1, le=100, description="每页数量"),
+    category: str | None = Query(None, description="分类过滤")
+):
+    """返回分页的商品列表，支持分类过滤和排序"""
+    ...
+
+@app.post(
+    "/products",
+    response_model=Product,
+    status_code=201,
+    responses={
+        400: {"model": ErrorResponse},
+        409: {"description": "商品已存在"}
+    }
+)
+async def create_product(product: ProductCreate):
+    ...</code></pre>
+
+  <h3>WebSocket 与 Streaming</h3>
+  <p>基于 ASGI，FastAPI 原生支持 WebSocket、SSE 和 StreamingResponse。</p>
+  <pre><code>from fastapi import WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
+import asyncio
+
+@app.websocket("/ws/chat/{room_id}")
+async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text(f"Echo: {data}")
+    except WebSocketDisconnect:
+        print(f"{room_id} 断开连接")
+
+async def generate_numbers():
+    for i in range(100):
+        yield f"data: {i}\n\n"
+        await asyncio.sleep(0.5)
+
+@app.get("/stream/numbers")
+async def stream_numbers():
+    return StreamingResponse(
+        generate_numbers(),
+        media_type="text/event-stream"
+    )</code></pre>
+</section>
+
+<section id="comparison" class="toc-link">
+  <h2><span class="num">04</span> 核心框架对比表</h2>
+
+  <p>以下是 Django、Flask 和 FastAPI 在关键维度上的详细对比。选择框架时，应综合考虑项目规模、团队经验和性能要求。</p>
+
+  <table>
+    <tr>
+      <th>维度</th>
+      <th>Django</th>
+      <th>Flask</th>
+      <th>FastAPI</th>
+    </tr>
+    <tr>
+      <td>类型</td>
+      <td>全栈框架</td>
+      <td>微框架</td>
+      <td>异步 API 框架</td>
+    </tr>
+    <tr>
+      <td>首次发布</td>
+      <td>2005</td>
+      <td>2010</td>
+      <td>2018</td>
+    </tr>
+    <tr>
+      <td>架构模式</td>
+      <td>MTV</td>
+      <td>自由</td>
+      <td>自由 + DI</td>
+    </tr>
+    <tr>
+      <td>路由</td>
+      <td>URL patterns</td>
+      <td>装饰器</td>
+      <td>装饰器 + 路径操作</td>
+    </tr>
+    <tr>
+      <td>ORM</td>
+      <td>内置 Django ORM</td>
+      <td>SQLAlchemy（扩展）</td>
+      <td>SQLAlchemy / Tortoise</td>
+    </tr>
+    <tr>
+      <td>模板</td>
+      <td>Django Template</td>
+      <td>Jinja2</td>
+      <td>Jinja2 / Mako</td>
+    </tr>
+    <tr>
+      <td>API</td>
+      <td>DRF / Ninja</td>
+      <td>Flask-RESTful</td>
+      <td>内置（OpenAPI）</td>
+    </tr>
+    <tr>
+      <td>数据验证</td>
+      <td>Form / Serializer</td>
+      <td>扩展</td>
+      <td>Pydantic（内置）</td>
+    </tr>
+    <tr>
+      <td>异步</td>
+      <td>Channels / 4.2+</td>
+      <td>扩展</td>
+      <td>原生异步</td>
+    </tr>
+    <tr>
+      <td>Admin</td>
+      <td>内置（强大）</td>
+      <td>Flask-Admin</td>
+      <td>第三方</td>
+    </tr>
+    <tr>
+      <td>ORM 迁移</td>
+      <td>makemigrations</td>
+      <td>Alembic</td>
+      <td>Alembic</td>
+    </tr>
+    <tr>
+      <td>WebSocket</td>
+      <td>Channels</td>
+      <td>Flask-SocketIO</td>
+      <td>原生支持</td>
+    </tr>
+    <tr>
+      <td>后台任务</td>
+      <td>Celery / Huey</td>
+      <td>Celery / RQ</td>
+      <td>BackgroundTasks</td>
+    </tr>
+    <tr>
+      <td>学习曲线</td>
+      <td>陡峭（全功能）</td>
+      <td>平缓</td>
+      <td>中等（类型注解）</td>
+    </tr>
+    <tr>
+      <td>社区规模</td>
+      <td>最大</td>
+      <td>大</td>
+      <td>快速增长</td>
+    </tr>
+    <tr>
+      <td>PyPI 下载/月</td>
+      <td>~1800 万</td>
+      <td>~3500 万</td>
+      <td>~4500 万</td>
+    </tr>
+    <tr>
+      <td>适用场景</td>
+      <td>CMS、企业系统、电商</td>
+      <td>微服务、原型、小项目</td>
+      <td>API 服务、实时系统</td>
+    </tr>
+  </table>
+</section>
+
+<section id="middleware" class="toc-link">
+  <h2><span class="num">05</span> 中间件与扩展体系对比</h2>
+
+  <p>三个框架都有中间件机制，但实现方式和扩展生态有所不同。</p>
+
+  <h3>Django 中间件</h3>
+  <p>Django 中间件采用进程式洋葱圈模型。每个中间件在请求进入和响应离开时都会执行。中间件按 <code>MIDDLEWARE</code> 设置顺序执行。</p>
+  <pre><code># 自定义 Django 中间件
+class RequestTimingMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        import time
+        start = time.time()
+        response = self.get_response(request)
+        duration = time.time() - start
+        response['X-Request-Duration'] = str(duration)
+        print(f"{request.path} 耗时 {duration:.3f}s")
+        return response
+
+# settings.py
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    # ... 自定义中间件可以放在任何位置
+    'myapp.middleware.RequestTimingMiddleware',
+]</code></pre>
+
+  <h3>Flask 中间件模式</h3>
+  <p>Flask 通过 <code>before_request</code>、<code>after_request</code>、<code>teardown_request</code> 钩子实现中间件功能。全局装饰器和 WSGI 中间件是补充机制。</p>
+  <pre><code>from flask import Flask, g, request
+import time
+
+app = Flask(__name__)
+
+@app.before_request
+def before_request():
+    g.start = time.time()
+    g.db = get_db()  # 建立数据库连接
+
+@app.after_request
+def after_request(response):
+    duration = time.time() - g.start
+    response.headers['X-Duration'] = str(duration)
+    return response
+
+@app.teardown_request
+def teardown_request(exception=None):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()  # 关闭数据库连接
+
+# WSGI 级中间件
+class ProxyFix:
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        environ['wsgi.url_scheme'] = 'https'
+        return self.app(environ, start_response)
+
+app.wsgi_app = ProxyFix(app.wsgi_app)</code></pre>
+
+  <h3>FastAPI 中间件</h3>
+  <p>FastAPI 基于 Starlette 的 ASGI 中间件体系。支持 <code>@app.middleware</code> 装饰器方式和底层 ASGI 中间件方式。</p>
+  <pre><code>from fastapi import FastAPI, Request
+from starlette.middleware.base import BaseHTTPMiddleware
+import time
+
+app = FastAPI()
+
+# 方式 1: 装饰器中间件
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    process_time = time.perf_counter() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    return response
+
+# 方式 2: 类中间件
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        print(f"请求: {request.method} {request.url.path}")
+        response = await call_next(request)
+        print(f"响应: {response.status_code}")
+        return response
+
+app.add_middleware(LoggingMiddleware)
+
+# 方式 3: 三方中间件
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://example.com"],
+    allow_methods=["*"],
+)</code></pre>
+
+  <h3>扩展生态对比</h3>
+  <table>
+    <tr><th>功能</th><th>Django</th><th>Flask</th><th>FastAPI</th></tr>
+    <tr><td>ORM</td><td>内置</td><td>Flask-SQLAlchemy</td><td>SQLAlchemy / Tortoise-ORM</td></tr>
+    <tr><td>迁移</td><td>内置</td><td>Flask-Migrate</td><td>Alembic</td></tr>
+    <tr><td>认证</td><td>django-auth</td><td>Flask-Login</td><td>fastapi-users / python-jose</td></tr>
+    <tr><td>缓存</td><td>django-cache</td><td>Flask-Caching</td><td>aiocache / fastapi-cache</td></tr>
+    <tr><td>后台任务</td><td>Celery</td><td>Celery / RQ</td><td>Celery / arq / BackgroundTasks</td></tr>
+    <tr><td>限流</td><td>django-ratelimit</td><td>Flask-Limiter</td><td>slowapi</td></tr>
+    <tr><td>CORS</td><td>django-cors-headers</td><td>Flask-CORS</td><td>内置</td></tr>
+    <tr><td>Session</td><td>内置</td><td>Flask-Session</td><td>Starlette Session</td></tr>
+  </table>
+</section>
+
+<section id="benchmark" class="toc-link">
+  <h2><span class="num">06</span> 性能基准</h2>
+
+  <p>以下基准数据基于典型场景（JSON 序列化 + 数据库查询）测试，使用 wrk 作为压测工具。数据仅供参考，实际性能受硬件、配置和业务逻辑复杂度影响。</p>
+
+  <h3>基础 JSON 响应</h3>
+  <table>
+    <tr><th>框架</th><th>请求/秒</th><th>延迟 P50</th><th>延迟 P99</th><th>内存/请求</th></tr>
+    <tr><td>FastAPI (ASGI)</td><td>~45,000</td><td>2.1ms</td><td>8.5ms</td><td>2.8 KB</td></tr>
+    <tr><td>Flask (WSGI)</td><td>~12,000</td><td>8.0ms</td><td>32ms</td><td>4.2 KB</td></tr>
+    <tr><td>Django (WSGI)</td><td>~8,000</td><td>12ms</td><td>45ms</td><td>6.5 KB</td></tr>
+    <tr><td>Django (ASGI)</td><td>~15,000</td><td>6.5ms</td><td>28ms</td><td>5.1 KB</td></tr>
+  </table>
+
+  <h3>数据库查询（单表 SELECT 100 行）</h3>
+  <table>
+    <tr><th>框架</th><th>请求/秒</th><th>延迟 P50</th><th>延迟 P99</th></tr>
+    <tr><td>FastAPI + asyncpg</td><td>~18,000</td><td>5.5ms</td><td>22ms</td></tr>
+    <tr><td>Flask + SQLAlchemy</td><td>~5,500</td><td>18ms</td><td>65ms</td></tr>
+    <tr><td>Django ORM</td><td>~4,200</td><td>24ms</td><td>85ms</td></tr>
+  </table>
+
+  <div class="callout"><strong>提示:</strong><br>性能基准测试应使用 wrk 或 hey 工具，测试时间不少于 30 秒，并发连接数从 10 到 1000 逐步增加。单次测试结果意义有限，应关注趋势和相对差距。</div>
+</section>
+
+<section id="asgi" class="toc-link">
+  <h2><span class="num">07</span> ASGI vs WSGI 演进</h2>
+
+  <p>WSGI（PEP 3333）从 Python 2.5 开始就是 Python Web 应用的标准接口。但它有一个根本限制——同步阻塞模型。ASGI（Asynchronous Server Gateway Interface）打破了这一限制。</p>
+
+  <h3>WSGI 模式</h3>
+  <p>WSGI 定义了服务器和应用的简单调用接口。应用接收 <code>environ</code> 字典和 <code>start_response</code> 回调，返回可迭代的响应体。每个请求对应一个线程或进程，I/O 操作阻塞线程。</p>
+  <pre><code># WSGI 应用示例
+def simple_app(environ, start_response):
+    status = '200 OK'
+    headers = [('Content-Type', 'text/plain')]
+    start_response(status, headers)
+    return [b"Hello, World!"]
+
+# WSGI 服务器（Gunicorn、uWSGI、Waitress）会：
+# 1. 接收 HTTP 请求
+# 2. 构建 environ 字典
+# 3. 在 worker 线程/进程中调用 app
+# 4. 收集响应返回给客户端</code></pre>
+
+  <h3>ASGI 模式</h3>
+  <p>ASGI 将 WSGI 的单次调用改为异步事件驱动模型。应用是一个异步可调用对象，接收 <code>scope</code>（连接信息）、<code>receive</code>（接收事件）和 <code>send</code>（发送事件）。一个连接可以发送和接收多个事件，这对 WebSocket 和 SSE 至关重要。</p>
+  <pre><code># ASGI 应用示例
+async def simple_asgi_app(scope, receive, send):
+    assert scope['type'] == 'http'
+    await send({
+        'type': 'http.response.start',
+        'status': 200,
+        'headers': [(b'content-type', b'text/plain')],
+    })
+    await send({
+        'type': 'http.response.body',
+        'body': b"Hello, ASGI!",
+    })
+
+# 启动方式
+# uvicorn main:simple_asgi_app
+# daphne main:simple_asgi_app
+# hypercorn main:simple_asgi_app</code></pre>
+
+  <h3>ASGI 服务器对比</h3>
+  <table>
+    <tr><th>服务器</th><th>协议支持</th><th>性能</th><th>特点</th></tr>
+    <tr><td>Uvicorn</td><td>HTTP/1.1, WebSocket</td><td>最高</td><td>基于 uvloop/httptools，最常用</td></tr>
+    <tr><td>Daphne</td><td>HTTP/1.1, HTTP/2, WebSocket</td><td>中等</td><td>Django Channels 官方推荐</td></tr>
+    <tr><td>Hypercorn</td><td>HTTP/1.1, HTTP/2, WebSocket, HTTP/3</td><td>中等</td><td>协议支持最全面</td></tr>
+  </table>
+
+  <h3>混合部署方案</h3>
+  <p>实际部署中，ASGI 和 WSGI 可以共存。使用 Nginx 作为反向代理，将 HTTP 请求转发到 wsgi 服务器，WebSocket 请求转发到 asgi 服务器。或者使用 Gunicorn 的 Uvicorn worker 实现平滑过渡。</p>
+  <pre><code># Gunicorn + Uvicorn worker 混合部署
+# pip install gunicorn uvicorn
+
+# 启动命令
+# gunicorn -w 4 -k uvicorn.workers.UvicornWorker myapp:app
+
+# Nginx 配置示例
+# location / {
+#     proxy_pass http://127.0.0.1:8000;
+#     proxy_http_version 1.1;
+#     proxy_set_header Upgrade $http_upgrade;
+#     proxy_set_header Connection "upgrade";
+# }</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>从 WSGI 到 ASGI 的迁移并不需要重写整个应用。Django 4.2+ 和 Flask 3.0+ 都提供了 ASGI 兼容层。可以先只将 WebSocket 部分迁移到 ASGI，再逐步过渡。</div>
+</section>
+
+<section id="guide" class="toc-link">
+  <h2><span class="num">08</span> 选型指南</h2>
+
+  <p>没有最好的框架，只有最合适的框架。以下是针对不同场景的选型建议。</p>
+
+  <h3>选择 Django 的场景</h3>
+  <p>Django 适合内容管理系统、电商平台、企业内部系统、社交平台等需要完整功能集的大型项目。如果你的团队有 Django 经验，项目周期长，功能需求明确，Django 能让你快速交付。</p>
+
+  <h3>选择 Flask 的场景</h3>
+  <p>Flask 适合微服务架构、API 网关、原型验证、小到中型 Web 应用、需要灵活定制的项目。Flask 的学习曲线最平缓，适合快速验证想法。它的扩展生态覆盖了几乎所有常见需求。</p>
+
+  <h3>选择 FastAPI 的场景</h3>
+  <p>FastAPI 适合 RESTful API 服务、实时应用（WebSocket/SSE）、高并发系统、数据科学 API 模型部署。如果你追求性能且希望自动获得类型安全和文档，FastAPI 是最佳选择。</p>
+
+  <h3>框架选择速查表</h3>
+  <table>
+    <tr><th>如果你的需求是...</th><th>推荐框架</th><th>备选方案</th></tr>
+    <tr><td>搭建内容管理系统</td><td>Django</td><td>Wagtail (基于 Django)</td></tr>
+    <tr><td>快速 API 原型</td><td>FastAPI</td><td>Flask</td></tr>
+    <tr><td>微服务</td><td>FastAPI / Flask</td><td>Nameko, Flask</td></tr>
+    <tr><td>实时通信</td><td>FastAPI</td><td>Django Channels</td></tr>
+    <tr><td>管理后台</td><td>Django Admin</td><td>Flask-Admin</td></tr>
+    <tr><td>机器学习 API</td><td>FastAPI</td><td>Flask</td></tr>
+    <tr><td>最小化部署</td><td>Flask</td><td>FastAPI</td></tr>
+    <tr><td>团队大型项目</td><td>Django</td><td>FastAPI + SQLAlchemy</td></tr>
+    <tr><td>微服务架构</td><td>FastAPI</td><td>Flask</td></tr>
+    <tr><td>异步优先的系统</td><td>FastAPI</td><td>Sanic, aiohttp</td></tr>
+  </table>
+
+  <div class="callout"><strong>最终建议:</strong><br>不要过度追求"最佳"框架。选择团队最熟悉、最符合项目当前需求的框架。随着项目演进，可以在不同模块中混合使用多个框架——FastAPI 提供 API，Flask 提供简单页面，Django 提供管理后台，它们可以很好地共存。</div>
+</section>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

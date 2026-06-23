@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python 性能优化深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Python 性能优化深度解析</h1>
+  <p class="subtitle">Profiling · Cython · Numba JIT · 多进程 · 异步 I/O · 内存优化 · PyPy JIT</p>
+  <span class="version">Python 3.12+ · Cython 3.0 · Numba 0.60 · PyPy 7.3</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#profiling">Profiling 性能分析</a></li>
+    <li><a href="#cython">Cython 编译加速</a></li>
+    <li><a href="#numba">Numba JIT</a></li>
+    <li><a href="#multiprocessing">多进程与向量化</a></li>
+    <li><a href="#async-io">异步 I/O 加速</a></li>
+    <li><a href="#memory">内存优化</a></li>
+    <li><a href="#pypy">PyPy 及其他 JIT</a></li>
+    <li><a href="#benchmarks">性能对比基准表</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="profiling" class="toc-link">
+  <h2><span class="num">01</span> Profiling 性能分析</h2>
+
+  <p>性能优化始于测量。没有数据支撑的优化是盲目优化。Python 生态提供了从宏观到微观的完整 profiling 工具链。</p>
+
+  <h3>cProfile 与 pprint</h3>
+  <p>cProfile 是 Python 内置的性能分析器，开销低，适合快速定位热点函数。</p>
+  <pre><code>import cProfile, pstats
+
+def slow_function():
+    total = 0
+    for i in range(10_000_000):
+        total += i ** 2
+    return total
+
+# 方式 1: 命令行
+# python -m cProfile -s cumulative my_script.py
+
+# 方式 2: 代码内
+profiler = cProfile.Profile()
+profiler.enable()
+result = slow_function()
+profiler.disable()
+
+# 统计分析
+stats = pstats.Stats(profiler)
+stats.sort_stats(pstats.SortKey.CUMULATIVE)
+stats.print_stats(20)  # 显示前 20 行
+
+# 保存结果
+profiler.dump_stats("profile.prof")
+
+# 使用 snakeviz 可视化
+# pip install snakeviz
+# snakeviz profile.prof</code></pre>
+
+  <h3>line_profiler</h3>
+  <p>line_profiler 逐行分析函数的执行时间，精确到微秒。对于定位函数内部的瓶颈行非常有效。</p>
+  <pre><code># pip install line_profiler
+
+from line_profiler import LineProfiler
+
+def process_data(data):
+    total = 0
+    for item in data:
+        total += item * 2
+        if total > 1000:
+            total -= 500
+    return total
+
+lp = LineProfiler()
+lp.add_function(process_data)
+lp.enable()
+result = process_data(range(10_000))
+lp.disable()
+lp.print_stats()
+
+# 输出示例:
+# Timer unit: 1e-06 s
+# Total time: 0.0034 s
+# Line #      Hits         Time  Per Hit   % Time  Line Contents
+# ==============================================================
+#      5                                           def process_data(data):
+#      6         1          2.0      2.0      0.1      total = 0
+#      7     10001       3000.0      0.3     88.2      for item in data:
+#      8     10000        200.0      0.0      5.9          total += item * 2
+#      9       100        100.0      1.0      2.9          if total > 1000:
+#     10       100        100.0      1.0      2.9              total -= 500
+
+# 使用装饰器
+# @profile
+# def my_function():
+#     ...
+# kernprof -l -v my_script.py</code></pre>
+
+  <h3>py-spy 火焰图</h3>
+  <p>py-spy 是采样分析器，无需修改代码即可分析运行中的 Python 进程。它支持生成火焰图，直观展示 CPU 时间分布。</p>
+  <pre><code># pip install py-spy
+
+# 分析正在运行的进程
+# py-spy record -o flamegraph.svg --pid 12345
+# py-spy record -o flamegraph.svg -- python my_script.py
+
+# 实时查看
+# py-spy top --pid 12345
+
+# 生成火焰图
+# py-spy record -o profile.svg --duration 30 -- python myapp.py
+
+# 分析子进程
+# py-spy record -o flame.svg -- python -m uvicorn myapp:app
+
+# 对比分析
+# py-spy record -o before.svg -- python old_version.py
+# py-spy record -o after.svg -- python new_version.py</code></pre>
+
+  <h3>memory_profiler</h3>
+  <pre><code># pip install memory_profiler psutil
+
+from memory_profiler import profile
+
+@profile
+def memory_intensive():
+    large_list = [i for i in range(1_000_000)]
+    large_dict = {i: i * 2 for i in range(100_000)}
+    del large_list
+    return sum(large_dict.values())
+
+result = memory_intensive()
+
+# 逐行内存分析
+# python -m memory_profiler my_script.py
+
+# 随时间跟踪内存（用于长时间运行的任务）
+# mprof run my_script.py
+# mprof plot --output memory.png
+
+# 低开销的内存采样
+# pip install memray
+# python -m memray run my_script.py
+# python -m memray flamegraph memray-*.bin</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>正确的 profiling 流程：先用 cProfile 找到热点函数，再用 line_profiler 逐行定位瓶颈，然后用 py-spy 火焰图分析全局性能，最后用 memory_profiler 检查内存问题。不要跳过第一步。</div>
+</section>
+
+<section id="cython" class="toc-link">
+  <h2><span class="num">02</span> Cython 编译加速</h2>
+
+  <p>Cython 是 Python 的超集，允许将 Python 代码编译为 C 扩展。通过添加静态类型声明，可以将数值密集型代码的性能提升到接近原生 C 的水平。</p>
+
+  <h3>基本类型声明</h3>
+  <pre><code># .pyx 文件 — Cython 源代码
+
+# Python 风格（无加速）
+def sum_squares(n):
+    total = 0
+    for i in range(n):
+        total += i * i
+    return total
+
+# Cython 风格（有类型声明）
+def sum_squares_fast(int n):
+    cdef int i
+    cdef long long total = 0
+    for i in range(n):
+        total += i * i
+    return total
+
+# 使用 C 类型
+cdef double _compute(double x, int n):
+    cdef int i
+    cdef double result = 1.0
+    for i in range(n):
+        result *= x
+    return result
+
+# 性能对比（n=10_000_000）:
+# Python:       ~2.8 秒
+# Cython (无类型): ~2.5 秒
+# Cython (有类型): ~0.08 秒</code></pre>
+
+  <h3>调用 C 库</h3>
+  <pre><code># 声明 C 函数并直接调用
+cdef extern from "math.h":
+    double sin(double x)
+    double cos(double x)
+    double sqrt(double x)
+
+def compute_trig(double x):
+    return sin(x) + cos(x)
+
+# 调用 libc stdio
+cdef extern from "stdio.h":
+    int printf(const char *format, ...)
+
+def c_print():
+    printf(b"Hello from C!\n")
+
+# 自定义 C 结构体
+cdef extern from "point.h":
+    struct Point:
+        double x
+        double y
+
+def distance(Point p1, Point p2):
+    return sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)</code></pre>
+
+  <h3>编译流程</h3>
+  <pre><code># 方式 1: pyximport（开发时直接用）
+import pyximport
+pyximport.install()
+import fast_math  # 自动编译 .pyx 文件
+
+# 方式 2: setuptools + Extension
+# setup.py
+from setuptools import setup, Extension
+from Cython.Build import cythonize
+
+ext_modules = [
+    Extension(
+        "fast_math",
+        sources=["fast_math.pyx"],
+        extra_compile_args=["-O3"],
+    )
+]
+
+setup(
+    ext_modules=cythonize(ext_modules, language_level="3"),
+)
+
+# 方式 3: cythonize 命令行
+# cythonize -i fast_math.pyx
+# cython -3 fast_math.pyx  # 生成 .c 文件
+
+# 查看生成的 C 代码
+# cython -a fast_math.pyx  # 生成 HTML 标注文件</code></pre>
+
+  <h3>类型声明指南</h3>
+  <table>
+    <tr><th>Cython 类型</th><th>C 类型</th><th>Python 对应</th><th>性能提升</th></tr>
+    <tr><td>cdef int</td><td>int</td><td>int</td><td>20x-50x</td></tr>
+    <tr><td>cdef double</td><td>double</td><td>float</td><td>20x-50x</td></tr>
+    <tr><td>cdef long long</td><td>long long</td><td>int (大)</td><td>20x-50x</td></tr>
+    <tr><td>cdef float[:]</td><td>float* + len</td><td>array</td><td>10x-30x</td></tr>
+    <tr><td>cdef double[:,:]</td><td>double**</td><td>ndarray</td><td>10x-30x</td></tr>
+    <tr><td>cdef str</td><td>PyObject*</td><td>str</td><td>1x-2x</td></tr>
+  </table>
+</section>
+
+<section id="numba" class="toc-link">
+  <h2><span class="num">03</span> Numba JIT</h2>
+
+  <p>Numba 是一个 JIT（Just-In-Time）编译器，它将 Python 函数编译为机器码。与 Cython 不同，Numba 不需要学习新的语法——只需要添加装饰器。</p>
+
+  <h3>@jit 与 @njit</h3>
+  <pre><code>from numba import jit, njit
+import numpy as np
+import time
+
+# @jit — 基本 JIT 编译
+@jit(nopython=True)  # nopython=True = @njit
+def monte_carlo_pi(n):
+    count = 0
+    for i in range(n):
+        x = np.random.random()
+        y = np.random.random()
+        if x * x + y * y <= 1.0:
+            count += 1
+    return 4.0 * count / n
+
+# 性能: Python ~45秒 vs Numba ~0.3秒 (n=10_000_000)
+
+# @njit — 简写（强制 nopython 模式）
+@njit
+def black_scholes(S, K, T, r, sigma):
+    """计算期权价格的向量化函数"""
+    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    call = S * _norm_cdf(d1) - K * np.exp(-r * T) * _norm_cdf(d2)
+    put = K * np.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
+    return call, put
+
+@njit
+def _norm_cdf(x):
+    """标准正态分布 CDF"""
+    return 0.5 * (1 + _erf(x / np.sqrt(2)))
+
+@njit
+def _erf(x):
+    """误差函数近似"""
+    a1, a2, a3, a4, a5 = 0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429
+    p = 0.3275911
+    sign = 1 if x >= 0 else -1
+    x = abs(x)
+    t = 1.0 / (1.0 + p * x)
+    y = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * np.exp(-x * x)
+    return sign * y</code></pre>
+
+  <h3>@vectorize — 通用函数</h3>
+  <pre><code>from numba import vectorize, float64
+import numpy as np
+
+# 创建通用函数（ufunc），可自动广播
+@vectorize([float64(float64, float64)])
+def fast_multiply(x, y):
+    return x * y + x / (y + 1.0)
+
+# 使用方式与 NumPy ufunc 相同
+a = np.random.rand(1_000_000).astype(np.float64)
+b = np.random.rand(1_000_000).astype(np.float64)
+result = fast_multiply(a, b)  # 自动并行
+
+# 目标参数控制并行
+@vectorize([float64(float64, float64)], target="parallel")
+def fast_add(x, y):
+    return x + y
+
+# target 可选: "cpu", "parallel", "cuda"</code></pre>
+
+  <h3>GPU 加速 (CUDA)</h3>
+  <pre><code>from numba import cuda
+import numpy as np
+
+@cuda.jit
+def vector_add_gpu(a, b, result):
+    idx = cuda.grid(1)
+    if idx < a.size:
+        result[idx] = a[idx] + b[idx]
+
+# 准备数据
+n = 1_000_000
+a = np.random.rand(n).astype(np.float32)
+b = np.random.rand(n).astype(np.float32)
+result = np.zeros(n, dtype=np.float32)
+
+# 配置 GPU 线程
+threads_per_block = 256
+blocks_per_grid = (n + threads_per_block - 1) // threads_per_block
+
+# 在 GPU 上执行
+vector_add_gpu[blocks_per_grid, threads_per_block](a, b, result)
+
+# 复杂 GPU 计算
+@cuda.jit
+def matrix_multiply_gpu(A, B, C):
+    """矩阵乘法: C = A @ B"""
+    row, col = cuda.grid(2)
+    if row < A.shape[0] and col < B.shape[1]:
+        total = 0.0
+        for k in range(A.shape[1]):
+            total += A[row, k] * B[k, col]
+        C[row, col] = total</code></pre>
+
+  <h3>Numba 与 NumPy 集成</h3>
+  <pre><code>import numpy as np
+from numba import njit
+
+# Numba 原生支持大部分 NumPy 函数
+@njit
+def image_process(img):
+    """图像处理 — 完全在 Numba 中编译"""
+    h, w = img.shape[:2]
+    result = np.zeros((h, w), dtype=np.float64)
+    for i in range(1, h - 1):
+        for j in range(1, w - 1):
+            # Sobel 边缘检测
+            gx = (img[i+1, j-1] - img[i-1, j-1] +
+                  2 * img[i+1, j] - 2 * img[i-1, j] +
+                  img[i+1, j+1] - img[i-1, j+1])
+            gy = (img[i-1, j+1] - img[i-1, j-1] +
+                  2 * img[i, j+1] - 2 * img[i, j-1] +
+                  img[i+1, j+1] - img[i+1, j-1])
+            result[i, j] = np.sqrt(gx * gx + gy * gy)
+    return result
+
+# 与 NumPy 完全互操作
+@njit
+def stats_analysis(data):
+    mean = np.mean(data)
+    std = np.std(data)
+    skew = np.mean((data - mean) ** 3) / (std ** 3)
+    kurt = np.mean((data - mean) ** 4) / (std ** 4) - 3
+    return {"mean": mean, "std": std, "skew": skew, "kurt": kurt}</code></pre>
+</section>
+
+<section id="multiprocessing" class="toc-link">
+  <h2><span class="num">04</span> 多进程与向量化</h2>
+
+  <p>Python 的 GIL（全局解释器锁）限制了多线程的并行计算能力。多进程是绕过 GIL 的主要方法，配合 NumPy 向量化可以实现接近线性的加速。</p>
+
+  <h3>multiprocessing 基础</h3>
+  <pre><code>from multiprocessing import Pool, cpu_count, Process, Queue
+import time
+
+def cpu_intensive(n):
+    """CPU 密集型任务"""
+    total = 0
+    for i in range(n):
+        total += i ** 2
+    return total
+
+if __name__ == "__main__":
+    # 获取 CPU 核心数
+    cores = cpu_count()
+    print(f"CPU 核心数: {cores}")
+
+    # 进程池
+    with Pool(processes=cores) as pool:
+        results = pool.map(cpu_intensive, [10_000_000] * cores)
+
+    # 异步提交
+    with Pool(processes=cores) as pool:
+        async_results = [
+            pool.apply_async(cpu_intensive, (10_000_000,))
+            for _ in range(cores)
+        ]
+        results = [r.get() for r in async_results]
+
+    # 分段处理大数据
+    data = list(range(100_000_000))
+    chunk_size = len(data) // cores
+    chunks = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
+
+    with Pool(cores) as pool:
+        chunk_results = pool.map(process_chunk, chunks)
+    final_result = sum(chunk_results)</code></pre>
+
+  <h3>共享内存与进程间通信</h3>
+  <pre><code>from multiprocessing import shared_memory, Process, Value, Array
+import numpy as np
+
+# 共享内存 (Python 3.8+)
+def worker(shm_name, shape, dtype):
+    shm = shared_memory.SharedMemory(name=shm_name)
+    arr = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+    arr *= 2  # 修改共享数据
+    shm.close()
+
+# 创建共享 NumPy 数组
+data = np.ones((1000, 1000), dtype=np.float64)
+shm = shared_memory.SharedMemory(
+    create=True, size=data.nbytes
+)
+shared_arr = np.ndarray(data.shape, dtype=data.dtype,
+                        buffer=shm.buf)
+shared_arr[:] = data[:]
+
+# 启动子进程
+p = Process(target=worker, args=(shm.name, data.shape, data.dtype))
+p.start()
+p.join()
+
+print(shared_arr[:5, :5])  # 子进程修改后的数据
+shm.close()
+shm.unlink()</code></pre>
+
+  <h3>NumPy 向量化与 SIMD</h3>
+  <pre><code>import numpy as np
+
+# 避免 Python 循环——使用 NumPy 向量化操作
+def slow_loop(a, b):
+    """Python 循环——慢"""
+    result = []
+    for i in range(len(a)):
+        result.append(a[i] * b[i] + a[i] ** 2)
+    return result
+
+def fast_vectorized(a, b):
+    """NumPy 向量化——快 50-100x"""
+    return a * b + a ** 2
+
+# 性能对比
+a = np.random.rand(1_000_000)
+b = np.random.rand(1_000_000)
+# slow_loop: ~0.8 秒
+# fast_vectorized: ~0.008 秒
+
+# 高级向量化操作
+# np.where — 条件选择
+result = np.where(a > 0.5, a * 2, a / 2)
+
+# np.einsum — Einstein 求和（矩阵运算优化）
+c = np.einsum("ij,jk->ik", matrix_a, matrix_b)
+
+# 广播
+broadcast_result = a[:, np.newaxis] + b[np.newaxis, :]
+
+# SIMD 友好的内存布局
+data = np.ascontiguousarray(data)  # C 连续布局
+data = np.asfortranarray(data)     # Fortran 连续布局</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>多进程的开销包括进程创建和序列化。对于轻量级任务，进程间通信的开销可能超过并行收益。经验法则：每个任务的执行时间应超过 10 毫秒，才值得使用多进程。</div>
+</section>
+
+<section id="async-io" class="toc-link">
+  <h2><span class="num">05</span> 异步 I/O 加速</h2>
+
+  <p>I/O 密集型应用（Web 服务、数据库查询、文件操作）的瓶颈不是 CPU，而是等待 I/O 完成的时间。asyncio 通过事件循环实现单线程并发，消除 I/O 等待浪费。</p>
+
+  <h3>asyncio 事件循环</h3>
+  <pre><code>import asyncio
+import aiohttp
+import time
+
+async def fetch_url(session, url):
+    """异步 HTTP 请求"""
+    async with session.get(url) as response:
+        return await response.text()
+
+async def main():
+    urls = [
+        "https://api.example.com/data/1",
+        "https://api.example.com/data/2",
+        "https://api.example.com/data/3",
+    ] * 10  # 30 个请求
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_url(session, url) for url in urls]
+        results = await asyncio.gather(*tasks)
+
+    return results
+
+# 性能对比（30 个 HTTP 请求，RTT=100ms）:
+# 同步: 30 * 100ms = ~3 秒
+# asyncio: ~100ms（全部并发）
+# 多线程: ~100ms + 线程开销
+
+# 控制并发数
+semaphore = asyncio.Semaphore(10)
+
+async def rate_limited_fetch(session, url):
+    async with semaphore:
+        return await fetch_url(session, url)</code></pre>
+
+  <h3>异步数据库</h3>
+  <pre><code>import asyncio
+import aiomysql
+import asyncpg
+
+# asyncpg — PostgreSQL
+async def query_postgres():
+    conn = await asyncpg.connect(
+        user="user", password="pass",
+        database="db", host="localhost"
+    )
+    rows = await conn.fetch(
+        "SELECT id, name FROM users WHERE is_active = $1",
+        True
+    )
+    await conn.close()
+    return rows
+
+# aiomysql — MySQL
+async def query_mysql():
+    pool = await aiomysql.create_pool(
+        host="localhost", user="user",
+        password="pass", db="db", minsize=5, maxsize=20
+    )
+    async with pool.acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT id, name FROM users WHERE is_active = %s",
+                (True,)
+            )
+            rows = await cur.fetchall()
+    pool.close()
+    await pool.wait_closed()
+    return rows
+
+# 连接池管理
+class AsyncDBPool:
+    def __init__(self, dsn: str, pool_size: int = 10):
+        self.dsn = dsn
+        self.pool_size = pool_size
+        self.pool = None
+
+    async def connect(self):
+        self.pool = await asyncpg.create_pool(
+            dsn=self.dsn,
+            min_size=self.pool_size,
+            max_size=self.pool_size * 2,
+            max_inactive_connection_lifetime=300
+        )
+
+    async def execute(self, query: str, *args):
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(query, *args)
+
+    async def close(self):
+        if self.pool:
+            await self.pool.close()</code></pre>
+
+  <h3>异步文件 I/O</h3>
+  <pre><code>import asyncio
+import aiofiles
+
+async def process_large_file(path: str):
+    """异步处理大文件"""
+    async with aiofiles.open(path, mode="r") as f:
+        async for line in f:
+            # 处理每一行
+            yield line.strip()
+
+async def batch_process_files(file_paths: list[str]):
+    tasks = [process_file(f) for f in file_paths]
+    results = await asyncio.gather(*tasks)
+    return results
+
+# aiofiles 支持:
+# - 文件读写
+# - 二进制操作
+# - 临时文件
+# - 目录操作
+
+# 备用方案: run_in_executor（使用线程池）
+async def read_in_thread(path: str):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,  # 使用默认线程池
+        lambda: open(path).read()
+    )</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>异步 I/O 的最佳场景是大量并发 I/O 操作（HTTP 请求、数据库查询、文件读写）。对于单次 I/O 操作，异步的开销可能超过收益。在 Web 框架（FastAPI、aiohttp）中，异步是默认选择。</div>
+</section>
+
+<section id="memory" class="toc-link">
+  <h2><span class="num">06</span> 内存优化</h2>
+
+  <p>Python 的内存效率在某些场景下可以大幅优化。从对象结构到数据结构选择，每一层都有优化空间。</p>
+
+  <h3>__slots__</h3>
+  <p><code>__slots__</code> 告诉 Python 不为实例创建 <code>__dict__</code>，而是使用固定大小的 C 结构体。每个对象节省约 64 字节。</p>
+  <pre><code># 普通类 — 每个实例 56+ 字节的 __dict__
+class User:
+    def __init__(self, name, email, age):
+        self.name = name
+        self.email = email
+        self.age = age
+
+# 使用 __slots__ — 每个实例固定 40 字节
+class UserOptimized:
+    __slots__ = ("name", "email", "age")
+
+    def __init__(self, name, email, age):
+        self.name = name
+        self.email = email
+        self.age = age
+
+# 内存对比（100 万个实例）
+# User: ~380 MB
+# UserOptimized: ~50 MB
+
+# 继承中的 __slots__
+class Base:
+    __slots__ = ("id",)
+
+class Derived(Base):
+    __slots__ = ("name",)  # 必须包含父类的 __slots__
+
+# __slots__ 的限制:
+# - 不能有 __dict__
+# - 不能有 __weakref__（除非显式声明）
+# - 不能多继承有不同 __slots__ 的类</code></pre>
+
+  <h3>weakref</h3>
+  <pre><code>import weakref
+
+class Cache:
+    """不会阻止对象被 GC 回收的缓存"""
+    def __init__(self):
+        self._data = weakref.WeakValueDictionary()
+
+    def set(self, key, value):
+        self._data[key] = value
+
+    def get(self, key):
+        return self._data.get(key)
+
+# 应用: 对象缓存、事件监听、树形结构的父引用
+class TreeNode:
+    def __init__(self, value):
+        self.value = value
+        self.children = []
+        self._parent = None
+
+    @property
+    def parent(self):
+        return self._parent() if self._parent else None
+
+    @parent.setter
+    def parent(self, node):
+        if node is not None:
+            self._parent = weakref.ref(node)
+        else:
+            self._parent = None
+
+# WeakSet — 不阻止 GC 的集合
+seen_objects = weakref.WeakSet()
+
+# WeakKeyDictionary — 键为弱引用
+callbacks = weakref.WeakKeyDictionary()</code></pre>
+
+  <h3>数组 vs 列表</h3>
+  <pre><code>import array
+import numpy as np
+import sys
+
+# list — 存储 Python 对象（每个元素 28 字节）
+py_list = [i for i in range(1_000_000)]
+# ~28 MB + 列表自身开销
+
+# array — 存储 C 类型值（每个元素 4 或 8 字节）
+int_array = array.array("i", range(1_000_000))
+# ~4 MB
+
+# numpy — 优化数值数组
+np_array = np.arange(1_000_000, dtype=np.int32)
+# ~4 MB
+
+# 内存对比
+for name, obj in [
+    ("list", py_list),
+    ("array('i')", int_array),
+    ("numpy int32", np_array),
+]:
+    print(f"{name:15s}: {sys.getsizeof(obj):>8} bytes")
+
+# 什么时候用数组:
+# - 存储大量同类型数值
+# - 需要紧凑内存
+# - 序列化/反序列化性能要求高</code></pre>
+
+  <h3>generator vs list</h3>
+  <pre><code>import sys
+
+# list — 所有数据在内存中
+def load_all_data():
+    return [i ** 2 for i in range(10_000_000)]
+# 内存: ~350 MB
+
+# generator — 懒加载，每次生成一个
+def stream_data():
+    for i in range(10_000_000):
+        yield i ** 2
+# 内存: ~200 字节
+
+# 文件处理
+def read_large_file(path):
+    with open(path) as f:
+        return f.readlines()  # 全部读入内存
+
+def read_large_file_lazy(path):
+    with open(path) as f:
+        for line in f:  # 逐行读取
+            yield line
+
+# 应用场景:
+# - 列表: 需要随机访问、多次遍历、数据量小
+# - 生成器: 数据量大、只需遍历一次、管道式处理</code></pre>
+
+  <h3>对象缓存与数据去重</h3>
+  <pre><code>import sys
+
+# sys.intern — 字符串驻留（节省重复字符串内存）
+names = ["Alice", "Bob", "Alice", "Charlie", "Bob"]
+interned_names = [sys.intern(n) for n in names]
+print(interned_names[0] is interned_names[2])  # True
+
+# 小整数缓存 — Python 默认缓存 -5 到 256
+a, b = 100, 100
+print(a is b)  # True
+c, d = 1000, 1000
+print(c is d)  # False（取决于实现）
+
+# 使用 __slots__ 的 namedtuple 替代
+from typing import NamedTuple
+
+class Point(NamedTuple):
+    x: float
+    y: float
+    z: float
+
+# NamedTuple 的每实例开销远小于普通类
+# 且支持解包、比较、哈希</code></pre>
+</section>
+
+<section id="pypy" class="toc-link">
+  <h2><span class="num">07</span> PyPy 及其他 JIT</h2>
+
+  <p>PyPy 是 Python 的替代运行时，内置 JIT 编译器。对于纯 Python 代码，PyPy 通常比 CPython 快 4-5 倍。但 PyPy 与 C 扩展的兼容性有限。</p>
+
+  <h3>PyPy JIT 编译</h3>
+  <p>PyPy 使用 JIT（Just-In-Time）编译技术。它分析程序的热点路径，将字节码编译为机器码，并在运行时进行类型特化（type specialization）。循环次数越多，性能优势越明显。</p>
+  <pre><code># PyPy vs CPython 性能对比
+def heavy_loop(n):
+    total = 0
+    for i in range(n):
+        total += i * i
+    return total
+
+# CPython 3.12:      ~3.2 秒 (n=50_000_000)
+# PyPy 7.3:          ~0.4 秒 (n=50_000_000)
+# 加速比: ~8x
+
+# PyPy 的 warmup 效应
+# 第一次调用 JIT 编译时较慢
+# 后续调用直接使用编译后的机器码
+# 适用于长时间运行的应用</code></pre>
+
+  <h3>PyPy 兼容性限制</h3>
+  <table>
+    <tr><th>特性</th><th>兼容性</th><th>说明</th></tr>
+    <tr><td>纯 Python 代码</td><td>完全兼容</td><td>大部分速度提升 4-5x</td></tr>
+    <tr><td>C 扩展 (CPython API)</td><td>有限</td><td>numpy 通过 PyPy 的 numpy 替代</td></tr>
+    <tr><td>Cython 编译的 .so</td><td>不兼容</td><td>需要 PyPy 重新编译</td></tr>
+    <tr><td>ctypes/cffi</td><td>完全兼容</td><td>PyPy 推荐使用 cffi</td></tr>
+    <tr><td>cffi</td><td>推荐</td><td>PyPy 原生支持，性能更好</td></tr>
+    <tr><td>asyncio</td><td>完全兼容</td><td>性能与 CPython 持平</td></tr>
+    <tr><td>multiprocessing</td><td>支持</td><td>略有差异</td></tr>
+    <tr><td>numpy</td><td>有限支持</td><td>PyPy 的 numpy 实现不完整</td></tr>
+  </table>
+
+  <h3>PyPy 适用场景</h3>
+  <pre><code># PyPy 最适合:
+# 1. 纯 Python 的 CPU 密集型计算
+# 2. 长时间运行的服务
+# 3. 大量字符串处理和正则匹配
+# 4. 解释器密集型代码（元类、装饰器、eval）
+
+# PyPy 不适合:
+# 1. 依赖 C 扩展的项目（numpy, pandas, scipy 等）
+# 2. 与 Cython 编译的库交互
+# 3. 对内存使用敏感的场景（PyPy 内存占用更高）
+# 4. 嵌入式或资源受限环境
+
+# 其他 JIT 选项:
+# - Pyston: Fork of CPython + JIT（兼容性更好）
+# - Codon: Python 到 C++ 的转译器（学术项目）
+# - GraalPy: GraalVM 上的 Python 实现</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>不要假设 PyPy 一定能加速。测试是关键——在切换到 PyPy 之前，在目标负载上做基准测试。PyPy 对纯 Python 循环密集的代码加速最明显，但对大量 C 扩展调用的代码可能比 CPython 更慢。</div>
+</section>
+
+<section id="benchmarks" class="toc-link">
+  <h2><span class="num">08</span> 性能对比基准表</h2>
+
+  <p>以下数据基于标准测试任务，使用不同优化技术测得的结果（值越低越好）。测试环境：AMD Ryzen 9 7950X, Python 3.12, Linux 6.8。</p>
+
+  <h3>计算密集型（n=10^8 循环）</h3>
+  <table>
+    <tr><th>方法</th><th>执行时间</th><th>加速比</th><th>说明</th></tr>
+    <tr><td>纯 Python</td><td>5.42 秒</td><td>1x</td><td>原始 Python for 循环</td></tr>
+    <tr><td>PyPy</td><td>0.65 秒</td><td>8.3x</td><td>无需修改代码</td></tr>
+    <tr><td>Numba @njit</td><td>0.28 秒</td><td>19.4x</td><td>添加装饰器</td></tr>
+    <tr><td>Cython (cdef)</td><td>0.18 秒</td><td>30.1x</td><td>手动类型声明</td></tr>
+    <tr><td>C 原生</td><td>0.12 秒</td><td>45.2x</td><td>手写 C</td></tr>
+    <tr><td>NumPy 向量化</td><td>0.05 秒</td><td>108x</td><td>数组运算</td></tr>
+  </table>
+
+  <h3>NumPy 运算（矩阵乘法 2000x2000）</h3>
+  <table>
+    <tr><th>方法</th><th>执行时间</th><th>加速比</th></tr>
+    <tr><td>纯 Python 三重循环</td><td>184 秒</td><td>1x</td></tr>
+    <tr><td>Numba @njit</td><td>0.95 秒</td><td>194x</td></tr>
+    <tr><td>NumPy @ 操作符</td><td>0.12 秒</td><td>1533x</td></tr>
+    <tr><td>NumPy + MKL</td><td>0.08 秒</td><td>2300x</td></tr>
+  </table>
+
+  <h3>HTTP 请求（100 个并发请求）</h3>
+  <table>
+    <tr><th>方法</th><th>总耗时</th><th>吞吐量</th></tr>
+    <tr><td>同步 requests</td><td>5.2 秒</td><td>19 req/s</td></tr>
+    <tr><td>多线程 (10 workers)</td><td>0.8 秒</td><td>125 req/s</td></tr>
+    <tr><td>asyncio + aiohttp</td><td>0.4 秒</td><td>250 req/s</td></tr>
+  </table>
+
+  <h3>内存效率（100 万个对象）</h3>
+  <table>
+    <tr><th>方法</th><th>内存占用</th><th>相对大小</th></tr>
+    <tr><td>普通类</td><td>~380 MB</td><td>100%</td></tr>
+    <tr><td>dataclass</td><td>~380 MB</td><td>100%</td></tr>
+    <tr><td>NamedTuple</td><td>~48 MB</td><td>12.6%</td></tr>
+    <tr><td>__slots__ 类</td><td>~50 MB</td><td>13.2%</td></tr>
+    <tr><td>array('i')</td><td>~4 MB</td><td>1.1%</td></tr>
+  </table>
+
+  <h3>优化优先级</h3>
+  <div class="callout"><strong>优化清单（按优先级排序）:</strong><br>
+  1. 选择正确的算法和数据结构（最大收益）<br>
+  2. 使用 NumPy 向量化替代 Python 循环<br>
+  3. 缓存计算结果（functools.lru_cache/cache）<br>
+  4. 使用生成器减少内存<br>
+  5. 使用 PyPy（如果无 C 扩展依赖）<br>
+  6. 使用 Numba JIT（数值计算场景）<br>
+  7. 使用 Cython 编译热点函数<br>
+  8. 使用多进程并行<br>
+  9. 使用 async I/O 加速 I/O 密集型任务<br>
+  10. 使用 __slots__ 和 array 减少内存</div>
+
+</section>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

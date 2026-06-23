@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python 基础深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>🐍 Python 基础深度解析</h1>
+  <p class="subtitle">动态类型 · 函数式编程 · OOP · 上下文管理器 · 迭代器 · 错误处理 · 模式匹配</p>
+  <span class="version">Python 3.13</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#sec1">类型系统</a></li>
+    <li><a href="#sec2">函数</a></li>
+    <li><a href="#sec3">OOP 面向对象</a></li>
+    <li><a href="#sec4">上下文管理器</a></li>
+    <li><a href="#sec5">迭代器与生成器</a></li>
+    <li><a href="#sec6">错误处理</a></li>
+    <li><a href="#sec7">match 语句</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="sec1" class="toc-link">
+  <h2><span class="num">01</span> 类型系统</h2>
+
+  <h3>动态类型与鸭子类型</h3>
+  <p>Python 是强动态类型语言。变量没有类型约束，但对象有明确的类型。运行时类型检查会在操作不兼容时抛出 <code>TypeError</code>。鸭子类型（"如果它走路像鸭子，叫起来像鸭子，那它就是鸭子"）是 Python 的核心设计哲学——不检查对象的具体类，而是检查它是否实现了所需的方法。</p>
+
+<pre><code class="language-python">def process(obj):
+    # 鸭子类型：只要 obj 有 .read() 方法就能工作
+    data = obj.read()
+    return len(data)
+
+# 任何实现了 .read() 的对象都可以传入
+process(open("file.txt"))      # file object
+process(io.StringIO("hello"))  # StringIO
+</code></pre>
+
+  <h3>类型注解（Type Hints）</h3>
+  <p>Python 3.5 引入 <code>typing</code> 模块，3.10+ 进一步简化了语法。类型注解不影响运行时，但被 mypy、pyright、PyCharm 等工具用于静态分析。</p>
+
+<pre><code class="language-python">from typing import Union, Optional, Literal, Any
+
+# 基础类型注解
+name: str = "Python"
+count: int = 42
+rate: float = 3.14
+active: bool = True
+
+# 集合类型（3.9+ 支持内置泛型）
+items: list[int] = [1, 2, 3]
+mapping: dict[str, int] = {"a": 1}
+data: tuple[int, str, float] = (1, "x", 3.14)
+
+# 可空类型（3.10+ 使用 |）
+maybe: str | None = None     # 等价于 Optional[str]
+
+# Union（联合类型）
+def parse(value: int | str) -> int | float:
+    if isinstance(value, str):
+        return int(value)
+    return float(value)
+
+# Literal（字面量类型，3.8+）
+def set_mode(mode: Literal["r", "w", "a"]) -> None:
+    ...
+
+# Any（任意类型）
+def debug(obj: Any) -> None:
+    print(repr(obj))
+</code></pre>
+
+  <h3>typing 进阶用法</h3>
+
+<pre><code class="language-python">from typing import TypeVar, Generic, Protocol, overload
+
+# TypeVar 泛型
+T = TypeVar("T")
+def first(items: list[T]) -> T:
+    return items[0]
+
+# Generic 泛型类
+class Stack(Generic[T]):
+    def __init__(self) -> None:
+        self._items: list[T] = []
+    def push(self, item: T) -> None:
+        self._items.append(item)
+    def pop(self) -> T:
+        return self._items.pop()
+
+# Protocol（结构子类型，Python 3.8+）
+class Readable(Protocol):
+    def read(self) -> bytes: ...
+
+def load(source: Readable) -> bytes:
+    return source.read()
+# 无需继承 Readable，只要实现了 read() 即可
+
+# @overload 重载
+@overload
+def double(value: int) -> int: ...
+@overload
+def double(value: str) -> str: ...
+def double(value: int | str) -> int | str:
+    if isinstance(value, int):
+        return value * 2
+    return value + value
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    Python 3.12+ 引入了 <code>type</code> 语句简化泛型别名：<code>type Point = tuple[float, float]</code>。3.11+ 支持 <code>Self</code> 类型用于返回自身类型。运行时类型检查可使用 <code>isinstance()</code> 和 <code>pydantic</code> 库。
+  </div>
+</section>
+
+<section id="sec2" class="toc-link">
+  <h2><span class="num">02</span> 函数</h2>
+
+  <h3>lambda 表达式</h3>
+  <p>lambda 创建匿名单表达式函数。适用于简单回调和高阶函数场景。</p>
+
+<pre><code class="language-python"># 基础 lambda
+square = lambda x: x ** 2
+print(square(5))  # 25
+
+# 排序 key
+pairs = [(1, "one"), (3, "three"), (2, "two")]
+pairs.sort(key=lambda p: p[0])
+
+# map / filter / reduce
+numbers = [1, 2, 3, 4, 5]
+doubled = list(map(lambda x: x * 2, numbers))
+evens = list(filter(lambda x: x % 2 == 0, numbers))
+</code></pre>
+
+  <h3>闭包（Closure）</h3>
+  <p>闭包是引用了外部函数作用域变量的内部函数。即使外部函数已返回，闭包也能记住这些变量。</p>
+
+<pre><code class="language-python">def make_counter(initial: int = 0):
+    count = [initial]  # 使用列表绕过不可变限制
+    def counter():
+        count[0] += 1
+        return count[0]
+    return counter
+
+c = make_counter(10)
+print(c())  # 11
+print(c())  # 12
+
+# 使用 nonlocal（Python 3+）
+def make_adder(n: int):
+    def adder(x: int) -> int:
+        return x + n  # n 来自外部作用域
+    return adder
+
+add5 = make_adder(5)
+print(add5(10))  # 15
+</code></pre>
+
+  <h3>装饰器（Decorator）</h3>
+  <p>装饰器是接受函数并返回新函数的可调用对象。使用 <code>@</code> 语法糖应用。</p>
+
+<pre><code class="language-python">import functools
+import time
+
+# 基础装饰器
+def timer(func):
+    @functools.wraps(func)  # 保留原函数的元数据
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = func(*args, **kwargs)
+        elapsed = time.perf_counter() - start
+        print(f"{func.__name__} took {elapsed:.4f}s")
+        return result
+    return wrapper
+
+@timer
+def heavy_compute(n: int) -> int:
+    return sum(i ** 2 for i in range(n))
+
+# 带参数的装饰器
+def retry(max_attempts: int = 3):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_attempts - 1:
+                        raise
+                    print(f"Attempt {attempt + 1} failed: {e}")
+            return None
+        return wrapper
+    return decorator
+
+@retry(max_attempts=5)
+def unstable_network_call():
+    ...
+
+# 类装饰器
+class CountCalls:
+    def __init__(self, func):
+        functools.update_wrapper(self, func)
+        self.func = func
+        self.count = 0
+    def __call__(self, *args, **kwargs):
+        self.count += 1
+        print(f"Call #{self.count} of {self.func.__name__}")
+        return self.func(*args, **kwargs)
+</code></pre>
+
+  <h3>偏函数（Partial Function）</h3>
+  <p><code>functools.partial</code> 固定函数的部分参数，生成新可调用对象。</p>
+
+<pre><code class="language-python">from functools import partial
+
+def power(base: float, exp: float) -> float:
+    return base ** exp
+
+square = partial(power, exp=2)
+cube = partial(power, exp=3)
+
+print(square(5))   # 25
+print(cube(3))     # 27
+
+# 实际应用：定制回调
+def log(level: str, message: str) -> None:
+    print(f"[{level.upper()}] {message}")
+
+debug = partial(log, "debug")
+info = partial(log, "info")
+error = partial(log, "error")
+
+info("系统启动完成")  # [INFO] 系统启动完成
+</code></pre>
+</section>
+
+<section id="sec3" class="toc-link">
+  <h2><span class="num">03</span> OOP 面向对象</h2>
+
+  <h3>类基础与 MRO</h3>
+  <p>Python 使用 C3 线性化算法确定方法解析顺序（MRO）。<code>super()</code> 遵循 MRO 调用下一个类的方法。</p>
+
+<pre><code class="language-python">class A:
+    def method(self):
+        print("A.method")
+
+class B(A):
+    def method(self):
+        print("B.method")
+        super().method()
+
+class C(A):
+    def method(self):
+        print("C.method")
+        super().method()
+
+class D(B, C):
+    def method(self):
+        print("D.method")
+        super().method()
+
+print(D.__mro__)
+# (<class 'D'>, <class 'B'>, <class 'C'>, <class 'A'>, <class 'object'>)
+D().method()
+# D.method → B.method → C.method → A.method
+
+# super() 在多重继承中的实际用途
+class LoggingMixin:
+    def log(self, msg: str) -> None:
+        print(f"[LOG] {msg}")
+
+class SerializeMixin:
+    def to_dict(self) -> dict:
+        return self.__dict__
+
+class User(LoggingMixin, SerializeMixin):
+    def __init__(self, name: str):
+        self.name = name
+        self.log(f"User {name} created")
+</code></pre>
+
+  <h3>property 与描述符</h3>
+
+<pre><code class="language-python">class Temperature:
+    def __init__(self, celsius: float):
+        self._celsius = celsius
+
+    @property
+    def celsius(self) -> float:
+        return self._celsius
+
+    @celsius.setter
+    def celsius(self, value: float):
+        if value < -273.15:
+            raise ValueError("低于绝对零度")
+        self._celsius = value
+
+    @property
+    def fahrenheit(self) -> float:
+        return self._celsius * 9 / 5 + 32
+
+    @fahrenheit.setter
+    def fahrenheit(self, value: float):
+        self._celsius = (value - 32) * 5 / 9
+
+temp = Temperature(25)
+print(temp.fahrenheit)  # 77.0
+temp.fahrenheit = 100
+print(temp.celsius)     # 37.777...
+
+# 描述符协议（property 的底层实现）
+class PositiveNumber:
+    def __set_name__(self, owner, name):
+        self._name = f"_{name}"
+    def __get__(self, obj, objtype=None):
+        return getattr(obj, self._name, 0)
+    def __set__(self, obj, value):
+        if value <= 0:
+            raise ValueError("值必须为正数")
+        setattr(obj, self._name, value)
+
+class Order:
+    quantity = PositiveNumber()
+    price = PositiveNumber()
+
+    def __init__(self, qty: int, price: float):
+        self.quantity = qty
+        self.price = price
+
+    def total(self) -> float:
+        return self.quantity * self.price
+</code></pre>
+
+  <h3>抽象基类（ABC）</h3>
+
+<pre><code class="language-python">from abc import ABC, abstractmethod
+
+class Animal(ABC):
+    @abstractmethod
+    def make_sound(self) -> str:
+        pass
+
+    @abstractmethod
+    def move(self) -> str:
+        pass
+
+    def describe(self) -> str:  # 具体方法
+        return f"{self.make_sound()} 然后 {self.move()}"
+
+class Dog(Animal):
+    def make_sound(self) -> str:
+        return "汪汪"
+    def move(self) -> str:
+        return "奔跑"
+
+# 注册虚拟子类（无需继承）
+from collections.abc import Sequence, Mapping
+
+class MySequence(Sequence):
+    def __getitem__(self, index):
+        return index
+    def __len__(self):
+        return 42
+# 自动获得 .count(), .index() 等方法
+</code></pre>
+
+  <h3>枚举（Enum）</h3>
+
+<pre><code class="language-python">from enum import Enum, auto, IntEnum, StrEnum
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+class Status(StrEnum):  # 3.11+
+    PENDING = "pending"
+    ACTIVE = "active"
+    DONE = "done"
+
+class Direction(IntEnum):
+    NORTH = 1
+    SOUTH = 2
+    EAST = 3
+    WEST = 4
+
+# 枚举方法与属性
+print(Color.RED.name)      # RED
+print(Color.RED.value)     # 1
+print(list(Color))         # [Color.RED, Color.GREEN, Color.BLUE]
+
+# 确保唯一值
+from enum import unique
+
+@unique
+class HttpStatus(IntEnum):
+    OK = 200
+    NOT_FOUND = 404
+    INTERNAL_ERROR = 500
+</code></pre>
+</section>
+
+<section id="sec4" class="toc-link">
+  <h2><span class="num">04</span> 上下文管理器</h2>
+
+  <p>上下文管理器通过 <code>__enter__</code> 和 <code>__exit__</code> 协议管理资源生命周期，与 <code>with</code> 语句配合使用。</p>
+
+  <h3>基于类的上下文管理器</h3>
+
+<pre><code class="language-python">class ManagedFile:
+    def __init__(self, filename: str, mode: str = "r"):
+        self.filename = filename
+        self.mode = mode
+
+    def __enter__(self):
+        self.file = open(self.filename, self.mode)
+        return self.file  # 绑定到 as 子句
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.file.close()
+        # 返回 True 表示抑制异常
+        if exc_type is ValueError:
+            print(f"忽略 ValueError: {exc_val}")
+            return True
+        return False
+
+with ManagedFile("test.txt", "w") as f:
+    f.write("Hello World")
+
+# __exit__ 的异常处理机制
+with ManagedFile("test.txt") as f:
+    raise ValueError("忽略我")
+# 不会传播，因为 __exit__ 返回了 True
+</code></pre>
+
+  <h3>基于生成器的上下文管理器（contextlib）</h3>
+
+<pre><code class="language-python">from contextlib import contextmanager
+
+@contextmanager
+def managed_file(filename: str, mode: str = "r"):
+    file = open(filename, mode)
+    try:
+        yield file
+    finally:
+        file.close()
+
+with managed_file("test.txt") as f:
+    content = f.read()
+
+# contextmanager 与异常处理
+@contextmanager
+def suppress(*exceptions):
+    try:
+        yield
+    except exceptions:
+        pass  # 静默忽略指定异常
+
+with suppress(FileNotFoundError, PermissionError):
+    with open("/etc/shadow") as f:
+        print(f.read())
+</code></pre>
+
+  <h3>contextlib 高级工具</h3>
+
+<pre><code class="language-python">from contextlib import closing, nullcontext, ExitStack, redirect_stdout
+import io
+
+# closing：确保调用 close 方法
+from urllib.request import urlopen
+with closing(urlopen("https://python.org")) as page:
+    content = page.read()
+
+# nullcontext：条件性上下文
+def process(need_db: bool):
+    db = get_db() if need_db else nullcontext()
+    with db as conn:
+        ...
+
+# ExitStack：动态管理多个上下文
+@contextmanager
+def open_many(files: list[tuple[str, str]]):
+    with ExitStack() as stack:
+        handles = [
+            stack.enter_context(open(fname, mode))
+            for fname, mode in files
+        ]
+        yield handles
+    # 退出时按逆序自动关闭所有文件
+
+# redirect_stdout 临时重定向
+f = io.StringIO()
+with redirect_stdout(f):
+    print("这段文字被捕获到 StringIO")
+output = f.getvalue()
+</code></pre>
+
+  <h3>异步上下文管理器</h3>
+
+<pre><code class="language-python">import asyncio
+
+class AsyncResource:
+    async def __aenter__(self):
+        await asyncio.sleep(0.1)
+        self.conn = await connect()
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.conn.close()
+        return False
+
+async def use_resource():
+    async with AsyncResource() as conn:
+        await conn.query("SELECT 1")
+</code></pre>
+</section>
+
+<section id="sec5" class="toc-link">
+  <h2><span class="num">05</span> 迭代器与生成器</h2>
+
+  <h3>迭代器协议</h3>
+  <p>任何实现了 <code>__iter__</code>（返回迭代器）和 <code>__next__</code>（返回下一个值或抛出 StopIteration）的对象都是迭代器。</p>
+
+<pre><code class="language-python">class Range:
+    """自定义 range 迭代器"""
+    def __init__(self, start: int, end: int, step: int = 1):
+        self.current = start
+        self.end = end
+        self.step = step
+
+    def __iter__(self):
+        return self  # 自身就是迭代器
+
+    def __next__(self):
+        if self.current >= self.end:
+            raise StopIteration
+        value = self.current
+        self.current += self.step
+        return value
+
+for i in Range(1, 5):
+    print(i)  # 1 2 3 4
+
+# 可迭代对象与迭代器分离
+class Squares:
+    """可迭代对象，每次返回新的迭代器"""
+    def __init__(self, n: int):
+        self.n = n
+    def __iter__(self):
+        return SquaresIterator(self.n)
+
+class SquaresIterator:
+    def __init__(self, n: int):
+        self.i, self.n = 0, n
+    def __iter__(self):
+        return self
+    def __next__(self):
+        if self.i >= self.n:
+            raise StopIteration
+        result = self.i ** 2
+        self.i += 1
+        return result
+</code></pre>
+
+  <h3>生成器（Generator）</h3>
+  <p>生成器是用 <code>yield</code> 定义的函数，每次调用 <code>__next__()</code> 执行到下一个 <code>yield</code> 并暂停。</p>
+
+<pre><code class="language-python"># 基础生成器
+def fibonacci(limit: int):
+    a, b = 0, 1
+    while a < limit:
+        yield a
+        a, b = b, a + b
+
+for num in fibonacci(100):
+    print(num)  # 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89
+
+# 生成器表达式
+squares = (x ** 2 for x in range(10))
+
+# 生成器管道
+def read_lines(filename: str):
+    with open(filename) as f:
+        for line in f:
+            yield line.strip()
+
+def filter_comments(lines):
+    for line in lines:
+        if not line.startswith("#"):
+            yield line
+
+def skip_blank(lines):
+    for line in lines:
+        if line:
+            yield line
+
+pipeline = skip_blank(filter_comments(read_lines("config.cfg")))
+for line in pipeline:
+    print(line)
+</code></pre>
+
+  <h3>yield from — 委托给子生成器</h3>
+
+<pre><code class="language-python">def chain(*iterables):
+    for it in iterables:
+        yield from it
+
+# 等价于：
+def chain_manual(*iterables):
+    for it in iterables:
+        for item in it:
+            yield item
+
+result = list(chain([1, 2], "abc"))
+print(result)  # [1, 2, 'a', 'b', 'c']
+
+# yield from 在递归场景的应用
+def flatten(items):
+    for item in items:
+        if isinstance(item, (list, tuple)):
+            yield from flatten(item)
+        else:
+            yield item
+
+nested = [1, [2, [3, 4], 5], 6]
+print(list(flatten(nested)))  # [1, 2, 3, 4, 5, 6]
+</code></pre>
+
+  <h3>生成器的 send / throw / close</h3>
+
+<pre><code class="language-python"># send：向生成器发送值
+def running_average():
+    total = 0.0
+    count = 0
+    avg = None
+    while True:
+        value = yield avg
+        total += value
+        count += 1
+        avg = total / count
+
+avg_gen = running_average()
+next(avg_gen)  # 启动生成器
+print(avg_gen.send(10))   # 10.0
+print(avg_gen.send(20))   # 15.0
+print(avg_gen.send(30))   # 20.0
+
+# throw：向生成器注入异常
+def safe_divider():
+    try:
+        while True:
+            x = yield
+            yield x / 2
+    except ZeroDivisionError:
+        yield float('inf')
+
+# close：关闭生成器
+gen = fibonacci(10)
+print(next(gen))  # 0
+gen.close()       # 在 yield 处抛出 GeneratorExit
+# next(gen)       # StopIteration
+</code></pre>
+</section>
+
+<section id="sec6" class="toc-link">
+  <h2><span class="num">06</span> 错误处理</h2>
+
+  <h3>try / except / else / finally</h3>
+
+<pre><code class="language-python">def safe_divide(a: float, b: float) -> float:
+    try:
+        result = a / b
+    except ZeroDivisionError:
+        print("除数不能为零")
+        return float('inf')
+    except TypeError as e:
+        print(f"类型错误: {e}")
+        raise  # 重新抛出当前异常
+    else:
+        print(f"计算成功: {result}")
+        return result
+    finally:
+        print("清理操作（始终执行）")
+
+# 捕获多个异常
+try:
+    data = process_input(raw)
+except (ValueError, TypeError, KeyError) as e:
+    print(f"输入处理失败: {e}")
+
+# 捕获所有异常（谨慎使用）
+try:
+    dangerous_op()
+except Exception:  # 不捕获 BaseException（SystemExit, KeyboardInterrupt）
+    log("操作失败")
+    raise
+</code></pre>
+
+  <h3>自定义异常</h3>
+
+<pre><code class="language-python">class AppError(Exception):
+    """应用基础异常"""
+    def __init__(self, message: str, code: int = 500):
+        self.code = code
+        super().__init__(message)
+
+class NotFoundError(AppError):
+    def __init__(self, resource: str, id: str):
+        self.resource = resource
+        self.id = id
+        super().__init__(f"{resource} #{id} 未找到", 404)
+
+class ValidationError(AppError):
+    def __init__(self, field: str, reason: str):
+        super().__init__(f"字段 '{field}' 验证失败: {reason}", 422)
+
+class RateLimitError(AppError):
+    def __init__(self, retry_after: int):
+        self.retry_after = retry_after
+        super().__init__("请求过于频繁", 429)
+
+# 使用自定义异常
+def get_user(user_id: int):
+    if user_id <= 0:
+        raise ValidationError("user_id", "必须是正整数")
+    user = db.find(user_id)
+    if user is None:
+        raise NotFoundError("User", str(user_id))
+    return user
+</code></pre>
+
+  <h3>异常链（Exception Chaining）</h3>
+
+<pre><code class="language-python"># 隐式链：异常上下文
+try:
+    int("not_a_number")
+except ValueError as e:
+    raise RuntimeError("解析失败") from e
+# 输出显示：
+# ValueError: invalid literal for int() with base 10: 'not_a_number'
+# The above exception was the direct cause of the following exception:
+# RuntimeError: 解析失败
+
+# 显式链：from None 抑制上下文
+try:
+    int("bad")
+except ValueError:
+    raise RuntimeError("转换失败") from None
+# 只显示 RuntimeError，不显示原始的 ValueError
+
+# 链式异常在调试中的意义
+class DatabaseError(Exception):
+    pass
+
+def query_db(sql: str):
+    try:
+        connection.execute(sql)
+    except ConnectionError as e:
+        raise DatabaseError(f"数据库查询失败: {sql}") from e
+</code></pre>
+
+  <h3>assert 与异常最佳实践</h3>
+
+<pre><code class="language-python"># assert 用于内部不变量检查（可被 -O 禁用）
+def process_data(data: list[int]) -> int:
+    assert isinstance(data, list), "data 必须是列表"
+    assert all(isinstance(x, int) for x in data), "所有元素必须是整数"
+    return sum(data)
+
+# EAFP vs LBYL
+# EAFP（It's Easier to Ask for Forgiveness than Permission）— Python 风格
+def safe_get(d: dict, key: str):
+    try:
+        return d[key]
+    except KeyError:
+        return None
+
+# LBYL（Look Before You Leap）
+def safe_get_lbyl(d: dict, key: str):
+    if key in d:
+        return d[key]
+    return None
+
+# warnings 模块用于非致命警告
+import warnings
+def deprecated(func):
+    def wrapper(*args, **kwargs):
+        warnings.warn(f"{func.__name__} 已弃用", DeprecationWarning, stacklevel=2)
+        return func(*args, **kwargs)
+    return wrapper
+</code></pre>
+</section>
+
+<section id="sec7" class="toc-link">
+  <h2><span class="num">07</span> match 语句</h2>
+
+  <p>Python 3.10 引入的 <code>match</code> 语句实现了模式匹配（Structural Pattern Matching），灵感来自 Scala、Rust、Haskell 等语言。</p>
+
+  <h3>基础匹配</h3>
+
+<pre><code class="language-python">def describe(value) -> str:
+    match value:
+        case 0:
+            return "零"
+        case 1 | 2 | 3:
+            return "小数字"
+        case int():
+            return f"整数: {value}"
+        case str():
+            return f"字符串: {value}"
+        case _:
+            return f"其他: {type(value).__name__}"
+
+print(describe(0))     # 零
+print(describe(2))     # 小数字
+print(describe(100))   # 整数: 100
+print(describe("hi"))  # 字符串: hi
+</code></pre>
+
+  <h3>解构与捕获</h3>
+
+<pre><code class="language-python"># 元组解构
+def process_point(point) -> str:
+    match point:
+        case (0, 0):
+            return "原点"
+        case (0, y):
+            return f"Y 轴: y={y}"
+        case (x, 0):
+            return f"X 轴: x={x}"
+        case (x, y):
+            return f"坐标: ({x}, {y})"
+        case _:
+            return "不是二维点"
+
+# 列表解构
+def analyze(seq) -> str:
+    match seq:
+        case []:
+            return "空列表"
+        case [first]:
+            return f"单元素: {first}"
+        case [first, second]:
+            return f"两个元素: {first}, {second}"
+        case [first, *rest]:
+            return f"首元素: {first}, 剩余: {rest}"
+
+# 字典解构
+def handle_request(request: dict) -> str:
+    match request:
+        case {"method": "GET", "path": path}:
+            return f"GET {path}"
+        case {"method": "POST", "data": data, "path": path}:
+            return f"POST {path}: {data}"
+        case {"method": m, "path": p}:
+            return f"其他方法 {m} {p}"
+        case _:
+            return "无效请求"
+</code></pre>
+
+  <h3>守卫（Guard）与类匹配</h3>
+
+<pre><code class="language-python"># 守卫条件
+def classify(value: int) -> str:
+    match value:
+        case n if n < 0:
+            return "负数"
+        case n if n % 2 == 0:
+            return "正偶数"
+        case _:
+            return "正奇数"
+
+# 类模式匹配
+from dataclasses import dataclass
+
+@dataclass
+class Command:
+    name: str
+    args: list[str]
+
+@dataclass
+class Query:
+    sql: str
+    params: tuple
+
+def execute(obj) -> str:
+    match obj:
+        case Command(name="exit"):
+            return "退出程序"
+        case Command(name=cmd, args=[flag, *rest]):
+            return f"命令 {cmd} 参数: {flag} 更多: {rest}"
+        case Query(sql=s, params=p) if p:
+            return f"查询: {s} 参数: {p}"
+        case Query():
+            return f"无参数查询: {obj.sql}"
+        case _:
+            return "未知操作"
+
+# 嵌套模式
+def deep_match(data) -> str:
+    match data:
+        case {"user": {"name": str(name), "roles": ["admin", *rest]}}:
+            return f"管理员 {name}, 额外角色: {rest}"
+        case {"user": {"name": name, "age": int(age)}}:
+            return f"用户 {name} 年龄 {age}"
+        case _:
+            return "格式不匹配"
+</code></pre>
+
+  <h3>枚举匹配与常量</h3>
+
+<pre><code class="language-python">from enum import Enum
+
+class HttpStatus(Enum):
+    OK = 200
+    NOT_FOUND = 404
+    ERROR = 500
+
+def handle_status(status: HttpStatus) -> str:
+    match status:
+        case HttpStatus.OK:
+            return "成功"
+        case HttpStatus.NOT_FOUND:
+            return "未找到"
+        case HttpStatus.ERROR:
+            return "服务器错误"
+        case _:
+            return "未知状态"
+
+# 常量匹配（注意：Python 中变量名匹配总会捕获，需要使用.限定）
+RED = 1
+GREEN = 2
+BLUE = 3
+
+def color_name(color: int) -> str:
+    match color:
+        case 1:  # 字面量
+            return "红色"
+        case RED:  # 等等！这里 RED 会被视为捕获变量
+            return "绿色"
+        case _:
+            return "未知"
+# ⚠️ 上面的 RED 实际上是重新绑定了变量！
+# 正确方式：使用枚举或字面量
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    match 语句是 Python 3.10+ 的特性。3.12+ 对 match 性能有显著优化。模式匹配的核心优势在于可读性——用声明式方式替代复杂的 if/elif 链条，尤其适合 AST 处理、协议解析和状态机场景。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

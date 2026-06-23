@@ -2,7 +2,7 @@
 
 ## 文档集合
 
-当前共 **201 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件（common.css / common.js）。
+当前共 **213 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件（common.css / common.js）。
 
 ### 文件结构
 
@@ -17,6 +17,7 @@
 ├── rust-*.html           # 13 篇 Rust 语言深度解析
 ├── vision-*.html         # 15 篇 AI 视觉技术解析
 ├── go-*.html             # 12 篇 Go 语言深度解析
+├── python-*.html         # 12 篇 Python 深度解析
 └── windows-*.html        # 9 篇 Windows 平台技术解析
 ```
 
@@ -30,6 +31,7 @@
 | Windows | 9 | 平台开发 | Win32, MFC, ATL/WTL, COM, UWP, WinUI3, MAUI, WPF, WebView2 |
 | AI 视觉 | 15 | 计算机视觉 | OpenCV, YOLO, PyTorch, TensorFlow, ONNX |
 | Go 语言 | 12 | 系统编程 | goroutine、GMP 调度、GC、反射、net/http、Module、CGo、泛型 |
+| Python | 12 | 语言生态 | 异步、FastAPI、Pydantic、SQLAlchemy、测试、性能 |
 
 ### 已覆盖主题（Linux 内核）
 
@@ -283,6 +285,23 @@
 | 12 | rust-unsafe.html | unsafe Rust |
 | 13 | rust-web-frameworks.html | Web 框架（Axum/Actix/Rocket） |
 
+### 已覆盖主题（Python）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | python-basics.html | Python 基础 |
+| 2 | python-asyncio.html | Python 异步编程 |
+| 3 | python-concurrency.html | Python 并发编程 |
+| 4 | python-pydantic.html | Pydantic 数据验证 |
+| 5 | python-fastapi.html | FastAPI Web 框架 |
+| 6 | python-nicegui.html | NiceGUI 桌面与 Web GUI |
+| 7 | python-advanced.html | Python 高级特性 |
+| 8 | python-web-ecosystem.html | Python Web 框架对比 |
+| 9 | python-sqlalchemy.html | SQLAlchemy ORM |
+| 10 | python-testing.html | Python 测试 |
+| 11 | python-packaging.html | Python 包管理 |
+| 12 | python-performance.html | Python 性能优化 |
+
 ### 已覆盖主题（Go 语言）
 
 | # | 文件 | 主题 |
@@ -476,3 +495,4 @@ const ICON_MAP = {
 | Zephyr | 待扩展 |
 | AI 视觉 | ✅ 15 篇（OpenCV / YOLO / PyTorch / TensorFlow / ONNX） |
 | Go 语言 | ✅ 12 篇（基础/并发/调度/GC/内存/反射/net-http/CGo/模块/泛型/性能） |
+| Python | ✅ 12 篇（基础/异步/并发/Pydantic/FastAPI/NiceGUI/SQLAlchemy/测试/性能） |

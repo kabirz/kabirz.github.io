@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python 测试深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Python 测试深度解析</h1>
+  <p class="subtitle">pytest · fixture · parametrize · mock · coverage · 异步 · property-based testing</p>
+  <span class="version">Python 3.12+ · pytest 8.x · hypothesis 6.x</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#pytest-basics">pytest 基础</a></li>
+    <li><a href="#fixture">pytest fixture</a></li>
+    <li><a href="#parametrize">parametrize</a></li>
+    <li><a href="#mock">mock 与 monkeypatch</a></li>
+    <li><a href="#coverage">coverage</a></li>
+    <li><a href="#async">异步测试</a></li>
+    <li><a href="#hypothesis">属性测试</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="pytest-basics" class="toc-link">
+  <h2><span class="num">01</span> pytest 基础</h2>
+
+  <p>pytest 是 Python 最流行的测试框架。它使用简单的 <code>assert</code> 语句代替 <code>self.assertEqual()</code>，提供自动测试发现、丰富的插件生态和简洁的失败信息。与 unittest 相比，pytest 的代码量减少约 40%。</p>
+
+  <h3>基本断言</h3>
+  <p>pytest 使用 Python 原生的 <code>assert</code> 语句，但提供了增强的失败诊断信息。直接比较、异常检测、近似比较都使用同样的语法。</p>
+  <pre><code># test_example.py
+def test_basic():
+    assert 1 + 1 == 2
+    assert "hello".upper() == "HELLO"
+    assert [1, 2, 3].count(2) == 1
+
+def test_collections():
+    fruits = {"apple", "banana", "cherry"}
+    assert "apple" in fruits
+    assert fruits == {"banana", "cherry", "apple"}
+
+def test_approximate():
+    assert 0.1 + 0.2 == pytest.approx(0.3, rel=1e-9)
+
+def test_exception():
+    with pytest.raises(ValueError, match="无效值"):
+        int("not_a_number")</code></pre>
+
+  <h3>运行测试</h3>
+  <p>pytest 按命名约定自动发现测试文件（<code>test_*.py</code> 或 <code>*_test.py</code>）和测试函数（<code>test_*</code>）。通过命令行参数可以精确控制执行范围。</p>
+  <pre><code># 运行所有测试
+# pytest
+
+# 运行指定文件
+# pytest tests/test_user.py
+
+# 运行指定函数
+# pytest tests/test_user.py::test_create_user
+
+# 运行匹配名称的测试
+# pytest -k "user and not slow"
+
+# 显示详细输出
+# pytest -v
+
+# 显示 print 输出
+# pytest -s
+
+# 停在第一个失败
+# pytest -x
+
+# 最大失败数
+# pytest --maxfail=5
+
+# 失败时进入 PDB
+# pytest --pdb</code></pre>
+
+  <h3>conftest.py</h3>
+  <p><code>conftest.py</code> 是 pytest 的共享配置中心。它自动对同级和子目录中的测试文件生效。可以定义 fixture、钩子函数、命令行选项和插件加载。</p>
+  <pre><code># conftest.py
+import pytest
+from myapp import create_app, db
+
+@pytest.fixture(scope="session")
+def app():
+    app = create_app("testing")
+    return app
+
+@pytest.fixture(scope="function")
+def client(app):
+    with app.test_client() as client:
+        yield client
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "slow: 标记耗时测试"
+    )
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        if "integration" in item.nodeid:
+            item.add_marker(pytest.mark.slow)</code></pre>
+
+  <h3>测试标记</h3>
+  <pre><code>import pytest
+
+@pytest.mark.slow
+def test_heavy_computation():
+    ...
+
+@pytest.mark.skip(reason="功能未实现")
+def test_future_feature():
+    ...
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 10),
+    reason="需要 Python 3.10+"
+)
+def test_new_feature():
+    ...
+
+@pytest.mark.xfail(strict=True, reason="已知问题 #123")
+def test_known_bug():
+    ...</code></pre>
+</section>
+
+<section id="fixture" class="toc-link">
+  <h2><span class="num">02</span> pytest fixture</h2>
+
+  <p>fixture 是 pytest 最强大的特性之一。它替代了 unittest 中的 <code>setUp</code> 和 <code>tearDown</code>，提供了模块化、可组合的测试资源管理方式。</p>
+
+  <h3>基本 fixture</h3>
+  <pre><code>import pytest
+
+@pytest.fixture
+def sample_data():
+    return {"name": "Alice", "age": 30, "items": [1, 2, 3]}
+
+def test_with_fixture(sample_data):
+    assert sample_data["name"] == "Alice"
+    assert len(sample_data["items"]) == 3
+
+@pytest.fixture
+def db_connection():
+    conn = create_test_db()
+    yield conn
+    conn.close()
+
+@pytest.fixture
+def user(db_connection):
+    user = db_connection.create_user("test_user")
+    yield user
+    db_connection.delete_user(user.id)
+
+def test_user_flow(user):
+    assert user.is_active == True</code></pre>
+
+  <h3>scope 控制</h3>
+  <p>fixture 的作用域控制其生命周期。选择合适的 scope 可以大幅提升测试执行速度。</p>
+  <pre><code>@pytest.fixture(scope="session")
+def app_config():
+    """整个测试会话只创建一次"""
+    return load_config("testing")
+
+@pytest.fixture(scope="module")
+def database(app_config):
+    """每个模块创建一次"""
+    db = create_database(app_config)
+    yield db
+    db.drop_all()
+
+@pytest.fixture(scope="class")
+def user_factory(database):
+    """每个测试类创建一次"""
+    return UserFactory(database)
+
+@pytest.fixture(scope="function")
+def session(database):
+    """每个测试函数创建一次（默认）"""
+    ssn = database.create_session()
+    yield ssn
+    ssn.rollback()
+    ssn.close()
+
+# session > module > class > function</code></pre>
+
+  <h3>autouse 与 yield fixture</h3>
+  <pre><code>@pytest.fixture(autouse=True)
+def setup_test_env():
+    os.environ["TESTING"] = "true"
+    yield
+    os.environ.pop("TESTING", None)
+
+@pytest.fixture
+def temp_dir():
+    import tempfile, shutil
+    path = tempfile.mkdtemp()
+    yield path
+    shutil.rmtree(path)
+
+def test_file_ops(temp_dir):
+    with open(f"{temp_dir}/test.txt", "w") as f:
+        f.write("hello")
+    assert os.path.exists(f"{temp_dir}/test.txt")</code></pre>
+
+  <h3>request 参数</h3>
+  <pre><code>@pytest.fixture
+def user_for_test(request):
+    if "admin" in request.keywords:
+        return User(role="admin")
+    return User(role="user")
+
+@pytest.mark.admin
+def test_admin_access(user_for_test):
+    assert user_for_test.role == "admin"
+
+@pytest.fixture(params=["mysql", "postgresql", "sqlite"])
+def database_type(request):
+    return request.param
+
+def test_connection(database_type):
+    conn = connect_to(database_type)
+    assert conn.is_connected</code></pre>
+
+  <h3>fixture 依赖与缓存</h3>
+  <pre><code>@pytest.fixture(scope="session")
+def api_client():
+    return APIClient(base_url="https://api.test")
+
+@pytest.fixture
+def auth_token(api_client):
+    response = api_client.post("/auth/login", json={
+        "username": "test", "password": "test123"
+    })
+    return response.json()["token"]
+
+@pytest.fixture
+def authenticated_client(api_client, auth_token):
+    api_client.headers["Authorization"] = f"Bearer {auth_token}"
+    return api_client
+
+def test_get_profile(authenticated_client):
+    response = authenticated_client.get("/profile")
+    assert response.status_code == 200</code></pre>
+</section>
+
+<section id="parametrize" class="toc-link">
+  <h2><span class="num">03</span> parametrize</h2>
+
+  <p><code>@pytest.mark.parametrize</code> 是数据驱动测试的核心工具。它允许用多个输入参数运行同一个测试函数，大幅减少重复代码并提高覆盖率。</p>
+
+  <h3>基本参数化</h3>
+  <pre><code>import pytest
+
+@pytest.mark.parametrize("input_val, expected", [
+    (1, 2), (2, 4), (3, 6), (10, 20), (0, 0), (-1, -2),
+])
+def test_double(input_val, expected):
+    assert input_val * 2 == expected
+
+@pytest.mark.parametrize("size", [1, 10, 100, 1000])
+def test_buffer_size(size):
+    buffer = create_buffer(size)
+    assert len(buffer) == size</code></pre>
+
+  <h3>笛卡尔积</h3>
+  <p>多个 <code>parametrize</code> 装饰器叠加会产生笛卡尔积组合。</p>
+  <pre><code>@pytest.mark.parametrize("protocol", ["http", "https"])
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT"])
+@pytest.mark.parametrize("endpoint", ["/users", "/items"])
+def test_api_endpoints(protocol, method, endpoint):
+    url = f"{protocol}://api.test{endpoint}"
+    response = make_request(method, url)
+    assert response.status_code in (200, 201, 204)
+
+# 等效于 2 * 3 * 2 = 12 个测试用例</code></pre>
+
+  <h3>自定义 ID</h3>
+  <pre><code>@pytest.mark.parametrize("value, expected", [
+    pytest.param(1, 1, id="positive"),
+    pytest.param(0, 0, id="zero"),
+    pytest.param(-1, -1, id="negative"),
+    pytest.param(float("inf"), float("inf"), id="infinity"),
+])
+def test_identity(value, expected):
+    assert value == expected
+
+@pytest.mark.parametrize(
+    "email",
+    ["user@example.com", "user+tag@example.com",
+     '"user"@example.com', "user@sub.example.com"],
+    ids=["basic", "plus_tag", "quoted", "subdomain"]
+)
+def test_valid_emails(email):
+    assert validate_email(email) == True</code></pre>
+
+  <h3>参数化与 fixture 组合</h3>
+  <pre><code>@pytest.fixture
+def db_connection(request):
+    db_type = request.param
+    conn = create_db(db_type)
+    yield conn
+    conn.close()
+
+@pytest.mark.parametrize("db_connection", [
+    "sqlite", "postgresql", "mysql"
+], indirect=True)
+def test_crud_operations(db_connection):
+    db_connection.insert({"name": "test"})
+    result = db_connection.find_one({"name": "test"})
+    assert result["name"] == "test"
+    db_connection.delete({"name": "test"})</code></pre>
+</section>
+
+<section id="mock" class="toc-link">
+  <h2><span class="num">04</span> mock 与 monkeypatch</h2>
+
+  <p>mock 和 monkeypatch 是 Python 中隔离外部依赖的两种方式。unittest.mock 提供了对象级别的模拟，monkeypatch 是 pytest 原生的补丁工具。</p>
+
+  <h3>unittest.mock.patch</h3>
+  <pre><code>from unittest.mock import patch, MagicMock
+import pytest
+from myapp import fetch_user_data
+
+@patch("myapp.requests.get")
+def test_fetch_user_data(mock_get):
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "id": 1, "name": "Alice", "email": "alice@example.com"
+    }
+    mock_response.status_code = 200
+    mock_get.return_value = mock_response
+
+    result = fetch_user_data(1)
+
+    mock_get.assert_called_once()
+    mock_get.assert_called_with(
+        "https://api.example.com/users/1", timeout=30
+    )
+    assert result["name"] == "Alice"</code></pre>
+
+  <h3>MagicMock 与 side_effect</h3>
+  <pre><code>from unittest.mock import MagicMock
+
+# side_effect 作为迭代器
+mock = MagicMock()
+mock.side_effect = [10, 20, 30]
+assert mock() == 10
+assert mock() == 20
+assert mock() == 30
+
+# side_effect 抛出异常
+mock = MagicMock()
+mock.side_effect = ValueError("无效数据")
+with pytest.raises(ValueError):
+    mock()
+
+# side_effect 作为函数
+def side_effect_func(*args, **kwargs):
+    if args[0] < 0:
+        raise ValueError("不能为负数")
+    return args[0] * 2
+
+mock = MagicMock()
+mock.side_effect = side_effect_func
+assert mock(5) == 10
+assert mock(3) == 6
+with pytest.raises(ValueError):
+    mock(-1)
+
+# 模拟数据库连接
+@patch("myapp.database.Connection")
+def test_db_operations(mock_conn_cls):
+    mock_conn = mock_conn_cls.return_value
+    mock_conn.execute.return_value.fetchall.return_value = [
+        {"id": 1, "name": "Alice"}
+    ]
+    result = get_all_users()
+    assert result[0]["name"] == "Alice"</code></pre>
+
+  <h3>monkeypatch</h3>
+  <p>monkeypatch 是 pytest 内置的补丁工具，可以安全地修改对象属性、环境变量和字典。它自动在测试结束后恢复修改。</p>
+  <pre><code>def test_env_var(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///test.db")
+    assert os.environ["DATABASE_URL"] == "sqlite:///test.db"
+
+def test_attribute(monkeypatch):
+    monkeypatch.setattr(User, "MAX_LOGIN_ATTEMPTS", 5)
+    assert User.MAX_LOGIN_ATTEMPTS == 5
+
+def test_dict(monkeypatch):
+    config = {"api_key": "12345", "debug": False}
+    monkeypatch.setitem(config, "debug", True)
+    assert config["debug"] == True
+
+def test_function(monkeypatch):
+    def mock_get_user(user_id):
+        return {"id": user_id, "name": "Mock"}
+    monkeypatch.setattr("myapp.get_user", mock_get_user)
+    result = get_user(1)
+    assert result["name"] == "Mock"</code></pre>
+
+  <h3>mock vs monkeypatch 对比</h3>
+  <table>
+    <tr><th>特性</th><th>unittest.mock</th><th>monkeypatch</th></tr>
+    <tr><td>对象级别</td><td>类/方法级别</td><td>属性/字典/env 级别</td></tr>
+    <tr><td>断言能力</td><td>丰富（assert_called_with 等）</td><td>无</td></tr>
+    <tr><td>清理机制</td><td>自动（patch 上下文）</td><td>自动（测试结束）</td></tr>
+    <tr><td>适用场景</td><td>外部 API、数据库、复杂对象</td><td>环境变量、配置、简单属性</td></tr>
+  </table>
+</section>
+
+<section id="coverage" class="toc-link">
+  <h2><span class="num">05</span> coverage 覆盖率</h2>
+
+  <p>覆盖率是衡量测试质量的量化指标。pytest-cov 将 coverage.py 与 pytest 深度集成，可以生成详细的覆盖率报告。</p>
+
+  <h3>pytest-cov 基础</h3>
+  <pre><code># 安装
+# pip install pytest-cov
+
+# 运行并显示概览
+# pytest --cov=myapp
+
+# 生成 HTML 报告
+# pytest --cov=myapp --cov-report=html
+
+# 指定分支覆盖率
+# pytest --cov=myapp --cov-branch
+
+# 设定覆盖率阈值（低于则失败）
+# pytest --cov=myapp --cov-fail-under=80</code></pre>
+
+  <h3>配置文件</h3>
+  <pre><code># pytest.ini
+[pytest]
+addopts = --cov=myapp --cov-report=term-missing --cov-report=html
+testpaths = tests
+
+# .coveragerc
+[run]
+source = myapp
+omit = */migrations/*
+       */tests/*
+       */setup.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise NotImplementedError
+    if __name__ == .__main__.:
+
+fail_under = 80</code></pre>
+
+  <h3>分支覆盖率</h3>
+  <pre><code>def process_user(user):
+    if user.is_active:
+        if user.role == "admin":
+            return "管理员已激活"
+        return "用户已激活"
+    else:
+        return "用户未激活"
+
+# 行覆盖 vs 分支覆盖
+# 如果只测试了 is_active=True + role="admin" 的情况
+# 行覆盖率可能是 100%，但分支覆盖率只有 50%</code></pre>
+
+  <h3>增量覆盖</h3>
+  <pre><code># 使用 diff-cover 工具
+# pip install diff-cover
+
+# 比较当前分支和 main 分支的覆盖率变化
+# diff-cover coverage.xml --compare-branch=main
+
+# 配置 CI/CD 中的增量覆盖
+# pytest --cov=myapp --cov-report=xml:coverage.xml
+# diff-cover coverage.xml --fail-under=90</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>覆盖率是手段，不是目的。追求 100% 覆盖率可能导致测试变成"为覆盖而覆盖"。聚焦核心逻辑、边界条件和异常路径的覆盖率，比盲目追求数字更有意义。</div>
+</section>
+
+<section id="async" class="toc-link">
+  <h2><span class="num">06</span> 异步测试</h2>
+
+  <p>pytest 通过插件支持异步代码测试。pytest-asyncio 是最常用的异步测试插件，允许使用 <code>async def</code> 定义测试函数和 fixture。</p>
+
+  <h3>pytest-asyncio 基础</h3>
+  <pre><code># 安装
+# pip install pytest-asyncio
+
+import pytest
+
+@pytest.mark.asyncio
+async def test_async_function():
+    result = await fetch_data()
+    assert result is not None
+
+@pytest.mark.asyncio
+async def test_async_with_timeout():
+    with pytest.raises(asyncio.TimeoutError):
+        async with asyncio.timeout(1):
+            await slow_operation(10)
+
+# 配置 pytest-asyncio
+# pytest.ini
+# [pytest]
+# asyncio_mode = auto  # 自动识别 async test 函数</code></pre>
+
+  <h3>异步 fixture</h3>
+  <pre><code>import pytest_asyncio
+
+@pytest_asyncio.fixture
+async def async_db():
+    db = await create_async_database()
+    yield db
+    await db.close()
+
+@pytest_asyncio.fixture
+async def http_client():
+    async with aiohttp.ClientSession() as session:
+        yield session
+
+@pytest.mark.asyncio
+async def test_create_user(async_db, http_client):
+    user_data = {"name": "Alice", "email": "alice@test.com"}
+    user_id = await async_db.create_user(user_data)
+    response = await http_client.get(f"/users/{user_id}")
+    assert response.status == 200
+    data = await response.json()
+    assert data["name"] == "Alice"</code></pre>
+
+  <h3>异步 HTTP 测试</h3>
+  <pre><code># 使用 httpx 的 AsyncClient 进行 HTTP 测试
+import httpx
+import pytest
+
+@pytest.mark.asyncio
+async def test_api_with_httpx():
+    async with httpx.AsyncClient(
+        base_url="http://testserver",
+        app=app  # FastAPI/Starlette 应用
+    ) as client:
+        response = await client.post("/items", json={
+            "name": "测试商品", "price": 99.9
+        })
+        assert response.status_code == 201
+        data = response.json()
+        assert data["name"] == "测试商品"
+
+# FastAPI 自带的 TestClient 用于同步测试
+# httpx AsyncClient 用于完整的异步测试</code></pre>
+</section>
+
+<section id="hypothesis" class="toc-link">
+  <h2><span class="num">07</span> 属性测试</h2>
+
+  <p>属性测试（Property-Based Testing）与传统基于例子的测试不同。它不测试特定输入，而是描述程序应满足的通用属性（不变量），然后让框架自动生成大量测试用例。</p>
+
+  <h3>hypothesis 基础</h3>
+  <pre><code>from hypothesis import given, strategies as st
+
+@given(st.lists(st.integers()))
+def test_reverse_twice(lst):
+    assert list(reversed(list(reversed(lst)))) == lst
+
+@given(st.text())
+def test_strip_length(s):
+    stripped = s.strip()
+    assert len(stripped) <= len(s)
+
+@given(st.lists(st.floats(allow_nan=False)))
+def test_sort_preserves_length(lst):
+    sorted_lst = sorted(lst)
+    assert len(sorted_lst) == len(lst)
+    assert all(x in sorted_lst for x in lst)</code></pre>
+
+  <h3>策略（Strategy）</h3>
+  <pre><code>from hypothesis import given, strategies as st
+import string
+
+@given(st.integers(min_value=0, max_value=100))
+def test_positive_numbers(n):
+    assert n >= 0
+
+@given(st.text(alphabet=string.ascii_letters, min_size=1, max_size=10))
+def test_username(username):
+    assert is_valid_username(username)
+
+user_strategy = st.fixed_dictionaries({
+    "name": st.text(min_size=1, max_size=50),
+    "age": st.integers(min_value=0, max_value=150),
+    "email": st.emails(),
+    "role": st.sampled_from(["admin", "user", "guest"]),
+})
+
+@given(user_strategy)
+def test_user_validation(user):
+    assert validate_user(user) == True
+
+@given(st.dates(), st.booleans())
+def test_date_format(date, include_time):
+    result = format_date(date, include_time)
+    assert len(result) > 0</code></pre>
+
+  <h3>收缩（Shrinking）</h3>
+  <p>hypothesis 最强大的特性之一——当测试失败时，它会自动尝试找到最小的失败输入。这大幅简化了调试。</p>
+  <pre><code>from hypothesis import given, strategies as st, assume
+
+def buggy_sort(lst):
+    """有 bug 的排序函数"""
+    if len(lst) > 5:
+        return lst
+    return sorted(lst)
+
+@given(st.lists(st.integers()))
+def test_sorting(lst):
+    result = buggy_sort(lst)
+    assert result == sorted(lst)
+    # 失败时自动收缩到最小输入:
+    # Falsifying example: test_sorting(lst=[6, 1, 2, 3, 4, 5])
+
+@given(st.lists(st.integers()))
+def test_median(lst):
+    assume(len(lst) > 0)
+    assert median(lst) <= max(lst)</code></pre>
+
+  <h3>状态测试</h3>
+  <p>状态测试（Stateful Testing）用于测试有状态的对象。hypothesis 的 <code>RuleBasedStateMachine</code> 允许定义一系列操作规则，自动探索对象可能的状态空间。</p>
+  <pre><code>from hypothesis.stateful import (
+    RuleBasedStateMachine, rule, precondition
+)
+
+class Counter:
+    def __init__(self):
+        self.value = 0
+
+    def increment(self):
+        self.value += 1
+
+    def decrement(self):
+        self.value -= 1
+
+class CounterTest(RuleBasedStateMachine):
+    def __init__(self):
+        super().__init__()
+        self.counter = Counter()
+
+    @rule()
+    def increment(self):
+        self.counter.increment()
+
+    @rule()
+    def decrement(self):
+        self.counter.decrement()
+
+    @rule()
+    def check_invariant(self):
+        assert self.counter.value >= -10
+
+# TestCounter = CounterTest.TestCase</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>属性测试不会替代传统的例子测试，而是补充。对于数学计算、编解码、输入验证、状态机等场景，属性测试能发现传统测试遗漏的边界条件。建议在新项目中至少为 10-20% 的测试用例使用 hypothesis。</div>
+</section>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

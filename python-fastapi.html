@@ -1,0 +1,1642 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FastAPI Web 框架深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>🐍 FastAPI Web 框架深度解析</h1>
+  <p class="subtitle">Starlette + Pydantic · 自动 OpenAPI · 依赖注入 · WebSocket · 安全认证 · 部署</p>
+  <span class="version">FastAPI 0.111+ · Python 3.10+</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#sec1">FastAPI 概述</a></li>
+    <li><a href="#sec2">路由设计</a></li>
+    <li><a href="#sec3">依赖注入</a></li>
+    <li><a href="#sec4">Pydantic 集成</a></li>
+    <li><a href="#sec5">中间件</a></li>
+    <li><a href="#sec6">WebSocket</a></li>
+    <li><a href="#sec7">安全与认证</a></li>
+    <li><a href="#sec8">OpenAPI 定制</a></li>
+    <li><a href="#sec9">后台任务</a></li>
+    <li><a href="#sec10">部署</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="sec1" class="toc-link">
+  <h2><span class="num">01</span> FastAPI 概述</h2>
+
+  <p>FastAPI 是一个基于 Python 类型提示的现代 Web 框架，构建于 Starlette（Web 部分）和 Pydantic（数据部分）之上。</p>
+
+  <h3>核心架构</h3>
+
+<pre><code class="language-python"># FastAPI 的层次架构
+"""
+┌─────────────────────────────────┐
+│         FastAPI 应用            │
+│  - 路由注册                      │
+│  - 依赖注入容器                  │
+│  - OpenAPI 自动生成              │
+├─────────────────────────────────┤
+│         Starlette               │
+│  - ASGI 服务器接口               │
+│  - 请求/响应处理                 │
+│  - WebSocket 支持               │
+│  - 中间件系统                    │
+│  - 后台任务                      │
+├─────────────────────────────────┤
+│         Pydantic V2             │
+│  - 数据模型定义                  │
+│  - 请求体验证                   │
+│  - 响应模型序列化               │
+│  - JSON Schema 生成             │
+├─────────────────────────────────┤
+│     ASGI Server (Uvicorn)       │
+│  - 异步 HTTP 服务器              │
+│  - 支持 HTTP/1.1 + WebSocket    │
+└─────────────────────────────────┘
+"""
+
+from fastapi import FastAPI
+
+# 创建应用实例
+app = FastAPI(
+    title="My API",
+    description="FastAPI 示例 API",
+    version="1.0.0",
+    docs_url="/docs",        # Swagger UI
+    redoc_url="/redoc",      # ReDoc
+    openapi_url="/openapi.json",
+)
+
+@app.get("/")
+async def root():
+    return {"message": "Hello FastAPI"}
+
+# 启动命令:
+# uvicorn main:app --reload --port 8000
+</code></pre>
+
+  <h3>自动 OpenAPI 生成</h3>
+
+<pre><code class="language-python"># FastAPI 自动从以下信息生成 OpenAPI 规范：
+# 1. 路由路径和 HTTP 方法
+# 2. 函数参数的类型注解
+# 3. Pydantic 模型的字段定义
+# 4. docstring 和描述
+# 5. 响应模型
+# 6. 安全方案
+
+# 生成的 OpenAPI 包含：
+# - /docs (Swagger UI) — 交互式文档
+# - /redoc (ReDoc) — 替代文档
+# - /openapi.json — 原始 JSON Schema
+
+# 自定义 OpenAPI 配置
+app = FastAPI(
+    openapi_tags=[
+        {"name": "users", "description": "用户管理"},
+        {"name": "items", "description": "商品管理"},
+    ],
+    servers=[
+        {"url": "https://api.example.com", "description": "生产环境"},
+        {"url": "http://localhost:8000", "description": "本地开发"},
+    ],
+    contact={
+        "name": "API 支持",
+        "email": "support@example.com",
+    },
+    license_info={
+        "name": "MIT",
+        "identifier": "MIT",
+    },
+)
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    FastAPI 在 0.111+ 版本开始支持 OpenAPI 3.1（JSON Schema 2020-12），对 Pydantic V2 有更好的支持。<code>docs_url=None</code> 可以禁用文档页面。
+  </div>
+</section>
+
+<section id="sec2" class="toc-link">
+  <h2><span class="num">02</span> 路由设计</h2>
+
+  <h3>HTTP 方法装饰器</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Path, Query, Body
+from typing import Annotated
+
+app = FastAPI()
+
+# GET — 查询资源
+@app.get("/items/{item_id}")
+async def get_item(item_id: int):
+    return {"item_id": item_id}
+
+# POST — 创建资源
+@app.post("/items")
+async def create_item(item: Item):  # 请求体自动解析
+    return item
+
+# PUT — 全量更新
+@app.put("/items/{item_id}")
+async def update_item(item_id: int, item: Item):
+    return {"item_id": item_id, **item.model_dump()}
+
+# PATCH — 部分更新
+@app.patch("/items/{item_id}")
+async def patch_item(item_id: int, item: dict):
+    # 部分更新
+    return {"item_id": item_id, "updated": list(item.keys())}
+
+# DELETE — 删除资源
+@app.delete("/items/{item_id}")
+async def delete_item(item_id: int):
+    return {"message": f"Item {item_id} deleted"}
+
+# HEAD / OPTIONS / TRACE
+@app.head("/items/{item_id}")
+async def head_item(item_id: int):
+    # 不返回响应体
+    ...
+
+# 注册路径操作的其他参数
+@app.get(
+    "/items",
+    response_model=list[Item],
+    status_code=200,
+    tags=["items"],
+    summary="获取所有商品",
+    description="返回分页的商品列表",
+    response_description="成功返回商品列表",
+    deprecated=False,
+    operation_id="listItems",
+)
+async def list_items(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+):
+    return get_items(skip=skip, limit=limit)
+</code></pre>
+
+  <h3>路径参数与查询参数</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Path, Query
+from typing import Annotated
+
+app = FastAPI()
+
+# 路径参数 — 使用类型注解自动解析
+@app.get("/users/{user_id}")
+async def get_user(
+    user_id: int = Path(..., title="用户 ID", ge=1, le=999999),
+    # ... 表示必填
+):
+    return {"user_id": user_id}
+
+# 路径参数验证
+@app.get("/products/{category}/{product_id}")
+async def get_product(
+    category: str = Path(..., min_length=3, max_length=50, pattern=r"^[a-z-]+$"),
+    product_id: int = Path(..., ge=1),
+):
+    return {"category": category, "product_id": product_id}
+
+# 查询参数
+@app.get("/search")
+async def search(
+    q: Annotated[
+        str | None,
+        Query(
+            title="搜索关键词",
+            description="按关键词搜索商品",
+            min_length=1,
+            max_length=100,
+            deprecated=False,
+            alias="keyword",  # URL 中使用 ?keyword=xxx
+            example="手机",
+        )
+    ] = None,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    sort: str = Query("name", pattern=r"^(name|price|date)$"),
+    order: str = Query("asc", pattern=r"^(asc|desc)$"),
+):
+    return {"q": q, "page": page, "size": size}
+
+# 必填查询参数
+@app.get("/required-query")
+async def required_query(token: str = Query(...)):  # ... 表示必填
+    return {"token": token}
+</code></pre>
+
+  <h3>请求体与参数混合</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Header, Cookie, Form, File, UploadFile
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class Order(BaseModel):
+    product_id: int
+    quantity: int = 1
+    coupon: str | None = None
+
+# 混合路径参数 + 查询参数 + 请求体
+@app.post("/orders/{user_id}")
+async def create_order(
+    user_id: int,                         # 路径参数
+    order: Order,                         # JSON 请求体
+    promo: bool = False,                  # 查询参数
+    x_request_id: str = Header(...),      # 请求头
+    session_id: str | None = Cookie(None),# Cookie
+):
+    return {
+        "user_id": user_id,
+        "order": order,
+        "promo": promo,
+        "request_id": x_request_id,
+    }
+
+# 表单数据
+@app.post("/login")
+async def login(
+    username: str = Form(...),
+    password: str = Form(...),
+    remember: bool = Form(False),
+):
+    return {"username": username}
+
+# 文件上传
+@app.post("/upload")
+async def upload(
+    file: UploadFile = File(...),
+    description: str = Form(""),
+):
+    contents = await file.read()
+    return {
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "size": len(contents),
+        "description": description,
+    }
+
+# 多文件上传
+@app.post("/upload-multiple")
+async def upload_multiple(
+    files: list[UploadFile] = File(...),
+):
+    return [f.filename for f in files]
+</code></pre>
+</section>
+
+<section id="sec3" class="toc-link">
+  <h2><span class="num">03</span> 依赖注入</h2>
+
+  <p>FastAPI 的依赖注入系统通过 <code>Depends</code> 函数实现，支持函数、类、生成器等多种形式。</p>
+
+  <h3>基础依赖注入</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Depends, HTTPException, status
+from typing import Annotated
+
+app = FastAPI()
+
+# 函数作为依赖
+async def common_params(
+    skip: int = 0,
+    limit: int = 100,
+):
+    return {"skip": skip, "limit": limit}
+
+# 在路径操作中使用 Depends
+@app.get("/items")
+async def list_items(params: Annotated[dict, Depends(common_params)]):
+    return params
+
+@app.get("/users")
+async def list_users(params: Annotated[dict, Depends(common_params)]):
+    return params
+
+# 更优雅的方式：直接解包
+@app.get("/products")
+async def list_products(
+    skip: int = Depends(common_params),
+    # 实际上 Depends 返回整个字典，但我们可以只取需要的字段
+):
+    pass
+
+# 推荐的方式：类型安全的依赖
+class Pagination:
+    def __init__(self, skip: int = 0, limit: int = 100):
+        self.skip = skip
+        self.limit = limit
+
+@app.get("/paginated")
+async def paginated(p: Annotated[Pagination, Depends(Pagination)]):
+    return {"skip": p.skip, "limit": p.limit}
+</code></pre>
+
+  <h3>可调用类与全局依赖</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Depends, Request, HTTPException
+from typing import Annotated
+
+# 可调用类依赖
+class DatabaseSession:
+    def __init__(self):
+        self.connected = False
+
+    async def __call__(self):
+        if not self.connected:
+            await self.connect()
+        return self
+
+    async def connect(self):
+        self.connected = True
+        return self
+
+    async def query(self, sql: str):
+        return f"result: {sql}"
+
+# 全局单例
+db_session = DatabaseSession()
+
+@app.get("/db-query")
+async def query_db(
+    db: Annotated[DatabaseSession, Depends(db_session)]
+):
+    return await db.query("SELECT 1")
+
+# 生成器依赖（用于资源管理等）
+from contextlib import asynccontextmanager
+
+async def get_db_session():
+    """提供数据库会话并自动关闭"""
+    db = DatabaseSession()
+    await db.connect()
+    try:
+        yield db
+    finally:
+        db.connected = False
+
+@app.get("/safe-query")
+async def safe_query(
+    db: Annotated[DatabaseSession, Depends(get_db_session)]
+):
+    return await db.query("SELECT 2")
+
+# 全局依赖
+common_params_dep = Depends(common_params)
+app = FastAPI(dependencies=[common_params_dep])
+# 所有路由都会注入 common_params
+</code></pre>
+
+  <h3>依赖嵌套与优先级</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Depends, HTTPException, status
+from typing import Annotated
+
+app = FastAPI()
+
+# 多层嵌套依赖
+async def verify_token(token: str = Header(...)):
+    if token != "valid-token":
+        raise HTTPException(status_code=401)
+    return {"user_id": 1, "role": "admin"}
+
+async def verify_admin(
+    user: Annotated[dict, Depends(verify_token)]
+):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403)
+    return user
+
+async def get_db():
+    return {"connection": "ok"}
+
+# 最终路由：依赖层层嵌套
+@app.get("/admin/users")
+async def admin_list_users(
+    admin: Annotated[dict, Depends(verify_admin)],
+    db: Annotated[dict, Depends(get_db)],
+):
+    # 先 verify_token → 再 verify_admin → 再 get_db
+    # 依赖按深度优先遍历执行
+    return {"admin": admin, "db": db}
+
+# 依赖缓存：同一请求中相同依赖只执行一次
+async def get_current_user(
+    token: str = Header(...),
+):
+    return {"user_id": 1}
+
+async def get_user_cart(
+    user: Annotated[dict, Depends(get_current_user)],
+):
+    return {"items": [], "user_id": user["user_id"]}
+
+@app.get("/cart")
+async def read_cart(
+    user: Annotated[dict, Depends(get_current_user)],  # 复用结果
+    cart: Annotated[dict, Depends(get_user_cart)],
+):
+    # get_current_user 只执行一次
+    return {"user": user, "cart": cart}
+</code></pre>
+
+  <h3>高级依赖模式</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Depends
+from typing import Annotated
+
+app = FastAPI()
+
+# Conditional dependencies
+class UserRole:
+    def __init__(self, min_role: str):
+        self.min_role = min_role
+
+    async def __call__(self, user: dict = Depends(get_current_user)):
+        roles = {"admin": 3, "editor": 2, "viewer": 1}
+        if roles.get(user.get("role", ""), 0) < roles.get(self.min_role, 0):
+            raise HTTPException(status_code=403)
+        return user
+
+require_admin = Depends(UserRole("admin"))
+require_editor = Depends(UserRole("editor"))
+
+@app.get("/admin-panel")
+async def admin_panel(user: Annotated[dict, require_admin]):
+    return {"panel": "admin"}
+
+@app.get("/editor-panel")
+async def editor_panel(user: Annotated[dict, require_editor]):
+    return {"panel": "editor"}
+
+# 异步与同步依赖混合
+def sync_dep():
+    return "sync data"
+
+async def async_dep(data: str = Depends(sync_dep)):
+    return f"async {data}"
+
+@app.get("/mixed")
+async def mixed(data: str = Depends(async_dep)):
+    return {"data": data}
+</code></pre>
+</section>
+
+<section id="sec4" class="toc-link">
+  <h2><span class="num">04</span> Pydantic 集成</h2>
+
+  <h3>请求模型与响应模型</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+from typing import Annotated
+from datetime import datetime
+
+app = FastAPI()
+
+# 请求模型
+class ItemCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    description: str | None = Field(None, max_length=1000)
+    price: float = Field(..., gt=0, le=100000)
+    tax: float | None = Field(None, ge=0, le=1)
+    tags: list[str] = Field(default_factory=list, max_length=10)
+    category_id: int = Field(..., ge=1)
+
+# 响应模型
+class ItemResponse(BaseModel):
+    id: int
+    name: str
+    description: str | None
+    price: float
+    tax: float | None
+    tags: list[str]
+    created_at: datetime
+    category_name: str
+
+# 使用 response_model 控制输出
+@app.post("/items", response_model=ItemResponse, status_code=201)
+async def create_item(item: ItemCreate):
+    # 内部逻辑...
+    new_item = {
+        "id": 1,
+        **item.model_dump(),
+        "created_at": datetime.now(),
+        "category_name": "电子产品",
+    }
+    return new_item
+
+# 响应模型排除/包含
+@app.get(
+    "/items/{item_id}",
+    response_model=ItemResponse,
+    response_model_exclude={"tax", "internal_note"},  # 排除敏感字段
+    response_model_exclude_unset=True,   # 排除未设置的字段
+    response_model_exclude_none=True,    # 排除 None 值
+)
+async def get_item(item_id: int):
+    item = get_item_from_db(item_id)
+    return item
+
+# 多个响应模型 — Union
+from typing import Union
+
+class ErrorResponse(BaseModel):
+    error: str
+    code: int
+
+@app.get(
+    "/items-or-error/{item_id}",
+    response_model=Union[ItemResponse, ErrorResponse],
+    responses={
+        404: {"model": ErrorResponse, "description": "商品未找到"},
+    }
+)
+async def get_item_or_error(item_id: int):
+    item = get_item_from_db(item_id)
+    if item is None:
+        return ErrorResponse(error="not found", code=404)
+    return item
+</code></pre>
+
+  <h3>嵌套模型与验证</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI
+from pydantic import BaseModel, Field
+from typing import Annotated
+
+app = FastAPI()
+
+# 嵌套模型
+class Address(BaseModel):
+    street: str = Field(..., min_length=1, max_length=200)
+    city: str = Field(..., min_length=1, max_length=100)
+    state: str = Field(..., min_length=2, max_length=50)
+    zip_code: str = Field(..., pattern=r"^\d{5}(-\d{4})?$")
+    country: str = Field(default="中国")
+
+class OrderItem(BaseModel):
+    product_id: int
+    quantity: int = Field(..., ge=1, le=100)
+    unit_price: float = Field(..., gt=0)
+
+class OrderCreate(BaseModel):
+    user_id: int
+    items: list[OrderItem] = Field(..., min_length=1)
+    shipping_address: Address
+    coupon_code: str | None = None
+    notes: str = Field("", max_length=500)
+
+    @field_validator("items")
+    @classmethod
+    def validate_items(cls, v: list[OrderItem]) -> list[OrderItem]:
+        if len(v) > 50:
+            raise ValueError("单次最多 50 件商品")
+        return v
+
+class OrderResponse(BaseModel):
+    order_id: int
+    user_id: int
+    items: list[OrderItem]
+    total: float
+    shipping_address: Address
+    status: str
+    created_at: datetime
+
+# 自定义验证
+@app.post("/orders", response_model=OrderResponse)
+async def create_order(order: OrderCreate):
+    # 自动获得完整的请求体验证
+    total = sum(item.unit_price * item.quantity for item in order.items)
+    return {
+        "order_id": 1,
+        **order.model_dump(),
+        "total": total,
+        "status": "pending",
+        "created_at": datetime.now(),
+    }
+</code></pre>
+
+  <h3>响应模型的智能处理</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Response
+from pydantic import BaseModel
+from typing import Any
+
+app = FastAPI()
+
+# response_model 自动过滤和转换
+class UserPublic(BaseModel):
+    id: int
+    name: str
+    email: str
+
+class UserPrivate(UserPublic):
+    hashed_password: str
+    ssn: str
+    internal_notes: str
+
+# FastAPI 只返回 UserPublic 中的字段
+@app.get("/users/{user_id}", response_model=UserPublic)
+async def get_user(user_id: int):
+    # 假设数据库返回完整数据
+    db_user = UserPrivate(
+        id=1, name="张三", email="zhang@example.com",
+        hashed_password="xxx", ssn="yyy", internal_notes="zzz"
+    )
+    # FastAPI 自动过滤：只返回 id, name, email
+    return db_user
+
+# 自定义响应头
+@app.get("/with-headers")
+async def with_headers(response: Response):
+    response.headers["X-Custom"] = "custom-value"
+    response.headers["X-Process-Time"] = "0.001"
+    return {"message": "ok"}
+
+# 响应状态码
+@app.post("/created", status_code=201)
+async def created():
+    return {"message": "created"}
+
+@app.delete("/no-content", status_code=204)
+async def no_content():
+    return None  # 响应体为空
+
+# 使用 response_class
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+
+@app.get("/html", response_class=HTMLResponse)
+async def get_html():
+    return "<h1>Hello</h1>"
+
+@app.get("/text", response_class=PlainTextResponse)
+async def get_text():
+    return "plain text"
+
+@app.get("/custom-json", response_class=JSONResponse)
+async def get_json():
+    return JSONResponse(content={"custom": True}, status_code=200)
+</code></pre>
+</section>
+
+<section id="sec5" class="toc-link">
+  <h2><span class="num">05</span> 中间件</h2>
+
+  <p>中间件在请求被路由处理之前和响应返回之后执行，适合横切关注点。</p>
+
+  <h3>基础中间件</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Request
+from starlette.middleware.base import BaseHTTPMiddleware
+import time
+
+app = FastAPI()
+
+# 使用 @app.middleware 装饰器
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.perf_counter()
+
+    # 请求处理前
+    response = await call_next(request)  # 调用下一个中间件/路由
+
+    # 响应处理后
+    process_time = time.perf_counter() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    return response
+
+# 基于类的中间件
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # 请求进入
+        print(f"→ {request.method} {request.url.path}")
+
+        response = await call_next(request)
+
+        # 响应出去
+        print(f"← {response.status_code}")
+        return response
+
+app.add_middleware(LoggingMiddleware)
+</code></pre>
+
+  <h3>内置中间件</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+
+app = FastAPI()
+
+# CORS 跨域
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://example.com",
+        "https://admin.example.com",
+    ],
+    allow_origin_regex=r"https://.*\.example\.com$",
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["X-Process-Time"],
+    max_age=600,  # 预检请求缓存时间（秒）
+)
+
+# TrustedHost — 限制允许的 Host 头
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=[
+        "example.com",
+        "*.example.com",
+        "localhost",
+        "127.0.0.1",
+    ]
+)
+
+# GZip 压缩
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1000,  # 小于 1KB 不压缩
+    compresslevel=5,    # 1-9，9 最慢但压缩率最高
+)
+
+# HTTPS 重定向（生产环境）
+if not DEBUG:
+    app.add_middleware(HTTPSRedirectMiddleware)
+</code></pre>
+
+  <h3>自定义中间件模式</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Request, HTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
+import time
+import asyncio
+
+app = FastAPI()
+
+# 限流中间件
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, max_requests: int = 100, window: int = 60):
+        super().__init__(app)
+        self.max_requests = max_requests
+        self.window = window
+        self.requests: dict[str, list[float]] = {}
+
+    async def dispatch(self, request: Request, call_next):
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+
+        # 清理过期记录
+        self.requests[client_ip] = [
+            t for t in self.requests.get(client_ip, [])
+            if now - t < self.window
+        ]
+
+        # 检查是否超限
+        if len(self.requests[client_ip]) >= self.max_requests:
+            raise HTTPException(status_code=429, detail="请求过于频繁")
+
+        self.requests[client_ip].append(now)
+        response = await call_next(request)
+        return response
+
+app.add_middleware(RateLimitMiddleware, max_requests=60, window=60)
+
+# 请求体日志中间件（谨慎使用）
+class RequestLogMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # 读取请求体（不会消耗原始流）
+        body = await request.body()
+        print(f"Body: {body[:1024]}...")  # 只记录前 1KB
+        response = await call_next(request)
+        return response
+</code></pre>
+</section>
+
+<section id="sec6" class="toc-link">
+  <h2><span class="num">06</span> WebSocket</h2>
+
+  <h3>WebSocket 端点</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, WebSocket, WebSocketDisconnect, WebSocketException
+from typing import Annotated
+
+app = FastAPI()
+
+# 基础 WebSocket
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()  # 接受连接
+    try:
+        while True:
+            data = await websocket.receive_text()  # 接收文本
+            await websocket.send_text(f"Echo: {data}")  # 发送文本
+    except WebSocketDisconnect:
+        print("客户端断开连接")
+    except Exception as e:
+        print(f"错误: {e}")
+
+# 接收/发送多种类型
+@app.websocket("/ws-multi")
+async def websocket_multi(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            # 接收任意类型
+            data = await websocket.receive()
+
+            if "text" in data:
+                await websocket.send_text(f"Text: {data['text']}")
+            elif "bytes" in data:
+                await websocket.send_bytes(data["bytes"])  # 回传二进制
+            elif "json" in data:
+                await websocket.send_json({"echo": data["json"]})
+
+    except WebSocketDisconnect:
+        pass
+</code></pre>
+
+  <h3>连接管理与消息广播</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from typing import Any
+import asyncio
+import json
+
+app = FastAPI()
+
+# 连接管理器
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, list[WebSocket]] = {}
+        self.user_connections: dict[str, WebSocket] = {}
+
+    async def connect(self, websocket: WebSocket, room: str, user_id: str = None):
+        await websocket.accept()
+        if room not in self.active_connections:
+            self.active_connections[room] = []
+        self.active_connections[room].append(websocket)
+        if user_id:
+            self.user_connections[user_id] = websocket
+
+    def disconnect(self, websocket: WebSocket, room: str, user_id: str = None):
+        if room in self.active_connections:
+            if websocket in self.active_connections[room]:
+                self.active_connections[room].remove(websocket)
+        if user_id and user_id in self.user_connections:
+            del self.user_connections[user_id]
+
+    async def broadcast(self, room: str, message: Any):
+        """广播消息到房间的所有连接"""
+        if room not in self.active_connections:
+            return
+        dead_connections = []
+        for conn in self.active_connections[room]:
+            try:
+                if isinstance(message, str):
+                    await conn.send_text(message)
+                else:
+                    await conn.send_json(message)
+            except WebSocketDisconnect:
+                dead_connections.append(conn)
+
+        # 清理断开的连接
+        for conn in dead_connections:
+            self.active_connections[room].remove(conn)
+
+    async def send_to_user(self, user_id: str, message: Any):
+        """向特定用户发送消息"""
+        if user_id in self.user_connections:
+            ws = self.user_connections[user_id]
+            try:
+                if isinstance(message, str):
+                    await ws.send_text(message)
+                else:
+                    await ws.send_json(message)
+            except WebSocketDisconnect:
+                del self.user_connections[user_id]
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/chat/{room_id}/{user_id}")
+async def chat_websocket(websocket: WebSocket, room_id: str, user_id: str):
+    await manager.connect(websocket, room_id, user_id)
+    try:
+        # 通知房间有新用户
+        await manager.broadcast(
+            room_id,
+            {"type": "join", "user_id": user_id}
+        )
+
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+
+            # 处理不同类型的消息
+            if message.get("type") == "chat":
+                await manager.broadcast(room_id, {
+                    "type": "chat",
+                    "user_id": user_id,
+                    "content": message.get("content"),
+                })
+            elif message.get("type") == "typing":
+                await manager.broadcast(room_id, {
+                    "type": "typing",
+                    "user_id": user_id,
+                })
+            elif message.get("type") == "private":
+                await manager.send_to_user(
+                    message.get("target_user"),
+                    {"type": "private", "from": user_id, "content": message.get("content")}
+                )
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, room_id, user_id)
+        await manager.broadcast(
+            room_id,
+            {"type": "leave", "user_id": user_id}
+        )
+</code></pre>
+
+  <h3>WebSocket 依赖注入</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, WebSocket, Depends, WebSocketException, status
+from typing import Annotated
+
+app = FastAPI()
+
+# WebSocket 的依赖注入
+async def get_token_from_query(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return None
+
+    # 验证 token
+    user = await verify_token(token)
+    if not user:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return None
+    return user
+
+@app.websocket("/ws/secure")
+async def secure_websocket(
+    websocket: WebSocket,
+    user: Annotated[dict, Depends(get_token_from_query)]
+):
+    if user is None:
+        return  # 连接已在依赖中关闭
+
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text(f"Hello {user['name']}: {data}")
+    except WebSocketDisconnect:
+        pass
+</code></pre>
+</section>
+
+<section id="sec7" class="toc-link">
+  <h2><span class="num">07</span> 安全与认证</h2>
+
+  <h3>OAuth2 / JWT</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from typing import Annotated
+from pydantic import BaseModel
+import jwt
+from datetime import datetime, timedelta
+
+app = FastAPI()
+
+# 配置
+SECRET_KEY = "your-secret-key"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# OAuth2 方案
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# 模型
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+class TokenData(BaseModel):
+    username: str | None = None
+    role: str | None = None
+
+class User(BaseModel):
+    username: str
+    email: str | None = None
+    disabled: bool | None = None
+
+# JWT 工具函数
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def verify_token(token: str) -> TokenData:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        role = payload.get("role")
+        if username is None:
+            raise HTTPException(status_code=401)
+        return TokenData(username=username, role=role)
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401)
+
+# 登录端点
+@app.post("/token", response_model=Token)
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    # 验证用户
+    if form_data.username != "admin" or form_data.password != "secret":
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    access_token = create_access_token(
+        data={"sub": form_data.username, "role": "admin"},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    return Token(access_token=access_token)
+
+# 获取当前用户（依赖注入）
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    token_data = verify_token(token)
+    # 从数据库获取用户
+    user = User(
+        username=token_data.username,
+        email=f"{token_data.username}@example.com",
+    )
+    return user
+
+# 受保护的路由
+@app.get("/users/me")
+async def read_users_me(
+    current_user: Annotated[User, Depends(get_current_user)]
+):
+    return current_user
+</code></pre>
+
+  <h3>HTTPBearer / APIKey</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Depends, HTTPException, Security
+from fastapi.security import (
+    HTTPBearer, HTTPAuthorizationCredentials,
+    APIKeyHeader, APIKeyQuery, APIKeyCookie,
+)
+from typing import Annotated
+
+app = FastAPI()
+
+# HTTP Bearer Token
+bearer_scheme = HTTPBearer(auto_error=False)
+
+async def get_bearer_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(bearer_scheme)]
+):
+    if credentials is None:
+        raise HTTPException(status_code=401)
+    if credentials.credentials != "valid-bearer-token":
+        raise HTTPException(status_code=403)
+    return credentials.credentials
+
+@app.get("/bearer-protected")
+async def bearer_protected(
+    token: str = Depends(get_bearer_token)
+):
+    return {"token": token[:10] + "..."}
+
+# API Key 支持多种位置
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+api_key_query = APIKeyQuery(name="api_key", auto_error=False)
+api_key_cookie = APIKeyCookie(name="api_key", auto_error=False)
+
+async def get_api_key(
+    header_key: str | None = Security(api_key_header),
+    query_key: str | None = Security(api_key_query),
+    cookie_key: str | None = Security(api_key_cookie),
+):
+    api_key = header_key or query_key or cookie_key
+    if api_key is None:
+        raise HTTPException(status_code=401)
+    if api_key not in VALID_API_KEYS:
+        raise HTTPException(status_code=403)
+    return api_key
+
+@app.get("/api-key-protected")
+async def api_key_protected(
+    api_key: str = Depends(get_api_key)
+):
+    return {"message": "访问成功"}
+
+# 多安全方案组合
+from fastapi.security import OAuth2PasswordBearer
+
+oauth2 = OAuth2PasswordBearer(tokenUrl="/token", auto_error=False)
+
+async def flexible_auth(
+    bearer: str | None = Depends(oauth2),
+    api_key: str | None = Security(api_key_header),
+):
+    """同时支持 Bearer Token 和 API Key"""
+    if bearer:
+        return {"method": "bearer", "user": verify_token(bearer)}
+    if api_key:
+        return {"method": "api_key", "key": api_key}
+    raise HTTPException(status_code=401)
+
+@app.get("/flexible-auth")
+async def flexible_auth_endpoint(
+    auth: dict = Depends(flexible_auth)
+):
+    return auth
+</code></pre>
+</section>
+
+<section id="sec8" class="toc-link">
+  <h2><span class="num">08</span> OpenAPI 定制</h2>
+
+  <h3>Tags / Summary / Description</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, APIRouter
+from pydantic import BaseModel
+from typing import Any
+
+app = FastAPI(
+    title="Pet Store API",
+    description="""
+    **宠物商店 API** — 展示 OpenAPI 定制功能
+
+    ## 功能
+    * 宠物 CRUD
+    * 订单管理
+    * 用户认证
+
+    ## 认证方式
+    使用 Bearer Token 认证
+    """,
+    version="2.0.0",
+    openapi_tags=[
+        {
+            "name": "pets",
+            "description": "宠物管理操作",
+            "externalDocs": {
+                "description": "外部文档",
+                "url": "https://docs.example.com/pets",
+            }
+        },
+        {"name": "orders", "description": "订单管理"},
+        {"name": "users", "description": "用户管理"},
+    ]
+)
+
+# 为路由指定标签
+@app.get("/pets", tags=["pets"], summary="获取所有宠物")
+async def list_pets():
+    """返回宠物列表（将作为 OpenAPI 的 description）"""
+    return []
+
+@app.post("/pets", tags=["pets"], summary="创建新宠物",
+          description="创建新宠物并返回宠物信息")
+async def create_pet():
+    """这里的 docstring 也会被包含"""
+    return {}
+
+# 路由分组
+router = APIRouter(
+    prefix="/admin",
+    tags=["admin"],
+    responses={404: {"description": "Not found"}},
+)
+
+@router.get("/stats")
+async def admin_stats():
+    return {"stats": "admin data"}
+
+app.include_router(router)
+</code></pre>
+
+  <h3>响应描述与状态码</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, HTTPException, status
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class Item(BaseModel):
+    id: int
+    name: str
+    price: float
+
+class ErrorResponse(BaseModel):
+    error: str
+    code: int
+    detail: str | None = None
+
+# 详细的响应定义
+@app.get(
+    "/items/{item_id}",
+    response_model=Item,
+    responses={
+        200: {
+            "description": "成功返回商品",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "id": 1,
+                        "name": "手机",
+                        "price": 2999.0
+                    }
+                }
+            }
+        },
+        404: {
+            "model": ErrorResponse,
+            "description": "商品未找到",
+        },
+        422: {
+            "model": ErrorResponse,
+            "description": "参数验证失败",
+        },
+    }
+)
+async def get_item(item_id: int):
+    item = find_item(item_id)
+    if item is None:
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorResponse(error="not_found", code=404, detail=f"Item {item_id} 未找到").model_dump()
+        )
+    return item
+
+# 自定义状态码
+@app.post("/items", status_code=status.HTTP_201_CREATED)
+async def create_item(item: Item):
+    return item
+
+# 多类型响应
+from fastapi.responses import ORJSONResponse
+
+@app.get("/items-json", response_class=ORJSONResponse)
+async def get_items_json():
+    # 使用 orjson（更快的 JSON 序列化）
+    return [{"id": 1, "name": "手机"}]
+</code></pre>
+
+  <h3>OpenAPI 扩展</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
+
+app = FastAPI()
+
+# 完全自定义 OpenAPI 函数
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    openapi_schema = get_openapi(
+        title="Custom API",
+        version="3.0.0",
+        description="自定义 OpenAPI",
+        routes=app.routes,
+    )
+
+    # 添加自定义字段
+    openapi_schema["info"]["x-logo"] = {
+        "url": "https://example.com/logo.png",
+        "altText": "API Logo"
+    }
+
+    # 添加自定义安全方案
+    openapi_schema["components"]["securitySchemes"]["internal"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Internal-Key",
+        "x-custom-field": "internal only",
+    }
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+
+# 禁用 OpenAPI
+app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
+</code></pre>
+</section>
+
+<section id="sec9" class="toc-link">
+  <h2><span class="num">09</span> 后台任务</h2>
+
+  <h3>BackgroundTasks</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, BackgroundTasks, Depends
+from typing import Annotated
+
+app = FastAPI()
+
+# 后台任务函数（不需要 await）
+def write_log(message: str):
+    with open("app.log", "a") as f:
+        f.write(f"{message}\n")
+
+async def send_email(to: str, subject: str, body: str):
+    # 模拟发邮件
+    import asyncio
+    await asyncio.sleep(2)
+    print(f"邮件已发送到 {to}: {subject}")
+
+@app.post("/register")
+async def register(
+    username: str,
+    email: str,
+    background_tasks: BackgroundTasks,
+):
+    # 创建用户...
+    user_id = 42
+
+    # 添加后台任务
+    background_tasks.add_task(write_log, f"用户 {username} 注册成功")
+    background_tasks.add_task(send_email, email, "欢迎注册", "感谢您的注册！")
+
+    return {"user_id": user_id, "message": "注册成功"}
+
+# 依赖注入后台任务
+def get_background_tasks() -> BackgroundTasks:
+    return BackgroundTasks()
+
+@app.post("/notify")
+async def notify(
+    tasks: Annotated[BackgroundTasks, Depends(get_background_tasks)],
+):
+    tasks.add_task(write_log, "通知已发送")
+    return {"message": "ok"}
+</code></pre>
+
+  <h3>BackgroundTasks vs Celery</h3>
+
+<pre><code class="language-python"># BackgroundTasks 的限制：
+# 1. 在响应返回后执行（不能保证完成）
+# 2. 进程重启后丢失
+# 3. 不支持分布式
+# 4. 没有重试机制
+
+# 适合：日志记录、通知推送、缓存预热
+
+# Celery 对比
+"""
+特性            BackgroundTasks    Celery / RQ / Dramatiq
+──────────────  ─────────────────  ──────────────────────
+执行时机        响应后尽快执行       异步队列 worker
+持久化          无                  支持（Redis/RabbitMQ）
+重试            无                  支持超时重试
+分布式          单进程              多 worker 多机器
+任务调度        即时                定时/延迟/CRON
+监控            无                  Flower/Dashboard
+适用场景        简单后处理           生产级异步任务
+"""
+
+# 使用 Celery 的 FastAPI 集成
+from celery import Celery
+
+celery_app = Celery(
+    "tasks",
+    broker="redis://localhost:6379/0",
+    backend="redis://localhost:6379/0",
+)
+
+@celery_app.task(bind=True, max_retries=3)
+def process_order_task(self, order_id: int):
+    """在 Celery worker 中执行"""
+    try:
+        # 处理订单
+        process_order(order_id)
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=60)  # 60 秒后重试
+
+@app.post("/orders-async")
+async def create_order_async(order_id: int):
+    """将任务发给 Celery worker"""
+    process_order_task.delay(order_id=order_id)
+    return {"message": "订单已提交，处理中"}
+</code></pre>
+</section>
+
+<section id="sec10" class="toc-link">
+  <h2><span class="num">10</span> 部署</h2>
+
+  <h3>ASGI 服务器</h3>
+
+<pre><code class="language-python"># Uvicorn — 推荐的 ASGI 服务器
+"""
+# 开发模式
+uvicorn main:app --reload --port 8000
+
+# 生产模式（单进程）
+uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 4 \
+    --loop uvloop \
+    --http httptools \
+    --log-level info \
+    --timeout-keep-alive 30 \
+    --limit-concurrency 1000 \
+    --backlog 2048
+"""
+
+# Gunicorn + Uvicorn Workers（推荐的生产方案）
+"""
+# 安装：pip install gunicorn uvicorn
+
+# gunicorn 作为进程管理器，每个 worker 是 uvicorn
+gunicorn main:app \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --bind 0.0.0.0:8000 \
+    --workers 4 \
+    --worker-connections 1000 \
+    --timeout 120 \
+    --keep-alive 5 \
+    --max-requests 10000 \
+    --max-requests-jitter 1000 \
+    --log-level info \
+    --access-logfile -
+"""
+</code></pre>
+
+  <h3>Docker 部署</h3>
+
+<pre><code class="language-python"># Dockerfile
+"""
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+# 安装依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ----- 多阶段构建 -----
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 从 builder 阶段复制
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# 复制应用代码
+COPY . .
+
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \\
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["gunicorn", "main:app", \\
+     "--worker-class", "uvicorn.workers.UvicornWorker", \\
+     "--bind", "0.0.0.0:8000", \\
+     "--workers", "4"]
+"""
+
+# docker-compose.yml
+"""
+version: '3.8'
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    ports:
+      - "80:80"
+    depends_on:
+      - web
+"""
+</code></pre>
+
+  <h3>生产环境配置最佳实践</h3>
+
+<pre><code class="language-python">from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+# 生产环境推荐配置
+app = FastAPI(
+    # 生产环境禁用文档
+    docs_url="/docs" if DEBUG else None,
+    redoc_url="/redoc" if DEBUG else None,
+
+    # 自定义异常处理器
+    exception_handlers={
+        404: lambda req, exc: JSONResponse(
+            status_code=404,
+            content={"error": "资源未找到"}
+        ),
+        500: lambda req, exc: JSONResponse(
+            status_code=500,
+            content={"error": "服务器内部错误"}
+        ),
+    },
+)
+
+# 全局异常捕获
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    # 记录错误（使用日志系统）
+    logger.exception("Unhandled exception")
+    return JSONResponse(
+        status_code=500,
+        content={"error": "服务器内部错误", "detail": str(exc) if DEBUG else None}
+    )
+
+# 请求 ID 中间件
+import uuid
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+# 优雅关闭
+import asyncio
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    print("正在关闭连接池...")
+    # 关闭数据库连接池
+    # await db.close()
+    print("应用已关闭")
+
+# 启动时的初始化
+@app.on_event("startup")
+async def startup_event():
+    print("正在初始化...")
+    # 初始化连接池
+    # await db.connect()
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    生产部署建议：使用 Gunicorn + Uvicorn Workers 作为进程管理器；配置反向代理（Nginx/Caddy）处理 SSL 和静态文件；使用 Supervisor/systemd 管理进程生命周期；启用 Prometheus 指标监控。对于高并发场景，注意调整 workers 数量（一般 2-4 × CPU 核心数）。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

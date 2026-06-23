@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python 高级特性深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Python 高级特性深度解析</h1>
+  <p class="subtitle">描述器 · 元类 · ABC · Protocol · 类型注解 · match 模式匹配</p>
+  <span class="version">Python 3.12+ · PEP 贯通</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#descriptor">描述器协议</a></li>
+    <li><a href="#metaclass">元类</a></li>
+    <li><a href="#abc">抽象基类 ABC</a></li>
+    <li><a href="#protocol">协议 Protocol</a></li>
+    <li><a href="#type-annotations">类型注解进化</a></li>
+    <li><a href="#match">match 语句模式匹配</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="descriptor" class="toc-link">
+  <h2><span class="num">01</span> 描述器协议</h2>
+
+  <p>描述器是 Python 中属性访问的核心机制。任何定义了 <code>__get__</code>、<code>__set__</code> 或 <code>__delete__</code> 中至少一个方法的对象，都是一个描述器。当类属性被访问时，Python 会按 <strong>数据描述器 &gt; 实例属性 &gt; 非数据描述器</strong> 的优先级顺序查找。</p>
+
+  <h3>描述器协议定义</h3>
+  <div class="callout"><strong>提示:</strong><br>描述器协议是 property、classmethod、staticmethod 以及 slot 的底层实现基础。理解描述器就等于理解了 Python 的属性机制。</div>
+
+  <pre><code>class Descriptor:
+    """一个典型的数据描述器"""
+    def __get__(self, obj, objtype=None):
+        print(f"GET from {objtype.__name__}")
+        return getattr(obj, '_value', None)
+
+    def __set__(self, obj, value):
+        print(f"SET {value} on {obj}")
+        obj._value = value
+
+    def __delete__(self, obj):
+        print(f"DELETE from {obj}")
+        del obj._value
+
+class MyClass:
+    attr = Descriptor()
+
+obj = MyClass()
+obj.attr = 42    # SET 42 on ...
+print(obj.attr)  # GET from MyClass
+del obj.attr     # DELETE from ...</code></pre>
+
+  <h3>数据描述器 vs 非数据描述器</h3>
+  <p>描述器按是否定义 <code>__set__</code> 分为两类。数据描述器（定义了 <code>__set__</code> 或 <code>__delete__</code>）优先级高于实例属性。非数据描述器（只定义 <code>__get__</code>）的优先级低于实例属性，这正是方法的工作方式。</p>
+  <pre><code>class NonDataDescriptor:
+    """非数据描述器——只有 __get__"""
+    def __get__(self, obj, objtype=None):
+        return "from descriptor"
+
+class Demo:
+    attr = NonDataDescriptor()
+
+d = Demo()
+print(d.attr)    # "from descriptor"
+d.attr = "实例值"
+print(d.attr)    # "实例值"——实例属性覆盖了非数据描述器
+del d.attr
+print(d.attr)    # "from descriptor"——删除实例属性后恢复</code></pre>
+
+  <h3>property 的实现原理</h3>
+  <p><code>property</code> 是 Python 内置的数据描述器。它包装了 getter、setter 和 deleter 函数，在 <code>__get__</code> 中调用 getter，在 <code>__set__</code> 中调用 setter。</p>
+  <pre><code>class Property:
+    """简化版 property 实现"""
+    def __init__(self, fget=None, fset=None, fdel=None):
+        self.fget = fget
+        self.fset = fset
+        self.fdel = fdel
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        if self.fget is None:
+            raise AttributeError
+        return self.fget(obj)
+
+    def __set__(self, obj, value):
+        if self.fset is None:
+            raise AttributeError
+        self.fset(obj, value)
+
+    def setter(self, func):
+        return type(self)(self.fget, func, self.fdel)</code></pre>
+
+  <h3>classmethod 实现原理</h3>
+  <p><code>classmethod</code> 是一个非数据描述器。它在 <code>__get__</code> 中将函数绑定到类，而不是实例。无论通过类还是实例访问，第一个参数始终是类本身。</p>
+  <pre><code>class ClassMethod:
+    """简化版 classmethod"""
+    def __init__(self, func):
+        self.func = func
+
+    def __get__(self, obj, objtype=None):
+        if objtype is None:
+            objtype = type(obj)
+        return lambda *args, **kw: self.func(objtype, *args, **kw)</code></pre>
+
+  <h3>staticmethod 实现原理</h3>
+  <p><code>staticmethod</code> 是最简单的描述器。它直接在 <code>__get__</code> 中返回原始函数，不做任何绑定。</p>
+  <pre><code>class StaticMethod:
+    """简化版 staticmethod"""
+    def __init__(self, func):
+        self.func = func
+
+    def __get__(self, obj, objtype=None):
+        return self.func</code></pre>
+
+  <h3>描述器在 Python 中的应用</h3>
+  <p>描述器无处不在。函数本身就是非数据描述器，所以方法调用会隐式传入 <code>self</code>。<code>@property</code> 用于计算属性，<code>__slots__</code> 背后也使用了描述器来管理实例属性。ORM 框架如 SQLAlchemy 大量使用描述器实现声明式映射。</p>
+  <pre><code>class ValidatedField:
+    """ORM 风格的验证字段描述器"""
+    def __init__(self, validator):
+        self.validator = validator
+        self.data = {}
+
+    def __set_name__(self, owner, name):
+        self.name = name
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return self.data.get(id(obj))
+
+    def __set__(self, obj, value):
+        self.validator(value)
+        self.data[id(obj)] = value
+
+def non_empty(val):
+    if not val:
+        raise ValueError("值不能为空")
+
+class User:
+    name = ValidatedField(non_empty)
+    email = ValidatedField(non_empty)</code></pre>
+</section>
+
+<section id="metaclass" class="toc-link">
+  <h2><span class="num">02</span> 元类</h2>
+
+  <p>元类是创建类的类。在 Python 中，<code>type</code> 是所有元类的基类。当定义一个类时，Python 会调用元类的 <code>__new__</code> 和 <code>__init__</code> 来创建类对象。理解元类，就是理解 Python 类创建过程的终极控制权。</p>
+
+  <h3>type 创建类</h3>
+  <p><code>type(name, bases, dict)</code> 是动态创建类的标准方式。三个参数分别代表类名、父类元组和命名空间字典。</p>
+  <pre><code># 用 type 动态创建类等价于 class 语句
+def init(self, name):
+    self.name = name
+
+def greet(self):
+    return f"Hello, {self.name}"
+
+DynamicClass = type('DynamicClass', (), {
+    '__init__': init,
+    'greet': greet
+})
+
+obj = DynamicClass("World")
+print(obj.greet())  # Hello, World</code></pre>
+
+  <h3>__new__ vs __init__</h3>
+  <p>元类的 <code>__new__</code> 在类创建之前调用，负责创建并返回类对象。<code>__init__</code> 在新类创建之后调用，负责初始化。<code>__new__</code> 是类工厂的核心，<code>__init__</code> 适合做后处理。</p>
+  <pre><code>class Meta(type):
+    def __new__(mcs, name, bases, namespace):
+        print(f"__new__: 创建类 {name}")
+        # 可以在 __new__ 中修改类的定义
+        namespace['created_by'] = mcs.__name__
+        return super().__new__(mcs, name, bases, namespace)
+
+    def __init__(cls, name, bases, namespace):
+        print(f"__init__: 初始化类 {name}")
+        super().__init__(name, bases, namespace)
+
+class MyClass(metaclass=Meta):
+    pass
+
+print(MyClass.created_by)  # Meta</code></pre>
+
+  <h3>__call__ 和类创建钩子</h3>
+  <p>元类的 <code>__call__</code> 在 <code>ClassName()</code> 被调用时触发。这意味着元类可以控制实例创建的全过程，常用于实现单例模式或对象池。</p>
+  <pre><code>class SingletonMeta(type):
+    _instances = {}
+
+    def __call__(cls, *args, **kwargs):
+        if cls not in cls._instances:
+            instance = super().__call__(*args, **kwargs)
+            cls._instances[cls] = instance
+        return cls._instances[cls]
+
+class Logger(metaclass=SingletonMeta):
+    def __init__(self):
+        self.level = "INFO"
+
+a = Logger()
+b = Logger()
+print(a is b)  # True</code></pre>
+
+  <h3>注册模式</h3>
+  <p>元类可以自动收集子类信息，实现注册表模式。这在插件系统和框架中非常常见。</p>
+  <pre><code>class RegistryMeta(type):
+    registry = {}
+
+    def __new__(mcs, name, bases, namespace):
+        cls = super().__new__(mcs, name, bases, namespace)
+        if not name.startswith('Base'):
+            mcs.registry[name] = cls
+        return cls
+
+class BasePlugin(metaclass=RegistryMeta):
+    """所有插件的基类，不会被注册"""
+    def process(self, data):
+        raise NotImplementedError
+
+class JsonPlugin(BasePlugin):
+    def process(self, data):
+        return {"data": data}
+
+class XmlPlugin(BasePlugin):
+    def process(self, data):
+        return f"<data>{data}</data>"
+
+print(BasePlugin.registry)
+# {'JsonPlugin': <class ...>, 'XmlPlugin': <class ...>}</code></pre>
+
+  <h3>ORM 中的应用</h3>
+  <p>元类在 ORM 框架中扮演核心角色。SQLAlchemy 的 <code>declarative_base</code> 背后就是元类，它负责将声明式类定义转换为数据库表映射。</p>
+  <pre><code>class ModelMeta(type):
+    def __new__(mcs, name, bases, namespace):
+        if name == 'Model':
+            return super().__new__(mcs, name, bases, namespace)
+
+        fields = {}
+        for key, val in namespace.items():
+            if isinstance(val, Field):
+                fields[key] = val
+                namespace[key] = None
+
+        namespace['_fields'] = fields
+        namespace['_table'] = name.lower()
+        return super().__new__(mcs, name, bases, namespace)
+
+class Field:
+    def __init__(self, ftype):
+        self.ftype = ftype
+
+class Model(metaclass=ModelMeta):
+    def save(self):
+        cols = ', '.join(self._fields.keys())
+        vals = ', '.join(f"'{getattr(self, k)}'" for k in self._fields)
+        return f"INSERT INTO {self._table} ({cols}) VALUES ({vals})"
+
+class User(Model):
+    name = Field(str)
+    email = Field(str)
+
+user = User()
+user.name = "Alice"
+user.email = "alice@example.com"
+print(user.save())
+# INSERT INTO user (name, email) VALUES ('Alice', 'alice@example.com')</code></pre>
+
+  <h3>元类的限制与最佳实践</h3>
+  <p>元类是非常强大的工具，但同时也增加了代码的复杂度。一般规则是：能用装饰器、类装饰器或 <code>__init_subclass__</code> 解决的问题，就不要用元类。Python 3.6 引入的 <code>__init_subclass__</code> 可以在父类中拦截子类创建，是元类的一个轻量替代。</p>
+  <div class="callout"><strong>最佳实践:</strong><br>元类的使用场景包括：ORM 映射、单例模式、注册模式、API 验证框架、DSL 构建。在框架设计之外，大多数情况下不需要自定义元类。</div>
+</section>
+
+<section id="abc" class="toc-link">
+  <h2><span class="num">03</span> 抽象基类 ABC</h2>
+
+  <p>抽象基类（Abstract Base Class）是 Python 中定义接口和规范的标准化方式。Python 的 <code>abc</code> 模块提供了 <code>ABC</code> 类和 <code>@abstractmethod</code> 装饰器，用于声明抽象方法，强制子类实现。</p>
+
+  <h3>abc.ABC 与 @abstractmethod</h3>
+  <p>从 <code>ABC</code> 继承的类不能直接实例化（如果包含抽象方法）。子类必须实现所有抽象方法才能实例化。这是实现模板方法模式和策略模式的理想方式。</p>
+  <pre><code>from abc import ABC, abstractmethod
+
+class Stream(ABC):
+    @abstractmethod
+    def read(self, size: int) -> bytes:
+        ...
+
+    @abstractmethod
+    def write(self, data: bytes) -> int:
+        ...
+
+    def close(self):
+        """非抽象方法——子类可以选择性重写"""
+        pass
+
+class FileStream(Stream):
+    def read(self, size: int) -> bytes:
+        return b"data" * size
+
+    def write(self, data: bytes) -> int:
+        return len(data)
+
+s = FileStream()
+print(s.read(10))  # b'datadatadata...'
+
+# Stream()  # TypeError: Can't instantiate abstract class</code></pre>
+
+  <h3>register() 方法</h3>
+  <p><code>register()</code> 可以将一个类注册为 ABC 的虚拟子类，而无需实际继承。虚拟子类通过 <code>isinstance()</code> 和 <code>issubclass()</code> 检查时会返回 True，但不会继承 ABC 的任何方法。</p>
+  <pre><code>from abc import ABC
+
+class Iterable(ABC):
+    @abstractmethod
+    def __iter__(self):
+        ...
+
+# 将内置 list 注册为 Iterable 的虚拟子类
+Iterable.register(list)
+
+print(isinstance([1, 2, 3], Iterable))  # True
+
+# 自定义类注册
+@Iterable.register
+class MyList:
+    def __iter__(self):
+        return iter([1, 2, 3])
+
+print(issubclass(MyList, Iterable))  # True</code></pre>
+
+  <h3>__subclasshook__</h3>
+  <p><code>__subclasshook__</code> 是 ABC 上最灵活的机制。它允许基于方法存在性（而非继承关系）来判断子类关系。collections.abc 中的许多抽象基类都利用了这个机制实现了鸭子类型兼容。</p>
+  <pre><code>from abc import ABC, abstractmethod
+
+class Sized(ABC):
+    @abstractmethod
+    def __len__(self):
+        ...
+
+    @classmethod
+    def __subclasshook__(cls, other):
+        if cls is Sized:
+            if any("__len__" in B.__dict__ for B in other.__mro__):
+                return True
+        return NotImplemented
+
+class MyContainer:
+    def __len__(self):
+        return 42
+
+print(issubclass(MyContainer, Sized))  # True
+print(isinstance(MyContainer(), Sized))  # True</code></pre>
+
+  <h3>collections.abc 标准库中的 ABC</h3>
+  <p>标准库的 <code>collections.abc</code> 模块定义了大量有用的 ABC，包括 <code>Container</code>、<code>Hashable</code>、<code>Iterable</code>、<code>Iterator</code>、<code>Reversible</code>、<code>Generator</code>、<code>Callable</code>、<code>Sequence</code>、<code>MutableSequence</code>、<code>Set</code>、<code>Mapping</code>、<code>MutableMapping</code> 等。这些 ABC 不仅规范了接口，还通过 mixin 方法提供了大量免费实现。</p>
+  <pre><code>from collections.abc import Sequence
+
+class MySequence(Sequence):
+    def __getitem__(self, index):
+        return [1, 2, 3][index]
+
+    def __len__(self):
+        return 3
+
+s = MySequence()
+print(s[0])        # 1
+print(s.count(1))  # 1 —— mixin 方法
+print(s.index(2))  # 1 —— mixin 方法
+print(list(reversed(s)))  # [3, 2, 1]</code></pre>
+</section>
+
+<section id="protocol" class="toc-link">
+  <h2><span class="num">04</span> 协议 Protocol</h2>
+
+  <p>PEP 544 在 Python 3.8 中引入了 <code>typing.Protocol</code>，实现了结构子类型（structural subtyping）或称为静态鸭子类型。与 ABC 的名义子类型（nominal subtyping）不同，Protocol 只关心对象是否具有所需的属性和方法签名。</p>
+
+  <h3>结构子类型 vs 名义子类型</h3>
+  <p>名义子类型要求显式声明继承关系（如 <code>class Dog(Animal)</code>）。结构子类型则根据形状（shape）来判断——如果你的类有 <code>quack()</code> 方法，你就被视为鸭子，而不需要继承 Duck。</p>
+  <pre><code>from typing import Protocol
+
+class Quackable(Protocol):
+    def quack(self) -> str:
+        ...
+
+class Duck:
+    def quack(self) -> str:
+        return "嘎嘎嘎"
+
+class Person:
+    def quack(self) -> str:
+        return "假装是鸭子"
+
+def make_it_quack(d: Quackable) -> None:
+    print(d.quack())
+
+# 不需要显式继承 Quackable！
+make_it_quack(Duck())    # 嘎嘎嘎
+make_it_quack(Person())  # 假装是鸭子</code></pre>
+
+  <h3>静态鸭子类型</h3>
+  <p>Protocol 主要在类型检查时发挥作用。mypy 和 pyright 会检查传入的对象是否满足 Protocol 定义的接口。在运行时，如果没有 <code>@runtime_checkable</code>，Protocol 不会对 <code>isinstance()</code> 产生影响。</p>
+  <pre><code>from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class SupportsClose(Protocol):
+    def close(self) -> None:
+        ...
+
+class FileHandler:
+    def close(self) -> None:
+        print("关闭文件")
+
+class Connection:
+    def close(self) -> None:
+        print("关闭连接")
+
+def cleanup(obj: SupportsClose) -> None:
+    obj.close()
+    if isinstance(obj, SupportsClose):
+        print("实现了 SupportsClose 协议")
+
+cleanup(FileHandler())
+cleanup(Connection())</code></pre>
+
+  <h3>协议组合</h3>
+  <p>Protocol 支持继承和组合，可以构建复杂的接口层次。这对于定义上下文管理器、迭代器、异步协议等复杂的接口规范特别有用。</p>
+  <pre><code>from typing import Protocol, Iterator
+
+class Readable(Protocol):
+    def read(self, size: int = -1) -> bytes:
+        ...
+
+class Writable(Protocol):
+    def write(self, data: bytes) -> int:
+        ...
+
+class ReadWritable(Readable, Writable, Protocol):
+    """组合协议"""
+    def seek(self, offset: int, whence: int = 0) -> int:
+        ...
+
+class Buffer:
+    def read(self, size: int = -1) -> bytes:
+        return b"data"
+
+    def write(self, data: bytes) -> int:
+        return len(data)
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        return offset
+
+def process(stream: ReadWritable) -> None:
+    data = stream.read()
+    stream.write(data)
+
+process(Buffer())</code></pre>
+
+  <h3>runtime_checkable 与性能</h3>
+  <p>使用 <code>@runtime_checkable</code> 装饰的 Protocol 支持 <code>isinstance()</code> 检查。但需要注意，运行时检查会迭代所有 Protocol 中的方法，对于大型 Protocol 可能会带来性能开销。建议只在需要 <code>isinstance</code> 支持时才使用 <code>runtime_checkable</code>。</p>
+  <div class="callout"><strong>提示:</strong><br>Protocol 是 Python 类型系统向 Go 接口和 Rust trait 风格靠拢的重要一步。在现代 Python 代码库中，优先使用 Protocol 而不是 ABC 来定义接口，可以获得更好的解耦和更灵活的复用。</div>
+</section>
+
+<section id="type-annotations" class="toc-link">
+  <h2><span class="num">05</span> 类型注解进化</h2>
+
+  <p>Python 的类型注解自 PEP 484（Python 3.5）引入以来，经历了快速的进化。每个新版本都带来了更简洁、更强大的类型表达方式。</p>
+
+  <h3>PEP 484 → PEP 585: 原生泛型</h3>
+  <p>PEP 484 最初使用 <code>typing.List[int]</code> 等泛型容器。PEP 585（Python 3.9）允许直接使用内置类型的泛型版本，大幅简化了注解。</p>
+  <pre><code># PEP 484 风格 (Python 3.5-3.8, 3.9+仍兼容)
+from typing import List, Dict, Tuple, Set
+
+def process(items: List[int]) -> Dict[str, Tuple[int, ...]]:
+    ...
+
+# PEP 585 风格 (Python 3.9+)
+def process(items: list[int]) -> dict[str, tuple[int, ...]]:
+    ...</code></pre>
+
+  <h3>PEP 604: 联合类型简化</h3>
+  <p>PEP 604（Python 3.10）引入了 <code>X | Y</code> 语法替代 <code>Union[X, Y]</code>，以及 <code>X | None</code> 替代 <code>Optional[X]</code>。</p>
+  <pre><code># 之前
+from typing import Union, Optional
+def parse(val: Union[str, int]) -> Optional[float]:
+    ...
+
+# 之后 (Python 3.10+)
+def parse(val: str | int) -> float | None:
+    ...</code></pre>
+
+  <h3>PEP 646: Variadic Generics</h3>
+  <p>PEP 646（Python 3.11）引入了 <code>*args</code> 风格的类型变量，用于表达任意数量的类型参数。这对 NumPy 和 Tensor 库特别重要。</p>
+  <pre><code>from typing import Generic, TypeVarTuple
+
+Ts = TypeVarTuple('Ts')
+
+class Array(Generic[*Ts]):
+    def __init__(self, shape: tuple[*Ts]):
+        self.shape = shape
+
+# 使用
+arr = Array((3, 4))           # Array[*tuple[int, int]]
+arr2 = Array((2, 3, 4))       # Array[*tuple[int, int, int]]</code></pre>
+
+  <h3>PEP 695: Type Parameter Syntax</h3>
+  <p>PEP 695（Python 3.12）引入了更简洁的类型参数声明语法，不再需要显式定义 TypeVar。</p>
+  <pre><code># 之前
+from typing import TypeVar, Generic
+T = TypeVar('T')
+class Stack(Generic[T]):
+    def push(self, item: T) -> None: ...
+    def pop(self) -> T: ...
+
+# 之后 (Python 3.12+)
+class Stack[T]:
+    def push(self, item: T) -> None: ...
+    def pop(self) -> T: ...
+
+# 函数也支持
+def first[T](items: list[T]) -> T:
+    return items[0]</code></pre>
+
+  <h3>PEP 692: TypedDict 与 **kwargs</h3>
+  <p>PEP 692（Python 3.12）允许使用 TypedDict 注解 <code>**kwargs</code>，精确表达关键字参数的类型结构。</p>
+  <pre><code>from typing import TypedDict, Unpack
+
+class Person(TypedDict):
+    name: str
+    age: int
+
+def greet(**kwargs: Unpack[Person]) -> str:
+    return f"{kwargs['name']} is {kwargs['age']}"
+
+greet(name="Alice", age=30)  # OK
+# greet(name="Bob")  # type error: missing 'age'</code></pre>
+
+  <h3>PEP 698: Override 装饰器</h3>
+  <p>PEP 698（Python 3.12）引入了 <code>@override</code> 装饰器，用于显式标记方法重写。类型检查器可以检测到重写但签名不匹配的情况。</p>
+  <pre><code>from typing import override
+
+class Base:
+    def process(self, data: str) -> int:
+        return len(data)
+
+class Derived(Base):
+    @override
+    def process(self, data: str) -> int:
+        return super().process(data) + 1
+
+    # @override
+    # def proces(self, data: str) -> int:  # type error: 方法名错误
+    #     ...</code></pre>
+
+  <h3>泛型 Self 与 TypeVar</h3>
+  <p>PEP 673（Python 3.11）引入了 <code>Self</code> 类型，用于注解返回自身类型的工厂方法或链式调用。而 <code>TypeVar</code> 和 <code>ParamSpec</code> 则为高阶函数和装饰器提供了精确的类型约束。</p>
+  <pre><code>from typing import Self, TypeVar, ParamSpec, Callable
+import functools
+
+P = ParamSpec('P')
+T = TypeVar('T')
+
+class Builder:
+    def set_name(self, name: str) -> Self:
+        self.name = name
+        return self
+
+    def set_age(self, age: int) -> Self:
+        self.age = age
+        return self
+
+class SpecialBuilder(Builder):
+    def extra(self) -> Self:
+        return self
+
+# 链式调用保留子类类型
+sb = SpecialBuilder().set_name("X").set_age(10).extra()
+
+# ParamSpec 用于装饰器类型注解
+def logged(func: Callable[P, T]) -> Callable[P, T]:
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        print(f"调用 {func.__name__}")
+        return func(*args, **kwargs)
+    return wrapper</code></pre>
+</section>
+
+<section id="match" class="toc-link">
+  <h2><span class="num">06</span> match 语句模式匹配</h2>
+
+  <p>PEP 634-636 在 Python 3.10 中引入了 <code>match</code> 语句，这是 Python 有史以来最重大的语法增强之一。它借鉴了 Rust、Scala 和 Haskell 等语言中的模式匹配思想，为 Python 带来了声明式的条件分支能力。</p>
+
+  <h3>基本语法与字面量模式</h3>
+  <p>最简单的模式匹配使用字面量值进行精确匹配。每个 case 可以有一个守卫条件（guard）来添加额外约束。</p>
+  <pre><code>def http_status(code: int) -> str:
+    match code:
+        case 200:
+            return "OK"
+        case 201:
+            return "Created"
+        case 301 | 302:
+            return "Redirect"
+        case 400:
+            return "Bad Request"
+        case 404:
+            return "Not Found"
+        case 500 | 502 | 503:
+            return "Server Error"
+        case _:
+            return "Unknown"
+
+print(http_status(404))  # Not Found</code></pre>
+
+  <h3>通配符与绑定</h3>
+  <p>通配符（<code>_</code>）匹配任何值但不绑定。普通的变量名会匹配任何值并绑定到该变量。这可用于解包序列元素。</p>
+  <pre><code>def process_point(point):
+    match point:
+        case (0, 0):
+            return "原点"
+        case (0, y):
+            return f"在 Y 轴上: y={y}"
+        case (x, 0):
+            return f"在 X 轴上: x={x}"
+        case (x, y):
+            return f"坐标: ({x}, {y})"
+        case _:
+            return "不是二维坐标"
+
+print(process_point((3, 5)))   # 坐标: (3, 5)
+print(process_point((0, 7)))   # 在 Y 轴上: y=7</code></pre>
+
+  <h3>类模式</h3>
+  <p>类模式允许按对象的属性进行匹配，类似于数据类的解构。这是 match 语句中最强大的特性之一。</p>
+  <pre><code>from dataclasses import dataclass
+
+@dataclass
+class Command:
+    name: str
+    args: list
+
+@dataclass
+class Result:
+    code: int
+    data: str
+
+def handle(obj) -> str:
+    match obj:
+        case Command(name="quit"):
+            return "退出程序"
+        case Command(name="greet", args=[name]):
+            return f"你好, {name}!"
+        case Command():
+            return f"未知命令: {obj.name}"
+        case Result(code=0, data=msg):
+            return f"成功: {msg}"
+        case Result(code=err):
+            return f"错误代码: {err}"
+        case _:
+            return "未知类型"
+
+print(handle(Command("greet", ["World"])))  # 你好, World!
+print(handle(Result(0, "操作完成")))          # 成功: 操作完成</code></pre>
+
+  <h3>守卫条件</h3>
+  <p>守卫（guard）是在模式之后添加的 <code>if</code> 表达式，在模式匹配的基础上增加额外约束。只有模式和守卫同时满足时才进入该分支。</p>
+  <pre><code>def classify_number(n: int) -> str:
+    match n:
+        case _ if n < 0:
+            return "负数"
+        case 0:
+            return "零"
+        case _ if n % 2 == 0:
+            return "正偶数"
+        case _:
+            return "正奇数"
+
+print(classify_number(-5))  # 负数
+print(classify_number(42))  # 正偶数</code></pre>
+
+  <h3>序列与映射模式</h3>
+  <p>match 语句支持匹配列表（序列模式）和字典（映射模式）。映射模式使用 <code>{}</code> 语法并按键匹配。</p>
+  <pre><code>def parse_config(config: dict) -> str:
+    match config:
+        case {"debug": True, "port": port}:
+            return f"调试模式，端口 {port}"
+        case {"port": port, "host": host}:
+            return f"生产模式: {host}:{port}"
+        case {}:
+            return "配置为空"
+        case _:
+            return "无效配置"
+
+def parse_ast(nodes):
+    match nodes:
+        case ["+", left, right]:
+            return f"({parse_ast(left)} + {parse_ast(right)})"
+        case ["*", left, right]:
+            return f"({parse_ast(left)} * {parse_ast(right)})"
+        case [("num", val)]:
+            return str(val)
+        case _:
+            return str(nodes)
+
+print(parse_ast(["+", ["*", ("num", 3), ("num", 4)], ("num", 5)]))
+# ((3 * 4) + 5)</code></pre>
+
+  <h3>嵌套模式与 OR 模式</h3>
+  <p>模式可以任意嵌套，OR 模式用 <code>|</code> 连接多个备选。还可以使用 <code>as</code> 关键字绑定子模式的值。</p>
+  <pre><code>def analyze_shape(shape) -> str:
+    match shape:
+        case ("circle", float(r) as radius):
+            return f"圆形，半径 {radius}"
+        case ("rect", w, h) | ("rectangle", w, h):
+            return f"矩形 {w}x{h}"
+        case ("polygon", *points) if len(points) >= 3:
+            return f"多边形，{len(points)} 个顶点"
+        case _:
+            return "未知形状"
+
+print(analyze_shape(("circle", 5.0)))           # 圆形，半径 5.0
+print(analyze_shape(("rect", 100, 200)))        # 矩形 100x200
+print(analyze_shape(("polygon", (0,0), (1,0), (1,1))))  # 多边形，3 个顶点</code></pre>
+
+  <h3>match 在 AST 处理中的应用</h3>
+  <p>模式匹配在编译器、解释器和 AST 处理中最能体现其威力。以下是一个简单的表达式求值器，展示了 match 如何简化树形结构的处理。</p>
+  <pre><code>def evaluate(expr) -> int:
+    match expr:
+        case ("num", int(n)):
+            return n
+        case ("add", left, right):
+            return evaluate(left) + evaluate(right)
+        case ("sub", left, right):
+            return evaluate(left) - evaluate(right)
+        case ("mul", left, right):
+            return evaluate(left) * evaluate(right)
+        case ("div", left, right):
+            return evaluate(left) // evaluate(right)
+        case _:
+            raise ValueError(f"未知表达式: {expr}")
+
+expr = ("add",
+         ("mul", ("num", 3), ("num", 4)),
+         ("num", 5))
+print(evaluate(expr))  # 17</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>模式匹配不是 switch/case 的简单替代。它是声明式的结构性解构。在 Python 3.10+ 项目中，所有涉及条件分支 + 数据解构的场景都应优先考虑 match 语句。</div>
+</section>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

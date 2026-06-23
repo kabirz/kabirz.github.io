@@ -208,8 +208,20 @@
     { t:"Go CGo 与跨语言调用", f:"go-cgo.html", top:"go" },
     { t:"Go 性能分析与调优", f:"go-profiling.html", top:"go" },
     { t:"Go 泛型深入", f:"go-generics.html", top:"go" },
+    { t:"Python 基础", f:"python-basics.html", top:"python" },
+    { t:"Python 异步编程", f:"python-asyncio.html", top:"python" },
+    { t:"Python 并发编程", f:"python-concurrency.html", top:"python" },
+    { t:"Pydantic 数据验证", f:"python-pydantic.html", top:"python" },
+    { t:"FastAPI Web 框架", f:"python-fastapi.html", top:"python" },
+    { t:"NiceGUI 桌面与 Web GUI", f:"python-nicegui.html", top:"python" },
+    { t:"Python 高级特性", f:"python-advanced.html", top:"python" },
+    { t:"Python Web 框架对比", f:"python-web-ecosystem.html", top:"python" },
+    { t:"SQLAlchemy ORM", f:"python-sqlalchemy.html", top:"python" },
+    { t:"Python 测试", f:"python-testing.html", top:"python" },
+    { t:"Python 包管理", f:"python-packaging.html", top:"python" },
+    { t:"Python 性能优化", f:"python-performance.html", top:"python" },
   ];
-  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", other:"硬件与平台" };
+  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", python:"Python 开发", other:"硬件与平台" };
 
   // 主题切换
   var STORAGE_KEY = 'kernel-docs-theme';
@@ -280,6 +292,7 @@
       driver: { emoji: "🔌", color: "#8250df" },
       vision: { emoji: "👁️", color: "#e74c3c" },
       go: { emoji: "🔷", color: "#00ADD8" },
+      python: { emoji: "🐍", color: "#3776AB" },
       other: { emoji: "📦", color: "#656d76" }
     };
 

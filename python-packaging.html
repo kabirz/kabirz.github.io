@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python 包管理深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Python 包管理深度解析</h1>
+  <p class="subtitle">pip/venv · pyproject.toml · poetry · pdm · Cython 打包 · 发布到 PyPI · 跨平台</p>
+  <span class="version">Python 3.12+ · PEP 517/518/621</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#pip-venv">pip 与 venv</a></li>
+    <li><a href="#pyproject">pyproject.toml</a></li>
+    <li><a href="#poetry">poetry</a></li>
+    <li><a href="#pdm">pdm</a></li>
+    <li><a href="#cython">Cython 打包</a></li>
+    <li><a href="#pypi">发布到 PyPI</a></li>
+    <li><a href="#cross">跨平台发布</a></li>
+    <li><a href="#monorepo">monorepo 管理</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="pip-venv" class="toc-link">
+  <h2><span class="num">01</span> pip 与 venv</h2>
+
+  <p>pip 是 Python 的官方包管理器，venv 是 Python 3.3+ 内置的虚拟环境工具。它们共同构成了 Python 包管理的基础设施。</p>
+
+  <h3>虚拟环境</h3>
+  <p>虚拟环境为每个项目创建独立的 Python 环境，避免不同项目的依赖冲突。</p>
+  <pre><code># 创建虚拟环境
+python -m venv .venv
+
+# 激活虚拟环境 (Linux/macOS)
+source .venv/bin/activate
+
+# 激活虚拟环境 (Windows)
+# .venv\Scripts\activate
+
+# 退出虚拟环境
+deactivate
+
+# 使用虚拟环境运行脚本
+.venv/bin/python script.py
+
+# 复制虚拟环境
+python -m venv --copies .venv</code></pre>
+
+  <h3>pip install</h3>
+  <pre><code># 安装包
+pip install requests
+pip install "flask>=2.0,<3.0"
+pip install "click>=8.0"
+
+# 从 requirements 文件安装
+pip install -r requirements.txt
+
+# 安装开发版本
+pip install -e .
+
+# 安装可选项
+pip install "fastapi[all]"
+
+# 指定源
+pip install -i https://pypi.tuna.tsinghua.edu.cn/simple numpy
+
+# 升级
+pip install --upgrade pip setuptools wheel</code></pre>
+
+  <h3>requirements.txt</h3>
+  <pre><code># requirements.txt — 固定版本依赖
+flask==3.0.0
+sqlalchemy>=2.0,<3.0
+pydantic>=2.5
+# git 依赖
+git+https://github.com/user/package.git@main
+# 本地路径
+./local-package/
+
+# requirements-dev.txt — 开发依赖
+-r requirements.txt
+pytest==8.0
+pytest-cov>=4.0
+black==24.0
+ruff==0.1.0
+mypy==1.7.0
+
+# 生成 requirements.txt
+# pip freeze > requirements.txt
+# pip list --format=freeze > requirements.txt</code></pre>
+
+  <h3>pip 高级用法</h3>
+  <pre><code># 查看已安装包
+pip list
+pip list --outdated  # 查看可升级的包
+
+# 查看包信息
+pip show flask
+
+# 检查依赖冲突
+pip check
+
+# 只下载不安装（用于离线安装）
+pip download -r requirements.txt -d ./packages/
+pip install --no-index --find-links=./packages/ -r requirements.txt
+
+# 哈希校验安装
+pip install --require-hashes -r requirements.txt
+
+# pip.conf / pip.ini 配置
+# [global]
+# index-url = https://pypi.tuna.tsinghua.edu.cn/simple
+# trusted-host = pypi.tuna.tsinghua.edu.cn</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>始终在虚拟环境中工作，永远不要使用系统 Python 的 pip 全局安装包。使用 <code>pip install --user</code> 作为备选方案。将 <code>.venv</code> 目录添加到 <code>.gitignore</code> 中。</div>
+</section>
+
+<section id="pyproject" class="toc-link">
+  <h2><span class="num">02</span> pyproject.toml</h2>
+
+  <p>PEP 517、518 和 621 定义了 <code>pyproject.toml</code> 作为 Python 项目的标准配置文件。它统一了构建系统配置和项目元数据，逐步替代 <code>setup.py</code> 和 <code>setup.cfg</code>。</p>
+
+  <h3>基本结构</h3>
+  <pre><code># pyproject.toml — 完整示例
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-package"
+version = "0.1.0"
+description = "一个示例 Python 包"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+
+authors = [
+    {name = "Author Name", email = "author@example.com"}
+]
+
+keywords = ["example", "tutorial"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+]
+
+dependencies = [
+    "requests>=2.28",
+    "click>=8.1",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "black>=24.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+]
+docs = [
+    "sphinx>=7.0",
+    "myst-parser>=2.0",
+]
+
+[project.urls]
+homepage = "https://github.com/user/my-package"
+documentation = "https://my-package.readthedocs.io"
+repository = "https://github.com/user/my-package"
+
+[project.scripts]
+my-cli = "my_package.cli:main"
+
+[project.entry-points."my_plugin"]
+my_plugin = "my_package.plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["my_package*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yaml", "*.json"]</code></pre>
+
+  <h3>src layout</h3>
+  <p>src layout 是推荐的包目录结构。源代码放在 <code>src/</code> 目录下，将包代码与项目根目录的其他文件（测试、配置、文档）分离。</p>
+  <pre><code># 推荐的项目目录结构
+my-project/
+├── pyproject.toml
+├── README.md
+├── LICENSE
+├── src/
+│   └── my_package/
+│       ├── __init__.py
+│       ├── core.py
+│       ├── cli.py
+│       └── utils.py
+├── tests/
+│   ├── test_core.py
+│   └── test_cli.py
+├── docs/
+│   └── index.md
+└── .gitignore
+
+# pyproject.toml 中的 src 配置
+[tool.setuptools.packages.find]
+where = ["src"]</code></pre>
+
+  <h3>setup.py 到 pyproject.toml 迁移</h3>
+  <table>
+    <tr><th>配置项</th><th>setup.py</th><th>pyproject.toml</th></tr>
+    <tr><td>包名</td><td>name="my-package"</td><td>[project] name = "my-package"</td></tr>
+    <tr><td>版本</td><td>version="0.1.0"</td><td>version = "0.1.0"</td></tr>
+    <tr><td>描述</td><td>description="..."</td><td>description = "..."</td></tr>
+    <tr><td>依赖</td><td>install_requires=[]</td><td>dependencies = []</td></tr>
+    <tr><td>可选依赖</td><td>extras_require={}</td><td>[project.optional-dependencies]</td></tr>
+    <tr><td>入口</td><td>entry_points={}</td><td>[project.scripts]</td></tr>
+    <tr><td>分类</td><td>classifiers=[]</td><td>classifiers = []</td></tr>
+    <tr><td>Python 版本</td><td>python_requires=""</td><td>requires-python = ""</td></tr>
+  </table>
+</section>
+
+<section id="poetry" class="toc-link">
+  <h2><span class="num">03</span> poetry</h2>
+
+  <p>Poetry 是现代化的 Python 包管理和依赖管理工具。它使用 <code>pyproject.toml</code> 作为配置，自动生成 <code>poetry.lock</code> 锁定文件，确保环境可重复安装。</p>
+
+  <h3>基本使用</h3>
+  <pre><code># 安装 poetry
+# curl -sSL https://install.python-poetry.org | python3 -
+
+# 初始化新项目
+poetry new my-project
+cd my-project
+
+# 在现有项目中初始化
+poetry init
+
+# 添加依赖
+poetry add requests
+poetry add "flask>=2.0,<3.0"
+poetry add --group dev pytest pytest-cov black
+poetry add --group docs sphinx
+
+# 安装所有依赖
+poetry install
+poetry install --only main      # 只安装生产依赖
+poetry install --without dev    # 排除 dev 组
+
+# 更新依赖
+poetry update
+poetry update requests
+
+# 查看依赖树
+poetry show --tree
+
+# 运行命令
+poetry run python -m pytest
+poetry run my-cli</code></pre>
+
+  <h3>pyproject.toml 的 poetry 配置</h3>
+  <pre><code>[build-system]
+requires = ["poetry-core>=1.9"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "my-project"
+version = "0.1.0"
+description = "使用 poetry 管理的项目"
+authors = ["Author <author@example.com>"]
+readme = "README.md"
+license = "MIT"
+homepage = "https://github.com/user/my-project"
+repository = "https://github.com/user/my-project"
+keywords = ["poetry", "example"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+requests = "^2.31"
+flask = ">=2.0,<3.0"
+pydantic = {version = "^2.5", extras = ["email"]}
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+ruff = "^0.1.0"
+mypy = "^1.7.0"
+
+[tool.poetry.group.docs.dependencies]
+sphinx = "^7.0"
+
+[tool.poetry.scripts]
+my-cli = "my_package.cli:main"
+
+[build-system]
+requires = ["poetry-core>=1.9"]
+build-backend = "poetry.core.masonry.api"</code></pre>
+
+  <h3>构建与发布</h3>
+  <pre><code># 构建 wheel 和 sdist
+poetry build
+
+# 发布到 PyPI
+poetry publish
+poetry publish --build  # 构建 + 发布
+
+# 发布到 TestPyPI
+poetry publish -r testpypi
+
+# 配置凭证
+# poetry config pypi-token.pypi your-api-token
+# poetry config http-basic.pypi username password
+
+# 版本管理
+poetry version patch     # 0.1.0 -> 0.1.1
+poetry version minor     # 0.1.0 -> 0.2.0
+poetry version major     # 0.1.0 -> 1.0.0
+poetry version "1.0.0"  # 指定版本</code></pre>
+
+  <h3>poetry.lock 文件</h3>
+  <p><code>poetry.lock</code> 记录了所有依赖的精确版本和哈希值。它应提交到版本控制系统中，确保所有开发者使用相同的依赖版本。CI/CD 环境中，<code>poetry install</code> 会优先使用 lock 文件。</p>
+</section>
+
+<section id="pdm" class="toc-link">
+  <h2><span class="num">04</span> pdm</h2>
+
+  <p>PDM（Python Development Master）是遵循 PEP 582 的包管理工具。它使用中心化缓存机制，支持 PEP 621 标准 <code>pyproject.toml</code>，并提供了与 poetry 类似的工作流。</p>
+
+  <h3>基本使用</h3>
+  <pre><code># 安装 pdm
+# curl -sSL https://pdm-project.org/install-pdm.py | python3 -
+
+# 初始化项目
+pdm init
+
+# 添加依赖
+pdm add requests
+pdm add -dG dev pytest pytest-cov
+pdm add "flask>=2.0" "sqlalchemy>=2.0"
+
+# 安装
+pdm install
+pdm install --production  # 只安装生产依赖
+
+# 查看依赖
+pdm list
+pdm list --tree
+
+# 更新
+pdm update
+pdm update requests
+
+# 运行
+pdm run pytest
+pdm run python script.py
+
+# 构建
+pdm build
+
+# 发布
+pdm publish</code></pre>
+
+  <h3>PEP 582 中心化缓存</h3>
+  <p>PDM 使用 PEP 582 的 <code>__pypackages__</code> 目录，将所有依赖安装到项目本地。这与虚拟环境不同——它不创建独立的 Python 解释器副本，而是通过缓存共享已安装的包。</p>
+  <pre><code># pdm 的项目结构
+my-project/
+├── pyproject.toml
+├── pdm.lock
+├── __pypackages__/
+│   └── 3.12/
+│       ├── lib/
+│       └── bin/
+└── src/
+    └── my_package/
+
+# pdm 缓存位置
+# ~/.cache/pdm/ 或 ~/Library/Caches/pdm/
+
+# 配置缓存
+pdm config cache_dir ~/.cache/pdm
+
+# PEP 582 自动识别
+# 在项目根目录运行 Python 时，自动使用 __pypackages__
+# python -c "import requests"  # 会从 __pypackages__ 加载</code></pre>
+
+  <h3>pdm vs poetry 对比</h3>
+  <table>
+    <tr><th>特性</th><th>poetry</th><th>pdm</th></tr>
+    <tr><td>标准</td><td>自定义 pyproject.toml</td><td>PEP 621（标准）</td></tr>
+    <tr><td>虚拟环境</td><td>内置 venv</td><td>PEP 582 __pypackages__</td></tr>
+    <tr><td>锁文件</td><td>poetry.lock</td><td>pdm.lock</td></tr>
+    <tr><td>构建后端</td><td>poetry-core</td><td>pdm-backend / setuptools</td></tr>
+    <tr><td>包缓存</td><td>pip 风格</td><td>中心化缓存（去重）</td></tr>
+    <tr><td>插件系统</td><td>有限</td><td>丰富（pdm-plugin 等）</td></tr>
+    <tr><td>Python 版本管理</td><td>不内置</td><td>内置（pdm use）</td></tr>
+    <tr><td>monorepo</td><td>不原生支持</td><td>原生支持</td></tr>
+  </table>
+</section>
+
+<section id="cython" class="toc-link">
+  <h2><span class="num">05</span> Cython 打包</h2>
+
+  <p>Cython 允许将 Python 代码编译为 C 扩展模块（<code>.so</code> 文件），大幅提升性能。打包 Cython 扩展需要配置编译过程，确保生成的可移植性。</p>
+
+  <h3>Cython 基础打包</h3>
+  <pre><code># pyproject.toml — Cython 扩展
+[build-system]
+requires = ["setuptools>=68.0", "wheel", "cython>=3.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fast-math"
+version = "0.1.0"
+# ...
+
+# src/fast_math/__init__.py — 导入编译后的模块
+from ._core import fast_calc  # noqa: F401
+
+# src/fast_math/_core.pyx — Cython 源代码
+cdef double _square(double x):
+    return x * x
+
+def fast_calc(double[:] arr):
+    cdef int i, n = arr.shape[0]
+    cdef double result = 0.0
+    for i in range(n):
+        result += _square(arr[i])
+    return result</code></pre>
+
+  <h3>setuptools 配置</h3>
+  <pre><code># setup.py — 仍然需要用于编译扩展
+from setuptools import setup, Extension
+from Cython.Build import cythonize
+import numpy
+
+extensions = [
+    Extension(
+        "fast_math._core",
+        sources=["src/fast_math/_core.pyx"],
+        include_dirs=[numpy.get_include()],
+        extra_compile_args=["-O3", "-march=native"],
+        define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
+    ),
+    Extension(
+        "fast_math._image",
+        sources=["src/fast_math/_image.pyx"],
+        include_dirs=[numpy.get_include()],
+    ),
+]
+
+setup(
+    ext_modules=cythonize(
+        extensions,
+        language_level="3",
+        compiler_directives={
+            "boundscheck": False,
+            "wraparound": False,
+            "initializedcheck": False,
+        },
+    ),
+)</code></pre>
+
+  <h3>编译与分发</h3>
+  <pre><code># 构建 wheel（包含编译的 .so 文件）
+python -m build
+
+# 针对当前平台构建
+pip wheel .
+
+# 安装开发版本（本地编译）
+pip install -e .
+
+# 验证编译结果
+python -c "import fast_math; print(fast_math.fast_calc([1,2,3]))"
+
+# Cython 编译后性能对比
+# Python 版本:    ~1.5 秒 (1e8 次循环)
+# Cython (无类型): ~1.2 秒
+# Cython (有类型): ~0.15 秒
+# C 原生:         ~0.12 秒</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>Cython 打包的 <code>.so</code> 文件是平台相关的。要分发给不同平台，需要为每个平台单独构建 wheel。使用 cibuildwheel 可以自动化多平台构建。</div>
+</section>
+
+<section id="pypi" class="toc-link">
+  <h2><span class="num">06</span> 发布到 PyPI</h2>
+
+  <p>发布到 PyPI（Python Package Index）是所有开源 Python 库的最终目标。以下是完整的发布流程。</p>
+
+  <h3>构建分发文件</h3>
+  <pre><code># 安装构建工具
+pip install build twine
+
+# 构建 sdist 和 wheel
+python -m build
+
+# 输出:
+# dist/
+# ├── my-package-0.1.0.tar.gz    # sdist (源码分发)
+# └── my_package-0.1.0-py3-none-any.whl  # wheel (二进制分发)
+
+# 验证构建
+twine check dist/*</code></pre>
+
+  <h3>发布到 TestPyPI</h3>
+  <pre><code># 注册 TestPyPI 账号
+# https://test.pypi.org/account/register/
+
+# 创建 API token
+# https://test.pypi.org/manage/account/token/
+
+# 上传到 TestPyPI
+twine upload --repository-url https://test.pypi.org/legacy/ dist/*
+
+# 从 TestPyPI 安装测试
+pip install --index-url https://test.pypi.org/simple/ my-package</code></pre>
+
+  <h3>发布到正式 PyPI</h3>
+  <pre><code># 创建 PyPI 账号
+# https://pypi.org/account/register/
+
+# 创建 API token
+# https://pypi.org/manage/account/token/
+
+# 配置 API token
+# 方式 1: 环境变量
+export TWINE_USERNAME=__token__
+export TWINE_PASSWORD=pypi-xxxxxxxx
+
+# 方式 2: ~/.pypirc
+[distutils]
+index-servers = pypi
+
+[pypi]
+username = __token__
+password = pypi-xxxxxxxx
+
+# 发布
+twine upload dist/*
+
+# 发布带有 Release 说明
+twine upload dist/* --comment "修复了关键 bug"</code></pre>
+
+  <h3>版本管理策略</h3>
+  <pre><code># 语义化版本: MAJOR.MINOR.PATCH
+# https://semver.org/
+
+# 常用方案 1: 手动维护 pyproject.toml 中的 version
+# 常用方案 2: 使用 __version__ 变量
+# src/my_package/__init__.py
+__version__ = "0.1.0"
+
+# 常用方案 3: 使用 setuptools-scm 从 git tag 自动生成
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
+
+[project]
+dynamic = ["version"]
+
+[tool.setuptools_scm]
+version_scheme = "no-guess-dev"
+
+# git tag v0.1.0
+# 自动生成的版本就是 0.1.0
+
+# 版本标记规范
+# 0.1.0.dev1    — 开发版本
+# 0.1.0a1       — Alpha
+# 0.1.0b1       — Beta
+# 0.1.0rc1      — 候选发布
+# 0.1.0         — 正式发布
+# 0.1.1         — 补丁</code></pre>
+
+  <h3>README 与 License</h3>
+  <pre><code># README.md 应该包含:
+# - 包名和简短描述
+# - 安装说明
+# - 快速开始示例
+# - 主要功能文档链接
+# - 贡献指南
+# - License 信息
+
+# LICENSE 文件
+# 选择开源 License: MIT, Apache 2.0, GPLv3, BSD 等
+# 使用 https://choosealicense.com/ 帮助选择
+
+# pyproject.toml 中引用
+[project]
+readme = "README.md"
+license = {file = "LICENSE"}
+# 或
+license = {text = "MIT"}</code></pre>
+</section>
+
+<section id="cross" class="toc-link">
+  <h2><span class="num">07</span> 跨平台发布</h2>
+
+  <p>对于包含 C 扩展（如 Cython 编译的 <code>.so</code> 文件）的包，需要为每个目标平台和 Python 版本单独构建 wheel。manylinux 标准定义了 Linux 平台的兼容性。</p>
+
+  <h3>manylinux 平台标签</h3>
+  <table>
+    <tr><th>标签</th><th>glibc 版本</th><th>适用发行版</th><th>说明</th></tr>
+    <tr><td>manylinux1</td><td>2.5</td><td>CentOS 5+</td><td>最广泛的兼容性</td></tr>
+    <tr><td>manylinux2010</td><td>2.12</td><td>CentOS 6+</td><td>逐步淘汰</td></tr>
+    <tr><td>manylinux2014</td><td>2.17</td><td>CentOS 7+</td><td>当前主流</td></tr>
+    <tr><td>manylinux_2_24</td><td>2.24</td><td>Debian 9+</td><td>Debian 系列</td></tr>
+    <tr><td>manylinux_2_28</td><td>2.28</td><td>AlmaLinux 8+</td><td>较新平台</td></tr>
+    <tr><td>musllinux_1_1</td><td>musl</td><td>Alpine 3.12+</td><td>Alpine 容器</td></tr>
+  </table>
+
+  <h3>cibuildwheel 自动化</h3>
+  <pre><code># pyproject.toml — cibuildwheel 配置
+[tool.cibuildwheel]
+build = "cp312-*"  # 只构建 Python 3.12
+# build = "cp3{10,11,12}-*"  # 多版本
+skip = "*-win32 *-manylinux_i686"  # 跳过 32 位
+
+# Linux 配置
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+
+# macOS 配置
+[tool.cibuildwheel.macos]
+archs = ["x86_64", "arm64"]
+
+# Windows 配置
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+
+# CI/CD 集成（GitHub Actions）
+# .github/workflows/build.yml
+# uses: pypa/cibuildwheel@v2.16
+
+# 本地运行
+# pip install cibuildwheel
+# cibuildwheel --platform linux</code></pre>
+
+  <h3>纯 Python 包的跨平台</h3>
+  <p>纯 Python 包（无 C 扩展）生成 <code>py3-none-any.whl</code>，天然跨平台。唯一的注意事项是目标 Python 版本的兼容性。在 <code>requires-python</code> 中声明支持的最低版本。</p>
+  <pre><code># 纯 Python 包只需构建一次
+python -m build
+# 生成: my_package-0.1.0-py3-none-any.whl
+# .whl 文件名中的 "any" 表示所有平台通用
+
+# 平台特定的 wheel 命名示例:
+# my_package-0.1.0-cp312-cp312-manylinux_2_28_x86_64.whl
+# my_package-0.1.0-cp312-cp312-macosx_11_0_arm64.whl
+# my_package-0.1.0-cp312-cp312-win_amd64.whl</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>对于跨平台发布，推荐使用 <code>cibuildwheel</code> + GitHub Actions 自动构建所有平台的 wheel。一次提交（git push），自动构建 Linux（x86_64/aarch64）、macOS（Intel/Apple Silicon）和 Windows 的 wheel。</div>
+</section>
+
+<section id="monorepo" class="toc-link">
+  <h2><span class="num">08</span> monorepo 管理</h2>
+
+  <p>Monorepo（单一仓库）将多个相关包放在同一个仓库中管理。Python 通过 namespace package 和 src layout 实现 monorepo 结构。</p>
+
+  <h3>Namespace Package</h3>
+  <p>Namespace package 允许不同目录中的子包共享同一个顶级包名。多个团队可以独立发布各自的部分。</p>
+  <pre><code># 目录结构
+monorepo/
+├── pyproject.toml       # 根项目配置
+├── packages/
+│   ├── core/
+│   │   ├── pyproject.toml
+│   │   └── src/
+│   │       └── mycompany/
+│   │           └── core/
+│   │               ├── __init__.py
+│   │               └── base.py
+│   ├── auth/
+│   │   ├── pyproject.toml
+│   │   └── src/
+│   │       └── mycompany/
+│   │           └── auth/
+│   │               ├── __init__.py
+│   │               └── login.py
+│   └── api/
+│       ├── pyproject.toml
+│       └── src/
+│           └── mycompany/
+│               └── api/
+│                   ├── __init__.py
+│                   └── routes.py
+└── tests/
+    └── integration/
+
+# mycompany/core/__init__.py — 不要设置 __init__.py 中的代码
+# 保持空文件或只放文档字符串，使其成为 namespace package</code></pre>
+
+  <h3>src layout 与 editable install</h3>
+  <pre><code># 根 pyproject.toml 可以使用 workspace 标准
+# PDM 原生支持 workspace
+
+# pdm 的 workspace 配置
+[tool.pdm.workspace]
+packages = ["packages/*"]
+
+# 安装所有 workspace 包
+# pdm install
+
+# poetry 的 workspace 替代方案
+# 使用 scripts 或 Makefile 批量安装
+# for pkg in packages/*; do
+#     (cd "$pkg" && poetry install)
+# done
+
+# 使用 pip -e 安装所有子包
+# pip install -e packages/core
+# pip install -e packages/auth
+# pip install -e packages/api
+
+# 开发时修改 core 包，auth 和 api 自动反映变更</code></pre>
+
+  <h3>共享配置与工具</h3>
+  <pre><code># 共享 ruff 配置（根 pyproject.toml）
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# 共享 mypy 配置
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+
+# 共享 pytest 配置
+[tool.pytest.ini_options]
+testpaths = ["tests", "packages/*/tests"]
+addopts = "-v --cov"
+
+# Makefile 或 task runner
+# .PHONY: test
+# test:
+#     pytest tests packages/*/tests
+
+# .PHONY: lint
+# lint:
+#     ruff check packages/*/src tests
+
+# .PHONY: build-all
+# build-all:
+#     for pkg in packages/*; do \
+#         (cd "$$pkg" && pdm build); \
+#     done</code></pre>
+
+  <h3>版本管理与依赖</h3>
+  <div class="callout"><strong>最佳实践:</strong><br>
+  1. 每个子包独立版本控制，使用 <code>__version__</code> 或 setuptools-scm<br>
+  2. 子包之间使用 <code>path://</code> 依赖或 <code>@editable</code> 进行开发<br>
+  3. 使用 <code>towncrier</code> 或 <code>scriv</code> 管理 changelog<br>
+  4. CI/CD 对变更的子包只构建和测试<br>
+  5. 发布时使用 monorepo 专用的发版工具（如 changesets）<br><br>
+  推荐阅读: <code>pdm workspace</code>、<code>poetry monorepo</code> 文档</div>
+</section>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

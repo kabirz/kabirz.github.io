@@ -1,0 +1,1536 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NiceGUI 桌面与 Web GUI 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>🐍 NiceGUI 桌面与 Web GUI 深度解析</h1>
+  <p class="subtitle">基于 Vue/Quasar · 纯 Python UI · 响应式绑定 · 数据可视化 · 多样化部署</p>
+  <span class="version">NiceGUI 1.4+ · Python 3.10+</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#sec1">NiceGUI 概述</a></li>
+    <li><a href="#sec2">基础组件</a></li>
+    <li><a href="#sec3">布局组件</a></li>
+    <li><a href="#sec4">数据绑定</a></li>
+    <li><a href="#sec5">事件处理</a></li>
+    <li><a href="#sec6">页面与路由</a></li>
+    <li><a href="#sec7">样式与主题</a></li>
+    <li><a href="#sec8">数据可视化</a></li>
+    <li><a href="#sec9">部署</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="sec1" class="toc-link">
+  <h2><span class="num">01</span> NiceGUI 概述</h2>
+
+  <p>NiceGUI 是一个基于 Vue 3 + Quasar Framework 的纯 Python GUI 框架。你无需编写 HTML/CSS/JavaScript，只需写 Python 代码就能构建交互式 Web 界面或桌面应用。</p>
+
+  <h3>核心架构</h3>
+
+<pre><code class="language-python"># NiceGUI 的技术栈
+"""
+┌──────────────────────────────────────────────┐
+│              你的 Python 代码                  │
+│  ui.label / ui.button / ui.input / ...        │
+├──────────────────────────────────────────────┤
+│           NiceGUI 后端引擎                    │
+│  - 自动生成 Vue 3 组件                        │
+│  - WebSocket 双向实时通信                     │
+│  - 响应式数据绑定                             │
+│  - 事件处理系统                               │
+├──────────────────────────────────────────────┤
+│         前端 (自动管理)                       │
+│  - Vue 3 + Quasar Framework                  │
+│  - Tailwind CSS 样式                          │
+│  - 自动热更新（开发模式）                      │
+├──────────────────────────────────────────────┤
+│               运行模式                        │
+│  - Web 模式: 浏览器访问                      │
+│  - 桌面模式: 原生窗口 (配合 pywebview)        │
+│  - 混合模式: 同时 Web + 桌面                 │
+└──────────────────────────────────────────────┘
+"""
+
+# 最小示例
+from nicegui import ui
+
+# 创建 UI
+ui.label("Hello NiceGUI!")
+ui.button("Click me", on_click=lambda: ui.notify("Clicked!"))
+
+# 启动应用
+# ui.run()
+
+# 可选参数
+ui.run(
+    title="My App",
+    port=8080,
+    host="0.0.0.0",
+    dark=False,
+    reload=True,       # 开发模式热重载
+    show=True,         # 自动打开浏览器
+    native=False,      # 是否使用原生窗口
+    window_size=(800, 600),
+    favicon="🚀",
+)
+</code></pre>
+
+  <h3>设计理念</h3>
+
+<pre><code class="language-python"># 1. 纯 Python — 无需前端知识
+# 2. 声明式 UI — 代码结构与 UI 结构对应
+# 3. 响应式更新 — 数据变化自动反映到 UI
+# 4. 双向绑定 — 前端交互反向更新 Python 数据
+
+# 与其他 Python GUI 框架对比
+"""
+框架          类型          学习曲线   安装大小   平台
+───────────   ──────────   ────────   ────────   ────────
+NiceGUI       Web+桌面      低         小         跨平台
+Tkinter       原生桌面       中         内置       Windows优先
+PyQt/PySide   原生桌面       高         大         跨平台
+Streamlit     Web 仪表盘    极低        小         仅 Web
+Gradio        ML 演示       极低        小         仅 Web
+Flet          Flutter桌面   中         中         跨平台
+Remi          Web 界面      极低        极小       仅 Web
+"""
+
+# 安装
+# pip install nicegui[all]  # 全部依赖
+# pip install nicegui       # 最小依赖
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    NiceGUI 特别适合快速原型、内部工具、IoT 仪表盘和简单的桌面应用。它的优势在于响应式数据绑定和自动生成前端代码，但复杂的交互逻辑还是需要深入理解其事件循环模型。生产环境中建议使用 <code>native=False</code> 的 Web 模式，通过反向代理部署。
+  </div>
+</section>
+
+<section id="sec2" class="toc-link">
+  <h2><span class="num">02</span> 基础组件</h2>
+
+  <h3>显示组件</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 文本标签
+ui.label("普通文本")
+ui.label("Markdown **支持**").classes("text-lg")
+ui.label("HTML <b>支持</b>").props('style="color: red"')
+
+# 图标
+ui.icon("home", color="primary", size="2em")
+ui.icon("settings", color="#ff6b6b")
+
+# 图片
+ui.image("https://picsum.photos/200/100")
+
+# HTML / Markdown
+ui.html("<h2>自定义 HTML</h2>")
+ui.markdown("""
+# Markdown 标题
+- 列表项 1
+- 列表项 2
+**粗体** *斜体* `代码`
+""")
+
+# 分隔线
+ui.separator()
+</code></pre>
+
+  <h3>输入组件</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 文本输入
+name = ui.input(label="姓名", placeholder="请输入姓名")
+name.bind_value_to(app.storage.user, "name")
+
+# 密码输入
+password = ui.input(
+    label="密码",
+    password=True,
+    password_toggle_button=True,  # 显示/隐藏密码按钮
+)
+
+# 文本区域
+bio = ui.textarea(
+    label="个人简介",
+    placeholder="介绍一下自己...",
+    maxlength=500,
+)
+
+# 数字输入
+age = ui.number(
+    label="年龄",
+    min=0,
+    max=150,
+    step=1,
+    value=25,
+)
+
+# 选择器
+city = ui.select(
+    label="城市",
+    options=["北京", "上海", "广州", "深圳"],
+    value="北京",
+)
+
+# 支持分组的选择器
+ui.select({
+    "中国": ["北京", "上海"],
+    "美国": ["纽约", "旧金山"],
+}, label="城市分组", value="北京")
+
+# 滑块
+volume = ui.slider(
+    min=0,
+    max=100,
+    step=1,
+    value=50,
+)
+
+# 开关
+enabled = ui.switch("启用功能", value=True)
+
+# 复选框
+agree = ui.checkbox("同意条款")
+
+# 单选按钮
+gender = ui.radio(
+    ["男", "女", "其他"],
+    value="男",
+).props("inline")  # 水平排列
+
+# 颜色选择器
+color = ui.color_picker(label="选择颜色", value="#ff6b6b")
+
+# 日期/时间选择器
+date = ui.date(value="2024-01-01")
+time = ui.time(value="12:00")
+
+# 文件上传
+ui.upload(
+    label="上传文件",
+    multiple=True,
+    max_file_size=10 * 1024 * 1024,  # 10MB
+    on_upload=lambda e: ui.notify(f"上传: {e.name}"),
+)
+</code></pre>
+
+  <h3>按钮与交互</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 基本按钮
+ui.button("点击我", on_click=lambda: ui.notify("按钮被点击"))
+
+# 按钮变体
+ui.button("主要按钮", color="primary")
+ui.button("次要按钮", color="secondary")
+ui.button("成功", color="positive")
+ui.button("警告", color="warning")
+ui.button("危险", color="negative")
+ui.button("禁用", color="grey", disable=True)
+
+# 带图标的按钮
+ui.button("保存", icon="save")
+ui.button("", icon="delete", color="negative").props("round")
+
+# 按钮组
+with ui.button_group():
+    ui.button("左").props("outline")
+    ui.button("中").props("outline")
+    ui.button("右").props("outline")
+
+# 切换按钮
+toggle = ui.toggle(["选项A", "选项B", "选项C"], value="选项A")
+
+# 链接按钮
+ui.link("访问官网", "https://nicegui.io", new_tab=True)
+
+# 按钮加载状态
+async def async_action():
+    button.props("loading")
+    await asyncio.sleep(2)
+    button.props(remove="loading")
+    ui.notify("完成")
+
+button = ui.button("异步操作", on_click=async_action)
+</code></pre>
+</section>
+
+<section id="sec3" class="toc-link">
+  <h2><span class="num">03</span> 布局组件</h2>
+
+  <h3>行与列布局</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 行布局（水平排列）
+with ui.row():
+    ui.button("按钮 1")
+    ui.button("按钮 2")
+    ui.button("按钮 3")
+
+# 列布局（垂直排列）
+with ui.column():
+    ui.label("第一行")
+    ui.label("第二行")
+    ui.label("第三行")
+
+# 行内对齐控制
+with ui.row(align="center"):  # 可选: start, center, end, stretch
+    ui.label("居中").classes("text-h4")
+    ui.button("按钮")
+
+# 间隔控制
+with ui.row(wrap=True):
+    for i in range(20):
+        ui.button(f"按钮 {i}")
+
+# Flex 布局
+with ui.row().classes("flex items-center justify-between"):
+    ui.label("左侧")
+    ui.label("中间")
+    ui.label("右侧")
+</code></pre>
+
+  <h3>卡片</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 基础卡片
+with ui.card():
+    ui.label("卡片标题").classes("text-h6")
+    ui.separator()
+    ui.label("卡片内容...")
+    with ui.row():
+        ui.button("确认", color="primary")
+        ui.button("取消")
+
+# 卡片变体
+with ui.card().tight():  # 紧凑模式
+    ui.image("https://picsum.photos/400/200")
+    with ui.card_section():
+        ui.label("标题").classes("text-h5")
+        ui.label("副标题").classes("text-subtitle2")
+        ui.label("描述文本...")
+
+# 带阴影的卡片
+with ui.card().classes("shadow-lg"):
+    ui.label("大阴影卡片")
+
+# 可点击卡片
+with ui.card().on("click", lambda: ui.notify("卡片被点击")):
+    ui.icon("settings", color="primary")
+    ui.label("设置").classes("text-h6")
+</code></pre>
+
+  <h3>展开面板与标签页</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 展开面板
+with ui.expansion("点击展开", icon="info"):
+    ui.label("展开后的内容")
+    ui.button("内部按钮")
+
+# 嵌套展开
+with ui.expansion("一级菜单"):
+    ui.label("一级内容")
+    with ui.expansion("二级菜单"):
+        ui.label("二级内容")
+
+# 标签页
+with ui.tabs() as tabs:
+    tab1 = ui.tab("主页")
+    tab2 = ui.tab("设置")
+    tab3 = ui.tab("关于")
+
+with ui.tab_panels(tabs, value=tab1):
+    with ui.tab_panel(tab1):
+        ui.label("主页内容")
+    with ui.tab_panel(tab2):
+        ui.label("设置内容")
+        ui.switch("启用选项")
+    with ui.tab_panel(tab3):
+        ui.label("关于页面")
+
+# 带图标的标签
+with ui.tabs() as tabs:
+    ui.tab("主页", icon="home")
+    ui.tab("设置", icon="settings")
+    ui.tab("通知", icon="notifications")
+</code></pre>
+
+  <h3>弹窗与对话框</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 通知提示
+ui.notify("操作成功", type="positive")
+ui.notify("警告信息", type="warning")
+ui.notify("发生错误", type="negative")
+ui.notify("普通信息", type="info")
+
+# 自定义通知
+ui.notify(
+    "自定义消息",
+    position="top-right",  # top-left, top-right, bottom-left, bottom-right
+    timeout=3000,          # 毫秒，0 则不自动关闭
+    close_button=True,
+    multi_line=True,
+)
+
+# 对话框
+with ui.dialog() as dialog:
+    with ui.card():
+        ui.label("确认操作").classes("text-h6")
+        ui.label("确定要执行此操作吗？")
+
+        with ui.row().classes("justify-end"):
+            ui.button("取消", on_click=dialog.close)
+            ui.button("确认", color="primary", on_click=lambda: (
+                dialog.close(),
+                ui.notify("已确认"),
+            ))
+
+ui.button("打开对话框", on_click=dialog.open)
+
+# 带输入的对话框
+with ui.dialog() as input_dialog:
+    with ui.card():
+        ui.label("请输入信息").classes("text-h6")
+        name = ui.input("姓名")
+        with ui.row().classes("justify-end"):
+            ui.button("取消", on_click=input_dialog.close)
+            ui.button("提交", on_click=lambda: (
+                ui.notify(f"你好, {name.value}"),
+                input_dialog.close()
+            ))
+
+# 工具提示
+ui.button("悬停我").tooltip("这是一个工具提示")
+</code></pre>
+</section>
+
+<section id="sec4" class="toc-link">
+  <h2><span class="num">04</span> 数据绑定</h2>
+
+  <p>NiceGUI 提供强大的响应式数据绑定系统，数据变化时 UI 自动更新，UI 交互时数据自动同步。</p>
+
+  <h3>基础绑定</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 基础响应式变量
+from nicegui import binding
+
+# 使用 reactive 创建响应式数据
+count = ui.reactive(0)
+
+# 自动绑定：数据变化触发 UI 更新
+ui.label().bind_text_from(count, "value")
+
+# 手动更新
+def increment():
+    count.value += 1  # 自动更新所有绑定的 UI
+    ui.notify(f"计数: {count.value}")
+
+ui.button("增加", on_click=increment)
+
+# 双向绑定示例
+name = ui.reactive("张三")
+ui.input("姓名").bind_value(name)  # 双向绑定
+
+# 显示更新
+ui.label().bind_text_from(name, "value")
+
+# 复杂对象
+class User:
+    def __init__(self):
+        self.name = "张三"
+        self.age = 25
+
+user = User()
+ui.label().bind_text_from(user, "name")
+ui.input().bind_value(user, "name")
+ui.number().bind_value(user, "age")
+</code></pre>
+
+  <h3>bind_* 方法</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 绑定文本
+label = ui.label()
+label.bind_text_from(source_obj, "field_name")
+
+# 绑定值
+input_field = ui.input()
+input_field.bind_value(source_obj, "field_name")
+
+# 绑定可见性
+button = ui.button("动态按钮")
+button.bind_visible_from(source_obj, "is_visible")
+
+# 绑定禁用状态
+button.bind_enabled_from(source_obj, "is_enabled")
+
+# 绑定样式类
+label.bind_classes_from(source_obj, "class_name", {
+    True: "text-red",
+    False: "text-green",
+})
+
+# 绑定样式
+label.bind_style_from(source_obj, "color_value", backward=lambda v: f"color: {v}")
+
+# 绑定属性
+button.props("color=primary")
+button.bind_props_from(source_obj, "button_color", "color")
+
+# 绑定图标
+icon = ui.icon("home")
+icon.bind_name_from(source_obj, "icon_name")
+
+# 完整示例
+class ViewModel:
+    def __init__(self):
+        self.count = 0
+        self.is_even = True
+        self.color = "primary"
+
+model = ViewModel()
+
+# 响应式更新
+def update_count():
+    model.count += 1
+    model.is_even = model.count % 2 == 0
+    model.color = "positive" if model.is_even else "negative"
+
+# UI 绑定
+ui.label().bind_text_from(model, "count")
+ui.button("增加", on_click=update_count)
+ui.label("偶数").bind_visible_from(model, "is_even")
+ui.label("奇数").bind_visible_from(model, "is_even", backward=lambda v: not v)
+</code></pre>
+
+  <h3>计算属性与转换</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 使用 backward 转换函数
+class Temperature:
+    def __init__(self):
+        self.celsius = 25
+
+temp = Temperature()
+
+# 显示华氏温度（自动转换）
+def to_fahrenheit(c):
+    return f"{c * 9/5 + 32:.1f}°F"
+
+def from_fahrenheit(f_str):
+    # 从字符串提取数值
+    try:
+        return (float(f_str.replace("°F", "")) - 32) * 5/9
+    except:
+        return temp.celsius
+
+ui.label().bind_text_from(temp, "celsius", backward=lambda v: f"{v}°C")
+
+# 列表绑定
+class ShoppingList:
+    def __init__(self):
+        self.items = ["牛奶", "面包", "鸡蛋"]
+
+cart = ShoppingList()
+
+# 列表渲染
+for item in cart.items:
+    ui.checkbox(item)
+
+# 动态添加
+def add_item():
+    cart.items.append(f"商品 {len(cart.items) + 1}")
+    ui.checkbox(cart.items[-1])
+
+ui.button("添加商品", on_click=add_item)
+
+# 字典绑定
+class Config:
+    def __init__(self):
+        self.settings = {
+            "theme": "light",
+            "font_size": 14,
+        }
+
+config = Config()
+ui.select(
+    ["light", "dark", "auto"],
+    value=config.settings["theme"]
+).bind_value(config.settings, "theme")
+</code></pre>
+</section>
+
+<section id="sec5" class="toc-link">
+  <h2><span class="num">05</span> 事件处理</h2>
+
+  <h3>基础事件</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 点击事件
+def handle_click():
+    ui.notify("按钮被点击")
+
+ui.button("点击我", on_click=handle_click)
+
+# 带参数的点击
+ui.button("传参", on_click=lambda: ui.notify("Lambda 调用"))
+
+# 输入事件
+def on_input_change(event):
+    ui.notify(f"输入变化: {event.value}")
+
+ui.input("输入框", on_change=on_input_change)
+
+# 选择事件
+def on_select(event):
+    ui.notify(f"选择了: {event.value}")
+
+ui.select(["A", "B", "C"], on_change=on_select)
+
+# 开关事件
+def on_toggle(event):
+    ui.notify(f"开关: {event.value}")
+
+ui.switch("开关", on_change=on_toggle)
+
+# 滑块事件
+def on_slider_change(event):
+    ui.notify(f"值: {event.value}")
+
+ui.slider(min=0, max=100, on_change=on_slider_change)
+</code></pre>
+
+  <h3>键盘与鼠标事件</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 全局键盘事件
+def on_key(event):
+    ui.notify(f"按键: {event.key} ({event.key_code})")
+    if event.key == "Escape":
+        ui.notify("按下了 ESC")
+
+ui.on("keydown", on_key)
+
+# 特定组件的键盘事件
+input_field = ui.input("输入")
+input_field.on("keydown.enter", lambda: ui.notify("按下了回车"))
+input_field.on("keydown.escape", lambda: input_field.value = "")
+
+# 鼠标事件
+def on_mouse(event):
+    ui.notify(f"鼠标位置: ({event.x}, {event.y})")
+
+ui.button("悬停区域").on("mouseenter", lambda: ui.notify("鼠标进入"))
+ui.button("点击区域").on("mouseleave", lambda: ui.notify("鼠标离开"))
+
+# 右键菜单
+ui.label("右键点击我").on("contextmenu", lambda e: (
+    ui.notify("右键菜单"),
+    e.prevent_default()  # 阻止浏览器默认右键菜单
+))
+
+# 拖拽事件
+draggable = ui.label("拖拽我").classes("cursor-move")
+draggable.on("dragstart", lambda: ui.notify("开始拖拽"))
+</code></pre>
+
+  <h3>自定义事件与定时器</h3>
+
+<pre><code class="language-python">from nicegui import ui
+import asyncio
+
+# 定时器
+from nicegui import app
+
+# 周期性任务
+@ui.page("/timer")
+def timer_page():
+    counter = ui.reactive(0)
+
+    # 每秒更新
+    timer = ui.timer(1.0, lambda: counter.increment())
+
+    ui.label().bind_text_from(counter, "value")
+
+    ui.button("暂停", on_click=timer.deactivate)
+    ui.button("恢复", on_click=timer.activate)
+
+# 一次性延迟任务
+async def delayed_action():
+    await asyncio.sleep(2)
+    ui.notify("2 秒后执行")
+
+ui.button("延迟通知", on_click=delayed_action)
+
+# 复杂自定义事件
+class Counter:
+    def __init__(self):
+        self.count = 0
+        self.history = []
+
+    def increment(self):
+        self.count += 1
+        self.history.append(("+", self.count))
+        self.emit_event("change")
+
+    def decrement(self):
+        self.count -= 1
+        self.history.append(("-", self.count))
+        self.emit_event("change")
+
+# 自定义 UI 事件
+@ui.page("/custom-events")
+def custom_events():
+    c = Counter()
+
+    # 使用 ui.timer 实现事件驱动
+    ui.label("计数器").classes("text-h4")
+    count_label = ui.label().bind_text_from(c, "count")
+
+    with ui.row():
+        ui.button("-", on_click=c.decrement)
+        ui.button("+", on_click=c.increment)
+
+    # 监听自定义变化
+    ui.label("历史记录:")
+    history_log = ui.column()
+
+    def update_history():
+        history_log.clear()
+        for op, val in c.history[-5:]:
+            with history_log:
+                ui.label(f"{op} {val}")
+
+    # 每次更新后刷新历史
+    ui.timer(0.5, update_history, once=False)
+</code></pre>
+</section>
+
+<section id="sec6" class="toc-link">
+  <h2><span class="num">06</span> 页面与路由</h2>
+
+  <h3>@ui.page 装饰器</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 定义页面（自动路由）
+@ui.page("/")
+def index_page():
+    ui.label("首页").classes("text-h2")
+    ui.link("去关于页", "/about")
+
+@ui.page("/about")
+def about_page():
+    ui.label("关于页面").classes("text-h2")
+    ui.markdown("这是一个 NiceGUI 示例应用")
+    ui.link("回到首页", "/")
+
+# 带路径参数的页面
+@ui.page("/user/{user_id}")
+def user_page(user_id: int):
+    ui.label(f"用户 ID: {user_id}").classes("text-h3")
+    ui.label(f"用户详情...")
+
+# 带查询参数的页面
+@ui.page("/search")
+def search_page(q: str = ""):
+    ui.label(f"搜索: {q}")
+    ui.input("搜索", value=q, on_change=lambda e: ui.open(f"/search?q={e.value}"))
+
+# 页面标题配置
+@ui.page("/settings", title="设置")
+def settings_page():
+    ui.label("设置页面")
+
+# 页面暗色模式
+@ui.page("/dark", dark=True)
+def dark_page():
+    ui.label("暗色模式页面")
+
+# 页面刷新间隔
+@ui.page("/live", refresh="auto")  # 自动刷新
+def live_page():
+    import datetime
+    ui.label(f"当前时间: {datetime.datetime.now()}")
+</code></pre>
+
+  <h3>导航与多页面</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# ui.open — 导航
+ui.link("打开页面", "/about")           # 链接导航
+ui.button("跳转", on_click=lambda: ui.open("/about"))  # 代码导航
+ui.button("新标签页", on_click=lambda: ui.open("https://example.com", new_tab=True))
+
+# 带标题的多页面应用
+@ui.page("/app")
+def app_page():
+    # 侧边栏布局
+    with ui.left_drawer().classes("bg-grey-2"):
+        ui.label("导航菜单").classes("text-h6")
+        ui.separator()
+
+        ui.link("仪表盘", "/app/dashboard")
+        ui.link("数据分析", "/app/analytics")
+        ui.link("设置", "/app/settings")
+
+    # 主要内容区域
+    with ui.column().classes("p-4 w-full"):
+        ui.label("欢迎使用应用").classes("text-h3")
+
+# 页面间数据传递
+app_data = {"user": None}
+
+@ui.page("/login")
+def login_page():
+    def do_login():
+        app_data["user"] = name.value
+        ui.open("/dashboard")
+
+    name = ui.input("用户名")
+    ui.button("登录", on_click=do_login)
+
+@ui.page("/dashboard")
+def dashboard_page():
+    if not app_data.get("user"):
+        ui.open("/login")
+        return
+    ui.label(f"欢迎, {app_data['user']}!")
+
+# 动态页面生成
+pages = ["page1", "page2", "page3"]
+for p in pages:
+    @ui.page(f"/dynamic/{p}")
+    def dynamic_page(page_name=p):
+        ui.label(f"这是 {page_name}")
+</code></pre>
+
+  <h3>App 生命周期</h3>
+
+<pre><code class="language-python">from nicegui import ui, app
+import asyncio
+
+# 应用级存储（跨页面共享）
+app.storage.user  # 浏览器 localStorage（每个用户独立）
+app.storage.general  # 服务器端（所有用户共享）
+
+# 存储使用示例
+@ui.page("/counter")
+def counter_page():
+    # 使用 user storage 保存每个用户的计数
+    if "count" not in app.storage.user:
+        app.storage.user["count"] = 0
+
+    count = ui.reactive(app.storage.user["count"])
+
+    def increment():
+        count.value += 1
+        app.storage.user["count"] = count.value
+
+    ui.label().bind_text_from(count, "value")
+    ui.button("增加", on_click=increment)
+
+# 应用启动/关闭事件
+@app.on_startup
+def startup():
+    print("应用启动")
+    # 初始化数据库连接
+    # 加载配置
+
+@app.on_shutdown
+def shutdown():
+    print("应用关闭")
+    # 关闭连接池
+    # 保存状态
+
+# 后台任务
+async def background_task():
+    while True:
+        print("后台任务运行中...")
+        await asyncio.sleep(60)
+
+@app.on_startup
+async def start_bg_task():
+    asyncio.create_task(background_task())
+
+# 中间件
+@app.middleware("http")
+async def log_requests(request):
+    print(f"请求: {request.method} {request.url}")
+
+# 异常处理
+@app.exception_handler(ValueError)
+def handle_value_error(exc: ValueError):
+    ui.notify(f"值错误: {exc}", type="negative")
+</code></pre>
+</section>
+
+<section id="sec7" class="toc-link">
+  <h2><span class="num">07</span> 样式与主题</h2>
+
+  <h3>Tailwind CSS 类</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# NiceGUI 内置 Tailwind CSS 支持
+# 通过 .classes() 方法添加 Tailwind 类
+
+# 文本样式
+ui.label("大标题").classes("text-4xl font-bold text-blue-600")
+ui.label("小标题").classes("text-xl font-semibold text-gray-500")
+ui.label("正文").classes("text-base text-gray-800 leading-relaxed")
+ui.label("错误").classes("text-sm text-red-500 italic")
+
+# 间距
+ui.label("上边距").classes("mt-8")
+ui.label("内边距").classes("p-4")
+ui.label("外边距").classes("mx-auto my-4")
+
+# 背景与边框
+ui.label("带背景").classes("bg-blue-100 p-2 rounded")
+ui.button("圆角按钮").classes("rounded-full")
+ui.card().classes("border-2 border-blue-300 shadow-lg")
+
+# 宽高
+ui.label("固定宽度").classes("w-64")
+ui.image("https://picsum.photos/400").classes("h-48 object-cover")
+
+# 响应式布局
+with ui.row().classes("flex flex-col md:flex-row"):
+    ui.label("移动端竖排").classes("w-full md:w-1/2")
+    ui.label("桌面端横排").classes("w-full md:w-1/2")
+
+# Flexbox 辅助类
+with ui.row().classes("flex items-center justify-between p-4"):
+    ui.label("左侧")
+    ui.button("右侧")
+</code></pre>
+
+  <h3>自定义 CSS 与 ui.query</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 全局 CSS
+ui.add_head_html("""
+<style>
+  .custom-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 20px;
+    border-radius: 12px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+  }
+  .custom-button {
+    background: #ff6b6b;
+    border: none;
+    padding: 10px 24px;
+    border-radius: 8px;
+    font-weight: bold;
+  }
+  .custom-button:hover {
+    background: #ee5a24;
+    transform: scale(1.05);
+    transition: all 0.3s;
+  }
+</style>
+""")
+
+# 应用自定义 CSS 类
+with ui.card().classes("custom-card"):
+    ui.label("自定义卡片样式")
+    ui.button("自定义按钮").classes("custom-button")
+
+# ui.query — 通过 CSS 选择器控制样式
+ui.query("body").style("background-color: #f0f2f5")
+ui.query(".nicegui-content").classes("max-w-7xl mx-auto p-4")
+ui.query("h1").style("color: #0969da; font-size: 2rem")
+
+# 条件样式
+@ui.page("/styled")
+def styled_page():
+    dark_mode = ui.dark_mode()
+    ui.switch("暗色模式", on_change=dark_mode.toggle)
+
+    # 根据模式应用不同样式
+    if dark_mode.value:
+        ui.query("body").style("background-color: #1a1a2e; color: #eee")
+    else:
+        ui.query("body").style("background-color: #f0f2f5; color: #333")
+
+# 动画
+ui.label("动画文本").classes("animate-pulse text-2xl text-blue-500")
+ui.button("弹跳按钮").classes("animate-bounce")
+
+# 自定义 Quasar 属性
+ui.button("带阴影").props("glow")
+ui.button("圆角").props("rounded")
+ui.button("平面").props("flat")
+ui.button("描边").props("outline")
+ui.button("大按钮").props("size=xl")
+</code></pre>
+
+  <h3>暗色模式</h3>
+
+<pre><code class="language-python">from nicegui import ui
+
+# 全局暗色模式
+ui.dark_mode().enable()   # 开启暗色
+ui.dark_mode().disable()  # 关闭暗色
+
+# 可切换的暗色模式
+dark = ui.dark_mode()
+ui.switch("暗色模式", on_change=dark.toggle)
+
+# 检测系统偏好
+dark_mode = ui.dark_mode(
+    value=None  # None = 跟随系统
+)
+
+# 页面级暗色模式
+@ui.page("/dark-page", dark=True)
+def dark_page():
+    ui.label("这个页面总是暗色模式")
+
+@ui.page("/light-page", dark=False)
+def light_page():
+    ui.label("这个页面总是亮色模式")
+
+# 自定义暗色模式切换按钮
+@ui.page("/custom-dark")
+def custom_dark():
+    dark = ui.dark_mode()
+    is_dark = ui.reactive(False)
+
+    def toggle_dark():
+        is_dark.value = not is_dark.value
+        if is_dark.value:
+            dark.enable()
+        else:
+            dark.disable()
+
+    ui.button("切换主题", on_click=toggle_dark)
+    ui.label("当前: ").bind_text_from(is_dark, "value",
+        backward=lambda v: "🌙 暗色" if v else "☀️ 亮色"
+    )
+</code></pre>
+</section>
+
+<section id="sec8" class="toc-link">
+  <h2><span class="num">08</span> 数据可视化</h2>
+
+  <h3>Plotly 图表</h3>
+
+<pre><code class="language-python">from nicegui import ui
+import plotly.graph_objects as go
+import plotly.express as px
+import pandas as pd
+import numpy as np
+
+# 基础折线图
+def line_chart():
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=[1, 2, 3, 4, 5],
+        y=[2, 4, 3, 5, 4],
+        mode="lines+markers",
+        name="数据系列",
+        line=dict(color="#0969da", width=3),
+    ))
+    fig.update_layout(title="折线图", height=400)
+    return fig
+
+ui.plotly(line_chart()).classes("w-full")
+
+# 柱状图
+def bar_chart():
+    fig = go.Figure(data=[
+        go.Bar(name="2023", x=["A", "B", "C"], y=[30, 45, 25]),
+        go.Bar(name="2024", x=["A", "B", "C"], y=[40, 35, 50]),
+    ])
+    fig.update_layout(barmode="group", title="柱状图对比")
+    return fig
+
+ui.plotly(bar_chart()).classes("w-full")
+
+# 饼图
+def pie_chart():
+    fig = go.Figure(data=[go.Pie(
+        labels=["手机", "电脑", "平板", "配件"],
+        values=[45, 25, 15, 15],
+        hole=0.4,  # 环形图
+    )])
+    fig.update_layout(title="销售占比")
+    return fig
+
+# 使用 Plotly Express
+def scatter_plot():
+    df = pd.DataFrame({
+        "x": np.random.randn(100),
+        "y": np.random.randn(100),
+        "category": np.random.choice(["A", "B", "C"], 100),
+    })
+    fig = px.scatter(df, x="x", y="y", color="category",
+                     title="散点图", opacity=0.7)
+    return fig
+
+# 交互式更新
+@ui.page("/live-chart")
+def live_chart():
+    import random
+    data = {"x": list(range(10)), "y": [random.random() for _ in range(10)]}
+    plot = ui.plotly(go.Figure(
+        data=go.Scatter(x=data["x"], y=data["y"], mode="lines+markers")
+    )).classes("w-full")
+
+    def update():
+        data["x"].append(len(data["x"]))
+        data["y"].append(random.random())
+        plot.update_traces(
+            go.Scatter(x=data["x"], y=data["y"], mode="lines+markers")
+        )
+
+    ui.button("添加数据点", on_click=update)
+</code></pre>
+
+  <h3>ECharts 图表</h3>
+
+<pre><code class="language-python">from nicegui import ui
+from nicegui.elements import EChart
+
+# 基础 ECharts
+options = {
+    "title": {"text": "ECharts 示例"},
+    "xAxis": {
+        "type": "category",
+        "data": ["一月", "二月", "三月", "四月", "五月", "六月"],
+    },
+    "yAxis": {"type": "value"},
+    "series": [{
+        "name": "销量",
+        "type": "line",
+        "data": [150, 230, 224, 218, 135, 147],
+        "smooth": True,
+    }],
+}
+
+ui.echart(options).classes("w-full h-80")
+
+# 组合图表
+def combined_chart():
+    options = {
+        "title": {"text": "组合图表"},
+        "tooltip": {"trigger": "axis"},
+        "legend": {"data": ["销售额", "增长率"]},
+        "xAxis": {
+            "type": "category",
+            "data": ["Q1", "Q2", "Q3", "Q4"],
+        },
+        "yAxis": [
+            {"type": "value", "name": "销售额"},
+            {"type": "value", "name": "增长率"},
+        ],
+        "series": [
+            {
+                "name": "销售额",
+                "type": "bar",
+                "data": [120, 200, 150, 80],
+            },
+            {
+                "name": "增长率",
+                "type": "line",
+                "yAxisIndex": 1,
+                "data": [2.0, 5.0, 3.5, -1.0],
+            },
+        ],
+    }
+    return options
+
+ui.echart(combined_chart()).classes("w-full h-80")
+
+# 饼图
+pie_options = {
+    "title": {"text": "访问来源", "left": "center"},
+    "series": [{
+        "name": "来源",
+        "type": "pie",
+        "radius": ["40%", "70%"],
+        "center": ["50%", "55%"],
+        "data": [
+            {"value": 1048, "name": "搜索引擎"},
+            {"value": 735, "name": "直接访问"},
+            {"value": 580, "name": "社交媒体"},
+        ],
+        "emphasis": {"itemStyle": {"shadowBlur": 10}},
+    }],
+}
+
+ui.echart(pie_options).classes("w-full h-80")
+
+# 实时 ECharts
+@ui.page("/realtime-echart")
+def realtime_echart():
+    from random import randint
+
+    # 初始化 20 个数据点
+    data = [randint(10, 100) for _ in range(20)]
+
+    chart = ui.echart({
+        "xAxis": {"type": "value", "min": 0, "max": 30},
+        "yAxis": {"type": "value"},
+        "series": [{
+            "type": "line",
+            "data": [list(enumerate(data))],
+            "smooth": True,
+        }],
+    }).classes("w-full h-64")
+
+    def add_point():
+        data.append(randint(10, 100))
+        if len(data) > 30:
+            data.pop(0)
+        chart.update_series("line", {
+            "data": [list(enumerate(data))],
+        })
+
+    ui.button("添加点", on_click=add_point)
+    ui.timer(1.0, add_point)  # 每秒自动添加
+</code></pre>
+
+  <h3>Highcharts 与表格</h3>
+
+<pre><code class="language-python">from nicegui import ui
+import pandas as pd
+
+# 高亮图表
+ui.highchart({
+    "title": {"text": "Highcharts 示例"},
+    "series": [{
+        "name": "数据",
+        "data": [1, 3, 2, 4, 5, 3, 6],
+    }],
+}).classes("w-full h-64")
+
+# 数据表格
+from nicegui import ui
+
+# 基础表格
+columns = [
+    {"name": "id", "label": "ID", "field": "id", "sortable": True},
+    {"name": "name", "label": "姓名", "field": "name", "sortable": True},
+    {"name": "age", "label": "年龄", "field": "age", "sortable": True},
+    {"name": "score", "label": "分数", "field": "score", "sortable": True},
+]
+
+rows = [
+    {"id": 1, "name": "张三", "age": 25, "score": 92},
+    {"id": 2, "name": "李四", "age": 30, "score": 85},
+    {"id": 3, "name": "王五", "age": 28, "score": 78},
+]
+
+ui.table(columns=columns, rows=rows).classes("w-full")
+
+# 可选择的表格
+table = ui.table(
+    columns=columns,
+    rows=rows,
+    selection="multiple",       # 多选
+    pagination={"rowsPerPage": 10},
+).classes("w-full")
+
+def get_selection():
+    selected = [row["name"] for row in table.selected]
+    ui.notify(f"选中: {', '.join(selected)}")
+
+ui.button("获取选中", on_click=get_selection)
+
+# Pandas DataFrame 集成
+df = pd.DataFrame({
+    "城市": ["北京", "上海", "广州", "深圳"],
+    "人口": [2154, 2428, 1868, 1756],
+    "GDP": [40270, 43215, 28232, 30665],
+})
+
+ui.table.from_pandas(df).classes("w-full")
+
+# 聚合表格
+ui.table(
+    columns=[
+        {"name": "category", "label": "分类", "field": "category"},
+        {"name": "total", "label": "总计", "field": "total"},
+    ],
+    rows=[
+        {"category": "电子产品", "total": 15000},
+        {"category": "服装", "total": 8500},
+        {"category": "食品", "total": 5200},
+    ],
+    row_key="category",
+).classes("w-full")
+</code></pre>
+</section>
+
+<section id="sec9" class="toc-link">
+  <h2><span class="num">09</span> 部署</h2>
+
+  <h3>Native 桌面模式</h3>
+
+<pre><code class="language-python"># 原生桌面窗口模式
+# 依赖: pip install nicegui[pywebview]
+
+from nicegui import ui
+
+ui.label("桌面应用示例")
+ui.button("退出", on_click=lambda: ui.app.shutdown())
+
+# 以桌面窗口运行
+ui.run(
+    title="我的桌面应用",
+    native=True,           # 使用原生窗口
+    window_size=(1024, 768),
+    fullscreen=False,
+    reload=False,          # 生产环境关闭热重载
+    host="127.0.0.1",      # 仅本地访问
+    port=8080,
+    show=True,             # 自动显示窗口
+    dark=True,             # 默认暗色模式
+)
+
+# 桌面应用打包（PyInstaller）
+"""
+# 安装打包工具
+pip install pyinstaller
+
+# 打包命令
+pyinstaller --onefile --windowed --name MyApp main.py
+
+# 注意：需要包含 nicegui 的静态资源
+# --add-data "path/to/nicegui/static:./nicegui/static"
+"""
+</code></pre>
+
+  <h3>Web 模式部署</h3>
+
+<pre><code class="language-python"># Web 模式（默认）
+from nicegui import ui
+
+ui.label("Web 应用")
+
+# 生产环境运行
+ui.run(
+    host="0.0.0.0",
+    port=8080,
+    title="生产应用",
+    reload=False,       # 关闭自动重载
+    show=False,         # 不自动打开浏览器
+    dark=False,
+    favicon="🚀",
+    # 绑定到 Unix socket（配合 Nginx 反向代理）
+    # socket="/tmp/nicegui.sock",
+)
+
+# 使用 uvicorn 运行（推荐生产方式）
+"""
+# 创建 app.py
+from nicegui import ui
+
+app = ui.Runner()
+
+@ui.page("/")
+def index():
+    ui.label("Hello")
+
+# 启动
+uvicorn app:app --host 0.0.0.0 --port 8080 --workers 4
+"""
+
+# Nginx 反向代理配置
+"""
+server {
+    listen 80;
+    server_name example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+    }
+}
+"""
+</code></pre>
+
+  <h3>Docker 部署</h3>
+
+<pre><code class="language-python"># Dockerfile
+"""
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# 安装依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制应用
+COPY . .
+
+# 暴露端口
+EXPOSE 8080
+
+# 启动
+CMD ["python", "main.py"]
+"""
+
+# requirements.txt
+"""
+nicegui[all]
+"""
+
+# docker-compose.yml
+"""
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+"""
+
+# 生产环境最佳实践
+PROD_CONFIG = """
+1. 使用反向代理（Nginx/Caddy）处理 SSL 和静态资源
+2. 启用 Gzip 压缩
+3. 设置合适的 WebSocket 超时
+4. 使用多 worker 进程
+5. 监控内存和 CPU 使用
+6. 配置日志轮转
+7. 定期更新 NiceGUI 版本
+8. 使用环境变量管理配置
+"""
+</code></pre>
+
+  <h3>云部署方案</h3>
+
+<pre><code class="language-python"># 1. Railway / Render / Fly.io
+"""
+# 一键部署配置
+# railway.toml / render.yaml / fly.toml
+
+[build]
+  builder = "nixpacks"
+  buildCommand = "pip install -r requirements.txt"
+
+[run]
+  command = "python main.py"
+  port = 8080
+"""
+
+# 2. 阿里云 / 腾讯云 ECS
+"""
+# 使用 systemd 管理服务
+# /etc/systemd/system/nicegui.service
+
+[Unit]
+Description=NiceGUI App
+After=network.target
+
+[Service]
+Type=simple
+User=appuser
+WorkingDirectory=/opt/app
+ExecStart=/usr/bin/python /opt/app/main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+# 3. 部署检查清单
+deployment_checklist = """
+✅ 关闭 debug 模式 (reload=False)
+✅ 配置日志
+✅ 设置资源限制
+✅ 配置反向代理
+✅ 启用 HTTPS
+✅ 设置健康检查端点
+✅ 配置数据库连接池
+✅ 设置环境变量
+✅ 启用监控告警
+✅ 配置自动重启
+"""
+
+# 健康检查端点
+@ui.page("/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "version": "1.0.0",
+        "uptime": get_uptime(),
+    }
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    NiceGUI 的 <code>native=True</code> 模式使用 pywebview 创建原生窗口，适合桌面应用。Web 模式更适合部署到服务器。Docker 部署时注意 WebSocket 连接的超时配置，反向代理需要支持 WebSocket 升级。对于生产环境，建议使用 <code>reload=False</code> 并配合 systemd 或 supervisor 管理进程。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

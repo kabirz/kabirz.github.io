@@ -335,6 +335,20 @@ const DOCS = [
   { t:"Go CGo 与跨语言调用", f:"go-cgo.html", d:"CGo 机制、类型映射、内存管理、cgo 调用开销、性能优化策略", i:"red", tags:["Go","CGo","跨语言","FFI","性能"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
   { t:"Go 性能分析与调优", f:"go-profiling.html", d:"pprof CPU/内存/阻塞、trace 调度分析、benchstat 统计、火焰图、调优实战", i:"blue", tags:["Go","pprof","trace","性能","火焰图"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
   { t:"Go 泛型深入", f:"go-generics.html", d:"类型参数与约束、类型推导、泛型集合/容器、泛型与接口、性能对比、最佳实践", i:"green", tags:["Go","泛型","约束","类型推导","性能"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+
+  // ── Python ──
+  { t:"Python 基础", f:"python-basics.html", d:"类型系统、函数式编程、OOP、装饰器、上下文管理器、元类", i:"blue", tags:["Python","类型","OOP","装饰器"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"Python 异步编程", f:"python-asyncio.html", d:"asyncio 事件循环、async/await 协程、Task/Future、异步上下文管理器", i:"green", tags:["Python","asyncio","async/await","协程"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"Python 并发编程", f:"python-concurrency.html", d:"threading、multiprocessing、GIL 机制、concurrent.futures、锁与同步", i:"red", tags:["Python","并发","threading","multiprocessing","GIL"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"Pydantic 数据验证", f:"python-pydantic.html", d:"BaseModel、Field 验证、validator/model_validator、配置管理、JSON Schema", i:"purple", tags:["Python","Pydantic","验证","BaseModel"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"FastAPI Web 框架", f:"python-fastapi.html", d:"路由、依赖注入、Pydantic 集成、中间件、WebSocket、OpenAPI", i:"green", tags:["Python","FastAPI","Web","OpenAPI"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"NiceGUI 桌面与 Web GUI", f:"python-nicegui.html", d:"组件系统、事件绑定、数据绑定、页面路由、Tailwind 集成、部署", i:"blue", tags:["Python","NiceGUI","GUI","Web"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"Python 高级特性", f:"python-advanced.html", d:"描述器协议、元类、抽象基类、协议、类型注解进化、match 语句", i:"orange", tags:["Python","元类","描述器","类型注解"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"Python Web 框架对比", f:"python-web-ecosystem.html", d:"Django 全栈 vs Flask 微框架 vs FastAPI 异步、生态选型", i:"purple", tags:["Python","Django","Flask","FastAPI","Web"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"SQLAlchemy ORM", f:"python-sqlalchemy.html", d:"声明式映射、Session、关系加载策略、Alembic 迁移、异步 ORM", i:"green", tags:["Python","SQLAlchemy","ORM","Alembic"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"Python 测试", f:"python-testing.html", d:"pytest fixture/fixture、parametrize、mock、coverage、异步测试", i:"blue", tags:["Python","pytest","mock","测试","coverage"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"Python 包管理", f:"python-packaging.html", d:"pip/venv、pyproject.toml、poetry、pdm、Cython 打包、发布到 PyPI", i:"orange", tags:["Python","pip","poetry","pyproject","打包"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+  { t:"Python 性能优化", f:"python-performance.html", d:"profiling (cProfile/py-spy)、Cython、Numba JIT、多进程/异步、内存优化", i:"red", tags:["Python","性能","Cython","Numba","profile"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
 ];
 
 const ICON_MAP = {
@@ -347,6 +361,7 @@ const ICON_MAP = {
   embedded: { emoji: "🔧", color: "#bc4c00" },
   vision: { emoji: "👁️", color: "#e74c3c" },
   go: { emoji: "🔷", color: "#00ADD8" },
+  python: { emoji: "🐍", color: "#3776AB" },
   other: { emoji: "📦", color: "#656d76" }
 };
 

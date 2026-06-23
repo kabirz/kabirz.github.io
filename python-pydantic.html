@@ -1,0 +1,1228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pydantic 数据验证深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>🐍 Pydantic 数据验证深度解析</h1>
+  <p class="subtitle">BaseModel · Field · validator · 配置管理 · JSON Schema · 类型进阶 · V2 迁移</p>
+  <span class="version">Pydantic V2 · Python 3.10+</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#sec1">BaseModel</a></li>
+    <li><a href="#sec2">Field 验证</a></li>
+    <li><a href="#sec3">validator</a></li>
+    <li><a href="#sec4">配置管理</a></li>
+    <li><a href="#sec5">JSON Schema 生成</a></li>
+    <li><a href="#sec6">类型进阶</a></li>
+    <li><a href="#sec7">Pydantic V2 变化</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="sec1" class="toc-link">
+  <h2><span class="num">01</span> BaseModel</h2>
+
+  <p>BaseModel 是 Pydantic 的核心类。通过继承它并声明类型注解的字段，自动获得解析、验证和序列化能力。</p>
+
+  <h3>基础字段定义与类型自动转换</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel
+from datetime import datetime
+from uuid import UUID, uuid4
+from decimal import Decimal
+
+class User(BaseModel):
+    id: UUID = uuid4()           # 自动生成 UUID
+    name: str                     # 字符串
+    age: int                      # 整数，自动转换
+    height: float                 # 浮点数，自动转换
+    is_active: bool               # 布尔值
+    score: Decimal | None = None  # Decimal 精度控制
+    created_at: datetime          # 自动解析日期字符串
+
+# 类型自动转换
+user = User(
+    name="张三",
+    age="25",                # 字符串 → int
+    height="175.5",          # 字符串 → float
+    is_active="yes",         # "yes"/"true"/"1" → True
+    created_at="2024-01-15T10:30:00",
+)
+
+print(user.age)        # 25 (int)
+print(type(user.age))  # <class 'int'>
+
+# 验证失败时抛出 ValidationError
+try:
+    User(
+        name="张三",
+        age="not_a_number",  # 无法转换为 int
+        height=175.5,
+        is_active=True,
+        created_at="invalid-date",
+    )
+except Exception as e:
+    print(e)  # 显示详细的字段错误信息
+</code></pre>
+
+  <h3>别名配置（别名映射）</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, Field, AliasChoices
+
+class ExternalAPI(BaseModel):
+    """处理外部 API 的蛇形/驼峰映射"""
+    model_config = {"alias_generator": lambda s: ''.join(
+        word.capitalize() if i else word
+        for i, word in enumerate(s.split('_'))
+    )}
+
+    user_id: int
+    user_name: str
+    email_address: str
+
+# 输入可以是驼峰格式
+data = ExternalAPI(
+    UserId=1,
+    UserName="张三",
+    EmailAddress="zhang@example.com"
+)
+print(data.user_id)   # 1（已映射为 snake_case）
+
+# 显式别名（优先级高于 alias_generator）
+class Product(BaseModel):
+    sku: str = Field(alias="product_code")
+    name: str = Field(alias="product_name")
+    price: float = Field(alias=AliasChoices("price", "cost", "amount"))
+
+    model_config = {"populate_by_name": True}
+    # 同时支持字段名和别名访问
+
+# 序列化时使用别名
+product = Product(product_code="SKU001", product_name="手机", price=2999.0)
+print(product.model_dump(by_alias=True))
+# {'product_code': 'SKU001', 'product_name': '手机', 'price': 2999.0}
+</code></pre>
+
+  <h3>orm_mode / model_config</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel
+from typing import Any
+
+# V1 的 orm_mode → V2 的 model_config
+class ConfigDemo(BaseModel):
+    # V2 推荐的方式：使用 model_config
+    model_config = {
+        "from_attributes": True,  # 替代 orm_mode=True
+        "extra": "forbid",        # 禁止额外字段
+        "frozen": True,           # 不可变（V1 的 allow_mutation=False）
+        "str_strip_whitespace": True,  # 自动去除字符串首尾空格
+        "validate_default": True,       # 验证默认值
+    }
+
+    name: str
+    age: int = 0
+
+# 常用配置项
+class AdvancedConfig(BaseModel):
+    model_config = {
+        "from_attributes": True,   # 从 ORM 对象创建
+        "extra": "ignore",         # 忽略额外字段（默认）
+        # "extra": "forbid",       # 拒绝额外字段
+        # "extra": "allow",        # 允许并保留额外字段
+        "populate_by_name": True,  # 允许用字段名赋值
+        "use_enum_values": True,   # 使用枚举值替代枚举实例
+        "validate_assignment": True,  # 赋值时也验证
+        "arbitrary_types_allowed": True,  # 允许任意类型
+        "strict": True,            # 严格模式（禁止隐式转换）
+        "revalidate_instances": "always",  # 总是重新验证
+    }
+
+# ORM 模式示例
+class SQLAlchemyModel(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: int
+    name: str
+    email: str
+
+# 假设有 SQLAlchemy ORM 对象
+# orm_obj = db_session.query(UserORM).first()
+# user = SQLAlchemyModel.model_validate(orm_obj)
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    model_config 使用字典而非内部类（V2 变化）。Pydantic V2 在解析性能上比 V1 快 5-50 倍，核心验证引擎用 Rust（pydantic-core）重写。<code>model_validate</code> 和 <code>model_dump</code> 分别替代 V1 的 <code>parse_obj</code> 和 <code>dict</code>。
+  </div>
+</section>
+
+<section id="sec2" class="toc-link">
+  <h2><span class="num">02</span> Field 验证</h2>
+
+  <h3>Field 参数详解</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, Field
+from typing import Annotated
+from uuid import UUID, uuid4
+
+class Product(BaseModel):
+    # 基础约束
+    id: UUID = Field(default_factory=uuid4)
+    name: str = Field(
+        min_length=1,
+        max_length=100,
+        strip_whitespace=True,
+    )
+
+    # 数值约束
+    price: float = Field(
+        gt=0,        # > 0
+        le=100000,   # ≤ 100000
+        multiple_of=0.01,  # 必须是 0.01 的倍数
+    )
+
+    quantity: int = Field(
+        ge=0,        # ≥ 0
+        lt=10000,    # < 10000
+    )
+
+    # 字符串模式
+    sku: str = Field(
+        pattern=r"^[A-Z]{3}-\d{4}$",
+        description="格式: ABC-1234",
+    )
+
+    # 默认值
+    discount: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+    )
+
+    # 使用 default_factory
+    tags: list[str] = Field(default_factory=list)
+
+    # 枚举验证
+    status: str = Field(
+        default="active",
+        pattern=r"^(active|inactive|archived)$"
+    )
+
+    # 元数据
+    created_by: str = Field(
+        default="system",
+        title="创建者",
+        description="记录创建该商品的用户",
+        examples=["admin", "张三"],
+        json_schema_extra={"ui:widget": "hidden"},
+    )
+
+# Annotated 方式（3.9+）
+from typing_extensions import Annotated
+
+class Order(BaseModel):
+    email: Annotated[str, Field(pattern=r"^\S+@\S+\.\S+$")]
+    age: Annotated[int, Field(ge=0, le=150)]
+    score: Annotated[float, Field(ge=0.0, le=100.0)]
+</code></pre>
+
+  <h3>验证装饰器：@field_validator</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, Field, field_validator
+from typing import Any
+
+class Registration(BaseModel):
+    username: str = Field(min_length=3, max_length=20)
+    email: str
+    password: str
+    confirm_password: str
+    age: int = Field(ge=0, le=150)
+
+    # V2 的 field_validator（替代 V1 的 @validator）
+    # mode="before"：在 Pydantic 内部验证之前执行
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, v: Any) -> str:
+        if isinstance(v, str):
+            return v.strip().lower()
+        return str(v).strip().lower()
+
+    # 默认 mode="after"：在类型转换之后执行
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        if not v.isalnum():
+            raise ValueError("用户名只能包含字母和数字")
+        return v
+
+    # 验证多个字段
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("密码至少 8 个字符")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("密码必须包含数字")
+        if not any(c.isupper() for c in v):
+            raise ValueError("密码必须包含大写字母")
+        return v
+
+    # 字段间依赖验证
+    @field_validator("confirm_password")
+    @classmethod
+    def passwords_match(cls, v: str, info) -> str:
+        if "password" in info.data and v != info.data["password"]:
+            raise ValueError("两次密码不一致")
+        return v
+
+# 验证单个字段的多个条件
+class OrderItem(BaseModel):
+    quantity: int
+    unit_price: float
+
+    @field_validator("quantity")
+    @classmethod
+    def check_quantity(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("数量必须为正数")
+        if v > 1000:
+            raise ValueError("单次购买不能超过 1000 件")
+        return v
+</code></pre>
+
+  <h3>@model_validator — 模型级别验证</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, model_validator
+from typing import Any
+
+class Order(BaseModel):
+    items: list[dict]
+    coupon_code: str | None = None
+    shipping_address: str | None = None
+    total: float = 0.0
+
+    # 前置验证：在任何字段验证之前执行
+    @model_validator(mode="before")
+    @classmethod
+    def check_raw_data(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # 自动修正字段名
+            if "items_count" in data:
+                # 转换或处理
+                pass
+            # 设置默认值
+            if "total" not in data:
+                data["total"] = 0.0
+        return data
+
+    # 后置验证：在所有字段验证之后执行
+    @model_validator(mode="after")
+    def validate_order(self) -> "Order":
+        errors = []
+
+        # 检查购物车不为空
+        if not self.items:
+            errors.append("订单至少需要一个商品")
+
+        # 检查总额
+        computed_total = sum(
+            item.get("price", 0) * item.get("quantity", 0) * (1 - item.get("discount", 0))
+            for item in self.items
+        )
+        if abs(self.total - computed_total) > 0.01:
+            errors.append(f"总额不匹配: 计算值 {computed_total:.2f}")
+
+        # 根据优惠券代码验证
+        if self.coupon_code and not self.shipping_address:
+            errors.append("使用优惠券需要提供收货地址")
+
+        if errors:
+            raise ValueError("; ".join(errors))
+
+        return self
+
+# 使用示例
+order_data = {
+    "items": [{"name": "手机", "price": 2999, "quantity": 2}],
+    "total": 5998.0,
+}
+
+try:
+    order = Order(**order_data)
+    print(f"订单验证通过: {order.total}")
+except Exception as e:
+    print(f"验证失败: {e}")
+</code></pre>
+</section>
+
+<section id="sec3" class="toc-link">
+  <h2><span class="num">03</span> validator 进阶</h2>
+
+  <h3>@validator（V1 兼容，V2 仍支持）</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, validator
+from typing import Any
+
+# V1 风格的 @validator（V2 中仍可使用，但推荐 @field_validator）
+class LegacyModel(BaseModel):
+    name: str
+    value: int
+
+    @validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("名称不能为空")
+        return v.strip()
+
+    @validator("value", pre=True)  # pre=True = mode="before"
+    @classmethod
+    def coerce_value(cls, v: Any) -> int:
+        if isinstance(v, str):
+            return int(v.replace(",", ""))
+        return v
+
+    # 验证多个字段
+    @validator("name", "value")
+    @classmethod
+    def validate_both(cls, v: Any, field) -> Any:
+        """同一个验证器处理多个字段"""
+        print(f"验证字段: {field.name}")
+        return v
+
+    # always=True：即使字段为 None 也执行验证
+    @validator("value", always=True)
+    @classmethod
+    def check_value(cls, v: int | None) -> int | None:
+        if v is not None and v < 0:
+            raise ValueError("值不能为负数")
+        return v
+
+    # 字段依赖
+    @validator("name")
+    @classmethod
+    def check_name_value(cls, v: str, values: dict) -> str:
+        # values 包含已验证字段的字典
+        val = values.get("value")
+        if val is not None and len(v) > val:
+            raise ValueError(f"名称长度不能超过 {val}")
+        return v
+</code></pre>
+
+  <h3>根验证器（V1：@root_validator → V2：@model_validator）</h3>
+
+<pre><code class="language-python"># V1 的 root_validator 迁移到 V2 的 model_validator
+# V1 方式（已弃用）：
+# @root_validator(pre=True)
+# def pre_process(cls, values):
+#     ...
+
+# V2 方式对比
+from pydantic import BaseModel, model_validator
+
+class UserRegistration(BaseModel):
+    username: str
+    email: str
+    email_confirm: str
+
+    # 等效于 V1 的 @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
+    def pre_process(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # 统一邮箱格式
+            if "email" in data:
+                data["email"] = data["email"].strip().lower()
+            if "email_confirm" in data:
+                data["email_confirm"] = data["email_confirm"].strip().lower()
+        return data
+
+    # 等效于 V1 的 @root_validator（默认 pre=False）
+    @model_validator(mode="after")
+    def validate_email_match(self) -> "UserRegistration":
+        if self.email != self.email_confirm:
+            raise ValueError("两次输入的邮箱不一致")
+        return self
+
+    # 可以有多个 model_validator（按声明顺序执行）
+    @model_validator(mode="after")
+    def validate_username_rules(self) -> "UserRegistration":
+        if self.username.lower() in self.email.lower():
+            raise ValueError("用户名不应出现在邮箱中")
+        return self
+</code></pre>
+
+  <h3>自定义错误与 ValidationInfo</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, Field, field_validator, ValidationInfo
+from typing import Any
+
+class HTTPConfig(BaseModel):
+    host: str = "localhost"
+    port: int = Field(default=8080, ge=1, le=65535)
+    ssl: bool = False
+    url_prefix: str = ""
+
+    @field_validator("host")
+    @classmethod
+    def validate_host(cls, v: str, info: ValidationInfo) -> str:
+        """使用 ValidationInfo 获取上下文"""
+        # info.field_name: 当前字段名
+        # info.data: 已验证字段的字典
+        # info.config: 模型配置
+
+        if v == "0.0.0.0" and not info.data.get("ssl"):
+            raise ValueError("非 SSL 模式不建议监听 0.0.0.0")
+        return v
+
+    @field_validator("url_prefix")
+    @classmethod
+    def normalize_prefix(cls, v: str) -> str:
+        if v and not v.startswith("/"):
+            return "/" + v
+        return v
+
+class APIResponse(BaseModel):
+    success: bool
+    data: Any = None
+    error: str | None = None
+
+    @field_validator("error")
+    @classmethod
+    def check_error(cls, v: str | None, info: ValidationInfo) -> str | None:
+        if info.data.get("success") and v:
+            raise ValueError("成功的响应不应包含错误信息")
+        if not info.data.get("success") and not v:
+            raise ValueError("失败的响应必须包含错误信息")
+        return v
+</code></pre>
+</section>
+
+<section id="sec4" class="toc-link">
+  <h2><span class="num">04</span> 配置管理</h2>
+
+  <h3>BaseSettings — 环境变量与配置</h3>
+
+<pre><code class="language-python">from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
+from typing import Optional
+
+class AppConfig(BaseSettings):
+    """
+    应用配置，从环境变量/ .env 文件加载
+    优先级：CLI 参数 > 环境变量 > .env 文件 > 默认值
+    """
+    # 基础配置
+    app_name: str = "MyApp"
+    debug: bool = False
+    secret_key: str
+
+    # 数据库配置
+    database_url: str = "sqlite:///./app.db"
+    database_pool_size: int = 5
+
+    # Redis 配置
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_password: str = ""
+
+    # 第三方 API
+    api_key: str = ""
+    api_timeout: int = 30
+
+    # 嵌套配置
+    allowed_hosts: list[str] = ["*"]
+
+    # model_config 替代 V1 的 Config 内部类
+    model_config = SettingsConfigDict(
+        env_file=".env",              # 自动加载 .env 文件
+        env_file_encoding="utf-8",
+        case_sensitive=False,         # 环境变量默认不区分大小写
+        extra="ignore",
+        env_nested_delimiter="__",    # 嵌套分隔符
+    )
+
+# 使用
+# .env 文件内容：
+# APP_NAME=Production
+# SECRET_KEY=abc123
+# DATABASE_URL=postgresql://user:pass@localhost/db
+# ALLOWED_HOSTS=["example.com", "api.example.com"]
+
+config = AppConfig()
+print(config.app_name)       # Production
+print(config.database_url)   # postgresql://user:pass@localhost/db
+</code></pre>
+
+  <h3>嵌套配置与环境变量前缀</h3>
+
+<pre><code class="language-python">from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel
+
+class DatabaseConfig(BaseModel):
+    host: str = "localhost"
+    port: int = 5432
+    username: str = "postgres"
+    password: str = ""
+    database: str = "app"
+
+class RedisConfig(BaseModel):
+    host: str = "localhost"
+    port: int = 6379
+    db: int = 0
+
+class NestedSettings(BaseSettings):
+    # 嵌套模型作为字段
+    db: DatabaseConfig = DatabaseConfig()
+    cache: RedisConfig = RedisConfig()
+
+    # 使用 env_prefix 和嵌套分隔符
+    model_config = SettingsConfigDict(
+        env_prefix="APP_",
+        env_nested_delimiter="__",
+        env_file=".env",
+    )
+
+# 环境变量映射：
+# APP_DB__HOST=db.example.com → settings.db.host
+# APP_DB__PORT=5433 → settings.db.port
+# APP_CACHE__HOST=redis.example.com → settings.cache.host
+
+settings = NestedSettings()
+print(settings.db.host)  # db.example.com
+
+# CLI 参数覆盖
+class CLIConfig(BaseSettings):
+    model_config = SettingsConfigDict(cli_parse_args=True)
+    port: int = 8000
+    workers: int = 1
+
+# 可以运行：python app.py --port=9000 --workers=4
+</code></pre>
+
+  <h3>配置分层与合并</h3>
+
+<pre><code class="language-python">from pydantic_settings import BaseSettings
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class DatabaseConfig(BaseModel):
+    url: str = "sqlite:///./dev.db"
+    pool_size: int = 5
+    echo: bool = False
+
+class LogConfig(BaseModel):
+    level: str = "INFO"
+    format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    file: Optional[str] = None
+
+class DeployConfig(BaseSettings):
+    """分层配置：环境 + 默认 + 覆盖"""
+    env: str = Field(default="development", pattern="^(development|staging|production)$")
+    db: DatabaseConfig = DatabaseConfig()
+    logging: LogConfig = LogConfig()
+    workers: int = 1
+    host: str = "0.0.0.0"
+    port: int = 8000
+
+    model_config = {"env_nested_delimiter": "__"}
+
+    @property
+    def is_production(self) -> bool:
+        return self.env == "production"
+
+    @property
+    def is_debug(self) -> bool:
+        return self.env == "development"
+
+# 根据环境加载不同配置
+def load_config(env: str | None = None) -> DeployConfig:
+    config = DeployConfig()  # 从环境变量加载
+    if env:
+        config.env = env
+
+    # 环境特定调整
+    if config.env == "production":
+        config.db.pool_size = 20
+        config.logging.level = "WARNING"
+        config.workers = 4
+    elif config.env == "staging":
+        config.db.pool_size = 10
+        config.db.echo = True
+
+    return config
+</code></pre>
+</section>
+
+<section id="sec5" class="toc-link">
+  <h2><span class="num">05</span> JSON Schema 生成</h2>
+
+  <h3>自动生成 JSON Schema</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import Literal
+from enum import Enum
+
+class Category(str, Enum):
+    ELECTRONICS = "electronics"
+    CLOTHING = "clothing"
+    FOOD = "food"
+    BOOKS = "books"
+
+class Address(BaseModel):
+    street: str = Field(min_length=1, max_length=200)
+    city: str = Field(min_length=1, max_length=100)
+    zip_code: str = Field(pattern=r"^\d{5}(-\d{4})?$")
+    country: str = Field(default="中国", min_length=1)
+
+class Item(BaseModel):
+    sku: str = Field(pattern=r"^[A-Z]{2}-\d{4}$")
+    name: str = Field(min_length=1, max_length=200)
+    category: Category
+    price: float = Field(gt=0, le=100000)
+    quantity: int = Field(ge=0, default=0)
+
+class Order(BaseModel):
+    order_id: int = Field(gt=0)
+    customer_email: str = Field(pattern=r"^\S+@\S+\.\S+$")
+    items: list[Item] = Field(min_length=1)
+    shipping_address: Address
+    created_at: datetime
+    status: Literal["pending", "confirmed", "shipped", "delivered"]
+    notes: str | None = Field(default=None, max_length=500)
+
+# V2 方式：model_json_schema
+schema = Order.model_json_schema()
+
+import json
+print(json.dumps(schema, indent=2, ensure_ascii=False))
+# 输出完整的 JSON Schema（包含 types, formats, patterns, 枚举等）
+</code></pre>
+
+  <h3>定制 Schema 输出</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, Field
+from typing import Any
+
+class CustomSchema(BaseModel):
+    # json_schema_extra：附加元数据
+    name: str = Field(
+        ...,
+        json_schema_extra={
+            "example": "张三",
+            "ui:widget": "text",
+            "ui:options": {"placeholder": "请输入姓名"},
+        }
+    )
+    age: int = Field(
+        ...,
+        json_schema_extra={
+            "example": 25,
+            "ui:widget": "range",
+            "ui:options": {"min": 0, "max": 150},
+        }
+    )
+
+    # 自定义模型级别的 Schema 生成
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs) -> dict:
+        schema = super().model_json_schema(*args, **kwargs)
+        # 添加自定义元数据到顶层
+        schema["title"] = "用户注册表单"
+        schema["description"] = "用于用户注册的 JSON Schema"
+        schema["$id"] = "https://example.com/schemas/user-registration.json"
+        schema["version"] = "1.0.0"
+        return schema
+
+# schema_extra 在 model_config 中
+class GlobalSchema(BaseModel):
+    model_config = {
+        "json_schema_extra": {
+            "$schema": "https://json-schema.org/draft-07/schema#",
+            "description": "全局定制的 Schema",
+            "examples": [
+                {"name": "示例", "age": 30}
+            ]
+        }
+    }
+    name: str
+    age: int
+
+# 过滤和排除字段
+class FilteredSchema(BaseModel):
+    id: int
+    name: str
+    internal_token: str
+    secret: str
+
+    model_config = {"json_schema_extra": lambda schema: None}
+    # 或者使用 exclude
+    # schema = FilteredSchema.model_json_schema(
+    #     exclude={"internal_token", "secret"}
+    # )
+</code></pre>
+
+  <h3>Schema 的实际应用</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, Field
+from fastapi import FastAPI
+import json
+
+# 与 FastAPI 集成（自动生成 OpenAPI）
+# FastAPI 自动调用 model_json_schema 生成 OpenAPI 规范
+
+# 将 Schema 用于前端验证
+class ValidateForm(BaseModel):
+    """前端表单验证 Schema"""
+    username: str = Field(min_length=3, max_length=20, pattern=r"^\w+$")
+    email: str = Field(pattern=r"^\S+@\S+\.\S+$")
+    password: str = Field(min_length=8, max_length=128)
+    confirm_password: str = Field(min_length=8)
+
+# 生成前端验证规则
+schema = ValidateForm.model_json_schema()
+rules = {}
+
+for field_name, field_schema in schema.get("properties", {}).items():
+    rule = {}
+    if "minLength" in field_schema:
+        rule["minLength"] = field_schema["minLength"]
+    if "maxLength" in field_schema:
+        rule["maxLength"] = field_schema["maxLength"]
+    if "pattern" in field_schema:
+        rule["pattern"] = field_schema["pattern"]
+    rules[field_name] = rule
+
+print(json.dumps(rules, indent=2, ensure_ascii=False))
+</code></pre>
+</section>
+
+<section id="sec6" class="toc-link">
+  <h2><span class="num">06</span> 类型进阶</h2>
+
+  <h3>Union / Literal / Enum</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, Field
+from typing import Literal, Union
+from enum import Enum
+
+# Union 类型
+class Cat(BaseModel):
+    pet_type: Literal["cat"]
+    meow_volume: int = Field(ge=1, le=10)
+
+class Dog(BaseModel):
+    pet_type: Literal["dog"]
+    bark_volume: int = Field(ge=1, le=10)
+
+class Fish(BaseModel):
+    pet_type: Literal["fish"]
+    tank_size: float = Field(gt=0)
+
+# discriminated union（可辨识联合）
+class Pet(BaseModel):
+    pet: Cat | Dog | Fish  # Union 类型
+
+# 使用方式
+pets = [
+    Pet(pet={"pet_type": "cat", "meow_volume": 5}),
+    Pet(pet={"pet_type": "dog", "bark_volume": 8}),
+    Pet(pet={"pet_type": "fish", "tank_size": 50.0}),
+]
+
+# Literal 类型
+def process_status(status: Literal["active", "inactive", "pending"]):
+    """只能接受这三个字符串值"""
+    ...
+
+class Config(BaseModel):
+    mode: Literal["dev", "staging", "prod"] = "dev"
+    region: Literal["us-east", "us-west", "eu-west"] = "us-east"
+
+# Enum 类型
+class Color(str, Enum):
+    RED = "red"
+    GREEN = "green"
+    BLUE = "blue"
+
+class Item(BaseModel):
+    model_config = {"use_enum_values": True}
+    name: str
+    color: Color
+
+item = Item(name="手机", color="red")
+print(item.color)  # "red"（字符串，而非 Color.RED）
+</code></pre>
+
+  <h3>datetime 与自定义类型</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, Field
+from datetime import datetime, date, time, timedelta
+from typing import Annotated
+from pydantic.functional_validators import AfterValidator
+
+class Event(BaseModel):
+    name: str
+    start_time: datetime
+    end_time: datetime
+    event_date: date
+    duration: timedelta | None = None
+    reminder_before: timedelta = timedelta(hours=1)
+
+    # 自定义验证逻辑
+    @field_validator("end_time")
+    @classmethod
+    def end_after_start(cls, v: datetime, info) -> datetime:
+        if "start_time" in info.data and v <= info.data["start_time"]:
+            raise ValueError("结束时间必须在开始时间之后")
+        return v
+
+# 自定义类型
+class PhoneNumber(str):
+    """自定义电话号类型"""
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source, handler):
+        from pydantic_core import core_schema
+
+        def validate_phone(v: str) -> str:
+            if not v.startswith("+"):
+                raise ValueError("电话号码必须以 + 开头")
+            if not v[1:].isdigit():
+                raise ValueError("电话号码只能包含数字")
+            if not 8 <= len(v) <= 15:
+                raise ValueError("电话号码长度不对")
+            return v
+
+        return core_schema.with_info_plain_validator_function(
+            validate_phone,
+            serialization=core_schema.to_string_ser_schema(),
+        )
+
+class Contact(BaseModel):
+    name: str
+    phone: PhoneNumber
+    email: str
+
+# Annotated 自定义验证器
+def validate_port(v: int) -> int:
+    if not 1 <= v <= 65535:
+        raise ValueError("端口号必须在 1-65535 之间")
+    return v
+
+Port = Annotated[int, AfterValidator(validate_port)]
+
+class Server(BaseModel):
+    host: str
+    port: Port = 8080
+
+server = Server(host="localhost", port="3000")
+print(server.port)  # 3000 (int)
+</code></pre>
+
+  <h3>__get_validators__ 与自定义验证器</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel
+from typing import Any, Callable
+
+# V1 风格的 __get_validators__（仍在 V2 中工作）
+class PositiveInt(int):
+    """仅在创建时验证的正整数"""
+    @classmethod
+    def __get_validators__(cls) -> Callable:
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v: Any) -> "PositiveInt":
+        if isinstance(v, str):
+            v = int(v)
+        if not isinstance(v, int):
+            raise TypeError("必须是整数")
+        if v <= 0:
+            raise ValueError("必须是正数")
+        return cls(v)
+
+class ModelWithPositive(BaseModel):
+    value: PositiveInt
+    count: PositiveInt = PositiveInt(1)
+
+# V2 推荐：使用 Annotated + BeforeValidator / AfterValidator
+from pydantic.functional_validators import BeforeValidator
+
+def coerce_float(v: Any) -> float:
+    """将兼容类型转为 float"""
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        return float(v.strip("%").strip())
+    raise ValueError(f"无法转换为 float: {v}")
+
+FlexibleFloat = Annotated[float, BeforeValidator(coerce_float)]
+
+class Product(BaseModel):
+    price: FlexibleFloat
+    discount: FlexibleFloat = 0.0
+
+# 使用
+p = Product(price="99.99", discount="10%")
+print(p.price)     # 99.99
+print(p.discount)  # 10.0
+
+# PlainValidator — 不进行任何类型推断
+from pydantic.functional_validators import PlainValidator
+
+def parse_hex(v: Any) -> int:
+    """解析十六进制字符串为整数"""
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str):
+        return int(v, 16)
+    raise ValueError("无效的十六进制输入")
+
+HexInt = Annotated[int, PlainValidator(parse_hex)]
+
+class Memory(BaseModel):
+    address: HexInt
+
+mem = Memory(address="0xFF")
+print(mem.address)  # 255
+</code></pre>
+</section>
+
+<section id="sec7" class="toc-link">
+  <h2><span class="num">07</span> Pydantic V2 变化</h2>
+
+  <h3>核心架构变化</h3>
+
+<pre><code class="language-python"># Pydantic V2 最重大的变化：
+
+# 1. pydantic-core — Rust 重写的验证引擎
+#    - 性能提升 5-50 倍
+#    - 更严格的类型处理
+#    - 更少的内存分配
+
+# 2. API 变化一览
+#    V1 → V2 核心映射：
+#    - .dict() → .model_dump()
+#    - .json() → .model_dump_json()
+#    - .schema() → .model_json_schema()
+#    - .parse_obj() → .model_validate()
+#    - .parse_raw() → .model_validate_json()
+#    - .construct() → .model_construct()
+#    - .update_forward_refs() → .model_rebuild()
+#    - class Config → model_config (dict)
+
+# 3. validator 系统的变化
+#    - @validator → @field_validator
+#    - @root_validator → @model_validator
+#    - 新增 mode="before"/"after"/"wrap"/"plain"
+#    - ValidationInfo 替代 values dict
+
+# 4. 配置系统
+#    - 内部 Config 类 → model_config 字典
+#    - SettingsConfigDict 替代 BaseSettings 的 Config
+
+# 5. 严格模式
+#    - strict=True / StrictInt / StrictStr / StrictFloat
+#    - 禁止隐式类型转换
+</code></pre>
+
+  <h3>validator 迁移指南</h3>
+
+<pre><code class="language-python"># V1 → V2 validator 迁移示例
+
+# V1 写法
+# class V1Model(BaseModel):
+#     name: str
+#     age: int
+
+#     @validator("name")
+#     def name_must_not_be_empty(cls, v):
+#         if not v:
+#             raise ValueError("name cannot be empty")
+#         return v
+
+#     @validator("age", pre=True)
+#     def coerce_age(cls, v):
+#         if isinstance(v, str):
+#             return int(v)
+#         return v
+
+#     @root_validator(pre=True)
+#     def pre_process(cls, values):
+#         values["age"] = int(values.get("age", 0))
+#         return values
+
+#     @root_validator
+#     def check_name_age(cls, values):
+#         if values["name"] and values["age"] < 18:
+#             raise ValueError("未成年人")
+#         return values
+
+# V2 等价写法
+from pydantic import BaseModel, field_validator, model_validator
+from typing import Any
+
+class V2Model(BaseModel):
+    name: str
+    age: int
+
+    # @validator → @field_validator
+    # mode="after" 是默认值
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("名称不能为空")
+        return v
+
+    # pre=True → mode="before"
+    @field_validator("age", mode="before")
+    @classmethod
+    def coerce_age(cls, v: Any) -> int:
+        if isinstance(v, str):
+            return int(v)
+        return v
+
+    # @root_validator(pre=True) → @model_validator(mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def pre_process(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "age" in data:
+                data["age"] = int(data["age"])
+        return data
+
+    # @root_validator → @model_validator(mode="after")
+    @model_validator(mode="after")
+    def check_name_age(self) -> "V2Model":
+        if self.name and self.age < 18:
+            raise ValueError("未成年人")
+        return self
+</code></pre>
+
+  <h3>V2 新增特性：Wrap 验证器与 SerDe</h3>
+
+<pre><code class="language-python">from pydantic import BaseModel, field_validator
+from typing import Any
+
+# Wrap 验证器：装饰器模式
+class ModelWithWrap(BaseModel):
+    data: str
+
+    @field_validator("data", mode="wrap")
+    @classmethod
+    def wrap_validator(cls, v: Any, handler) -> str:
+        print(f"包装验证: {v!r}")
+        # 可以修改值后调用内部验证
+        if v is None:
+            v = "default"
+        result = handler(v)  # 调用内部验证逻辑
+        print(f"验证结果: {result!r}")
+        return result
+
+# SerDe（序列化/反序列化）控制
+from pydantic import BaseModel, Field
+from datetime import datetime
+
+class SerDeDemo(BaseModel):
+    name: str
+    password: str = Field(exclude=True)  # 序列化时排除
+    internal_id: int = Field(exclude=True)
+    created_at: datetime
+
+    # 自定义序列化器
+    @field_serializer("created_at")
+    def serialize_dt(self, v: datetime) -> str:
+        return v.isoformat()
+
+    # 自定义反序列化器
+    @field_validator("created_at", mode="before")
+    @classmethod
+    def parse_dt(cls, v: Any) -> datetime:
+        if isinstance(v, str):
+            return datetime.fromisoformat(v)
+        return v
+
+# 输出控制
+user = SerDeDemo(
+    name="张三",
+    password="secret123",
+    internal_id=42,
+    created_at="2024-01-15T10:30:00"
+)
+
+dump = user.model_dump()
+print(dump)
+# {'name': '张三', 'created_at': '2024-01-15T10:30:00'}
+# password 和 internal_id 被排除
+
+# 使用 include/exclude 控制输出
+partial = user.model_dump(include={"name", "created_at"})
+</code></pre>
+
+  <h3>性能对比与升级建议</h3>
+
+<pre><code class="language-python"># Pydantic V2 性能优势：
+# - 解析速度：比 V1 快 5-50 倍
+# - 内存占用：减少 50-80%
+# - JSON 解析：直接使用 Rust 解析器
+# - 验证逻辑：零分配路径（热路径）
+
+# 升级建议：
+upgrade_guide = """
+✅ 立即升级的新项目
+   - 直接使用 Pydantic V2，享受性能提升
+   - 使用新的 API（model_validate, model_dump）
+
+⚠️ 旧项目迁移
+   - V2 对大部分 V1 代码向后兼容
+   - 部分高级用法需要调整（尤其是自定义验证器）
+   - 使用 `pydantic.v1` 兼容模块逐步迁移
+
+🔧 迁移检查清单
+1. 替换 .dict() → .model_dump()
+2. 替换 .parse_obj() → .model_validate()
+3. 替换 .schema() → .model_json_schema()
+4. 替换 @validator → @field_validator（推荐）
+5. 替换 @root_validator → @model_validator（推荐）
+6. 替换 class Config → model_config dict
+7. 验证自定义 __get_validators__ 兼容性
+8. 测试严格的类型转换行为
+"""
+
+# V2 调试工具
+from pydantic import TypeAdapter
+
+# TypeAdapter：在不定义模型的情况下验证类型
+validate_int_list = TypeAdapter(list[int])
+result = validate_int_list.validate_python([1, 2, "3", "4"])
+print(result)  # [1, 2, 3, 4]（字符串被自动转换）
+
+validate_json = TypeAdapter(list[int])
+data = validate_json.validate_json("[1, 2, 3, 4]")
+print(data)  # [1, 2, 3, 4]
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    Pydantic V2 最值得关注的变化是 pydantic-core 的 Rust 引擎带来的性能飞跃，以及 API 的现代化。迁移时可以逐步进行：V2 完全兼容 V1 的 validator 写法。新项目建议直接使用 <code>@field_validator</code>、<code>@model_validator</code> 和 <code>model_dump</code> 等新 API。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

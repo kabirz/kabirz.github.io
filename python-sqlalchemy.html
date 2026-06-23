@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SQLAlchemy ORM 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>SQLAlchemy ORM 深度解析</h1>
+  <p class="subtitle">声明式映射 · Session · 关系加载 · 查询 API · Alembic 迁移 · 异步 ORM · 2.0 迁移</p>
+  <span class="version">Python 3.12+ · SQLAlchemy 2.0.36</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#mapping">声明式映射</a></li>
+    <li><a href="#session">Session 管理</a></li>
+    <li><a href="#loading">关系加载策略</a></li>
+    <li><a href="#query">查询 API</a></li>
+    <li><a href="#alembic">Alembic 迁移</a></li>
+    <li><a href="#async">异步 ORM</a></li>
+    <li><a href="#migration-20">SQLAlchemy 2.0 变化</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="mapping" class="toc-link">
+  <h2><span class="num">01</span> 声明式映射</h2>
+
+  <p>SQLAlchemy 的声明式映射系统允许开发者使用 Python 类来定义数据库表结构。在 2.0 版本中，新引入的 <code>Mapped</code> 注解和 <code>mapped_column</code> 让映射更加简洁和类型安全。</p>
+
+  <h3>传统声明式（1.x 风格）</h3>
+  <p>在 SQLAlchemy 1.x 中，映射通过 <code>declarative_base</code> 和 <code>Column</code> 定义。这种方式至今仍然有效，但在 2.0 中不是推荐方式。</p>
+  <pre><code>from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
+from sqlalchemy.orm import declarative_base, relationship
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), nullable=False)
+    email = Column(String(120), unique=True)
+    age = Column(Integer, default=0)
+
+    addresses = relationship("Address", back_populates="user")
+
+class Address(Base):
+    __tablename__ = 'addresses'
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String(120), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'))
+
+    user = relationship("User", back_populates="addresses")</code></pre>
+
+  <h3>2.0 风格映射</h3>
+  <p>SQLAlchemy 2.0 引入了 <code>Mapped</code> 泛型类型和 <code>mapped_column</code>。类型注解直接描述了列的类型和约束，不再需要重复的类型参数。</p>
+  <pre><code>from typing import Optional, List
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import String, ForeignKey
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = 'users'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(50))
+    email: Mapped[str] = mapped_column(String(120), unique=True)
+    age: Mapped[Optional[int]] = mapped_column(default=0)
+    is_active: Mapped[bool] = mapped_column(default=True)
+
+    addresses: Mapped[List["Address"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+class Address(Base):
+    __tablename__ = 'addresses'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(120))
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+
+    user: Mapped["User"] = relationship(back_populates="addresses")</code></pre>
+
+  <h3>常用字段类型</h3>
+  <table>
+    <tr><th>Python 类型</th><th>mapped_column 参数</th><th>SQL 类型</th><th>说明</th></tr>
+    <tr><td>int</td><td>primary_key=True</td><td>INTEGER</td><td>主键</td></tr>
+    <tr><td>str</td><td>String(255)</td><td>VARCHAR</td><td>字符串</td></tr>
+    <tr><td>str | None</td><td>String(255), nullable=True</td><td>VARCHAR</td><td>可为空字符串</td></tr>
+    <tr><td>bool</td><td>default=False</td><td>BOOLEAN</td><td>布尔值</td></tr>
+    <tr><td>datetime</td><td>default=func.now()</td><td>TIMESTAMP</td><td>时间戳</td></tr>
+    <tr><td>Decimal</td><td>Numeric(10,2)</td><td>NUMERIC</td><td>浮点数</td></tr>
+    <tr><td>json</td><td>JSON</td><td>JSON</td><td>JSON 存储</td></tr>
+    <tr><td>UUID</td><td>UUID, default=uuid.uuid4</td><td>UUID</td><td>UUID</td></tr>
+  </table>
+
+  <h3>relationship 与 back_populates</h3>
+  <p><code>relationship</code> 定义了 ORM 级别的关联关系。<code>back_populates</code> 建立双向引用，让两个方向的导航属性保持同步。额外的 <code>cascade</code> 参数控制级联操作行为。</p>
+  <pre><code>class Post(Base):
+    __tablename__ = 'posts'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+
+    user: Mapped["User"] = relationship(back_populates="posts")
+    comments: Mapped[List["Comment"]] = relationship(
+        back_populates="post",
+        cascade="all, delete-orphan",
+        order_by="Comment.created_at"
+    )
+
+class Comment(Base):
+    __tablename__ = 'comments'
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    body: Mapped[str] = mapped_column(Text)
+    post_id: Mapped[int] = mapped_column(ForeignKey('posts.id'))
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'))
+
+    post: Mapped["Post"] = relationship(back_populates="comments")
+    user: Mapped["User"] = relationship()</code></pre>
+</section>
+
+<section id="session" class="toc-link">
+  <h2><span class="num">02</span> Session 管理</h2>
+
+  <p>Session 是 SQLAlchemy ORM 的核心工作单元。它跟踪对象状态、管理事务、执行刷新操作。理解 Session 的生命周期是高效使用 ORM 的关键。</p>
+
+  <h3>Session 创建与配置</h3>
+  <p>使用 <code>sessionmaker</code> 创建可配置的 Session 工厂。在 2.0 风格中，推荐使用 <code>with</code> 语句确保资源释放。</p>
+  <pre><code>from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+# 创建引擎
+engine = create_engine(
+    "postgresql+psycopg2://user:pass@localhost/mydb",
+    pool_size=10,
+    max_overflow=20,
+    pool_pre_ping=True,
+    echo=False  # SQL 日志
+)
+
+# 创建 Session 工厂
+SessionLocal = sessionmaker(
+    bind=engine,
+    autocommit=False,   # 手动事务控制
+    autoflush=True,     # 查询前自动 flush
+    expire_on_commit=True
+)
+
+# 使用 Session
+def get_user(user_id: int) -> User | None:
+    with SessionLocal() as session:
+        return session.get(User, user_id)
+    # Session 自动关闭</code></pre>
+
+  <h3>Session 生命周期与状态</h3>
+  <p>被 Session 管理的对象有四个状态：Transient（尚未关联）、Pending（已 add 但未 flush）、Persistent（已持久化）、Detached（Session 已关闭）。</p>
+  <pre><code>from sqlalchemy.orm import Session
+
+with Session(engine) as session:
+    # 1. Transient: 新建对象，尚未与 Session 关联
+    user = User(name="Alice", email="alice@example.com")
+    assert user not in session
+
+    # 2. Pending: 添加到 Session，尚未刷新到数据库
+    session.add(user)
+    assert user in session
+    # 此时 user.id 还是 None（如果使用自增主键）
+
+    # 3. Flush: 将 Pending 对象写入数据库
+    session.flush()
+    # 此时 user.id 已被数据库分配
+
+    # 4. 提交事务
+    session.commit()
+    # 对象保持 Persistent 状态
+
+    # 5. 过期处理
+    # expire_on_commit=True 会标记对象为过期
+    # 再次访问属性时会自动从数据库加载
+
+# 6. Detached: Session 关闭，对象脱离
+# user 处于 Detached 状态，但仍可访问已加载的属性</code></pre>
+
+  <h3>事务与提交/回滚</h3>
+  <p>Session 自动管理数据库事务。每个 Session 开始于一个隐式事务。<code>commit()</code> 提交事务，<code>rollback()</code> 在发生错误时回滚。</p>
+  <pre><code>from sqlalchemy.exc import IntegrityError
+
+def create_user_with_addresses(
+    session: Session,
+    user_data: dict,
+    addresses: list[dict]
+) -> User:
+    try:
+        user = User(**user_data)
+        session.add(user)
+        session.flush()  # 获取 user.id
+
+        for addr_data in addresses:
+            addr = Address(user_id=user.id, **addr_data)
+            session.add(addr)
+
+        session.commit()
+        return user
+    except IntegrityError as e:
+        session.rollback()  # 回滚到事务开始状态
+        raise ValueError(f"数据冲突: {e}")
+    except Exception:
+        session.rollback()
+        raise</code></pre>
+
+  <h3>请求级 Session 模式</h3>
+  <p>在 Web 应用中，通常为每个请求创建独立的 Session，使用 scoped_session 或依赖注入管理。</p>
+  <pre><code>from sqlalchemy.orm import scoped_session
+
+# scoped_session 为每个线程/协程维护独立的 Session
+session_factory = sessionmaker(bind=engine)
+ScopedSession = scoped_session(session_factory)
+
+# Web 应用中的典型模式
+def get_db():
+    db = ScopedSession()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# FastAPI 中使用
+async def get_db_dependency():
+    with Session(engine) as session:
+        yield session
+
+# Flask 中使用
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    ScopedSession.remove()</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>Session 不是线程安全的。在多线程环境中，请确保每个线程使用独立的 Session。scoped_session 和 FastAPI 的 Depends 都可以自动管理 Session 的创建和清理。</div>
+</section>
+
+<section id="loading" class="toc-link">
+  <h2><span class="num">03</span> 关系加载策略</h2>
+
+  <p>关系加载策略决定了 SQLAlchemy 如何从数据库获取关联对象。错误的选择会导致著名的 N+1 查询问题。</p>
+
+  <h3>lazy 加载（默认）</h3>
+  <p>这是默认的加载方式。只有在首次访问关联属性时才会执行额外的 SQL 查询。优点是按需加载，缺点是可能触发 N+1 问题。</p>
+  <pre><code># lazy=True（默认）——按需加载
+user = session.get(User, 1)
+# 只执行: SELECT * FROM users WHERE id = 1
+print(user.addresses)
+# 此时才执行: SELECT * FROM addresses WHERE user_id = 1</code></pre>
+
+  <h3>selectin 加载（推荐）</h3>
+  <p>一次性查询所有关联对象，使用 IN 子句。SQLAlchemy 2.0 推荐在大多数场景中使用 selectin 加载。</p>
+  <pre><code>from sqlalchemy.orm import selectinload
+
+# 方式 1: 查询时指定
+users = session.execute(
+    select(User).options(selectinload(User.addresses))
+).scalars().all()
+
+# 方式 2: 在 relationship 上设置默认
+class User(Base):
+    __tablename__ = 'users'
+    # ...
+    addresses: Mapped[List["Address"]] = relationship(
+        lazy="selectin"
+    )
+
+# 执行 2 条 SQL:
+# SELECT * FROM users WHERE ...
+# SELECT * FROM addresses WHERE user_id IN (...)</code></pre>
+
+  <h3>joined 加载</h3>
+  <p>使用 LEFT OUTER JOIN 一次查询主表和关联表。适合一对一或需要同时访问父对象和子对象的场景。</p>
+  <pre><code>from sqlalchemy.orm import joinedload
+
+# 使用 JOIN 一次加载
+stmt = (
+    select(User)
+    .options(joinedload(User.addresses))
+    .where(User.is_active == True)
+)
+users = session.execute(stmt).scalars().all()
+
+# 执行 1 条 SQL:
+# SELECT users.*, addresses.*
+# FROM users LEFT OUTER JOIN addresses ON users.id = addresses.user_id
+# WHERE users.is_active = True
+
+# 注意: joinedload 加载的对象不会影响 WHERE 过滤
+# 要按关联表过滤，使用 join() 而不是 joinedload()</code></pre>
+
+  <h3>subquery 加载</h3>
+  <p>使用子查询批量加载关联对象。与 selectin 类似，但使用子查询而非 IN 列表。</p>
+  <pre><code>from sqlalchemy.orm import subqueryload
+
+users = session.execute(
+    select(User).options(subqueryload(User.addresses))
+).scalars().all()
+
+# 执行 2 条 SQL:
+# SELECT * FROM users
+# SELECT * FROM addresses WHERE user_id IN (
+#   SELECT id FROM users
+# )</code></pre>
+
+  <h3>raiseload 与 N+1 防护</h3>
+  <p>raiseload 是一个特殊的加载策略——它阻止懒加载，并在访问未加载的关联时抛出异常。这是检测和防止 N+1 问题的有力工具。</p>
+  <pre><code>from sqlalchemy.orm import raiseload
+
+# 全局阻止所有懒加载
+user = session.execute(
+    select(User).options(raiseload('*'))
+).scalars().first()
+
+# 访问未加载的关联时抛出异常
+# print(user.addresses)  # raise MissingGreenlet
+
+# 对特定关系使用 selectin
+user = session.execute(
+    select(User)
+    .options(
+        raiseload('*'),  # 阻止所有懒加载
+        selectinload(User.addresses)  # 但显式预加载 addresses
+    )
+).scalars().first()
+
+print(user.addresses)  # 正常，因为已加载</code></pre>
+
+  <h3>加载策略选择指南</h3>
+  <table>
+    <tr><th>策略</th><th>SQL 执行</th><th>适用场景</th><th>N+1 风险</th></tr>
+    <tr><td>lazy</td><td>N+1 条</td><td>很少访问关联</td><td>高风险</td></tr>
+    <tr><td>selectin</td><td>2 条（IN 查询）</td><td>一对多，列表展示</td><td>低风险</td></tr>
+    <tr><td>joined</td><td>1 条（JOIN）</td><td>一对一，详情页</td><td>低风险</td></tr>
+    <tr><td>subquery</td><td>2 条（子查询）</td><td>分页 + 关联加载</td><td>低风险</td></tr>
+    <tr><td>raiseload</td><td>0 条（阻止）</td><td>调试，性能优化</td><td>强制检查</td></tr>
+  </table>
+</section>
+
+<section id="query" class="toc-link">
+  <h2><span class="num">04</span> 查询 API</h2>
+
+  <p>SQLAlchemy 2.0 统一了查询 API，推荐使用 <code>select()</code> 函数替代 1.x 的 <code>Query</code> 对象。新的 API 更加类型安全，编写体验更一致。</p>
+
+  <h3>2.0 风格查询</h3>
+  <pre><code>from sqlalchemy import select, func, and_, or_, desc
+
+# 基础查询
+stmt = select(User).where(User.is_active == True)
+result = session.execute(stmt)
+users = result.scalars().all()
+
+# 查询特定列
+stmt = select(User.id, User.name, User.email)
+rows = session.execute(stmt).all()
+for id_, name, email in rows:
+    print(id_, name, email)
+
+# 过滤条件
+stmt = select(User).where(
+    and_(
+        User.age >= 18,
+        User.age <= 65,
+        or_(
+            User.name.like("A%"),
+            User.name.like("B%")
+        )
+    )
+)
+
+# 排序与分页
+stmt = (
+    select(User)
+    .where(User.is_active == True)
+    .order_by(User.created_at.desc())
+    .offset(20)
+    .limit(10)
+)</code></pre>
+
+  <h3>JOIN 查询</h3>
+  <pre><code># 隐式 JOIN
+stmt = (
+    select(User, Address)
+    .join(Address, User.id == Address.user_id)
+    .where(Address.email.like("%@example.com"))
+)
+
+# 显式 JOIN
+from sqlalchemy.orm import join
+stmt = (
+    select(User)
+    .join(Address)
+    .where(Address.email == "admin@example.com")
+    .options(selectinload(User.addresses))
+)
+
+# LEFT JOIN
+stmt = select(User).outerjoin(Address)
+
+# 多表 JOIN
+stmt = (
+    select(Post, User, Comment)
+    .select_from(Post)
+    .join(User, Post.user_id == User.id)
+    .outerjoin(Comment, Comment.post_id == Post.id)
+)</code></pre>
+
+  <h3>聚合查询</h3>
+  <pre><code>from sqlalchemy import func, literal_column
+
+# 计数
+stmt = select(func.count()).select_from(User)
+count = session.execute(stmt).scalar()
+
+# 分组统计
+stmt = (
+    select(
+        User.id,
+        User.name,
+        func.count(Post.id).label("post_count"),
+        func.max(Post.created_at).label("last_post")
+    )
+    .outerjoin(Post, Post.user_id == User.id)
+    .group_by(User.id)
+    .having(func.count(Post.id) > 5)
+    .order_by(desc("post_count"))
+)
+results = session.execute(stmt).all()
+
+# 子查询
+subq = (
+    select(Post.user_id, func.count().label("cnt"))
+    .group_by(Post.user_id)
+    .subquery()
+)
+stmt = (
+    select(User, subq.c.cnt)
+    .join(subq, User.id == subq.c.user_id)
+)</code></pre>
+
+  <h3>1.x Query vs 2.0 select 对比</h3>
+  <table>
+    <tr><th>操作</th><th>1.x Query</th><th>2.0 select</th></tr>
+    <tr><td>创建</td><td>session.query(User)</td><td>select(User)</td></tr>
+    <tr><td>过滤</td><td>.filter(User.name == "X")</td><td>.where(User.name == "X")</td></tr>
+    <tr><td>链式</td><td>.filter().order_by()</td><td>.where().order_by()</td></tr>
+    <tr><td>获取单条</td><td>.first()</td><td>session.execute(stmt).scalar_one()</td></tr>
+    <tr><td>获取全部</td><td>.all()</td><td>session.execute(stmt).scalars().all()</td></tr>
+    <tr><td>JOIN</td><td>.join(Address)</td><td>stmt.join(Address)</td></tr>
+    <tr><td>计数</td><td>.count()</td><td>select(func.count())</td></tr>
+    <tr><td>更新</td><td>.update()</td><td>update(User).where()</td></tr>
+    <tr><td>删除</td><td>.delete()</td><td>delete(User).where()</td></tr>
+  </table>
+</section>
+
+<section id="alembic" class="toc-link">
+  <h2><span class="num">05</span> Alembic 迁移</h2>
+
+  <p>Alembic 是 SQLAlchemy 官方推荐的数据库迁移工具。它追踪模型定义的变化，自动生成迁移脚本，并将变更应用到数据库。</p>
+
+  <h3>初始化配置</h3>
+  <pre><code># 安装
+# pip install alembic
+
+# 初始化
+# alembic init alembic
+
+# 配置 alembic.ini
+# sqlalchemy.url = postgresql://user:pass@localhost/mydb
+
+# alembic/env.py — 关联模型
+from myapp.models import Base
+target_metadata = Base.metadata</code></pre>
+
+  <h3>自动生成迁移</h3>
+  <pre><code># 自动检测模型变化生成迁移脚本
+# alembic revision --autogenerate -m "add user table"
+
+# 生成的迁移脚本示例:
+"""add user table
+
+Revision ID: abc123
+"""
+from alembic import op
+import sqlalchemy as sa
+
+def upgrade():
+    op.create_table(
+        'users',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('name', sa.String(length=50), nullable=False),
+        sa.Column('email', sa.String(length=120), nullable=True),
+        sa.PrimaryKeyConstraint('id'),
+        sa.UniqueConstraint('email')
+    )
+
+def downgrade():
+    op.drop_table('users')</code></pre>
+
+  <h3>高级迁移操作</h3>
+  <pre><code>def upgrade():
+    # 添加列
+    op.add_column('users', sa.Column('age', sa.Integer()))
+
+    # 修改列
+    op.alter_column('users', 'email',
+                    existing_type=sa.VARCHAR(120),
+                    nullable=False)
+
+    # 创建索引
+    op.create_index('idx_users_email', 'users', ['email'])
+
+    # 数据迁移
+    op.execute("UPDATE users SET age = 0 WHERE age IS NULL")
+
+    # 批量操作
+    with op.batch_alter_table('users') as batch_op:
+        batch_op.add_column(sa.Column('phone', sa.String(20)))
+        batch_op.drop_column('old_field')
+
+def downgrade():
+    with op.batch_alter_table('users') as batch_op:
+        batch_op.drop_column('phone')
+    op.drop_index('idx_users_email')
+    op.drop_column('users', 'age')</code></pre>
+
+  <h3>迁移工作流</h3>
+  <div class="callout"><strong>最佳实践:</strong><br>
+  1. <code>alembic revision --autogenerate</code> 生成迁移<br>
+  2. 审查生成的脚本，确保正确<br>
+  3. <code>alembic upgrade head</code> 应用到本地数据库<br>
+  4. 提交迁移脚本到版本控制<br>
+  5. 在 CI/CD 中自动执行 <code>alembic upgrade head</code><br>
+  6. 永远不要手动修改已发布的迁移脚本——应该创建新的迁移来修正</div>
+</section>
+
+<section id="async" class="toc-link">
+  <h2><span class="num">06</span> 异步 ORM</h2>
+
+  <p>SQLAlchemy 2.0 原生支持异步操作。使用 <code>asyncpg</code> 作为 PostgreSQL 驱动，配合 <code>AsyncSession</code> 和 <code>async_scoped_session</code>，可以实现完全异步的数据库访问。</p>
+
+  <h3>异步引擎配置</h3>
+  <pre><code>from sqlalchemy.ext.asyncio import (
+    create_async_engine,
+    AsyncSession,
+    async_sessionmaker
+)
+from sqlalchemy.orm import DeclarativeBase
+
+# 注意使用 asyncpg 驱动
+ASYNC_DB_URL = "postgresql+asyncpg://user:pass@localhost/mydb"
+
+async_engine = create_async_engine(
+    ASYNC_DB_URL,
+    pool_size=10,
+    max_overflow=20,
+    echo=True
+)
+
+# 异步 Session 工厂
+AsyncSessionLocal = async_sessionmaker(
+    async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)</code></pre>
+
+  <h3>异步查询</h3>
+  <pre><code>from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+async def get_active_users(session: AsyncSession) -> list[User]:
+    stmt = (
+        select(User)
+        .where(User.is_active == True)
+        .order_by(User.created_at.desc())
+        .limit(100)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+async def create_post(
+    session: AsyncSession,
+    title: str,
+    body: str,
+    user_id: int
+) -> Post:
+    post = Post(title=title, body=body, user_id=user_id)
+    session.add(post)
+    await session.commit()
+    await session.refresh(post)
+    return post</code></pre>
+
+  <h3>异步关系加载</h3>
+  <pre><code>from sqlalchemy.orm import selectinload
+
+async def get_user_with_addresses(
+    session: AsyncSession,
+    user_id: int
+) -> User | None:
+    stmt = (
+        select(User)
+        .where(User.id == user_id)
+        .options(selectinload(User.addresses))
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+# 在 FastAPI 中使用
+from fastapi import FastAPI, Depends
+
+app = FastAPI()
+
+async def get_session():
+    async with AsyncSessionLocal() as session:
+        yield session
+
+@app.get("/users/{user_id}")
+async def get_user(
+    user_id: int,
+    session: AsyncSession = Depends(get_session)
+):
+    user = await get_user_with_addresses(session, user_id)
+    if not user:
+        return {"error": "not found"}
+    return {
+        "id": user.id,
+        "name": user.name,
+        "addresses": [a.email for a in user.addresses]
+    }</code></pre>
+
+  <div class="callout"><strong>提示:</strong><br>异步 ORM 不是银弹。对于 I/O 密集型的 API 服务，异步能大幅提升吞吐量。但如果查询本身是瓶颈，再多的异步也无法解决问题——此时需要优化查询、添加缓存或使用读写分离。</div>
+</section>
+
+<section id="migration-20" class="toc-link">
+  <h2><span class="num">07</span> SQLAlchemy 2.0 变化</h2>
+
+  <p>SQLAlchemy 2.0 是一次重大版本升级。它移除了一堆 1.x 时代的遗留 API，引入了更清晰、更类型安全的接口。以下是从 1.x 迁移到 2.0 的关键变化。</p>
+
+  <h3>核心变化总结</h3>
+  <table>
+    <tr><th>方面</th><th>1.x</th><th>2.0</th></tr>
+    <tr><td>查询 API</td><td>session.query(User)</td><td>select(User)</td></tr>
+    <tr><td>引擎</td><td>create_engine()</td><td>create_engine()（兼容）</td></tr>
+    <tr><td>声明式映射</td><td>declarative_base() + Column</td><td>DeclarativeBase + Mapped + mapped_column</td></tr>
+    <tr><td>Session</td><td>sessionmaker()（兼容）</td><td>sessionmaker()（增强）</td></tr>
+    <tr><td>连接</td><td>engine.execute()</td><td>connection.execute()</td></tr>
+    <tr><td>事务控制</td><td>session.begin()</td><td>session.begin()（增强）</td></tr>
+    <tr><td>异步</td><td>实验性</td><td>原生完整支持</td></tr>
+    <tr><td>废弃</td><td>—</td><td>autocommit=True, Session.commit() 不再自动 begin</td></tr>
+  </table>
+
+  <h3>旧引擎 → 新引擎</h3>
+  <pre><code># 1.x 风格
+engine = create_engine("sqlite:///db.sqlite3", echo=True)
+
+# 2.0 风格（完全相同，但多了未来标识）
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+engine = create_engine("postgresql:///db", echo=True)
+
+# 2.0 推荐的连接方式
+with engine.connect() as conn:
+    result = conn.execute(text("SELECT 1"))
+    print(result.scalar())</code></pre>
+
+  <h3>废弃与移除的 API</h3>
+  <pre><code># 以下在 2.0 中被废弃或移除:
+# 1. session.query() — 改用 select()
+# 2. Query.get() — 改用 session.get()
+# 3. Query.join() — 改用 select().join()
+# 4. Session.begin(subtransactions=True) — 改用 savepoint
+# 5. engine.execute() — 改用 connection.execute()
+# 6. autocommit=True — 不再支持
+# 7. declarative_base() — 改用 DeclarativeBase
+
+# 使用 future=True 在 1.4 中提前适配 2.0
+from sqlalchemy.future import select  # 1.4 兼容
+
+# 检查是否已完全迁移 2.0
+import sqlalchemy
+print(sqlalchemy.__version__)  # 2.0.x</code></pre>
+
+  <h3>迁移步骤</h3>
+  <div class="callout"><strong>迁移清单:</strong><br>
+  1. 升级到 SQLAlchemy 1.4，启用 <code>future=True</code><br>
+  2. 将 <code>session.query()</code> 替换为 <code>session.execute(select())</code><br>
+  3. 将 <code>Column</code> 替换为 <code>mapped_column</code><br>
+  4. 添加类型注释 <code>Mapped[T]</code><br>
+  5. 处理 <code>autocommit</code> 和 <code>subtransactions</code><br>
+  6. 升级到 SQLAlchemy 2.0<br>
+  7. 运行测试确保一切正常</div>
+</section>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Python 异步编程深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>🐍 Python 异步编程深度解析</h1>
+  <p class="subtitle">事件循环 · async/await · Task/Future · 异步上下文管理器 · 异步队列 · 同步原语 · 超时与取消</p>
+  <span class="version">Python 3.13 · asyncio</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#sec1">事件循环</a></li>
+    <li><a href="#sec2">async/await 协程</a></li>
+    <li><a href="#sec3">Task 与 Future</a></li>
+    <li><a href="#sec4">异步上下文管理器</a></li>
+    <li><a href="#sec5">异步迭代器</a></li>
+    <li><a href="#sec6">异步队列</a></li>
+    <li><a href="#sec7">同步原语</a></li>
+    <li><a href="#sec8">超时与取消</a></li>
+    <li><a href="#sec9">调试与性能</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="sec1" class="toc-link">
+  <h2><span class="num">01</span> 事件循环</h2>
+
+  <p>事件循环是 asyncio 的核心调度器。它负责注册、执行和取消任务，处理 I/O 就绪通知，以及在协程之间切换上下文。</p>
+
+  <h3>获取与设置事件循环</h3>
+
+<pre><code class="language-python">import asyncio
+
+# 获取当前运行的事件循环（3.10+ 推荐方式）
+loop = asyncio.get_running_loop()  # 无运行循环则抛出 RuntimeError
+
+# 获取或创建事件循环（3.10 之前的方式，3.12 弃用）
+loop = asyncio.get_event_loop()     # 没有则创建新的
+
+# 创建新的事件循环
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+# 3.10+ 推荐：直接使用 asyncio.run()
+async def main():
+    print("Hello asyncio")
+
+asyncio.run(main())  # 自动创建和关闭事件循环
+</code></pre>
+
+  <h3>run_until_complete 与 run_forever</h3>
+
+<pre><code class="language-python"># run_until_complete：运行协程直到完成
+async def fetch_data():
+    await asyncio.sleep(1)
+    return {"data": "result"}
+
+loop = asyncio.new_event_loop()
+try:
+    result = loop.run_until_complete(fetch_data())
+    print(result)
+finally:
+    loop.close()
+
+# run_forever：永久运行，需要手动停止
+async def periodic_task():
+    while True:
+        print("Tick")
+        await asyncio.sleep(1)
+
+loop = asyncio.new_event_loop()
+asyncio.ensure_future(periodic_task(), loop=loop)
+try:
+    loop.run_forever()  # 直到 loop.stop() 被调用
+except KeyboardInterrupt:
+    pass
+finally:
+    loop.close()
+</code></pre>
+
+  <h3>3.10+ 事件循环变化</h3>
+
+<pre><code class="language-python"># 3.10：弃用 loop 参数传递
+# 旧的模式（3.10 弃用）
+# await asyncio.sleep(1, loop=loop)
+
+# 新的模式
+async def correct():
+    await asyncio.sleep(1)  # 自动使用运行中的循环
+
+# 3.11：TaskGroup 结构化并发
+async def with_task_group():
+    async with asyncio.TaskGroup() as tg:
+        task1 = tg.create_task(asyncio.sleep(1))
+        task2 = tg.create_task(asyncio.sleep(2))
+    # 所有任务在退出时完成
+
+# 3.12：弃用更多遗留 API
+# asyncio.get_event_loop() 在无运行循环时弃用
+# 始终使用 asyncio.get_running_loop()
+
+# 3.13：性能改进
+# 事件循环底层优化，协程切换开销降低
+</code></pre>
+
+  <h3>自定义事件循环策略</h3>
+
+<pre><code class="language-python">import asyncio
+import platform
+
+# 选择事件循环实现
+if platform.system() == "Windows":
+    # Windows 上使用 ProactorEventLoop（默认 3.8+）
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+else:
+    # Linux 上使用 SelectorEventLoop 或 uvloop
+    try:
+        import uvloop
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        # uvloop 基于 libuv，性能比 SelectorEventLoop 快 2-4 倍
+    except ImportError:
+        pass
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    始终优先使用 <code>asyncio.run()</code> 作为入口点。它自动创建新的事件循环、运行协程并在完成后关闭循环。uvloop 将事件循环替换为 libuv 实现，是生产环境的高性能选择。
+  </div>
+</section>
+
+<section id="sec2" class="toc-link">
+  <h2><span class="num">02</span> async/await 协程</h2>
+
+  <h3>协程函数与协程对象</h3>
+
+<pre><code class="language-python"># 协程函数：用 async def 定义的函数
+async def greet(name: str) -> str:
+    return f"Hello, {name}"
+
+# 调用协程函数返回协程对象（不会执行函数体）
+coro = greet("Python")
+print(type(coro))  # <class 'coroutine'>
+
+# 执行协程的三种方式
+# 1. await
+result = await coro
+
+# 2. asyncio.run()
+result = asyncio.run(greet("Python"))
+
+# 3. create_task 调度
+task = asyncio.create_task(greet("Python"))
+
+# 协程函数的生命周期
+async def lifecycle():
+    print("开始执行")
+    await asyncio.sleep(1)  # 挂起，让出控制权
+    print("继续执行")
+    return "完成"
+
+# 协程在 await 处挂起，事件循环调度其他协程
+</code></pre>
+
+  <h3>可等待对象（Awaitable）</h3>
+
+<pre><code class="language-python"># Python 中的三种可等待类型：
+# 1. 协程（coroutine）
+# 2. Task
+# 3. Future
+
+import asyncio
+from typing import Awaitable
+
+# 自定义可等待对象
+class Waitable:
+    """实现 __await__ 协议的自定义可等待对象"""
+    def __init__(self, delay: float):
+        self.delay = delay
+
+    def __await__(self):
+        return self._wait().__await__()
+
+    async def _wait(self):
+        await asyncio.sleep(self.delay)
+        return "waited"
+
+async def use_custom_awaitable():
+    result = await Waitable(1.0)
+    print(result)
+
+# await 链
+async def inner():
+    await asyncio.sleep(0.5)
+    return "inner result"
+
+async def outer():
+    result = await inner()  # 链式 await
+    return f"outer got: {result}"
+
+async def top():
+    return await outer()
+
+print(asyncio.run(top()))
+# outer got: inner result
+</code></pre>
+
+  <h3>协程的正确用法与常见错误</h3>
+
+<pre><code class="language-python"># ❌ 常见错误：忘记 await
+async def bad():
+    asyncio.sleep(1)  # 创建了协程对象但未被 await
+    # RuntimeWarning: coroutine was never awaited
+
+# ❌ 在同步函数中调用协程
+def sync_func():
+    asyncio.run(some_coro())  # OK，但如果已有运行循环则失败
+
+# ❌ 在回调中调用协程
+def callback():
+    asyncio.create_task(some_coro())  # 需要运行中的事件循环
+
+# ✅ 正确方式
+async def good():
+    await asyncio.sleep(1)
+
+# ✅ 在同步环境中启动
+def main():
+    asyncio.run(good())
+
+# ✅ 回调中启动协程
+def callback_with_loop():
+    loop = asyncio.get_running_loop()
+    loop.create_task(some_coro())
+</code></pre>
+
+  <h3>asyncio.gather 与协程并发</h3>
+
+<pre><code class="language-python">async def fetch_url(url: str) -> str:
+    print(f"开始请求 {url}")
+    await asyncio.sleep(1)  # 模拟网络延迟
+    print(f"完成请求 {url}")
+    return f"<response from {url}>"
+
+async def concurrent_fetch():
+    # 并行执行多个协程
+    results = await asyncio.gather(
+        fetch_url("https://api.example.com/1"),
+        fetch_url("https://api.example.com/2"),
+        fetch_url("https://api.example.com/3"),
+        return_exceptions=True  # 将异常作为结果返回，不抛出
+    )
+    return results
+
+# gather 的返回顺序与输入顺序一致
+# 总共耗时 ~1s（三个请求并行），而不是 3s
+</code></pre>
+</section>
+
+<section id="sec3" class="toc-link">
+  <h2><span class="num">03</span> Task 与 Future</h2>
+
+  <h3>Task 的创建与管理</h3>
+
+<pre><code class="language-python">import asyncio
+
+async def background_work(task_id: int, duration: float):
+    print(f"任务 {task_id} 开始")
+    await asyncio.sleep(duration)
+    print(f"任务 {task_id} 完成")
+    return f"结果 {task_id}"
+
+async def main():
+    # 使用 create_task 创建任务（立即调度）
+    task1 = asyncio.create_task(background_work(1, 2.0))
+    task2 = asyncio.create_task(background_work(2, 1.5))
+
+    # 任务运行中可以做其他事情
+    print("主协程继续工作...")
+
+    # 等待任务完成
+    result1 = await task1
+    result2 = await task2
+
+    print(result1, result2)
+
+    # 检查任务状态
+    print(f"task1 done: {task1.done()}")
+    print(f"task1 cancelled: {task1.cancelled()}")
+
+    # 任务取消
+    task3 = asyncio.create_task(background_work(3, 10))
+    task3.cancel()  # 在任务内部抛出 CancelledError
+    try:
+        await task3
+    except asyncio.CancelledError:
+        print("任务 3 被取消")
+</code></pre>
+
+  <h3>gather / wait / as_completed 对比</h3>
+
+<pre><code class="language-python">async def demo_gather():
+    """gather：并发执行，返回有序结果列表"""
+    results = await asyncio.gather(
+        asyncio.sleep(1, result="A"),
+        asyncio.sleep(2, result="B"),
+        asyncio.sleep(3, result="C"),
+    )
+    print(results)  # ['A', 'B', 'C'] — 顺序与输入一致
+
+async def demo_wait():
+    """wait：细粒度控制，返回 (done, pending) 元组"""
+    tasks = {
+        asyncio.create_task(asyncio.sleep(1, result="A")),
+        asyncio.create_task(asyncio.sleep(2, result="B")),
+        asyncio.create_task(asyncio.sleep(3, result="C")),
+    }
+    done, pending = await asyncio.wait(
+        tasks,
+        timeout=2.5,           # 超时返回部分结果
+        return_when=asyncio.FIRST_COMPLETED,  # 或 ALL_COMPLETED, FIRST_EXCEPTION
+    )
+    for task in done:
+        print(task.result())   # A, B (C 仍在运行)
+    for task in pending:
+        task.cancel()          # 清理未完成的任务
+
+async def demo_as_completed():
+    """as_completed：按完成顺序逐个处理"""
+    tasks = [
+        asyncio.create_task(asyncio.sleep(2, result="慢速")),
+        asyncio.create_task(asyncio.sleep(1, result="快速")),
+        asyncio.create_task(asyncio.sleep(3, result="最慢")),
+    ]
+    for coro in asyncio.as_completed(tasks, timeout=3):
+        earliest = await coro
+        print(f"完成: {earliest}")  # 快速 → 慢速 → 最慢
+</code></pre>
+
+  <h3>shield — 保护任务不被取消</h3>
+
+<pre><code class="language-python">async def critical_operation():
+    """不可中断的关键操作"""
+    print("关键操作开始")
+    await asyncio.sleep(2)
+    print("关键操作完成")
+    return "关键数据"
+
+async def safe_operation():
+    """使用 shield 保护子操作"""
+    try:
+        # shield 防止内部协程被外部取消传播
+        result = await asyncio.shield(critical_operation())
+        return result
+    except asyncio.CancelledError:
+        print("外部已取消，但 shield 确保内部完成")
+        # 如果 shield 内部的协程还在运行，取消不会传播进去
+        raise
+
+async def main():
+    task = asyncio.create_task(safe_operation())
+    await asyncio.sleep(0.5)
+    task.cancel()  # 尝试取消
+    try:
+        await task
+    except asyncio.CancelledError:
+        print("主协程捕获取消")
+</code></pre>
+
+  <h3>TaskGroup（3.11+ 结构化并发）</h3>
+
+<pre><code class="language-python">import asyncio
+
+async def worker(n: int):
+    await asyncio.sleep(n)
+    if n == 2:
+        raise ValueError(f"worker {n} 失败")
+    return f"worker {n} 完成"
+
+async def main():
+    # TaskGroup 提供结构化并发
+    # 任何一个任务抛出异常，所有任务被取消
+    try:
+        async with asyncio.TaskGroup() as tg:
+            t1 = tg.create_task(worker(1))
+            t2 = tg.create_task(worker(2))  # 将抛出异常
+            t3 = tg.create_task(worker(3))
+        # 所有任务正常完成才到达这里
+    except ExceptionGroup as eg:
+        print(f"捕获到异常组: {eg.exceptions}")
+        # ExceptionGroup 封装所有子任务异常
+
+    # 传统方式 vs TaskGroup
+    # 传统：需要手动管理取消和异常聚合
+    # TaskGroup：自动取消 + ExceptionGroup 聚合
+</code></pre>
+</section>
+
+<section id="sec4" class="toc-link">
+  <h2><span class="num">04</span> 异步上下文管理器</h2>
+
+  <p>异步上下文管理器通过 <code>__aenter__</code> 和 <code>__aexit__</code> 协议管理异步资源生命周期。</p>
+
+<pre><code class="language-python">import asyncio
+from contextlib import asynccontextmanager
+
+# 基于类的异步上下文管理器
+class AsyncConnection:
+    """模拟异步数据库连接"""
+    async def connect(self):
+        print("连接数据库...")
+        await asyncio.sleep(0.5)
+        self.connected = True
+        print("数据库已连接")
+
+    async def close(self):
+        print("关闭连接...")
+        await asyncio.sleep(0.3)
+        self.connected = False
+        print("连接已关闭")
+
+    async def query(self, sql: str) -> str:
+        if not self.connected:
+            raise RuntimeError("未连接")
+        await asyncio.sleep(0.2)
+        return f"结果: {sql}"
+
+    async def __aenter__(self):
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+        # 返回 True 抑制异常
+        return False  # 不抑制
+
+async def use_connection():
+    async with AsyncConnection() as conn:
+        result = await conn.query("SELECT 1")
+        print(result)
+    # 退出时自动关闭连接
+
+# 基于装饰器的异步上下文管理器
+@asynccontextmanager
+async def async_managed_resource(name: str):
+    print(f"获取资源: {name}")
+    resource = {"name": name, "ready": True}
+    try:
+        yield resource
+    finally:
+        print(f"释放资源: {name}")
+        await asyncio.sleep(0.1)
+
+async def use_resource():
+    async with async_managed_resource("database") as res:
+        print(f"使用资源: {res['name']}")
+
+# 异步 ExitStack
+from contextlib import AsyncExitStack
+
+async def manage_multiple():
+    """同时管理多个异步上下文"""
+    async with AsyncExitStack() as stack:
+        conn1 = await stack.enter_async_context(AsyncConnection())
+        conn2 = await stack.enter_async_context(AsyncConnection())
+        # 同时使用两个连接
+        r1 = await conn1.query("SELECT 1")
+        r2 = await conn2.query("SELECT 2")
+        print(r1, r2)
+    # 按逆序自动关闭所有连接
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    异步上下文管理器最常见的应用场景是数据库连接、HTTP 会话和文件操作。始终优先使用 <code>async with</code> 而非手动调用 <code>__aenter__</code>/<code>__aexit__</code>。AsyncExitStack 在动态管理不确定数量的异步资源时特别有用。
+  </div>
+</section>
+
+<section id="sec5" class="toc-link">
+  <h2><span class="num">05</span> 异步迭代器</h2>
+
+  <p>异步迭代器通过 <code>__aiter__</code> 和 <code>__anext__</code> 协议支持在异步环境中逐个产生值。</p>
+
+<pre><code class="language-python">import asyncio
+
+# 基于类的异步迭代器
+class AsyncCounter:
+    """异步计数器，每秒递增"""
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.current = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.current >= self.limit:
+            raise StopAsyncIteration
+        self.current += 1
+        await asyncio.sleep(1)
+        return self.current
+
+async def use_async_iter():
+    async for value in AsyncCounter(5):
+        print(f"计数: {value}")
+
+# 异步生成器（推荐方式）
+async def async_counter(limit: int, delay: float = 1):
+    """使用异步生成器产生值"""
+    for i in range(limit):
+        await asyncio.sleep(delay)
+        yield i  # yield 在 async def 中创建异步生成器
+
+async def use_async_gen():
+    async for value in async_counter(5, 0.5):
+        print(f"值: {value}")
+
+# 实用场景：异步分页读取
+async def paginated_fetch(url: str, page_size: int = 100):
+    page = 1
+    while True:
+        data = await fetch_page(url, page, page_size)
+        if not data:
+            break
+        yield data
+        page += 1
+
+async def process_all():
+    async for page in paginated_fetch("https://api.example.com/items"):
+        print(f"处理了 {len(page)} 条记录")
+
+# 异步迭代器转换
+async def transform_example():
+    # 异步推导式（Python 3.6+）
+    results = [x async for x in async_counter(5)]
+    print(results)  # [0, 1, 2, 3, 4]
+
+    # 异步列表推导 + 条件过滤
+    even = [x async for x in async_counter(10) if x % 2 == 0]
+    print(even)  # [0, 2, 4, 6, 8]
+
+    # 异步字典推导
+    mapping = {f"key-{x}": f"val-{x}" async for x in async_counter(5)}
+    print(mapping)
+</code></pre>
+</section>
+
+<section id="sec6" class="toc-link">
+  <h2><span class="num">06</span> 异步队列</h2>
+
+  <p><code>asyncio.Queue</code> 是线程安全的异步 FIFO 队列，用于协程间通信和生产者-消费者模式。</p>
+
+<pre><code class="language-python">import asyncio
+import random
+
+# 基础队列
+async def producer(queue: asyncio.Queue, n: int):
+    for i in range(n):
+        item = f"item-{i}"
+        await queue.put(item)
+        print(f"生产: {item}")
+        await asyncio.sleep(random.random())
+    await queue.put(None)  # 信号结束
+
+async def consumer(queue: asyncio.Queue, name: str):
+    while True:
+        item = await queue.get()
+        if item is None:  # 收到结束信号
+            queue.task_done()
+            break
+        print(f"消费者 {name} 处理: {item}")
+        await asyncio.sleep(random.random() * 1.5)
+        queue.task_done()
+
+async def main():
+    queue = asyncio.Queue(maxsize=5)  # 缓冲区大小
+    # 启动生产者和多个消费者
+    prod = asyncio.create_task(producer(queue, 10))
+    consumers = [
+        asyncio.create_task(consumer(queue, f"C{i}"))
+        for i in range(3)
+    ]
+    await asyncio.gather(prod, *consumers)
+
+# 队列类型
+async def queue_types():
+    # FIFO 队列（默认）
+    fifo = asyncio.Queue()
+    await fifo.put("first")
+    await fifo.put("second")
+    print(await fifo.get())  # first
+
+    # LIFO 队列（栈）
+    lifo = asyncio.LifoQueue()
+    await lifo.put("first")
+    await lifo.put("second")
+    print(await lifo.get())  # second
+
+    # 优先级队列
+    pq = asyncio.PriorityQueue()
+    await pq.put((2, "中等优先级"))
+    await pq.put((1, "高优先级"))
+    await pq.put((3, "低优先级"))
+
+    while not pq.empty():
+        priority, task = await pq.get()
+        print(f"优先级 {priority}: {task}")
+
+# queue.join() 与 task_done()
+async def coordinated_work():
+    q = asyncio.Queue()
+
+    async def worker():
+        while True:
+            item = await q.get()
+            try:
+                await asyncio.sleep(0.5)
+            finally:
+                q.task_done()
+
+    workers = [asyncio.create_task(worker()) for _ in range(5)]
+    for i in range(20):
+        await q.put(i)
+
+    await q.join()  # 等待所有项目被处理
+    print("所有任务完成")
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    <code>Queue.join()</code> 阻塞直到队列中所有项目都被 <code>task_done()</code> 标记完成。这是协调生产者和消费者的推荐方式。注意队列的 <code>maxsize</code> 参数控制背压，避免内存无限增长。
+  </div>
+</section>
+
+<section id="sec7" class="toc-link">
+  <h2><span class="num">07</span> 同步原语</h2>
+
+  <p>asyncio 提供了与 threading 模块对应的异步同步原语，用于协程间的同步与互斥。</p>
+
+  <h3>Lock（互斥锁）</h3>
+
+<pre><code class="language-python">import asyncio
+
+shared_resource = 0
+
+async def increment(lock: asyncio.Lock, n: int):
+    global shared_resource
+    for _ in range(n):
+        async with lock:  # 异步获取锁
+            current = shared_resource
+            await asyncio.sleep(0.01)  # 模拟处理
+            shared_resource = current + 1
+
+async def test_lock():
+    lock = asyncio.Lock()
+    tasks = [asyncio.create_task(increment(lock, 100)) for _ in range(3)]
+    await asyncio.gather(*tasks)
+    print(f"最终值: {shared_resource}")  # 300（没有锁会小于 300）
+</code></pre>
+
+  <h3>Semaphore（信号量）</h3>
+
+<pre><code class="language-python">async def limited_request(sem: asyncio.Semaphore, url_id: int):
+    """限制最多同时 3 个并发请求"""
+    async with sem:
+        print(f"请求 {url_id} 开始")
+        await asyncio.sleep(1)
+        print(f"请求 {url_id} 完成")
+
+async def test_semaphore():
+    sem = asyncio.Semaphore(3)  # 最多 3 个并发
+    tasks = [limited_request(sem, i) for i in range(10)]
+    await asyncio.gather(*tasks)
+    # 总耗时 ~4s（10/3 向上取整）而不是 10s
+</code></pre>
+
+  <h3>Event（事件）</h3>
+
+<pre><code class="language-python">async def waiter(event: asyncio.Event, name: str):
+    print(f"{name} 等待事件...")
+    await event.wait()  # 阻塞直到 set()
+    print(f"{name} 收到事件")
+
+async def setter(event: asyncio.Event):
+    await asyncio.sleep(2)
+    print("设置事件")
+    event.set()
+
+async def test_event():
+    event = asyncio.Event()
+    waiters = [asyncio.create_task(waiter(event, f"W{i}")) for i in range(3)]
+    await asyncio.create_task(setter(event))
+    await asyncio.gather(*waiters)
+</code></pre>
+
+  <h3>Condition（条件变量）</h3>
+
+<pre><code class="language-python">async def consumer(cv: asyncio.Condition, name: str, items: list):
+    async with cv:
+        while not items:
+            print(f"{name} 等待项目...")
+            await cv.wait()  # 释放锁并等待 notify
+        item = items.pop(0)
+        print(f"{name} 消费: {item}")
+    return item
+
+async def producer(cv: asyncio.Condition, items: list):
+    async with cv:
+        items.append("新项目")
+        print("生产了新项目")
+        cv.notify(1)  # 唤醒一个等待者
+        # cv.notify_all() 唤醒所有
+
+async def test_condition():
+    cv = asyncio.Condition()
+    items = []
+    cons = asyncio.create_task(consumer(cv, "C1", items))
+    await asyncio.sleep(0.5)
+    await producer(cv, items)
+    await cons
+</code></pre>
+</section>
+
+<section id="sec8" class="toc-link">
+  <h2><span class="num">08</span> 超时与取消</h2>
+
+  <p>超时管理是异步编程的核心问题。asyncio 提供了多种超时和取消机制。</p>
+
+  <h3>wait_for — 带超时的 await</h3>
+
+<pre><code class="language-python">import asyncio
+
+async def slow_operation():
+    await asyncio.sleep(10)
+    return "done"
+
+async def use_wait_for():
+    try:
+        result = await asyncio.wait_for(slow_operation(), timeout=2.0)
+        print(result)
+    except asyncio.TimeoutError:
+        print("操作超时！")
+        # slow_operation 内部被取消（CancelledError）
+
+# wait_for 底层行为：超时后，内部协程被取消
+# 这意味着如果协程有 finally 或 try/finally，它会被执行
+
+async def cleanup_operation():
+    try:
+        await asyncio.sleep(10)
+    finally:
+        print("清理中...")
+        await asyncio.sleep(0.5)
+
+# 超时后，cleanup 的 finally 块会执行
+</code></pre>
+
+  <h3>timeout（3.11+）— 上下文管理器风格超时</h3>
+
+<pre><code class="language-python">async def work_with_timeout():
+    """使用 asyncio.timeout 上下文管理器（3.11+）"""
+    try:
+        async with asyncio.timeout(2.0):
+            await asyncio.sleep(10)  # 2 秒后超时
+    except asyncio.TimeoutError:
+        print("操作超时")
+
+async def timeout_scope_control():
+    """timeout 的灵活控制"""
+    timeout = asyncio.Timeout(5.0)
+    async with timeout:
+        await asyncio.sleep(2)
+        timeout.reschedule(1.0)  # 剩余时间改为 1 秒
+        await asyncio.sleep(3)   # 这个会超时
+
+# asyncio.timeout 与 asyncio.Timeout
+# asyncio.timeout(delay) 返回 Timeout 上下文管理器（快捷方式）
+# asyncio.Timeout() 提供 reschedule(), expired() 等方法
+</code></pre>
+
+  <h3>取消的最佳实践</h3>
+
+<pre><code class="language-python">async def cancellable_worker():
+    """正确处理取消的协程"""
+    try:
+        while True:
+            await asyncio.sleep(1)
+            print("工作中...")
+    except asyncio.CancelledError:
+        print("收到取消信号，清理中...")
+        await asyncio.sleep(1)  # 执行清理
+        raise  # 重新抛出以通知调用方
+
+# 屏蔽取消（谨慎使用）
+async def non_cancellable():
+    """在关键部分临时屏蔽取消"""
+    with asyncio.CancelScope(shield=True):
+        # 这部分代码不会被外部取消
+        await asyncio.sleep(1)
+    # 恢复可取消状态
+
+# 超时与取消的关系
+async def timeout_vs_cancel():
+    """timeout 本质上也是通过取消实现的"""
+    task = asyncio.create_task(slow_operation())
+
+    try:
+        await asyncio.wait_for(task, timeout=1.0)
+    except asyncio.TimeoutError:
+        # task 已经被取消了
+        print(f"task cancelled: {task.cancelled()}")  # True
+</code></pre>
+
+  <h3>超时在真实场景中的应用</h3>
+
+<pre><code class="language-python">import aiohttp  # 需要安装
+
+async def fetch_with_timeout(session: aiohttp.ClientSession, url: str):
+    """带超时的 HTTP 请求"""
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)):
+            return await session.get(url)
+    except asyncio.TimeoutError:
+        print(f"请求 {url} 超时")
+        return None
+
+async def health_check():
+    """服务健康检查，每个服务 2 秒超时"""
+    services = [
+        "https://api1.example.com/health",
+        "https://api2.example.com/health",
+        "https://api3.example.com/health",
+    ]
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_with_timeout(session, url) for url in services]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        return results
+
+# 整体超时
+async def run_with_global_timeout():
+    """整体操作最多 10 秒"""
+    try:
+        async with asyncio.timeout(10):
+            results = await health_check()
+            return results
+    except asyncio.TimeoutError:
+        print("健康检查整体超时")
+        return []
+</code></pre>
+</section>
+
+<section id="sec9" class="toc-link">
+  <h2><span class="num">09</span> 调试与性能</h2>
+
+  <h3>Debug 模式</h3>
+
+<pre><code class="language-python">import asyncio
+import os
+
+# 启用 debug 模式的三种方式
+# 1. 环境变量
+# PYTHONASYNCIODEBUG=1 python script.py
+
+# 2. 代码中设置
+asyncio.run(main(), debug=True)
+
+# 3. 循环级别
+loop = asyncio.new_event_loop()
+loop.set_debug(True)
+
+# Debug 模式开启时的行为
+async def debug_example():
+    # 未 await 的协程会输出警告
+    asyncio.sleep(1)
+    # RuntimeWarning: coroutine 'sleep' was never awaited
+
+    # 超过 0.1s 的阻塞调用会被记录
+    import time
+    time.sleep(0.5)
+    # Executing <Task finished> took 0.500 seconds
+
+    # 回调耗时统计
+    loop = asyncio.get_running_loop()
+    loop.slow_callback_duration = 0.05  # 默认 0.1
+
+# 协程耗时分析
+async def profile_coro(delay: float):
+    """带耗时的协程"""
+    start = loop.time()
+    await asyncio.sleep(delay)
+    elapsed = loop.time() - start
+    print(f"协程耗时: {elapsed:.2f}s")
+</code></pre>
+
+  <h3>回调与性能分析</h3>
+
+<pre><code class="language-python">import asyncio
+import time
+
+# 自定义事件循环监控
+class MonitoringLoop(asyncio.SelectorEventLoop):
+    def __init__(self):
+        super().__init__()
+        self.task_times = {}
+
+    def create_task(self, coro, **kwargs):
+        task = super().create_task(coro, **kwargs)
+        task_id = id(task)
+        self.task_times[task_id] = time.monotonic()
+
+        # 添加完成回调
+        def on_done(t):
+            if not t.cancelled() and not t.exception():
+                elapsed = time.monotonic() - self.task_times[task_id]
+                if elapsed > 0.5:
+                    print(f"任务 {t.get_name()} 耗时 {elapsed:.2f}s")
+
+        task.add_done_callback(on_done)
+        return task
+
+# 协程耗时分析工具
+async def analyze_coroutines():
+    """分析协程运行时间"""
+    loop = asyncio.get_running_loop()
+
+    async def timed_coro(name: str, delay: float):
+        start = loop.time()
+        await asyncio.sleep(delay)
+        elapsed = loop.time() - start
+        return {"name": name, "elapsed": elapsed}
+
+    tasks = [
+        timed_coro("fast", 0.1),
+        timed_coro("medium", 0.5),
+        timed_coro("slow", 1.0),
+    ]
+
+    results = await asyncio.gather(*tasks)
+    for r in results:
+        print(f"{r['name']}: {r['elapsed']:.2f}s")
+</code></pre>
+
+  <h3>fibers 概念与第三方优化</h3>
+
+<pre><code class="language-python"># fibers / 纤程 — 比协程更轻量的调度单元
+
+# 1. uvloop — 替代事件循环
+import uvloop
+# uvloop 使用 libuv (Node.js 的事件循环)
+# 相比 SelectorEventLoop 性能提升 2-4 倍
+# 特别适合 I/O 密集型的网络服务
+
+# 使用 uvloop
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+# 之后所有 asyncio.run() 都使用 uvloop
+
+# 2. trio — 结构化并发的替代方案
+# import trio
+# async def trio_main():
+#     async with trio.open_nursery() as nursery:
+#         nursery.start_soon(some_task)
+# trio 使用"取消作用域"和"监护权"模型
+
+# 3. curio — 轻量级 asyncio 替代
+# import curio
+# 强调简单性和可预测性
+
+# 性能对比
+async def benchmark():
+    """简单基准测试"""
+    N = 1000
+
+    async def empty_io():
+        await asyncio.sleep(0)
+
+    # 测量协程切换开销
+    start = time.monotonic()
+    for _ in range(N):
+        await empty_io()
+    elapsed = time.monotonic() - start
+    print(f"每次 await 平均: {(elapsed / N) * 1000000:.1f}us")
+</code></pre>
+
+  <h3>最佳实践总结</h3>
+
+<pre><code class="language-python"># 1. 始终使用 asyncio.run() 作为入口
+# 2. 使用 TaskGroup（3.11+）管理任务生命周期
+# 3. 为网络请求设置合理的超时
+# 4. 不要在协程中使用 time.sleep() — 使用 asyncio.sleep()
+# 5. 避免在协程中执行 CPU 密集型代码 — 使用 run_in_executor
+import asyncio
+
+async def cpu_bound_task():
+    # 将 CPU 密集型任务交给线程池
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(
+        None,  # 使用默认线程池
+        lambda: sum(i ** 2 for i in range(10_000_000))
+    )
+    return result
+
+# 6. 使用 asyncio.gather(return_exceptions=True) 避免部分失败影响全部
+# 7. 调试时启用 PYTHONASYNCIODEBUG=1
+# 8. 定期检查未 await 的协程（debug 模式会自动检测）
+
+async def main():
+    # 正确的入口模式
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(worker("A", 1))
+        tg.create_task(worker("B", 2))
+
+if __name__ == "__main__":
+    asyncio.run(main())
+</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong><br>
+    性能调优建议：I/O 密集型场景使用 uvloop；CPU 密集型使用 <code>run_in_executor</code> 或 multiprocessing；混合负载需要合理规划协程与线程边界。Python 3.13 在 asyncio 性能方面有显著改进，协程调度开销进一步降低。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>
