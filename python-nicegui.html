@@ -1325,16 +1325,27 @@ ui.run(
 )
 
 # 桌面应用打包（PyInstaller）
-"""
 # 安装打包工具
-pip install pyinstaller
+# pip install pyinstaller
 
-# 打包命令
-pyinstaller --onefile --windowed --name MyApp main.py
+# 打包命令（单文件模式）
+# pyinstaller --onefile --windowed --name MyApp main.py
 
-# 注意：需要包含 nicegui 的静态资源
-# --add-data "path/to/nicegui/static:./nicegui/static"
-"""
+# 打包命令（目录模式，启动更快）
+# pyinstaller --onedir --windowed --name MyApp main.py
+
+# ⚠️ 打包体积说明：
+# --onefile 单文件模式：约 120-200 MB
+#   - Python 解释器 + 标准库：~30MB
+#   - NiceGUI + FastAPI + Uvicorn + Starlette 等：~40-60MB
+#   - PyWebView（native 模式）：~20MB
+#   - 其他依赖 + 静态资源：~20-30MB
+# --onedir  目录模式：约 200-350 MB（解包后目录）
+# 打包体积主要由依赖链决定，与 NiceGUI 本身关系不大。
+# 减小体积的方法：使用 UPX 压缩 / 排除无用模块 / 改用 Web 部署
+
+# 带 UPX 压缩打包（可减小 30-50% 体积）
+# pyinstaller --onefile --windowed --upx-dir=/usr/bin/upx --name MyApp main.py
 </code></pre>
 
   <h3>Web 模式部署</h3>
