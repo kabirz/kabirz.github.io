@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux RAS 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux RAS 深度解析</h1>
+  <p class="subtitle">可靠性、可用性、可维护性 — 硬件错误处理框架</p>
+  <span class="version">Linux 7.0.12 · drivers/acpi/apei/ghes.c (1935 行) · drivers/ras/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#flow">错误处理流程</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>RAS（Reliability, Availability, Serviceability）是 Linux 内核的<strong>硬件错误处理框架</strong>。它处理 ECC 内存错误、CPU 缓存错误、PCIe AER 错误等硬件故障，支持错误纠正（CE）、不可纠正错误（UE）报告和内存热移除。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">RAS 错误处理架构：</span>
+
+  硬件检测到错误
+  ├── ECC 内存错误（CE/UE）
+  ├── CPU 缓存错误
+  ├── PCIe AER 错误
+  └── 机器检查异常（MCE）
+        │
+        ↓
+  <span style="color:#8250df">固件报告</span>（GHES/GHES/GHES）
+  ACPI/GHES → 内核
+        │
+        ↓
+  <span style="color:#1a7f37">RAS 子系统</span>
+  ├── ce_error_handler()   — 可纠正错误
+  ├── ue_error_handler()   — 不可纠正错误
+  └── mce_handler()        — 机器检查异常
+        │
+        ├── 记录错误到 /sys/devices/system/ras/
+        ├── 发送 uevent 通知用户态
+        ├── 内存热移除（如果支持）
+        └── panic（如果不可恢复）
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 错误处理流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">ECC 内存错误处理：</span>
+
+  ECC 检测到可纠正错误（CE）
+        │
+        ├── 硬件自动纠正（ECC 修正位翻转）
+        │   数据完整，无影响
+        │
+        ├── 内核记录错误
+        │   edac_mc_handle_error()
+        │   → 记录 DIMM/Bank 位置
+        │   → 记录地址和时间
+        │
+        └── 用户态通知
+            mcelog（如果启用）
+            edac-utils
+            rasdaemon
+
+<span style="color:#1a7f37">不可纠正错误（UE）处理：</span>
+
+  ECC 无法纠正的错误
+        │
+        ├── 1. 标记页面为坏页
+        │       memory_failure() → 标记不可用
+        │
+        ├── 2. 尝试热移除内存
+        │       memory_hotplug → 移除故障内存
+        │
+        └── 3. 如果无法恢复 → panic
+            无法纠正的错误 → 系统停止
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 应用场景</h2>
+  <table>
+    <tr><th>场景</th><th>说明</th></tr>
+    <tr><td>ECC 内存</td><td>纠正单比特翻转，记录多比特错误</td></tr>
+    <tr><td>CPU 缓存</td><td>检测 L1/L2/L3 缓存错误</td></tr>
+    <tr><td>PCIe AER</td><td>PCIe 高级错误报告（Correctable/Uncorrectable）</td></tr>
+    <tr><td>内存热移除</td><td>故障内存自动隔离</td></tr>
+    <tr><td>MCE</td><td>机器检查异常处理</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm"># 查看 RAS 错误</span>
+$ dmesg | grep -i "ras\|edac\|ecc\|mce"
+$ cat /sys/devices/system/ras/cpuid/ce_err_count
+$ edac-util status
+$ mcelog --client  <span class="cm"># 查看 MCE 日志</span></code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/ras/</span>
+├── <span class="file">ras.c</span>            <span class="cmt">RAS 核心框架</span>
+├── <span class="file">cec.c</span>            <span class="cmt">CE 错误计数</span>
+└── <span class="file">mce.c</span>            <span class="cmt">机器检查异常</span>
+
+<span class="dir">drivers/acpi/apei/</span>
+├── <span class="file">ghes.c</span>           <span class="cmt">GHES 错误处理 (1935 行)</span>
+├── <span class="file">hest.c</span>           <span class="cmt">硬件错误源表</span>
+└── <span class="file">erst.c</span>           <span class="cmt">错误记录存储</span>
+
+<span class="dir">drivers/edac/</span>
+├── <span class="file">edac_mc.c</span>        <span class="cmt">内存控制器 EDAC</span>
+└── <span class="file">edac_core.c</span>      <span class="cmt">EDAC 核心框架</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>drivers/acpi/apei/ghes.c</code> — GHES 错误处理，理解固件→内核错误传递。<br>
+    <code>drivers/ras/mce.c</code> — MCE 处理，理解机器检查异常。<br>
+    <code>drivers/edac/edac_mc.c</code> — EDAC 内存错误检测框架。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · drivers/acpi/apei/ghes.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

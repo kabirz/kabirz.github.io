@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux KASLR 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux KASLR 深度解析</h1>
+  <p class="subtitle">内核地址空间布局随机化 — 防止 ROP 攻击</p>
+  <span class="version">Linux 7.0.12 · arch/x86/boot/compressed/kaslr.c (908 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">实现原理</a></li>
+    <li><a href="#flow">启动流程</a></li>
+    <li><a href="#usecases">安全价值</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>KASLR（Kernel Address Space Layout Randomization）是 Linux 内核的<strong>地址空间随机化</strong>安全机制。每次启动时，内核代码、模块、页面等基地址随机偏移，使攻击者无法预测内核函数地址，大幅增加 ROP（Return-Oriented Programming）攻击难度。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 实现原理</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">无 KASLR（固定地址）：</span>
+
+  内核映射地址始终固定：
+  ┌──────────────────────────────┐ 0xffffffff80000000
+  │ 内核代码（.text）             │  ← 攻击者知道地址
+  │ 内核数据（.data/.bss）        │
+  │ 内核模块加载区域              │
+  └──────────────────────────────┘
+
+<span style="color:#1a7f37">有 KASLR（随机化地址）：</span>
+
+  每次启动内核基地址随机偏移：
+  ┌──────────────────────────────┐ 0xffffffff82400000 (随机)
+  │  内核代码（.text）            │  ← 攻击者不知道地址
+  │  内核数据（.data/.bss）       │
+  │  内核模块加载区域             │
+  └──────────────────────────────┘
+
+  偏移范围：16MB（x86_64）
+  每次重启地址不同 → ROP gadget 无法预测
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 启动流程</h2>
+  <div class="ascii-diagram"><pre>
+  Bootloader 加载压缩内核
+        │
+        ↓
+  <span style="color:#8250df">kaslr_early_init()</span> — arch/x86/boot/compressed/kaslr.c
+        │
+        ├── 1. 从硬件随机源获取随机数
+        │       RDRAND / RDSEED 指令
+        │       或 BIOS/UEFI 提供的随机数
+        │
+        ├── 2. 计算随机偏移
+        │       偏移 = random() & 0x00FFFFFF  <span class="cm">// 对齐到 16MB</span>
+        │
+        ├── 3. 调整内核加载地址
+        │       输出地址 = 内核原始地址 + 偏移
+        │
+        └── 4. 后续内核初始化使用随机化后的地址
+
+  /proc/cmdline 包含 kaslr 信息：
+  $ cat /proc/cmdline
+  BOOT_IMAGE=/boot/vmlinuz-... kaslr ...
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 安全价值</h2>
+  <table>
+    <tr><th>攻击类型</th><th>KASLR 防护</th></tr>
+    <tr><td>ROP/JOP</td><td>无法预测 gadget 地址</td></tr>
+    <tr><td>内核漏洞利用</td><td>增加地址猜测难度</td></tr>
+    <tr><td>内核信息泄露</td><td>地址不固定，泄露一次无效</td></tr>
+    <tr><td>模块加载攻击</td><td>模块加载地址随机</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>KASLR 的局限</strong><br>
+    KASLR 只是增加了攻击难度，不是完全防御：<br>
+    ① 如果有信息泄露漏洞，攻击者可以读取随机化后的地址<br>
+    ② 一些侧信道攻击可以绕过 KASLR<br>
+    ③ KASLR 通常与 SMEP/SMAP/PXN 等其他防护机制配合使用
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">arch/x86/boot/compressed/</span>
+└── <span class="file">kaslr.c</span>          <span class="cmt">KASLR 核心 (908 行)</span>
+      └── kaslr_early_init()  <span class="cmt">KASLR 初始化</span>
+
+<span class="dir">arch/x86/</span>
+├── <span class="file">mm/kaslr.c</span>       <span class="cmt">x86 内存 KASLR</span>
+└── <span class="file">lib/kaslr.c</span>      <span class="cmt">随机数生成</span>
+
+<span class="dir">arch/arm64/kernel/</span>
+└── <span class="file">kaslr.c</span>          <span class="cmt">ARM64 KASLR</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>arch/x86/boot/compressed/kaslr.c</code> — KASLR 核心，理解随机偏移计算。<br>
+    <code>arch/x86/mm/kaslr.c</code> — x86 内存布局随机化。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · arch/x86/boot/compressed/kaslr.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内存模型 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内存模型 深度解析</h1>
+  <p class="subtitle">LKMM — 多核并发的内存排序保证</p>
+  <span class="version">Linux 7.0.12 · Documentation/memory-barriers.txt (3016 行) · include/linux/compiler.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#barriers">内存屏障</a></li>
+    <li><a href="#order">排序规则</a></li>
+    <li><a href="#api">API 与使用</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>LKMM（Linux Kernel Memory Model）定义了多处理器系统中<strong>内存操作的排序规则</strong>。编译器和 CPU 可能重排内存访问顺序以提高性能，LKMM 通过内存屏障（memory barriers）确保并发代码的正确性。它是 RCU、spinlock、原子操作等同步原语的基础。</p>
+</section>
+
+<section id="barriers" class="toc-link">
+  <h2><span class="num">02</span> 内存屏障</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">内存屏障类型：</span>
+
+  无屏障（可能发生重排）：
+  CPU 0:              CPU 1:
+  WRITE A = 1         if (B == 1)
+  WRITE B = 1              A = 1  <span style="color:#cf222e">← 可能先看到 A=1，再看到 B=0</span>
+
+  <span style="color:#1a7f37">有写屏障（smp_wmb）：</span>
+  CPU 0:              CPU 1:
+  WRITE A = 1         if (B == 1) {
+  <span style="color:#1a7f37">smp_wmb()</span>                <span style="color:#1a7f37">smp_rmb()</span>
+  WRITE B = 1              A == 1  <span style="color:#1a7f37">← 保证看到 A=1</span>
+                       }
+
+<span style="color:#8250df">屏障类型：</span>
+
+  smp_wmb()  — 写屏障：之前的写操作在之后的写操作之前对其他 CPU 可见
+  smp_rmb()  — 读屏障：之前的读操作在之后的读操作之前完成
+  smp_mb()   — 全屏障：之前的所有读写在之后的所有读写之前完成
+  smp_store_release() — 释放语义：之前的读写在本次写之前完成
+  smp_load_acquire()  — 获取语义：本次读在之后的读写之前完成
+</pre></div>
+</section>
+
+<section id="order" class="toc-link">
+  <h2><span class="num">03</span> 排序规则</h2>
+  <table>
+    <tr><th>场景</th><th>需要的屏障</th><th>说明</th></tr>
+    <tr><td>生产者-消费者</td><td>smp_wmb + smp_rmb</td><td>确保数据在标记之前可见</td></tr>
+    <tr><td>队列操作</td><td>smp_wmb</td><td>确保入队顺序正确</td></tr>
+    <tr><td>引用计数</td><td>原子操作自带</td><td>atomic_inc/dec 提供排序</td></tr>
+    <tr><td>RCU 读端</td><td>rcu_dereference()</td><td>编译器屏障 + 控制依赖</td></tr>
+    <tr><td>RCU 写端</td><td>rcu_assign_pointer()</td><td>smp_store_release 语义</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">04</span> API 与使用</h2>
+  <div class="card">
+    <pre><code><span class="cm">// 内存屏障 API</span>
+<span class="fn">smp_wmb</span>();          <span class="cm">// 写屏障</span>
+<span class="fn">smp_rmb</span>();          <span class="cm">// 读屏障</span>
+<span class="fn">smp_mb</span>();           <span class="cm">// 全屏障</span>
+<span class="fn">smp_store_release</span>(&amp;ptr, val);  <span class="cm">// 释放语义写</span>
+<span class="fn">smp_load_acquire</span>(&amp;ptr);        <span class="cm">// 获取语义读</span>
+
+<span class="cm">// 编译器屏障（阻止编译器重排，但不阻止 CPU 重排）</span>
+<span class="fn">barrier</span>();
+
+<span class="cm">// 不可预测的值（防止编译器优化）</span>
+READ_ONCE(x);    <span class="cm">// 防止编译器缓存</span>
+WRITE_ONCE(x, v); <span class="cm">// 防止编译器合并/拆分</span>
+
+<span class="cm">// 生产者-消费者示例</span>
+<span class="cm">// 生产者</span>
+data = <span class="num">42</span>;
+<span class="fn">smp_wmb</span>();        <span class="cm">// 确保 data 在 ready 之前可见</span>
+ready = <span class="num">1</span>;
+
+<span class="cm">// 消费者</span>
+<span class="kw">if</span> (<span class="fn">READ_ONCE</span>(ready)) {
+    <span class="fn">smp_rmb</span>();    <span class="cm">// 确保读 ready 之后再读 data</span>
+    <span class="fn">printk</span>(<span class="st">"%d\n"</span>, data);  <span class="cm">// 保证看到 data=42</span>
+}</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">Documentation/</span>
+└── <span class="file">memory-barriers.txt</span> <span class="cmt">内存屏障权威文档 (3016 行)</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">compiler.h</span>       <span class="cmt">barrier() / READ_ONCE / WRITE_ONCE</span>
+├── <span class="file">atomic.h</span>         <span class="cmt">原子操作（自带屏障）</span>
+└── <span class="file">barrier.h</span>        <span class="cmt">内存屏障 API</span>
+
+<span class="dir">tools/memory-model/</span>
+├── <span class="file">litmus-tests/</span>    <span class="cmt">LKMM 一致性测试</span>
+└── <span class="file">linux-kernel.cat</span> <span class="cmt">LKMM 形式化定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>Documentation/memory-barriers.txt</code> — 内存屏障权威文档，理解 LKMM 全貌。<br>
+    <code>include/linux/compiler.h</code> — <code>barrier()</code>、<code>READ_ONCE</code>/<code>WRITE_ONCE</code> 定义。<br>
+    <code>tools/memory-model/</code> — LKMM 形式化模型和一致性测试。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · Documentation/memory-barriers.txt · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
