@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Namespace 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Namespace 深度解析</h1>
+  <p class="subtitle">资源隔离框架 — 七种命名空间全景</p>
+  <span class="version">Linux 7.0.12 · kernel/nsproxy.c · kernel/ns_common.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">七种命名空间</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">创建与切换</a></li>
+    <li><a href="#docker">Docker 中的应用</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Namespace 是 Linux 内核提供的<strong>资源隔离机制</strong>。每个命名空间将全局资源（进程 ID、网络、文件系统等）封装为独立的视图，使不同命名空间中的进程看到不同的"世界"。它是 Docker、LXC、Kubernetes 等容器技术的基石。Linux 支持 7 种命名空间。</p>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 七种命名空间</h2>
+  <table>
+    <tr><th>类型</th><th>CLONE 标志</th><th>隔离内容</th><th>典型用途</th></tr>
+    <tr><td><strong>MNT</strong></td><td>CLONE_NEWNS</td><td>挂载点</td><td>容器文件系统</td></tr>
+    <tr><td><strong>PID</strong></td><td>CLONE_NEWPID</td><td>进程 ID</td><td>容器 PID 隔离</td></tr>
+    <tr><td><strong>NET</strong></td><td>CLONE_NEWNET</td><td>网络栈</td><td>容器网络（已有专题）</td></tr>
+    <tr><td><strong>UTS</strong></td><td>CLONE_NEWUTS</td><td>主机名/域名</td><td>容器主机名</td></tr>
+    <tr><td><strong>IPC</strong></td><td>CLONE_NEWIPC</td><td>IPC 资源</td><td>隔离 System V IPC</td></tr>
+    <tr><td><strong>USER</strong></td><td>CLONE_NEWUSER</td><td>用户/组 ID</td><td>非特权容器</td></tr>
+    <tr><td><strong>CGROUP</strong></td><td>CLONE_NEWCGROUP</td><td>cgroup 根目录</td><td>cgroup 视图隔离</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+Docker 容器使用全部 7 种命名空间：
+
+  host namespace                    container namespace
+  ┌────────────────────┐           ┌────────────────────┐
+  │ PID 1 (init)       │           │ PID 1 (container)  │  ← PID
+  │ PID 2 (kthreadd)   │           │ PID 2              │
+  │ ...                 │           │                    │
+  │                     │           │                    │
+  │ hostname: prod-srv  │           │ hostname: web-01   │  ← UTS
+  │                     │           │                    │
+  │ 192.168.1.100       │           │ 10.0.0.2           │  ← NET
+  │ eth0, docker0       │           │ eth0               │
+  │                     │           │                    │
+  │ / (rootfs)          │           │ / (overlayfs)      │  ← MNT
+  │ /var/lib/docker     │           │                    │
+  └────────────────────┘           └────────────────────┘
+</pre></div>
+</section>
+
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+  <div class="card">
+    <pre><code><span class="cm">// 命名空间代理 — 进程的命名空间视图</span>
+<span class="kw">struct</span> <span class="ty">nsproxy</span> {
+    <span class="ty">atomic_t</span>          count;     <span class="cm">// 引用计数</span>
+    <span class="kw">struct</span> <span class="ty">uts_namespace</span>  *uts_ns;  <span class="cm">// UTS（主机名）</span>
+    <span class="kw">struct</span> <span class="ty">ipc_namespace</span>  *ipc_ns;  <span class="cm">// IPC</span>
+    <span class="kw">struct</span> <span class="ty">mnt_namespace</span>  *mnt_ns;  <span class="cm">// MNT（挂载点）</span>
+    <span class="kw">struct</span> <span class="ty">pid_namespace</span>  *pid_ns;  <span class="cm">// PID</span>
+    <span class="kw">struct</span> <span class="ty">user_namespace</span> *user_ns; <span class="cm">// USER</span>
+    <span class="kw">struct</span> <span class="ty">net</span>           *net_ns;  <span class="cm">// NET（网络，已有专题）</span>
+    <span class="kw">struct</span> <span class="ty">cgroup_namespace</span> *cgroup_ns; <span class="cm">// CGROUP</span>
+};
+
+<span class="cm">// 每个进程的 task_struct 引用 nsproxy</span>
+<span class="cm">// fork/clone 时继承或创建新命名空间</span>
+<span class="cm">// setns() 切换到其他命名空间</span></code></pre>
+  </div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 创建与切换</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">创建新命名空间：</span>
+
+  <span style="color:#8250df">方式 1：clone() 创建新进程</span>
+  clone(CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS, ...)
+  → 新进程获得独立的 PID/NET/MNT 命名空间
+
+  <span style="color:#1a7f37">方式 2：unshare() 当前进程</span>
+  unshare(CLONE_NEWUTS)
+  → 当前进程获得独立的 UTS 命名空间
+  → 不影响其他进程
+
+<span style="color:#1a7f37">切换到已有命名空间：</span>
+
+  setns(fd, CLONE_NEWPID)
+  → 当前进程进入 fd 指定的命名空间
+  → 需要 CAP_SYS_ADMIN 权限
+</pre></div>
+</section>
+
+<section id="docker" class="toc-link">
+  <h2><span class="num">05</span> Docker 中的应用</h2>
+  <div class="ascii-diagram"><pre>
+Docker 容器创建时的命名空间设置：
+
+  docker run -d --name web nginx
+        │
+        ↓
+  runc 容器运行时
+        │
+        ├── clone(CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS
+        │         | CLONE_NEWUTS | CLONE_NEWIPC
+        │         | CLONE_NEWUSER | CLONE_NEWCGROUP)
+        │
+        ├── 创建所有 7 种命名空间
+        │
+        ├── 配置每个命名空间：
+        │   PID:  容器内 PID 1 = nginx 进程
+        │   NET:  创建 veth → br0 → 宿主机网络
+        │   MNT:  挂载 overlayfs 作为根文件系统
+        │   UTS:  设置 hostname = 容器 ID
+        │   IPC:  隔离 System V IPC
+        │   USER: 映射 UID（非特权容器）
+        │   CGROUP: 设置 cgroup 限制
+        │
+        └── 启动容器进程
+</pre></div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+├── <span class="file">nsproxy.c</span>        <span class="cmt">命名空间代理</span>
+├── <span class="file">ns_common.c</span>      <span class="cmt">命名空间公共接口</span>
+├── <span class="file">fork.c</span>           <span class="cmt">clone 实现</span>
+├── <span class="file">pid.c</span>            <span class="cmt">PID 命名空间</span>
+├── <span class="file">utsname.c</span>        <span class="cmt">UTS 命名空间</span>
+├── <span class="file">ipc/namespace.c</span>  <span class="cmt">IPC 命名空间</span>
+└── <span class="file">user/namespace.c</span> <span class="cmt">USER 命名空间</span>
+
+<span class="dir">fs/</span>
+├── <span class="file">namespace.c</span>      <span class="cmt">MNT 命名空间（挂载）</span>
+└── <span class="file">proc/namespace.c</span> <span class="cmt">/proc/pid/ns/</span>
+
+<span class="dir">net/core/</span>
+└── <span class="file">net_namespace.c</span>  <span class="cmt">NET 命名空间（已有专题）</span>
+
+<span class="dir">kernel/cgroup/</span>
+└── <span class="file">namespace.c</span>      <span class="cmt">CGROUP 命名空间</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/nsproxy.c</code> — 命名空间代理核心。<br>
+    <code>kernel/pid.c</code> — PID 命名空间实现，理解容器 PID 1。<br>
+    <code>fs/namespace.c</code> — MNT 命名空间，理解挂载隔离。<br>
+    <code>include/linux/nsproxy.h</code> — <code>struct nsproxy</code> 定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/nsproxy.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

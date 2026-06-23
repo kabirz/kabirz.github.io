@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux tmpfs 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux tmpfs 深度解析</h1>
+  <p class="subtitle">内存文件系统 — /dev/shm、/tmp、POSIX 共享内存的基础</p>
+  <span class="version">Linux 7.0.12 · mm/shmem.c (6022 行) · fs/tmpfs.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>tmpfs 是 Linux 的<strong>基于内存的文件系统</strong>。文件数据存储在 RAM 中（或 swap），不写磁盘。它是 POSIX 共享内存（<code>/dev/shm</code>）、<code>/tmp</code>、容器 overlayfs 下层等多个机制的基础。核心实现在 <code>mm/shmem.c</code>（6022 行），复用了 Page Cache 的 address_space 机制。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+  <div class="ascii-diagram"><pre>
+tmpfs 架构（基于 Page Cache + shmem）：
+
+  用户态：write(fd, data, len)
+        │
+        ↓
+  VFS → tmpfs 文件操作
+        │
+        ↓
+  shmem_write_begin() → <span style="color:#8250df">分配页面</span>
+        │
+        ├── 从 page cache 查找/分配页面
+        │   get_user_pages_fast() 或 shmem_get_folio()
+        │
+        ├── 将用户数据复制到 Page Cache 页面
+        │
+        └── shmem_write_end() → 标记为脏页
+
+  用户态：read(fd, buf, len)
+        │
+        ↓
+  VFS → tmpfs 文件操作
+        │
+        ↓
+  shmem_read_iter() → <span style="color:#1a7f37">从 Page Cache 读取</span>
+        │
+        └── 数据已经在内存中，直接复制到用户态
+
+  关键：tmpfs 的所有数据都在 Page Cache 中
+  不写磁盘（除非显式 swap out）
+  进程退出后释放（除非持久挂载）
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">03</span> 应用场景</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">/dev/shm — POSIX 共享内存</span>
+
+  $ ls -la /dev/shm
+  -rw------- 1 user user 4096 Jun 12 10:00 myshm
+
+  shm_open("/myshm") → 在 /dev/shm 创建文件
+  mmap(MAP_SHARED) → 映射到进程地址空间
+  多进程映射同一文件 → 共享内存
+
+<span style="color:#1a7f37">/tmp — 临时文件</span>
+
+  $ mount | grep tmpfs
+  tmpfs on /tmp type tmpfs (rw,nosuid,nodev)
+
+  程序写入 /tmp → 数据在 RAM 中
+  重启 → 数据消失（安全，无需清理）
+  systemd-tmpfiles 定期清理过期文件
+
+<span style="color:#8250df">/run — 运行时数据</span>
+
+  $ mount | grep /run
+  tmpfs on /run type tmpfs (rw,nosuid,nodev)
+
+  PID 文件、socket 文件、systemd 状态
+  重启自动清除
+
+<span style="color:#bc4c00">容器 — OverlayFS 下层</span>
+
+  Docker overlay2 存储驱动：
+  upperdir（容器层，ext4）
+  lowerdir（镜像层，只读）
+  workdir → tmpfs（工作目录）
+
+  容器删除后 tmpfs 自动释放
+</pre></div>
+
+  <h3>tmpfs 挂载选项</h3>
+  <div class="card">
+    <pre><code><span class="cm"># 创建 tmpfs 挂载点</span>
+$ mount -t tmpfs -o size=256M tmpfs /mnt/ramdisk
+
+<span class="cm"># 常用选项</span>
+size=256M       <span class="cm"># 最大容量限制</span>
+nr_inodes=4096  <span class="cm"># 最大 inode 数量</span>
+mode=1777       <span class="cm"># 权限（/tmp 通常 1777）</span>
+uid=0           <span class="cm"># 所有者</span>
+gid=0           <span class="cm"># 所属组</span>
+
+<span class="cm"># 查看 tmpfs 使用情况</span>
+$ df -h /dev/shm /tmp /run
+Filesystem      Size  Used Avail Use%
+tmpfs           2.0G  128M  1.9G   6% /dev/shm
+tmpfs           2.0G  4.2M  2.0G   1% /tmp
+tmpfs           2.0G  3.5M  2.0G   1% /run</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">04</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+└── <span class="file">shmem.c</span>           <span class="cmt">tmpfs 核心实现 (6022 行)</span>
+      └── shmem_write_begin/end()  <span class="cmt">写入操作</span>
+      └── shmem_get_folio()        <span class="cmt">页面分配</span>
+      └── shmem_file_setup()       <span class="cmt">创建 tmpfs 文件</span>
+      └── shmem_statfs()           <span class="cmt">文件系统统计</span>
+
+<span class="dir">fs/</span>
+├── <span class="file">tmpfs.c</span>            <span class="cmt">tmpfs VFS 操作</span>
+└── <span class="file">shmem.c</span>            <span class="cmt">shmem 操作</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">shmem_fs.h</span>        <span class="cmt">shmem 内部接口</span>
+└── <span class="file">tmpfs_fs.h</span>        <span class="cmt">tmpfs 定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/shmem.c</code> — tmpfs 核心，理解内存文件系统如何基于 Page Cache。<br>
+    <code>fs/tmpfs.c</code> — tmpfs VFS 操作，理解挂载和文件操作。<br>
+    <code>include/linux/shmem_fs.h</code> — shmem 内部接口定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/shmem.c · fs/tmpfs.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

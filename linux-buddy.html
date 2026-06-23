@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 伙伴系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 伙伴系统深度解析</h1>
+  <p class="subtitle">页面分配器 — 物理内存管理的基础</p>
+  <span class="version">Linux 7.0.12 · mm/page_alloc.c (7869 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">Zone 与伙伴系统</a></li>
+    <li><a href="#flow">分配与释放流程</a></li>
+    <li><a href="#slub">SLUB 分配器</a></li>
+    <li><a href="#oom">OOM Killer</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>伙伴系统（Buddy System）是 Linux 内核的<strong>物理页面分配器</strong>，负责管理所有物理内存。它将空闲页面组织成 11 个阶（order 0~10），每个阶管理 2^order 个连续页面。当内核需要分配内存时（如 sk_buff、inode、内核模块），最终都会走到伙伴系统分配物理页面。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> Zone 与伙伴系统</h2>
+  <div class="ascii-diagram"><pre>
+Linux 物理内存管理层次：
+
+  物理内存
+    │
+    ├── <span style="color:#cf222e">Zone DMA</span>（0~16MB）— ISA 设备 DMA 区域
+    ├── <span style="color:#1a7f37">Zone DMA32</span>（0~4GB）— 32 位设备 DMA
+    └── <span style="color:#8250df">Zone Normal</span>（4GB+）— 常规内存
+
+  每个 Zone 包含 11 个 free_list（伙伴系统核心）：
+
+  Zone Normal
+  ├── free_area[0] → 2^0 = 1 页面 (4KB)
+  ├── free_area[1] → 2^1 = 2 页面 (8KB)
+  ├── free_area[2] → 2^2 = 4 页面 (16KB)
+  ├── ...
+  ├── free_area[9] → 2^9 = 512 页面 (2MB)
+  └── free_area[10] → 2^10 = 1024 页面 (4MB)
+
+  每个 free_area 包含一个链表
+  链表上的块都是 2^order 个连续页面
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 分配与释放流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">分配页面 __alloc_pages()：</span>
+
+  需要 order=2（4 个连续页面）
+        │
+        ├── 1. 检查 watermarks（水位线）
+        │       high → 低水位 → 唤醒 kswapd
+        │       low → 紧急，直接回收
+        │       min → 危险，可能失败
+        │
+        ├── 2. 查找 free_area[2]
+        │       有 → 取出一个块，分配成功
+        │
+        ├── 3. 没有 → 拆分更大的块
+        │       找到 free_area[3]（8 页面）
+        │       拆分为两个 free_area[2]
+        │       一个分配，一个放回 free_area[2]
+        │
+        ├── 4. 如果都找不到 → 内存回收
+        │       kswapd / direct reclaim
+        │       回收 Page Cache / slab
+        │
+        └── 5. 仍然找不到 → OOM Killer
+
+<span style="color:#1a7f37">释放页面 __free_pages()：</span>
+
+  释放 order=2 的块（4 页面）
+        │
+        ├── 1. 检查伙伴（buddy）是否存在
+        │       伙伴 = 地址 ^ (4KB << order)
+        │
+        ├── 2. 伙伴空闲 → <span style="color:#1a7f37">合并</span>
+        │       两个 order=2 合并为 order=3
+        │       继续检查 order=3 的伙伴
+        │       递归合并直到无法合并
+        │
+        └── 3. 放入对应 free_area[order]
+</pre></div>
+</section>
+
+<section id="slub" class="toc-link">
+  <h2><span class="num">04</span> SLUB 分配器</h2>
+  <p>SLUB（Slab Unqueued）是 Linux 内核的<strong>小对象分配器</strong>，管理小于页面大小的内核对象（如 <code>struct inode</code>、<code>struct task_struct</code>）。</p>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">伙伴系统 vs SLUB：</span>
+
+  伙伴系统：分配整页（4KB、8KB、...）
+  SLUB：分配对象（如 192B 的 inode、6KB 的 task_struct）
+
+  SLUB 工作方式：
+  1. 从伙伴系统分配整页
+  2. 将页面切分为固定大小的对象槽位
+  3. 分配时从 freelist 取一个空闲槽位
+  4. 释放时将槽位放回 freelist
+
+  ┌──────────────────────────────────────────┐
+  │ SLUB 页（4KB）                            │
+  ├──────────┬──────────┬──────────┬──────────┤
+  │ object 0 │ object 1 │ object 2 │ object 3 │
+  │ (已分配)  │ (空闲)   │ (已分配)  │ (空闲)   │
+  └──────────┴───┬──────┴──────────┴───┬──────┘
+                  │                      │
+              freelist              freelist
+              (空闲对象链表)
+
+  /proc/slabinfo 查看所有 slab 缓存
+  /sys/kernel/slab/ 查看单个缓存详情
+</pre></div>
+</section>
+
+<section id="oom" class="toc-link">
+  <h2><span class="num">05</span> OOM Killer</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">OOM Killer 工作流程：</span>
+
+  内存不足 → __alloc_pages 失败
+        │
+        ↓
+  <span style="color:#8250df">out_of_memory()</span> — mm/oom_kill.c
+        │
+        ├── 1. 检查是否 OOM 允许
+        │       system 例外、OOM_SCORE_ADJ_MAX
+        │
+        ├── 2. 选择牺牲进程
+        │       oom_badness() 计算 oom_score
+        │       分数 = RSS + swap + 页表 + oom_score_adj
+        │       分数最高 → 被选中
+        │
+        ├── 3. 发送 SIGKILL
+        │       do_send_sig_info(SIGKILL, ...)
+        │
+        └── 4. 进程退出 → 释放内存 → 恢复
+</pre></div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">page_alloc.c</span>     <span class="cmt">伙伴系统 (7869 行)</span>
+│     └── __alloc_pages()    <span class="cmt">分配页面入口</span>
+│     └── __free_pages()     <span class="cmt">释放页面</span>
+│     └── __free_one_page()  <span class="cmt">伙伴合并</span>
+├── <span class="file">slub.c</span>           <span class="cmt">SLUB 分配器 (9844 行)</span>
+│     └── kmem_cache_alloc() <span class="cmt">分配对象</span>
+│     └── kmem_cache_free()  <span class="cmt">释放对象</span>
+├── <span class="file">slab_common.c</span>    <span class="cmt">SLAB 公共接口</span>
+├── <span class="file">oom_kill.c</span>       <span class="cmt">OOM Killer (1273 行)</span>
+├── <span class="file">vmscan.c</span>         <span class="cmt">页面回收 (kswapd)</span>
+└── <span class="file">swap.c</span>           <span class="cmt">Swap 管理</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">mmzone.h</span>         <span class="cmt">struct zone / free_area</span>
+├── <span class="file">slub_def.h</span>       <span class="cmt">struct kmem_cache</span>
+└── <span class="file">oom.h</span>            <span class="cmt">OOM 接口</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/page_alloc.c</code> — 从 <code>__alloc_pages()</code> 理解伙伴系统分配。<br>
+    <code>mm/slub.c</code> — <code>kmem_cache_alloc()</code> 理解内核小对象分配。<br>
+    <code>mm/oom_kill.c</code> — <code>out_of_memory()</code> 理解 OOM 机制。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/page_alloc.c · mm/slub.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
