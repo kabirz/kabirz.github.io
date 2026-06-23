@@ -2,51 +2,296 @@
 
 ## 文档集合
 
-当前共 **28 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件，基于 Linux 7.0.12 内核源码。
+当前共 **174 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件（common.css / common.js）。
 
 ### 文件结构
 
 ```
 ~/docs/
-├── index.html           # 导航页（左侧栏 + 搜索，数据驱动渲染）
-├── common.css           # 公共样式（主题、侧边栏、所有组件）
-├── common.js            # 公共脚本（主题切换、侧边栏、滚动高亮）
-├── linux-*.html         # 27 篇深度解析文档
-└── AGENTS.md            # 本文档
+├── index.html            # 导航页（左侧栏 + 搜索，数据驱动渲染）
+├── common.css            # 公共样式（主题、侧边栏、所有组件）
+├── common.js             # 公共脚本（主题切换、侧边栏生成、滚动高亮）
+├── AGENTS.md             # 本文档
+├── linux-*.html          # 140 篇 Linux 内核深度解析
+├── docker-*.html         # 12 篇 Docker / 容器技术解析
+├── rust-*.html           # 13 篇 Rust 语言深度解析
+└── windows-*.html        # 9 篇 Windows 平台技术解析
 ```
 
-### 已覆盖主题
+### 文档分布
 
-| # | 文件名 | 主题 | 分类 |
-|---|--------|------|------|
-| 1 | linux-mmu.html | MMU（页表、缺页、TLB） | 内核核心 |
-| 2 | linux-mm.html | 内存管理（伙伴系统、SLUB、VMA、回收、OOM） | 内核核心 |
-| 3 | linux-scheduler.html | 调度器（CFS/EEVDF、RT、Deadline、sched_ext） | 内核核心 |
-| 4 | linux-atomic.html | 原子操作（atomic、refcount、内存屏障） | 内核核心 |
-| 5 | linux-spinlock.html | 自旋锁（Spinlock / Rwlock / Seqlock） | 内核核心 |
-| 6 | linux-cas-vs-spinlock.html | CAS 与自旋锁区别 | 内核核心 |
-| 7 | linux-mutex.html | 互斥锁（Mutex） | 内核核心 |
-| 8 | linux-semaphore.html | 信号量（Semaphore / Rwsem） | 内核核心 |
-| 9 | linux-rwlock.html | 读写锁（Rwlock / Rwsem） | 内核核心 |
-| 10 | linux-rcu.html | RCU（Tree RCU、SRCU、宽限期） | 内核核心 |
-| 11 | linux-completion.html | Completion（完成量、同步等待） | 内核核心 |
-| 12 | linux-cgroup.html | cgroup（v1/v2、控制器、BPF） | 内核核心 |
-| 12 | linux-procfs.html | procfs（seq_file、/proc/[pid]） | 文件系统 |
-| 13 | linux-vfs.html | VFS（四大对象、DCache、路径查找） | 文件系统 |
-| 14 | linux-devmodel.html | 设备模型（bus/device/driver） | 设备与驱动 |
-| 15 | linux-pinctrl.html | pinctrl（引脚复用、设备树） | 设备与驱动 |
-| 16 | linux-gpio.html | GPIO（gpio_chip、gpiolib） | 设备与驱动 |
-| 17 | linux-i2c.html | I2C（i2c_adapter、SMBus） | 设备与驱动 |
-| 18 | linux-spi.html | SPI（spi_device、SPI-MEM） | 设备与驱动 |
-| 19 | linux-serial.html | 串口（uart_ops、控制台） | 设备与驱动 |
-| 20 | linux-mmc.html | MMC（SD/eMMC/SDIO） | 设备与驱动 |
-| 21 | linux-led.html | LED 子系统（触发器） | 设备与驱动 |
-| 22 | linux-pwm.html | PWM（pwm_chip、pwm_ops） | 设备与驱动 |
-| 23 | linux-clk.html | 时钟子系统（clk_ops、PLL） | 设备与驱动 |
-| 24 | linux-dma.html | DMA（SWIOTLB、IOMMU） | 设备与驱动 |
-| 25 | linux-devtree.html | 设备树（DTB、语法、Overlay） | 硬件与平台 |
-| 26 | linux-arm-mm.html | ARM 内存管理（页表、MTE） | 硬件与平台 |
-| 27 | linux-network.html | 网络子系统（sk_buff、TCP/IP、XDP） | 网络 |
+| 领域 | 文件数 | 分类 | 说明 |
+|------|--------|------|------|
+| Linux 内核 | 140 | 内核核心 / 文件系统 / 设备驱动 / 网络 / 硬件平台 | 基于 Linux 7.0.12 内核源码 |
+| Docker / 容器 | 12 | 容器技术 | namespaces, cgroups, OCI, runc, containerd, buildkit 等 |
+| Rust | 13 | 系统编程 | 所有权、trait、unsafe、async、tokio、web/gui/embedded 框架 |
+| Windows | 9 | 平台开发 | Win32, MFC, ATL/WTL, COM, UWP, WinUI3, MAUI, WPF, WebView2 |
+
+### 已覆盖主题（Linux 内核）
+
+#### 内核核心（35 篇）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | linux-atomic.html | 原子操作（atomic、refcount、内存屏障） |
+| 2 | linux-buddy.html | 伙伴系统（Buddy） |
+| 3 | linux-cas-vs-spinlock.html | CAS 与自旋锁区别 |
+| 4 | linux-cgroup.html | cgroup（v1/v2、控制器、BPF） |
+| 5 | linux-cleanup.html | 清理机制（__cleanup__） |
+| 6 | linux-compaction.html | 内存压缩（Compaction） |
+| 7 | linux-completion.html | Completion（完成量、同步等待） |
+| 8 | linux-cpufreq.html | cpufreq 频率调节 |
+| 9 | linux-cpuidle.html | cpuidle 空闲管理 |
+| 10 | linux-ebpf.html | eBPF / BPF 可编程内核 |
+| 11 | linux-futex.html | futex 快速用户态互斥 |
+| 12 | linux-hugepages.html | 大页（HugeTLB / THP） |
+| 13 | linux-io-uring.html | io_uring 异步 I/O |
+| 14 | linux-iommu.html | IOMMU / SMMU |
+| 15 | linux-irq.html | genirq（irq_desc/chip/domain） |
+| 16 | linux-kasan.html | KASAN 内存错误检测 |
+| 17 | linux-kaslr.html | KASLR 地址随机化 |
+| 18 | linux-kref.html | kref 引用计数 |
+| 19 | linux-ksm.html | KSM 内核同页合并 |
+| 20 | linux-kthread.html | kthread 内核线程 |
+| 21 | linux-lkmm.html | Linux 内核内存模型 |
+| 22 | linux-locking-overview.html | 锁机制概览 |
+| 23 | linux-memory-hotplug.html | 内存热插拔 |
+| 24 | linux-mm-overview.html | 内存管理概览 |
+| 25 | linux-mm.html | 内存管理（伙伴/SLUB/VMA/回收/OOM） |
+| 26 | linux-mmap.html | mmap 内存映射 |
+| 27 | linux-mmu.html | MMU（页表、缺页、TLB） |
+| 28 | linux-mutex.html | 互斥锁（Mutex） |
+| 29 | linux-notifier.html | notifier 通知链 |
+| 30 | linux-numa.html | NUMA 非一致内存访问 |
+| 31 | linux-overcommit.html | 内存过载（Overcommit） |
+| 32 | linux-page-cache.html | 页缓存（Page Cache） |
+| 33 | linux-page-reclaim.html | 页回收（Reclaim） |
+| 34 | linux-pagefault.html | 缺页异常（Page Fault） |
+| 35 | linux-perf-events.html | perf_events 性能事件 |
+| 36 | linux-perf.html | perf 性能分析（perf） |
+| 37 | linux-rcu.html | RCU（Tree RCU、SRCU、宽限期） |
+| 38 | linux-rwlock.html | 读写锁（Rwlock / Rwsem） |
+| 39 | linux-sched-ext.html | sched_ext 可扩展调度 |
+| 40 | linux-scheduler.html | 调度器（CFS/EEVDF/RT/Deadline/sched_ext） |
+| 41 | linux-semaphore.html | 信号量（Semaphore / Rwsem） |
+| 42 | linux-softirq.html | softirq / tasklet / 软中断 |
+| 43 | linux-spinlock.html | 自旋锁（Spinlock / Rwlock / Seqlock） |
+| 44 | linux-static-keys.html | static_key / static_call |
+| 45 | linux-swap.html | 交换空间（Swap） |
+| 46 | linux-taint.html | Tainted 内核污染标记 |
+| 47 | linux-timers.html | 定时器（timer_list / hrtimer / timer wheel） |
+| 48 | linux-tmpfs.html | tmpfs 临时文件系统 |
+| 49 | linux-tracepoints.html | tracepoints 静态跟踪点 |
+| 50 | linux-tracing-overview.html | 跟踪/性能分析概览 |
+| 51 | linux-waitqueue.html | waitqueue 等待队列 |
+| 52 | linux-watchdog.html | watchdog 看门狗 |
+| 53 | linux-workqueue.html | workqueue 工作队列 |
+| 54 | linux-wq-bh.html | workqueue BH 底半部 |
+| 55 | linux-writeback.html | 回写机制（Writeback） |
+| 56 | linux-xarray.html | XArray 数据结构 |
+
+#### 同步与并发（9 篇）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | linux-atomic.html | 原子操作 |
+| 2 | linux-cas-vs-spinlock.html | CAS 与自旋锁 |
+| 3 | linux-completion.html | completion |
+| 4 | linux-futex.html | futex |
+| 5 | linux-lkmm.html | 内核内存模型 |
+| 6 | linux-locking-overview.html | 锁机制总览 |
+| 7 | linux-mutex.html | mutex |
+| 8 | linux-rcu.html | RCU |
+| 9 | linux-rwlock.html | rwlock / rwsem |
+| 10 | linux-semaphore.html | semaphore |
+| 11 | linux-spinlock.html | spinlock |
+
+#### 文件系统（20 篇）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | linux-debugfs.html | debugfs |
+| 2 | linux-ext4.html | ext4 文件系统 |
+| 3 | linux-fanotify.html | fanotify 文件事件监控 |
+| 4 | linux-fifo.html | FIFO 命名管道 |
+| 5 | linux-inotify.html | inotify 文件事件监控 |
+| 6 | linux-page-cache.html | 页缓存 |
+| 7 | linux-pipe.html | pipe 管道 |
+| 8 | linux-procfs.html | procfs（seq_file、/proc/[pid]） |
+| 9 | linux-seq_file.html | seq_file 顺序文件接口 |
+| 10 | linux-splice.html | splice 零拷贝 |
+| 11 | linux-sysfs.html | sysfs 虚拟文件系统 |
+| 12 | linux-tmpfs.html | tmpfs |
+| 13 | linux-vfs.html | VFS（四大对象、DCache、路径查找） |
+| 14 | linux-writeback.html | 回写机制 |
+
+#### 进程与信号（9 篇）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | linux-coredump.html | 核心转储（coredump） |
+| 2 | linux-fork-exec.html | fork/exec 进程创建 |
+| 3 | linux-kthread.html | kthread |
+| 4 | linux-namespace.html | 内核命名空间 |
+| 5 | linux-ptrace.html | ptrace 进程跟踪 |
+| 6 | linux-process-groups.html | 进程组 / session |
+| 7 | linux-seccomp.html | seccomp 安全计算 |
+| 8 | linux-signal.html | 信号（signal） |
+
+#### 设备与驱动（27 篇）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | linux-clk.html | 时钟子系统（clk_ops、PLL） |
+| 2 | linux-debugging.html | 驱动调试 |
+| 3 | linux-debugging-overview.html | 调试技术概览 |
+| 4 | linux-devmodel.html | 设备模型（bus/device/driver） |
+| 5 | linux-dma.html | DMA（SWIOTLB、IOMMU） |
+| 6 | linux-gpio.html | GPIO（gpio_chip、gpiolib） |
+| 7 | linux-i2c.html | I2C（i2c_adapter、SMBus） |
+| 8 | linux-kernel-modules.html | 内核模块 |
+| 9 | linux-led.html | LED 子系统（触发器） |
+| 10 | linux-livepatch.html | livepatch 热补丁 |
+| 11 | linux-mmc.html | MMC（SD/eMMC/SDIO） |
+| 12 | linux-pci.html | PCI/PCIe 子系统 |
+| 13 | linux-pinctrl.html | pinctrl（引脚复用、设备树） |
+| 14 | linux-pm.html | 电源管理（suspend/resume、runtime PM） |
+| 15 | linux-pwm.html | PWM（pwm_chip、pwm_ops） |
+| 16 | linux-random.html | 随机数（RNG） |
+| 17 | linux-ras.html | RAS 可靠性/可用性/可服务性 |
+| 18 | linux-serial.html | 串口（uart_ops、控制台） |
+| 19 | linux-spi.html | SPI（spi_device、SPI-MEM） |
+| 20 | linux-suspend.html | 挂起/休眠 |
+| 21 | linux-thermal.html | thermal 热管理 |
+| 22 | linux-tty.html | TTY 子系统 |
+| 23 | linux-watchdog.html | watchdog |
+
+#### 网络（25 篇）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | linux-af-packet.html | AF_PACKET 原始包 |
+| 2 | linux-arp.html | ARP 协议 |
+| 3 | linux-bpf-maps.html | BPF maps |
+| 4 | linux-bridge.html | 网桥（bridge） |
+| 5 | linux-icmp.html | ICMP 协议 |
+| 6 | linux-ipv6.html | IPv6 |
+| 7 | linux-napi.html | NAPI 轮询 |
+| 8 | linux-net-device.html | 网络设备（net_device） |
+| 9 | linux-net-overview.html | 网络子系统概览 |
+| 10 | linux-netfilter.html | Netfilter / iptables / nftables |
+| 11 | linux-netlink.html | Netlink 套接字 |
+| 12 | linux-netns.html | 网络命名空间 |
+| 13 | linux-network.html | 网络子系统（sk_buff、TCP/IP、XDP） |
+| 14 | linux-routing.html | 路由子系统 |
+| 15 | linux-rx-packet.html | 接收路径（NAPI → socket） |
+| 16 | linux-skbuff.html | sk_buff 结构 |
+| 17 | linux-socket.html | socket 层 |
+| 18 | linux-tc.html | TC 流量控制 |
+| 19 | linux-tcp.html | TCP 协议 |
+| 20 | linux-tun-tap.html | tun/tap 虚拟网卡 |
+| 21 | linux-tx-packet.html | 发送路径 |
+| 22 | linux-udp.html | UDP 协议 |
+| 23 | linux-unix-socket.html | Unix domain socket |
+| 24 | linux-veth.html | veth 虚拟网卡对 |
+| 25 | linux-vlan.html | VLAN / 802.1Q |
+| 26 | linux-vxlan.html | VXLAN |
+| 27 | linux-xdp-ebpf.html | XDP + eBPF |
+
+#### 安全（7 篇）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | linux-capability.html | capabilities 权能 |
+| 2 | linux-kaslr.html | KASLR |
+| 3 | linux-lockdown.html | lockdown |
+| 4 | linux-lsm.html | LSM 安全模块框架 |
+| 5 | linux-seccomp.html | seccomp |
+| 6 | linux-selinux.html | SELinux |
+| 7 | linux-taint.html | Tainted |
+
+#### IPC（4 篇）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | linux-ipc-overview.html | IPC 概览 |
+| 2 | linux-message-queue.html | POSIX / SysV 消息队列 |
+| 3 | linux-pipe.html | pipe |
+| 4 | linux-shared-memory.html | 共享内存 |
+
+#### 跟踪与调试（11 篇）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | linux-debugging-overview.html | 调试技术概览 |
+| 2 | linux-debugging.html | 驱动调试 |
+| 3 | linux-ftrace.html | ftrace 跟踪器 |
+| 4 | linux-kprobe.html | kprobe / kretprobe |
+| 5 | linux-perf-events.html | perf_events |
+| 6 | linux-perf.html | perf |
+| 7 | linux-profiling-overview.html | 性能分析概览 |
+| 8 | linux-stack-trace.html | stack trace / unwinding |
+| 9 | linux-tracepoints.html | tracepoints |
+| 10 | linux-tracing-overview.html | 跟踪概览 |
+
+#### 硬件与平台（6 篇）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | linux-arm-mm.html | ARM 内存管理（页表、MTE） |
+| 2 | linux-devtree.html | 设备树（DTB、语法、Overlay） |
+| 3 | linux-iommu.html | IOMMU |
+| 4 | linux-pci.html | PCI/PCIe |
+| 5 | linux-vdso.html | vDSO 虚拟动态共享库 |
+
+### 已覆盖主题（Docker / 容器技术）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | docker-arch.html | Docker 整体架构 |
+| 2 | docker-buildkit.html | BuildKit 构建引擎 |
+| 3 | docker-capabilities.html | Linux capabilities 容器化 |
+| 4 | docker-compose.html | Compose 编排 |
+| 5 | docker-containerd.html | containerd 容器运行时 |
+| 6 | docker-namespaces.html | 命名空间隔离 |
+| 7 | docker-network.html | 网络模型 |
+| 8 | docker-oci.html | OCI 标准（runtime + image + distribution） |
+| 9 | docker-overlayfs.html | OverlayFS 联合文件系统 |
+| 10 | docker-runc.html | runc 容器运行时 |
+| 11 | docker-security.html | 安全机制 |
+| 12 | docker-volume.html | 存储卷管理 |
+
+### 已覆盖主题（Rust）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | rust-async.html | async/.await 异步编程 |
+| 2 | rust-cargo.html | Cargo 包管理器 |
+| 3 | rust-cli-tools.html | CLI 工具链 |
+| 4 | rust-concurrency.html | 并发编程（Send/Sync） |
+| 5 | rust-dioxus.html | Dioxus Web 框架 |
+| 6 | rust-embedded.html | 嵌入式开发 |
+| 7 | rust-gui-frameworks.html | GUI 框架（egui/iced/slint） |
+| 8 | rust-macros.html | 宏系统 |
+| 9 | rust-ownership.html | 所有权 / 借用 / 生命周期 |
+| 10 | rust-tokio.html | Tokio 异步运行时 |
+| 11 | rust-trait.html | Trait 系统 |
+| 12 | rust-unsafe.html | unsafe Rust |
+| 13 | rust-web-frameworks.html | Web 框架（Axum/Actix/Rocket） |
+
+### 已覆盖主题（Windows）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | windows-atl-wtl.html | ATL / WTL 模板库 |
+| 2 | windows-maui.html | .NET MAUI |
+| 3 | windows-mfc.html | MFC 框架 |
+| 4 | windows-uwp.html | UWP 通用平台 |
+| 5 | windows-webview2.html | WebView2 |
+| 6 | windows-win32.html | Win32 API |
+| 7 | windows-winforms.html | WinForms |
+| 8 | windows-winui3.html | WinUI 3 |
+| 9 | windows-wpf.html | WPF |
 
 ---
 
@@ -60,6 +305,7 @@
 - 侧边栏折叠按钮、展开按钮、拖拽调整宽度
 - Hero / 导航 / 卡片 / 代码块 / 表格 / 流程图 / 提示框 / 文件树等组件
 - `:has(.doc-sidebar)` 自动为有侧边栏的页面添加左侧边距
+- `.sidebar-cat-*` / `.sidebar-item` / `.sidebar-search` 类（与 `index.html` 共用）
 
 ### common.js
 
@@ -70,8 +316,9 @@
   - 折叠后左侧 `›` 展开按钮
   - 右侧边缘拖拽调整宽度（180-500px）
   - 移动端隐藏，底部 `☰` 按钮滑出
+- **侧边栏持久化**：滚动位置保存到 `localStorage`（debounced 200ms），折叠状态按 `data-top` 保存/恢复
 - **滚动高亮**：导航页 TOC 滚动高亮
-- **文档列表**：`DOCS` 数组定义所有文档（侧边栏用）
+- **文档列表**：`DOCS` 数组定义所有文档（侧边栏 + 导航页共用）
 
 ---
 
@@ -143,19 +390,21 @@ const DOCS = [
 1. 创建 `~/docs/{topic}.html`（使用模板）
 2. 在 `index.html` 的 `DOCS` 数组中添加条目
 3. 在 `common.js` 的 `DOCS` 数组中添加条目（侧边栏用）
-4. 更新统计数字（`total-count` 等）
+4. 更新 `index.html` 中的统计数字（`total-count` 等）
 5. 如需新领域，在 `ICON_MAP` 中添加 emoji 和颜色
 
 ### 领域定义
 
 ```javascript
 const ICON_MAP = {
-  linux: { emoji: "🐧", color: "#0969da" },
-  zephyr: { emoji: "⚡", color: "#1769aa" },
-  docker: { emoji: "🐳", color: "#2496ed" },
-  ai: { emoji: "🤖", color: "#ff6b6b" },
+  linux:    { emoji: "🐧", color: "#0969da" },
+  docker:   { emoji: "🐳", color: "#2496ed" },
+  rust:     { emoji: "🦀", color: "#ce422b" },
+  windows:  { emoji: "🪟", color: "#0078d4" },
+  zephyr:   { emoji: "⚡", color: "#1769aa" },
+  ai:       { emoji: "🤖", color: "#ff6b6b" },
   embedded: { emoji: "🔧", color: "#bc4c00" },
-  other: { emoji: "📦", color: "#656d76" }
+  other:    { emoji: "📦", color: "#656d76" }
 };
 ```
 
@@ -175,10 +424,12 @@ const ICON_MAP = {
 
 | 领域 | 状态 |
 |------|------|
-| Linux 内核 | ✅ 27 篇 |
-| 文件系统 | 待扩展（ext4、XFS、btrfs） |
-| 网络 | 待扩展（Netfilter、Socket） |
-| 设备驱动 | 待扩展（USB、PCIe） |
+| Linux 内核 | ✅ 140 篇（基本覆盖核心子系统） |
+| Docker / 容器 | ✅ 12 篇 |
+| Rust | ✅ 13 篇 |
+| Windows | ✅ 9 篇 |
+| 文件系统 | 待扩展（XFS、btrfs、F2FS） |
+| 网络 | 待扩展（WireGuard、MPTCP、SRv6） |
+| 设备驱动 | 待扩展（USB、PCIe、ALSA、V4L2） |
 | Zephyr | 待扩展 |
-| Docker | 待扩展 |
 | AI | 待扩展 |
