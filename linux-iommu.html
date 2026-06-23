@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux IOMMU 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux IOMMU 深度解析</h1>
+  <p class="subtitle">I/O 虚拟化 — DMA 重映射与设备隔离</p>
+  <span class="version">Linux 7.0.12 · drivers/iommu/iommu.c (4217 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>IOMMU（I/O Memory Management Unit）是硬件设备和内存之间的<strong>DMA 重映射单元</strong>。它将设备的 IOVA（I/O 虚拟地址）翻译为物理地址，提供设备隔离、SVA（Shared Virtual Addressing）等能力。Intel VT-d 和 AMD-Vi 是两种主要实现。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">IOMMU 工作原理：</span>
+
+  无 IOMMU：
+  设备 DMA → 直接访问物理内存 → <span style="color:#cf222e">任何设备可访问任何内存</span>
+
+  有 IOMMU：
+  设备 DMA → IOVA → <span style="color:#1a7f37">IOMMU 翻译表</span> → 物理地址
+  每个设备有独立的地址映射 → <span style="color:#1a7f37">设备只能访问分配给它的内存</span>
+
+<span style="color:#8250df">IOMMU 三大功能：</span>
+
+  1. DMA 重映射
+     设备的 DMA 地址翻译为物理地址
+     防止恶意/故障设备访问未授权内存
+
+  2. 设备直通（Passthrough）
+     将物理设备直接分配给虚拟机
+     虚拟机独占设备，性能接近原生
+
+  3. SVA（Shared Virtual Addressing）
+     设备和 CPU 共享同一虚拟地址空间
+     设备可以直接使用 CPU 的页表
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">03</span> 应用场景</h2>
+  <table>
+    <tr><th>场景</th><th>IOMMU 功能</th><th>说明</th></tr>
+    <tr><td>虚拟机设备直通</td><td>VT-d passthrough</td><td>GPU/NVMe 直接分配给 VM</td></tr>
+    <tr><td>SR-IOV</td><td>VF 分配</td><td>网卡虚拟功能分配给多个 VM</td></tr>
+    <tr><td>安全隔离</td><td>DMA 重映射</td><td>防止 DMA 攻击</td></tr>
+    <tr><td>SVA</td><td>共享虚拟地址</td><td>设备直接使用 CPU 页表</td></tr>
+    <tr><td>VFIO</td><td>用户态驱动</td><td>DPDK/QEMU 设备直通</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">04</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/iommu/</span>
+├── <span class="file">iommu.c</span>          <span class="cmt">IOMMU 核心 (4217 行)</span>
+├── <span class="file">iommu.c</span>          <span class="cmt">IOMMU API</span>
+├── <span class="file">intel-iommu.c</span>    <span class="cmt">Intel VT-d 驱动</span>
+├── <span class="file">amd/iommu.c</span>      <span class="cmt">AMD-Vi 驱动</span>
+└── <span class="file">arm-smmu-v3.c</span>    <span class="cmt">ARM SMMUv3 驱动</span>
+
+<span class="dir">drivers/vfio/</span>
+├── <span class="file">vfio_iommu_type1.c</span> <span class="cmt">VFIO IOMMU 后端</span>
+└── <span class="file">vfio_pci_core.c</span>  <span class="cmt">VFIO PCI 设备</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">iommu.h</span>           <span class="cmt">IOMMU API 定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>drivers/iommu/iommu.c</code> — IOMMU 核心框架。<br>
+    <code>drivers/iommu/intel-iommu.c</code> — Intel VT-d 驱动实现。<br>
+    <code>drivers/vfio/vfio_iommu_type1.c</code> — VFIO 如何使用 IOMMU 实现设备直通。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · drivers/iommu/iommu.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

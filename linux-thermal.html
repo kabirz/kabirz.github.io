@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Thermal 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Thermal 深度解析</h1>
+  <p class="subtitle">热量管理 — 温度监控、节流、冷却</p>
+  <span class="version">Linux 7.0.12 · drivers/thermal/thermal_core.c (1959 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#govs">Thermal Governor</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux Thermal 框架管理 CPU 和设备的<strong>温度控制</strong>。当温度超过阈值时，触发节流（throttling）降低性能以保护硬件。它与 cpufreq 紧密协作——温度过高时降低 CPU 频率，是笔记本、服务器、嵌入式系统的关键保护机制。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Thermal 框架架构：</span>
+
+  ┌─────────────────────────────────────────────┐
+  │            Thermal Zone（温度传感器）         │
+  │  /sys/class/thermal/thermal_zone0/          │
+  │  ├── temp: 当前温度（毫摄氏度）              │
+  │  ├── type: 传感器类型（x86_pkg_temp 等）     │
+  │  ├── trip_point_0_temp: 第一阈值            │
+  │  └── trip_point_0_type: critical/hot/passive│
+  └───────────────────┬─────────────────────────┘
+                      │ 温度超过阈值
+                      ↓
+  ┌─────────────────────────────────────────────┐
+  │            Thermal Governor（调节器）        │
+  │  step_wise: 步进式节流                      │
+  │  power_allocator: 功率分配（IPA）           │
+  │  bang_bang: 开关式控制                      │
+  └───────────────────┬─────────────────────────┘
+                      │ 请求降温
+                      ↓
+  ┌─────────────────────────────────────────────┐
+  │            Cooling Device（冷却设备）        │
+  │  cpufreq cooling: 降低 CPU 频率            │
+  │  fan: 控制风扇转速                          │
+  │  devfreq cooling: 降低 GPU 频率            │
+  │  power_allocator: 限制 CPU 功率            │
+  └─────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="govs" class="toc-link">
+  <h2><span class="num">03</span> Thermal Governor</h2>
+  <table>
+    <tr><th>Governor</th><th>策略</th><th>适用场景</th></tr>
+    <tr><td><strong>step_wise</strong></td><td>温度每升一级，降低一个冷却状态</td><td>通用</td></tr>
+    <tr><td><strong>power_allocator</strong></td><td>PID 控制器分配功耗预算</td><td>多核 CPU</td></tr>
+    <tr><td><strong>bang_bang</strong></td><td>阈值判断开关</td><td>风扇控制</td></tr>
+    <tr><td><strong>user_space</strong></td><td>通知用户态程序</td><td>自定义策略</td></tr>
+  </table>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 应用场景</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看热区信息</span>
+$ cat /sys/class/thermal/thermal_zone0/temp
+<span class="num">52000</span>  <span class="cm"># 52°C</span>
+
+$ cat /sys/class/thermal/thermal_zone0/type
+x86_pkg_temp
+
+<span class="cm"># 查看 trip 点</span>
+$ cat /sys/class/thermal/thermal_zone0/trip_point_0_temp
+<span class="num">100000</span>  <span class="cm"># 100°C（临界温度）</span>
+
+$ cat /sys/class/thermal/thermal_zone0/trip_point_0_type
+critical
+
+<span class="cm"># 查看冷却设备</span>
+$ ls /sys/class/thermal/cooling_device0/
+$ cat /sys/class/thermal/cooling_device0/cur_state
+<span class="num">0</span>  <span class="cm"># 当前冷却等级（0=无节流）</span>
+
+<span class="cm"># 使用 thermald 守护进程（Intel 推荐）</span>
+$ sudo systemctl start thermald</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/thermal/</span>
+├── <span class="file">thermal_core.c</span>   <span class="cmt">Thermal 核心 (1959 行)</span>
+│     └── thermal_zone_device_update() <span class="cmt">温度更新</span>
+│     └── thermal_zone_trip_update()   <span class="cmt">阈值检查</span>
+├── <span class="file">step_wise.c</span>      <span class="cmt">步进式调节器</span>
+├── <span class="file">power_allocator.c</span> <span class="cmt">IPA 功率分配器</span>
+├── <span class="file">bang_bang.c</span>      <span class="cmt">开关式调节器</span>
+└── <span class="dir">intel/</span>
+    └── <span class="file">intel_powerclamp.c</span> <span class="cmt">Intel 功耗钳制</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>drivers/thermal/thermal_core.c</code> — Thermal 核心框架。<br>
+    <code>drivers/thermal/step_wise.c</code> — step_wise 调节器，最简单的温度控制策略。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · drivers/thermal/thermal_core.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

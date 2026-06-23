@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Suspend/Resume 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Suspend/Resume 深度解析</h1>
+  <p class="subtitle">系统休眠 — 休眠、挂起与恢复</p>
+  <span class="version">Linux 7.0.12 · kernel/power/suspend.c (649 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#states">休眠状态</a></li>
+    <li><a href="#flow">挂起流程</a></li>
+    <li><a href="#tuning">配置与调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 支持多种系统休眠状态：挂起到内存（Suspend-to-RAM，即睡眠）、挂起到磁盘（Suspend-to-Disk，即休眠）、混合休眠等。这些机制是笔记本电池续航、服务器节能的关键。</p>
+</section>
+
+<section id="states" class="toc-link">
+  <h2><span class="num">02</span> 休眠状态</h2>
+  <table>
+    <tr><th>状态</th><th>系统调用</th><th>恢复速度</th><th>功耗</th><th>说明</th></tr>
+    <tr><td><strong>suspend (S3)</strong></td><td>echo mem > /sys/power/state</td><td>快（秒级）</td><td>极低</td><td>挂起到内存（笔记本睡眠）</td></tr>
+    <tr><td><strong>hibernate (S4)</strong></td><td>echo disk > /sys/power/state</td><td>慢（分钟级）</td><td>零</td><td>挂起到磁盘（完全关机状态）</td></tr>
+    <tr><td><strong>hybrid</strong></td><td>echo disk > /sys/power/state + 检查</td><td>快/慢</td><td>极低</td><td>同时写入内存和磁盘</td></tr>
+    <tr><td><strong>freeze</strong></td><td>echo freeze > /sys/power/state</td><td>极快</td><td>中低</td><td>仅冻结用户进程</td></tr>
+    <tr><td><strong>idle</strong></td><td>CPU idle states</td><td>立即</td><td>低</td><td>仅 CPU 空闲（已有 cpuidle 文章）</td></tr>
+  </table>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 挂起流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Suspend-to-RAM (S3) 流程：</span>
+
+  用户态：echo mem > /sys/power/state
+        │
+        ↓
+  <span style="color:#8250df">pm_suspend()</span> — kernel/power/suspend.c
+        │
+        ├── 1. 冻结用户进程
+        │       freeze_processes()
+        │       所有用户态进程挂起（TASK_FROZEN）
+        │
+        ├── 2. 冻结内核线程
+        │       freeze_kernel_threads()
+        │       仅允许 suspend 专用线程运行
+        │
+        ├── 3. 设备挂起
+        │       dpm_suspend()
+        │       遍历所有设备，调用 dev->pm_ops->suspend()
+        │       ├── 网卡：停止 DMA，保存寄存器
+        │       ├── 磁盘：停止 I/O，刷新缓存
+        │       ├── USB：断开连接
+        │       └── GPU：保存状态
+        │
+        ├── 4. 平台挂起
+        │       platform_suspend_ops->suspend()
+        │       写入 ACPI S3 状态
+        │       CPU 停止，内存保持刷新
+        │
+        └── 5. 系统进入睡眠
+            仅内存和唤醒设备保持供电
+
+<span style="color:#1a7f37">唤醒流程：</span>
+
+  唤醒事件（按键/网络包/定时器）
+        │
+        ↓
+  1. CPU 恢复执行
+  2. 平台恢复：platform_suspend_ops->resume()
+  3. 设备恢复：dpm_resume()
+  4. 解冻内核线程
+  5. 解冻用户进程
+  6. 系统恢复正常运行
+</pre></div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">04</span> 配置与调优</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看支持的休眠状态</span>
+$ cat /sys/power/state
+mem freeze disk
+
+<span class="cm"># 查看唤醒设备</span>
+$ cat /proc/acpi/wakeup
+Device  S-state   Status   Sysfs node
+LID     S3    *enabled   LNXPWRGBBTN:00
+EHC1    S3    *enabled   EHCI:00
+XHC     S3    *enabled   xhci_hcd:00
+
+<span class="cm"># 禁用特定设备唤醒</span>
+$ echo EHC1 > /proc/acpi/wakeup  <span class="cm"># 切换 enable/disable</span>
+
+<span class="cm"># 查看挂起统计</span>
+$ sudo pm-suspend --verbose   <span class="cm"># 详细挂起日志</span>
+$ dmesg | grep -i "suspend\|resume\|freeze"
+
+<span class="cm"># systemd 挂起</span>
+$ systemctl suspend           <span class="cm"># S3 挂起</span>
+$ systemctl hibernate         <span class="cm"># S4 休眠</span>
+$ systemctl hybrid-sleep     <span class="cm"># 混合休眠</span></code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/power/</span>
+├── <span class="file">suspend.c</span>        <span class="cmt">Suspend 核心 (649 行)</span>
+│     └── pm_suspend()       <span class="cmt">挂起入口</span>
+│     └── suspend_devices_and_enter() <span class="cmt">设备挂起</span>
+├── <span class="file">hibernate.c</span>      <span class="cmt">Hibernate 实现</span>
+├── <span class="file">swap.c</span>           <span class="cmt">Swap 管理（休眠用）</span>
+├── <span class="file">process.c</span>        <span class="cmt">进程冻结/解冻</span>
+└── <span class="file">devcoredump.c</span>    <span class="cmt">设备崩溃转储</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/power/suspend.c</code> — 从 <code>pm_suspend()</code> 理解挂起全流程。<br>
+    <code>kernel/power/process.c</code> — 进程冻结/解冻机制。<br>
+    <code>drivers/base/power/main.c</code> — 设备挂起/恢复框架（dpm_suspend/dpm_resume）。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/power/suspend.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
