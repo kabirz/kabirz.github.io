@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux SELinux 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux SELinux 深度解析</h1>
+  <p class="subtitle">强制访问控制 — 基于标签的安全策略引擎</p>
+  <span class="version">Linux 7.0.12 · security/selinux/hooks.c (7976 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#labels">安全标签</a></li>
+    <li><a href="#flow">访问检查流程</a></li>
+    <li><a href="#policy">策略语言</a></li>
+    <li><a href="#tuning">管理与调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>SELinux（Security-Enhanced Linux）是 Linux 内核中的<strong>强制访问控制（MAC）</strong>安全模块。与传统 DAC（自主访问控制）不同，SELinux 为每个进程和资源分配<strong>安全标签</strong>，通过策略规则决定访问权限。即使 root 进程也被 SELinux 策略约束，是 Android、RHEL/Fedora 的核心安全机制。</p>
+</section>
+
+<section id="labels" class="toc-link">
+  <h2><span class="num">02</span> 安全标签</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">SELinux 标签系统：</span>
+
+  每个对象（进程/文件/端口）都有一个安全上下文：
+
+  user:role:type:level
+
+  示例：
+  system_u:system_r:httpd_t:s0-s0:c0.c1023
+
+  ├── user    : 系统用户身份
+  ├── role    : 角色（进程可扮演的角色）
+  ├── type    : <span style="color:#cf222e">★ 类型（核心，策略基于类型）</span>
+  └── level   : MLS/MCS 级别（多级安全）
+
+  类型是最关键的部分：
+  httpd_t  → Apache 进程的类型
+  httpd_sys_content_t → Apache 可读的文件类型
+  httpd_port_t → Apache 可绑定的端口类型
+
+  策略规则只检查类型，不检查具体用户/角色
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 访问检查流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">进程访问文件时的 SELinux 检查：</span>
+
+  进程 httpd (httpd_t) 打开 /var/www/html/index.html
+        │
+        ↓
+  VFS 层 → <span style="color:#8250df">security_inode_permission()</span>
+        │
+        ├── 1. 获取进程安全上下文
+        │       current->cred->security → httpd_t
+        │
+        ├── 2. 获取文件安全上下文
+        │       inode->i_security → httpd_sys_content_t
+        │
+        ├── 3. 查询策略数据库
+        │       type_httpd_t : type_httpd_sys_content_t : file : read → <span style="color:#1a7f37">ALLOW</span>
+        │
+        └── 4. 允许访问 → 继续执行
+
+<span style="color:#1a7f37">如果策略不允许：</span>
+
+  策略查询 → <span style="color:#cf222e">DENY</span>
+        │
+        ├── 1. 记录审计日志
+        │       audit.log: avc: denied { read } for ...
+        │
+        └── 2. 返回 -EACCES（权限拒绝）
+                进程无法访问文件
+</pre></div>
+</section>
+
+<section id="policy" class="toc-link">
+  <h2><span class="num">04</span> 策略语言</h2>
+  <div class="card">
+    <pre><code><span class="cm"># SELinux 策略规则示例</span>
+
+<span class="cm"># 允许 httpd 读取 web 内容文件</span>
+<span class="kw">allow</span> httpd_t httpd_sys_content_t:file { read open getattr };
+
+<span class="cm"># 允许 httpd 绑定 80/443 端口</span>
+<span class="kw">allow</span> httpd_t httpd_port_t:tcp_socket { name_bind };
+
+<span class="cm"># 允许 httpd 发起网络连接</span>
+<span class="kw">allow</span> httpd_t self:tcp_socket { create connect };
+
+<span class="cm"># 禁止 httpd 访问 ssh 密钥</span>
+<span class="cm"># （默认 deny，无需显式写规则）</span>
+
+<span class="cm"># 类型转移（进程创建子进程时的类型）</span>
+<span class="kw">allow</span> httpd_t httpd_t:process { fork };
+<span class="cm"># 子进程继承 httpd_t 类型</span></code></pre>
+  </div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">05</span> 管理与调优</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看 SELinux 状态</span>
+$ getenforce
+Enforcing
+
+$ sestatus
+SELinux status:                 enabled
+SELinuxfs mount:                /sys/fs/selinux
+SELinux root directory:         /etc/selinux
+Loaded policy name:             targeted
+Current mode:                   enforcing
+Mode from config file:          enforcing
+
+<span class="cm"># 临时切换模式</span>
+$ setenforce 0   <span class="cm"># Permissive（仅记录，不阻止）</span>
+$ setenforce 1   <span class="cm"># Enforcing（默认，阻止违规）</span>
+
+<span class="cm"># 查看文件的 SELinux 标签</span>
+$ ls -Z /var/www/html/index.html
+-rw-r--r--. root root system_u:object_r:httpd_sys_content_t:s0 /var/www/html/index.html
+
+<span class="cm"># 修改文件标签</span>
+$ chcon -t httpd_sys_content_t /var/www/html/index.html
+
+<span class="cm"># 永久修改文件标签（通过 restorecon）</span>
+$ semanage fcontext -a -t httpd_sys_content_t "/var/www/html(/.*)?"
+$ restorecon -Rv /var/www/html
+
+<span class="cm"># 查看审计日志</span>
+$ ausearch -m avc -ts recent</code></pre>
+  </div>
+
+  <h3>常见问题排查</h3>
+  <table>
+    <tr><th>问题</th><th>原因</th><th>解决</th></tr>
+    <tr><td>服务启动失败</td><td>端口标签不匹配</td><td><code>semanage port -a -t http_port_t -p tcp 8080</code></td></tr>
+    <tr><td>文件访问被拒</td><td>文件标签错误</td><td><code>restorecon -Rv /path</code></td></tr>
+    <tr><td>容器无法运行</td><td>容器标签缺失</td><td>安装容器 SELinux 策略包</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">security/selinux/</span>
+├── <span class="file">hooks.c</span>          <span class="cmt">LSM 钩子 (7976 行)</span>
+├── <span class="file">ss/services.c</span>    <span class="cmt">策略数据库查询</span>
+├── <span class="file">ss/avtab.c</span>       <span class="cmt">访问向量表（AVT）</span>
+├── <span class="file">ss/hashtab.c</span>     <span class="cmt">标签哈希表</span>
+├── <span class="file">objsec.c</span>         <span class="cmt">对象安全上下文</span>
+└── <span class="file">netif.c</span>          <span class="cmt">网络接口标签</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>security/selinux/hooks.c</code> — LSM 钩子实现，理解 SELinux 如何在内核中检查权限。<br>
+    <code>security/selinux/ss/services.c</code> — 策略数据库查询，理解 allow 规则如何匹配。<br>
+    <code>security/selinux/ss/avtab.c</code> — 访问向量表，策略规则的存储结构。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · security/selinux/hooks.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 进程组与会话 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 进程组与会话 深度解析</h1>
+  <p class="subtitle">进程层级 — 信号投递与作业控制的基石</p>
+  <span class="version">Linux 7.0.12 · kernel/signal.c (5050 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#hierarchy">层级结构</a></li>
+    <li><a href="#signal">信号投递与进程组</a></li>
+    <li><a href="#jobctl">作业控制</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>进程组和会话是 Linux 进程层级管理的两大概念。进程组是<strong>一组共享同一 PGID 的进程</strong>，用于信号广播（如 Ctrl+C 终止整个管道链）。会话是<strong>一组进程组的集合</strong>，关联到一个控制终端。它们是 shell 作业控制（job control）的基础。</p>
+</section>
+
+<section id="hierarchy" class="toc-link">
+  <h2><span class="num">02</span> 层级结构</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">进程层级：</span>
+
+  会话（Session）
+  ├── 会话 ID（SID）
+  ├── 控制终端（tty/pts）
+  └── 进程组列表
+        ├── <span style="color:#1a7f37">前台进程组</span>（终端前台）
+        │     ├── 进程 A（PGID=100）
+        │     └── 进程 B（PGID=100）
+        │
+        └── 后台进程组
+              ├── 进程 C（PGID=200）
+              └── 进程 D（PGID=200）
+
+<span style="color:#8250df">典型场景 — shell 管道：</span>
+
+  $ cat file | grep pattern | wc -l
+
+  创建三个进程，共享同一 PGID
+  ├── cat   (PID=100, PGID=100, SID=1)
+  ├── grep  (PID=101, PGID=100, SID=1)
+  └── wc    (PID=102, PGID=100, SID=1)
+
+  Ctrl+C 发送 SIGINT 到 PGID=100 → 三个进程全部终止
+</pre></div>
+</section>
+
+<section id="signal" class="toc-link">
+  <h2><span class="num">03</span> 信号投递与进程组</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">信号投递方式：</span>
+
+  kill(pid, SIGTERM)  → 发送给指定 PID
+  kill(-pgid, SIGTERM) → <span style="color:#1a7f37">发送给整个进程组</span>
+  kill(0, SIGTERM)    → 发送给当前进程组所有进程
+
+  Ctrl+C → 内核发送 SIGINT 到<strong>前台进程组</strong>
+  Ctrl+Z → 内核发送 SIGTSTP 到<strong>前台进程组</strong>
+  Ctrl+\ → 内核发送 SIGQUIT 到<strong>前台进程组</strong>
+
+  tcsetpgrp() → 设置前台进程组
+  → shell 执行前台命令时调用
+  → 终端信号转发到该进程组
+</pre></div>
+</section>
+
+<section id="jobctl" class="toc-link">
+  <h2><span class="num">04</span> 作业控制</h2>
+  <div class="card">
+    <pre><code><span class="cm"># Shell 作业控制命令</span>
+$ sleep 100 &amp;             <span class="cm"># 后台运行（新进程组）</span>
+[1] 12345
+
+$ jobs                      <span class="cm"># 查看作业列表</span>
+[1]+ Running                 sleep 100 &amp;
+
+$ fg %1                     <span class="cm"># 调到前台</span>
+$ Ctrl+Z                    <span class="cm"># 挂起（SIGTSTP）</span>
+[1]+ Stopped                 sleep 100
+
+$ bg %1                     <span class="cm"># 放到后台继续运行</span>
+[1]+ Running                 sleep 100 &amp;
+
+$ kill %1                   <span class="cm"># 终止作业</span></code></pre>
+  </div>
+
+  <h3>关键系统调用</h3>
+  <table>
+    <tr><th>系统调用</th><th>功能</th></tr>
+    <tr><td><code>setpgid(pid, pgid)</code></td><td>设置进程的进程组</td></tr>
+    <tr><td><code>getpgrp()</code></td><td>获取当前进程组 ID</td></tr>
+    <tr><td><code>setsid()</code></td><td>创建新会话（进程成为会话领导）</td></tr>
+    <tr><td><code>getsid(pid)</code></td><td>获取进程的会话 ID</td></tr>
+    <tr><td><code>tcsetpgrp(fd, pgrp)</code></td><td>设置前台进程组</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+├── <span class="file">signal.c</span>         <span class="cmt">信号核心 (5050 行)</span>
+│     └── kill_pgrp()     <span class="cmt">发送信号到进程组</span>
+│     └── kill_pid()      <span class="cmt">发送信号到进程</span>
+├── <span class="file">sys.c</span>            <span class="cmt">setpgid/setsid 实现</span>
+└── <span class="file">pid.c</span>            <span class="cmt">PID/PGID/SID 管理</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">sched/signal.h</span>   <span class="cmt">signal_struct / task_struct 信号字段</span>
+└── <span class="file">posix_types.h</span>    <span class="cmt">pid_t / pid 类型</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/signal.c</code> — <code>kill_pgrp()</code> 理解信号广播到进程组。<br>
+    <code>kernel/sys.c</code> — <code>setpgid()</code> 和 <code>setsid()</code> 实现。<br>
+    <code>include/linux/sched/signal.h</code> — 进程组和会话相关字段。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/signal.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

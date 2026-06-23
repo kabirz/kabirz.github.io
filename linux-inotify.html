@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux inotify 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux inotify 深度解析</h1>
+  <p class="subtitle">文件系统事件监控 — 代替轮询的高效通知</p>
+  <span class="version">Linux 7.0.12 · fs/notify/inotify/inotify_user.c (861 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#api">API 与使用</a></li>
+    <li><a href="#events">事件类型</a></li>
+    <li><a href="#fanotify">inotify vs fanotify</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>inotify 是 Linux 内核提供的<strong>文件系统事件监控机制</strong>。它允许进程监控文件/目录的变化（创建、删除、修改、属性变更等），无需轮询。VSCode 文件监视、logrotate、IDE 项目刷新等都依赖 inotify。</p>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">02</span> API 与使用</h2>
+  <div class="card">
+    <pre><code><span class="cm">// inotify API</span>
+<span class="kw">#include</span> <span class="st">&lt;sys/inotify.h&gt;</span>
+
+<span class="cm">// 1. 创建 inotify 实例</span>
+<span class="ty">int</span> fd = <span class="fn">inotify_init</span>();      <span class="cm">// 阻塞模式</span>
+<span class="ty">int</span> fd = <span class="fn">inotify_init1</span>(IN_NONBLOCK); <span class="cm">// 非阻塞</span>
+
+<span class="cm">// 2. 添加监控</span>
+<span class="ty">int</span> wd = <span class="fn">inotify_add_watch</span>(fd, <span class="st">"/var/log"</span>,
+    IN_CREATE | IN_DELETE | IN_MODIFY | IN_MOVED_TO);
+
+<span class="cm">// 3. 等待事件</span>
+<span class="kw">struct</span> <span class="ty">inotify_event</span> event;
+<span class="fn">read</span>(fd, &amp;event, <span class="kw">sizeof</span>(event));
+<span class="cm">// event.wd = 监控描述符</span>
+<span class="cm">// event.mask = 事件类型</span>
+<span class="cm">// event.len = 名称长度</span>
+<span class="cm">// event.name = 变化的文件名（目录监控时）</span>
+
+<span class="cm">// 4. 移除监控</span>
+<span class="fn">inotify_rm_watch</span>(fd, wd);
+
+<span class="cm">// 5. 关闭</span>
+<span class="fn">close</span>(fd);</code></pre>
+  </div>
+</section>
+
+<section id="events" class="toc-link">
+  <h2><span class="num">03</span> 事件类型</h2>
+  <table>
+    <tr><th>事件</th><th>说明</th></tr>
+    <tr><td><code>IN_CREATE</code></td><td>在监控目录中创建文件/目录</td></tr>
+    <tr><td><code>IN_DELETE</code></td><td>在监控目录中删除文件/目录</td></tr>
+    <tr><td><code>IN_MODIFY</code></td><td>文件内容被修改</td></tr>
+    <tr><td><code>IN_ATTRIB</code></td><td>文件属性被修改（权限、时间戳等）</td></tr>
+    <tr><td><code>IN_MOVED_FROM</code></td><td>文件从监控目录移出</td></tr>
+    <tr><td><code>IN_MOVED_TO</code></td><td>文件移入监控目录</td></tr>
+    <tr><td><code>IN_CLOSE_WRITE</code></td><td>可写文件被关闭</td></tr>
+    <tr><td><code>IN_OPEN</code></td><td>文件被打开</td></tr>
+    <tr><td><code>IN_ISDIR</code></td><td>变化的对象是目录（标志位）</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm"># 实用示例：监控 /var/log 变化</span>
+<span class="cm"># inotifywait（from inotify-tools 包）</span>
+$ inotifywait -m -r /var/log -e create,delete,modify
+Setting up watches.  Beware: since -r was given, this may take a while!
+Watches established.
+/var/log/ CREATE newfile.txt
+/var/log/ MODIFY newfile.txt
+/var/log/ DELETE oldfile.txt</code></pre>
+  </div>
+</section>
+
+<section id="fanotify" class="toc-link">
+  <h2><span class="num">04</span> inotify vs fanotify</h2>
+  <table>
+    <tr><th>特性</th><th>inotify</th><th>fanotify</th></tr>
+    <tr><td>监控粒度</td><td>单个文件/目录</td><td>整个挂载点</td></tr>
+    <tr><td>权限</td><td>需要读权限</td><td>CAP_SYS_ADMIN</td></tr>
+    <tr><td>事件类型</td><td>文件操作</td><td>文件访问 + 权限</td></tr>
+    <tr><td>响应速度</td><td>快</td><td>略慢</td></tr>
+    <tr><td>典型用途</td><td>文件监视（IDE）</td><td>杀毒软件、DLP</td></tr>
+    <tr><td>容量</td><td>用户可调（/proc/sys/fs/inotify/）</td><td>系统级</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">fs/notify/inotify/</span>
+├── <span class="file">inotify_user.c</span>    <span class="cmt">inotify 核心 (861 行)</span>
+│     └── inotify_init1()   <span class="cmt">创建实例</span>
+│     └── inotify_add_watch() <span class="cmt">添加监控</span>
+│     └── inotify_rm_watch() <span class="cmt">移除监控</span>
+└── <span class="file">inotify_fsnotify.c</span> <span class="cmt">文件系统通知回调</span>
+
+<span class="dir">fs/notify/fanotify/</span>
+├── <span class="file">fanotify_user.c</span>   <span class="cmt">fanotify 核心 (2216 行)</span>
+└── <span class="file">fanotify.c</span>        <span class="cmt">fanotify 内核实现</span>
+
+<span class="dir">fs/notify/</span>
+├── <span class="file">dnotify.c</span>        <span class="cmt">旧版 dnotify（已废弃）</span>
+└── <span class="file">fsnotify.c</span>       <span class="cmt">fsnotify 框架</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>fs/notify/inotify/inotify_user.c</code> — inotify 核心，理解 add_watch 的注册机制。<br>
+    <code>fs/notify/inotify/inotify_fsnotify.c</code> — 文件系统事件如何触发 inotify 通知。<br>
+    <code>fs/notify/fanotify/fanotify_user.c</code> — fanotify 实现，对比 inotify 的设计差异。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · fs/notify/inotify/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
