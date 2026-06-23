@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Kernel Livepatch 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Kernel Livepatch 深度解析</h1>
+  <p class="subtitle">内核热补丁 — 不重启修复内核漏洞</p>
+  <span class="version">Linux 7.0.12 · kernel/livepatch/core.c (1387 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#flow">补丁流程</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Kernel Livepatch 允许在<strong>不重启系统的情况下修复内核漏洞</strong>。它通过运行时替换内核函数实现热补丁，避免了重启带来的服务中断。Kpatch（Red Hat）、kGraft（SUSE）和内核内置的 livepatch 框架都基于此机制。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Livepatch 工作原理：</span>
+
+  补丁前：
+  函数 vulnerable_func() 在内核中运行
+
+  <span style="color:#1a7f37">应用 Livepatch：</span>
+
+  1. 加载补丁模块
+  │   包含修复后的函数 patched_func()
+  │
+  2. 注册补丁
+  │   klp_enable_patch()
+  │   记录：vulnerable_func → patched_func 的映射
+  │
+  3. 等待安全切换点
+  │   所有执行 vulnerable_func 的任务完成
+  │
+  4. 修改函数入口
+  │   vulnerable_func 的入口 NOP → JMP patched_func
+  │
+  5. 后续调用直接跳转到 patched_func
+
+  <span style="color:#8250df">安全切换机制（KLP）：</span>
+  - 使用栈检查确保没有任务在旧函数中
+  - 设置切换点（stack check）
+  - 所有任务通过切换点后才激活补丁
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 补丁流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Livepatch 加载流程：</span>
+
+  管理员：katp install livepatch-5.10.0-15-foo.ko
+        │
+        ↓
+  <span style="color:#8250df">klp_enable_patch()</span> — kernel/livepatch/core.c
+        │
+        ├── 1. 验证补丁
+        │       检查符号版本匹配
+        │       检查补丁函数签名
+        │
+        ├── 2. 注册补丁
+        │       将补丁添加到全局补丁列表
+        │       设置函数替换映射
+        │
+        ├── 3. 设置切换点
+        │       klp_schedule_transition()
+        │       等待所有任务到达安全点
+        │
+        ├── 4. 激活补丁
+        │       修改函数入口 NOP → JMP
+        │       所有新调用跳转到修复函数
+        │
+        └── 5. 完成
+            补丁生效，无需重启
+
+  管理员：katp remove livepatch-5.10.0-15-foo.ko
+        │
+        └── 回滚：修改函数入口 JMP → NOP
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 应用场景</h2>
+  <table>
+    <tr><th>场景</th><th>工具</th><th>说明</th></tr>
+    <tr><td>CVE 紧急修复</td><td>kpatch / kGraft</td><td>安全漏洞热修复</td></tr>
+    <tr><td>生产环境</td><td>livepatch 框架</td><td>避免重启，保持服务可用</td></tr>
+    <tr><td>云平台</td><td>Canonical Livepatch</td><td>AWS/Azure/阿里云内核热补丁</td></tr>
+    <tr><td>金融系统</td><td>合规要求</td><td>零停机时间修复</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/livepatch/</span>
+├── <span class="file">core.c</span>           <span class="cmt">Livepatch 核心 (1387 行)</span>
+│     └── klp_enable_patch()  <span class="cmt">启用补丁</span>
+│     └── klp_disable_patch() <span class="cmt">禁用补丁</span>
+│     └── klp_transition()     <span class="cmt">安全切换</span>
+├── <span class="file">patch.c</span>          <span class="cmt">补丁管理</span>
+├── <span class="file">replace.c</span>        <span class="cmt">函数替换</span>
+└── <span class="file">stack.c</span>          <span class="cmt">栈检查（安全切换点）</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/livepatch/core.c</code> — 从 <code>klp_enable_patch()</code> 理解补丁加载流程。<br>
+    <code>kernel/livepatch/replace.c</code> — 函数替换实现（NOP↔JMP）。<br>
+    <code>kernel/livepatch/stack.c</code> — 栈检查，确保安全切换。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/livepatch/core.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

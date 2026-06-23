@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Static Keys 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Static Keys 深度解析</h1>
+  <p class="subtitle">静态键 — 零开销的条件分支优化</p>
+  <span class="version">Linux 7.0.12 · kernel/jump_label.c · arch/x86/kernel/alternative.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">实现原理</a></li>
+    <li><a href="#api">API 与使用</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Static Keys（静态键）是 Linux 内核的<strong>零开销条件分支优化</strong>机制。传统 if (static_var) 每次执行都要读取全局变量（缓存行未命中），而 static keys 通过运行时<strong>修改代码路径</strong>（NOP ↔ JMP），使条件分支在不执行时完全无开销。它是 tracepoint、安全模块检查等高频路径的核心优化。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 实现原理</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">传统条件分支（每次执行）：</span>
+
+  if (static_branch_unlikely(&amp;my_key)) {
+      do_something();  <span class="cm">// 每次都执行检查</span>
+  }
+
+  编译为：
+  CMP [static_key_value], 0    <span class="cm">// 读取全局变量（缓存行未命中 ~100ns）</span>
+  JZ  skip                     <span class="cm">// 条件跳转</span>
+  CALL do_something
+  skip:
+
+<span style="color:#1a7f37">Static Key（零开销）：</span>
+
+  静态键关闭时（默认状态）：
+  do_something 的入口是 <span style="color:#1a7f37">NOP 指令</span>
+  → 执行时直接跳过，无任何检查开销
+
+  静态键开启时：
+  <span class="color:#8250df">static_branch_enable(&amp;my_key)</span>
+  → 修改代码：NOP → JMP do_something
+  → 执行时直接跳转，无条件检查开销
+
+  关闭时：
+  <span class="color:#8250df">static_branch_disable(&amp;my_key)</span>
+  → 修改代码：JMP → NOP
+</pre></div>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> API 与使用</h2>
+  <div class="card">
+    <pre><code><span class="kw">#include</span> <span class="st">&lt;linux/jump_label.h&gt;</span>
+
+<span class="cm">// 定义静态键（默认关闭）</span>
+<span class="fn">DEFINE_STATIC_KEY_FALSE</span>(my_feature_key);
+
+<span class="cm">// 使用静态键</span>
+<span class="kw">if</span> (<span class="fn">static_branch_unlikely</span>(&amp;my_feature_key)) {
+    <span class="cm">// 这段代码在静态键关闭时完全不会执行</span>
+    <span class="cm">// 编译为 NOP → 零开销</span>
+    <span class="fn">do_expensive_check</span>();
+}
+
+<span class="cm">// 运行时启用/禁用</span>
+<span class="fn">static_branch_enable</span>(&amp;my_feature_key);   <span class="cm">// 启用</span>
+<span class="fn">static_branch_disable</span>(&amp;my_feature_key);  <span class="cm">// 禁用</span>
+
+<span class="cm">// 用法示例：性能计数器开关</span>
+<span class="fn">DEFINE_STATIC_KEY_FALSE</span>(perf_counters_enabled);
+
+<span class="kw">void</span> <span class="fn">on_packet</span>(<span class="kw">struct</span> <span class="ty">sk_buff</span> *skb) {
+    <span class="kw">if</span> (<span class="fn">static_branch_unlikely</span>(&amp;perf_counters_enabled)) {
+        <span class="fn">update_perf_counters</span>(skb);  <span class="cm">// 仅在启用时执行</span>
+    }
+}</code></pre>
+  </div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 应用场景</h2>
+  <table>
+    <tr><th>场景</th><th>Static Key</th><th>说明</th></tr>
+    <tr><td>tracepoint</td><td>tracepoint static keys</td><td>动态启用/禁用 tracepoint</td></tr>
+    <tr><td>安全模块</td><td>LSM static keys</td><td>SELinux/AppArmor 检查开关</td></tr>
+    <tr><td>网络过滤</td><td>netfilter static keys</td><td>动态启用 Netfilter 规则</td></tr>
+    <tr><td>调试开关</td><td>debug static keys</td><td>运行时启用调试代码</td></tr>
+    <tr><td>性能计数</td><td>perf static keys</td><td>运行时启用性能监控</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>vs. 全局变量</strong><br>
+    <strong>全局变量</strong>：<code>if (global_flag)</code> → 每次读取内存（~100ns cache miss）<br>
+    <strong>Static Key</strong>：<code>static_branch_unlikely()</code> → NOP 指令（0ns）<br>
+    在高频路径（如每个数据包、每个系统调用）中，static key 的性能提升显著。
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+└── <span class="file">jump_label.c</span>     <span class="cmt">Static Key 核心</span>
+
+<span class="dir">arch/x86/kernel/</span>
+└── <span class="file">alternative.c</span>    <span class="cmt">x86 代码修补（NOP↔JMP）(3213 行)</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">jump_label.h</span>     <span class="cmt">Static Key API 定义</span>
+└── <span class="file">jump_label_type.h</span> <span class="cmt">类型定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/jump_label.c</code> — Static Key 核心，理解 enable/disable 如何修改代码。<br>
+    <code>arch/x86/kernel/alternative.c</code> — x86 代码修补机制，NOP↔JMP 的底层实现。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/jump_label.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

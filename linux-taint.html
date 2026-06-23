@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核污染 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核污染 深度解析</h1>
+  <p class="subtitle">Tainted Kernel — 内核状态标记与诊断</p>
+  <span class="version">Linux 7.0.12 · kernel/module/main.c · include/linux/panic.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#flags">污染标志</a></li>
+    <li><a href="#flow">污染触发流程</a></li>
+    <li><a href="#usecases">诊断与排查</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>当内核检测到可能影响稳定性的事件时，会将自己标记为"污染"（tainted）。污染是一个<strong>诊断标记</strong>，告诉技术支持人员内核可能不可靠。一个被污染的内核在提交 bug 报告时需要先清除污染状态。</p>
+</section>
+
+<section id="flags" class="toc-link">
+  <h2><span class="num">02</span> 污染标志</h2>
+  <table>
+    <tr><th>位</th><th>标志</th><th>说明</th></tr>
+    <tr><td>0</td><td><code>TAINT_PROPRIETARY_MODULE</code></td><td>加载了非 GPL 模块</td></tr>
+    <tr><td>1</td><td><code>TAINT_FORCED_MODULE</code></td><td>强制加载了不兼容模块</td></tr>
+    <tr><td>2</td><td><code>TAINT_CPU_OUT_OF_SPEC</code></td><td>CPU 运行在规格外</td></tr>
+    <tr><td>3</td><td><code>TAINT_MODULE</code></td><td>模块被强制加载</td></tr>
+    <tr><td>4</td><td><code>TAINT_UNSIGNED_MODULE</code></td><td>加载了未签名模块</td></tr>
+    <tr><td>5</td><td><code>TAINT_SOFTLOCKUP</code></td><td>检测到软锁定</td></tr>
+    <tr><td>6</td><td><code>TAINT_DIE</code></td><td>内核 oops/panic</td></tr>
+    <tr><td>7</td><td><code>TAINT_OVERRIDDEN_ACPI_TABLE</code></td><td>ACPI 表被覆盖</td></tr>
+    <tr><td>8</td><td><code>TAINT_WARN</code></td><td>WARN_ON 触发</td></tr>
+    <tr><td>9</td><td><code>TAINT_CUSTOM_*</code></td><td>厂商自定义标记</td></tr>
+  </table>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 污染触发流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">污染触发示例：</span>
+
+  加载非 GPL 模块
+  $ insmod proprietary_driver.ko
+        │
+        ↓
+  mark_module_tainted(module)
+        │
+        ├── 检查 MODULE_LICENSE
+        │   不是 "GPL" 或 "GPL v2" → 污染
+        │
+        ├── add_taint(TAINT_PROPRIETARY_MODULE, LOCKDEP_STILL_OK)
+        │   设置 taint_flags 对应位
+        │
+        └── printk(KERN_WARNING "Loading module taints kernel")
+
+  查看污染状态
+  $ cat /proc/sys/kernel/tainted
+  <span class="num">12288</span>  <span class="cm"># 二进制：11000000000000 = 位 12 + 位 13</span>
+
+  $ cat /proc/sys/kernel/tainted
+  <span class="num">0</span>  <span class="cm"># 未污染</span>
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 诊断与排查</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看内核污染状态</span>
+$ cat /proc/sys/kernel/tainted
+<span class="num">0</span>  <span class="cm"># 0 = 干净，非 0 = 被污染</span>
+
+<span class="cm"># 解释污染标志</span>
+$ echo <span class="num">12288</span> | python3 -c "
+import sys
+taint = int(sys.stdin.read())
+flags = {
+    0: 'proprietary_module', 1: 'forced_module',
+    2: 'cpu_out_of_spec', 4: 'unsigned_module',
+    5: 'softlockup', 6: 'die', 8: 'warn',
+}
+for bit, name in sorted(flags.items()):
+    if taint & (1 &lt;&lt; bit):
+        print(f'  Bit {bit}: {name}')
+"
+
+<span class="cm"># 清除污染（仅调试用）</span>
+$ echo <span class="num">0</span> > /proc/sys/kernel/tainted  <span class="cm"># 不推荐在生产环境</span>
+
+<span class="cm"># 内核配置</span>
+CONFIG_MODULE_SIG=n    <span class="cm"># 禁用模块签名（会污染）</span>
+CONFIG_MODULE_SIG_FORCE=y  <span class="cm"># 强制模块签名（防止未签名污染）</span></code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+├── <span class="file">panic.c</span>          <span class="cmt">Panic（触发 TAINT_DIE）</span>
+├── <span class="file">module/main.c</span>    <span class="cmt">模块加载（触发模块污染）</span>
+└── <span class="file">warn.c</span>           <span class="cmt">WARN_ON（触发 TAINT_WARN）</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">panic.h</span>          <span class="cmt">TAINT_* 常量定义</span>
+└── <span class="file">module.h</span>         <span class="cmt">模块污染接口</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/module/main.c</code> — <code>mark_module_tainted()</code> 理解模块污染触发。<br>
+    <code>include/linux/panic.h</code> — TAINT_* 常量定义和 add_taint() 接口。<br>
+    <code>kernel/panic.c</code> — panic() 中的污染标记逻辑。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/module/main.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
