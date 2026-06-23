@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Capabilities 与容器权限深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Capabilities 与容器权限深度解析</h1>
+  <p class="subtitle">root 权限细分 — 最小权限原则的内核实现</p>
+  <span class="version">Linux 7.0.12 · include/uapi/linux/capability.h · Docker 视角</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#categories">能力分类</a></li>
+    <li><a href="#data">数据结构</a></li>
+    <li><a href="#inheritance">能力继承规则</a></li>
+    <li><a href="#exec">execve 的能力计算</a></li>
+    <li><a href="#ambient">Ambient 集</a></li>
+    <li><a href="#bpf">BPF 能力与 cgroup</a></li>
+    <li><a href="#docker">Docker 默认能力集</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>传统 UNIX 权限模型：root（UID 0）能做<strong>任何事</strong>，普通用户什么都做不了。这导致一个程序要么不需要 root，要么 root 全开。</p>
+
+  <p>Linux Capabilities 把 root 权限<strong>拆分成约 40 个独立的能力</strong>。每个能力代表一类特权操作，进程可以单独拥有。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">传统模型</div>
+      <ul>
+        <li>UID 0 = 越过所有检查</li>
+        <li>非 0 = 检查每个 file mode</li>
+        <li>过度授权（setuid root 全开）</li>
+        <li>权限提升不可控</li>
+        <li>bug = 整个系统危险</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">Capabilities 模型</div>
+      <ul>
+        <li>权限拆分细粒度</li>
+        <li>每个能力独立检查</li>
+        <li>最小权限原则</li>
+        <li>能力可在 exec 时调整</li>
+        <li>容器仅持必要能力</li>
+      </ul>
+    </div>
+  </div>
+
+  <p>核心思想：</p>
+<pre><code>// 检查 root 改为检查特定能力
+// 旧代码：
+if (capable(CAP_SYS_ADMIN)) {
+    // 允许管理操作
+}
+
+// 能力检查宏：
+// capable(XXX_CAP) - 是否有该能力
+// ns_capable(ns, XXX_CAP) - 在指定 namespace 中
+// has_ns_capability_noaudit(ns, ..., cap) - 不审计版本
+</code></pre>
+</section>
+
+<section id="categories" class="toc-link">
+  <h2><span class="num">02</span> 能力分类</h2>
+
+  <p>Linux 7.0.12 有 41 个能力。按用途分类：</p>
+
+  <table>
+    <tr><th>分类</th><th>能力</th><th>作用</th></tr>
+    <tr><td rowspan="3">文件系统</td><td><code>CAP_CHOWN</code></td><td>修改文件所有者</td></tr>
+    <tr><td><code>CAP_DAC_OVERRIDE</code></td><td>忽略 DAC（文件权限）</td></tr>
+    <tr><td><code>CAP_DAC_READ_SEARCH</code></td><td>忽略 read/search 限制</td></tr>
+    <tr><td rowspan="3">进程管理</td><td><code>CAP_KILL</code></td><td>发信号给非自有进程</td></tr>
+    <tr><td><code>CAP_SETGID</code></td><td>setgid/setgroups</td></tr>
+    <tr><td><code>CAP_SETUID</code></td><td>setuid/setreuid</td></tr>
+    <tr><td rowspan="3">网络</td><td><code>CAP_NET_BIND_SERVICE</code></td><td>绑定 &lt; 1024 端口</td></tr>
+    <tr><td><code>CAP_NET_RAW</code></td><td>RAW socket（ping、tcpdump）</td></tr>
+    <tr><td><code>CAP_NET_ADMIN</code></td><td>网卡配置、iptables、路由</td></tr>
+    <tr><td rowspan="4">系统</td><td><code>CAP_SYS_ADMIN</code></td><td>"万能能力" — mount、chroot、io等</td></tr>
+    <tr><td><code>CAP_SYS_BOOT</code></td><td>reboot</td></tr>
+    <tr><td><code>CAP_SYS_MODULE</code></td><td>加载/卸载内核模块</td></tr>
+    <tr><td><code>CAP_SYS_TIME</code></td><td>settimeofday, stime</td></tr>
+    <tr><td rowspan="2">硬件</td><td><code>CAP_SYS_RAWIO</code></td><td>raw I/O、ioperm、iopl</td></tr>
+    <tr><td><code>CAP_SYS_PTRACE</code></td><td>ptrace 任意进程</td></tr>
+    <tr><td>调度</td><td><code>CAP_SYS_NICE</code></td><td>修改 nice、CPU affinity</td></tr>
+    <tr><td>IPC</td><td><code>CAP_IPC_LOCK</code></td><td>mlock, shmctl SHM_LOCK</td></tr>
+    <tr><td>性能</td><td><code>CAP_PERFMON</code></td><td>perf_event_open、eBPF</td></tr>
+    <tr><td>BPF</td><td><code>CAP_BPF</code></td><td>BPF 程序加载、map 操作</td></tr>
+    <tr><td>检查点</td><td><code>CAP_CHECKPOINT_RESTORE</code></td><td>CRIU 检查点恢复</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>CAP_SYS_ADMIN 是新 root:</strong><br>
+    <code>CAP_SYS_ADMIN</code> 被用于太多场景：mount、chroot、quotactl、io_setup、各种 namespace 操作、USB 设备配置等。<br>
+    实践中很难绕开它，被称为"new root"。<br>
+    Docker 默认不授予此能力，需要 <code>--privileged</code> 或 <code>--cap-add=SYS_ADMIN</code>。
+  </div>
+</section>
+
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 数据结构</h2>
+
+<pre><code>// include/uapi/linux/capability.h
+#define _LINUX_CAPABILITY_VERSION_3  0x20080522
+
+// 用户态结构（向后兼容）
+struct user_cap_header {
+    __u32              version;          // 版本号
+    int                pid;              // 0 = 当前进程
+};
+
+struct user_cap_data {
+    __u32              effective;        // 当前有效
+    __u32              permitted;        // 允许（受 inheritable/bounding 限制）
+    __u32              inheritable;      // 可继承
+};
+
+// 内核态：
+// include/linux/cred.h
+struct cred {
+    kuid_t               uid;
+    kgid_t               gid;
+    kuid_t               suid;
+    kgid_t               sgid;
+    kuid_t               euid;
+    kgid_t               egid;
+    kuid_t               fsuid;
+    kgid_t               fsgid;
+    unsigned             securebits;
+    kernel_cap_t         cap_inheritable;   // 可继承
+    kernel_cap_t         cap_permitted;      // 允许
+    kernel_cap_t         cap_effective;      // 有效
+    kernel_cap_t         cap_bset;            // bounding set
+    kernel_cap_t         cap_ambient;         // ambient 集
+    // ...
+};
+
+// kernel_cap_t 实际上是 bitmap
+// include/uapi/linux/capability.h
+#define CAP_LAST_CAP   CAP_CHECKPOINT_RESTORE
+#define _KERNEL_CAP_T_BIT (CAP_LAST_CAP + 1)
+
+typedef struct {
+    unsigned long     cap[_KERNEL_CAP_WORDS];
+} kernel_cap_t;
+</code></pre>
+
+  <p>5 个能力集：</p>
+
+  <table>
+    <tr><th>集</th><th>用途</th><th>影响范围</th></tr>
+    <tr><td><code>cap_effective</code></td><td>当前可用的能力</td><td>每次 capability 检查</td></tr>
+    <tr><td><code>cap_permitted</code></td><td>允许持有的能力上限</td><td>effective 的超集</td></tr>
+    <tr><td><code>cap_inheritable</code></td><td>exec 时可保留</td><td>跨 exec 不丢</td></tr>
+    <tr><td><code>cap_bset</code></td><td>bounding set（永久上限）</td><td>permitted 的硬上限</td></tr>
+    <tr><td><code>cap_ambient</code></td><td>隐式能力（exec 不丢）</td><td>无 file cap 也能保留</td></tr>
+  </table>
+</section>
+
+<section id="inheritance" class="toc-link">
+  <h2><span class="num">04</span> 能力继承规则</h2>
+
+  <p>能力在 <code>execve()</code> 时的转移规则是 Linux capabilities 最复杂的部分：</p>
+
+<pre><code>// security/commoncap.c - cap_bprm_set_creds()
+// 计算 exec 后的能力集
+
+// 设：
+//   P_in_*  = 父进程（exec 前）
+//   F_*     = 可执行文件的 file capabilities
+//   P_out_* = exec 后的能力
+
+// 1. 计算 effective：
+P_out_effective = (F_inheritable & P_in_inheritable) |
+                   (F_permitted & P_in_permitted) |
+                   P_in_ambient;
+P_out_effective &= P_out_permitted;
+if (F_effective)
+    P_out_effective |= F_permitted & P_out_permitted;
+
+// 2. permitted 集计算：
+P_out_permitted = (P_in_inheritable & F_inheritable) |
+                   (F_permitted & P_in_bounding) |
+                   P_in_ambient;
+P_out_permitted &= P_in_bounding;       // bounding 始终限制
+
+// 3. inheritable 集：
+P_out_inheritable = P_in_inheritable;   // 直接保留
+
+// 4. ambient 集：
+P_out_ambient = P_in_ambient;            // 保留（除非 permitted 失去某能力）
+
+// 5. 特殊：root (uid==0) 路径有 fallback
+</code></pre>
+
+  <p>三种 file capability：</p>
+<pre><code># getcap 查看文件能力
+$ getcap /usr/bin/ping
+/usr/bin/ping = cap_net_raw+ep
+#                ↑       ↑ ↑
+#                能力名  e=effective, p=permitted, i=inheritable
+
+# setcap 设置
+$ setcap cap_net_raw+ep /usr/bin/myprogram
+$ setcap -r /usr/bin/myprogram   # 移除
+
+# 文件能力的存储：
+# security/xattr.h
+#define XATTR_NAME_CAPS "security.capability"
+// value 是 struct vfs_cap_data
+struct vfs_cap_data_v2 {
+    __le32 magic_etc;          // VFS_CAP_REVISION_3
+    __le32 data[VFS_CAP_U32].permitted;
+    __le32 data[VFS_CAP_U32].inheritable;
+    __le32 data[VFS_CAP_U32-1].magic_id;  // 唯一 ID
+};
+</code></pre>
+
+  <p>setuid root vs file caps：</p>
+<pre><code>// 传统 setuid root（如 ping）
+$ ls -l /usr/bin/ping
+-rwsr-xr-x 1 root root ... ping
+// ping 进程 exec 后 UID=0 → 拥有全部能力
+
+// 现代用 file caps
+$ getcap /usr/bin/ping
+ping = cap_net_raw+ep
+// ping 进程 exec 后是非 root 但拥有 CAP_NET_RAW
+// 更细粒度，更安全
+</code></pre>
+</section>
+
+<section id="exec" class="toc-link">
+  <h2><span class="num">05</span> execve 的能力计算</h2>
+
+  <p>完整的 execve 能力计算（包含 securebits）：</p>
+
+<pre><code>// security/commoncap.c
+
+static int cap_bprm_creds_from_file(struct linux_binprm *bprm,
+                                      struct file *file)
+{
+    // 1. 读取 file capabilities
+    struct vfs_cap_data vcap;
+    int ret = bprm_caps_from_vfs_caps(&vcap, bprm, &effective, &has_fcap);
+    
+    // 2. 处理 root 转 non-root 的特殊情况
+    if (!uid_eq(new->euid, new->uid) &amp;&amp; ...)
+        // SECBIT_NOROOT 检查
+        if (issecure(SECURE_NOROOT))
+            // 即使 root 也不自动获得能力
+            ...
+    
+    // 3. 处理 setuid root 的默认行为
+    if (uid_eq(new->euid, root_uid)) {
+        // SECBIT_NO_SETUID_FIXUP 检查
+        if (!issecure(SECURE_NO_SETUID_FIXUP)) {
+            // 标准行为：root 完全继承
+            new->cap_effective = new->cap_permitted;
+        }
+    }
+    
+    // 4. ambient 集处理
+    // 如果新 effective 不包含 ambient 中的某能力
+    // 该 ambient 能力被丢弃
+    
+    // 5. keep_caps flag
+    if (issecure(SECURE_KEEP_CAPS))
+        // 即使 setuid 改变 uid 也不丢失能力
+    
+    return 0;
+}
+
+// securebits 是一组可配置的安全策略标志
+#define SECUREBITS_DEFAULT 0x00000000
+#define SECBIT_NOROOT        1  // root 不自动获能力
+#define SECBIT_NOROOT_LOCKED 2  // 锁定
+#define SECBIT_NO_SETUID_FIXUP       4
+#define SECBIT_NO_SETUID_FIXUP_LOCKED 8
+#define SECBIT_KEEP_CAPS       16
+#define SECBIT_KEEP_CAPS_LOCKED 32
+#define SECBIT_NO_CAP_AMBIENT_RAISE 64
+#define SECBIT_NO_CAP_AMBIENT_RAISE_LOCKED 128
+</code></pre>
+</section>
+
+<section id="ambient" class="toc-link">
+  <h2><span class="num">06</span> Ambient 集</h2>
+
+  <p>Ambient 集（Linux 4.3 引入）是为<strong>shell 脚本和解释型程序</strong>设计的。它允许在没有 file capabilities 的情况下保留能力跨 exec。</p>
+
+<pre><code>// 添加能力到 ambient
+prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_NET_BIND_SERVICE, 0, 0);
+// 现在 execve 后 CAP_NET_BIND_SERVICE 仍有效
+
+// 使用场景：
+//   - 普通用户脚本需要绑定低端口
+//   - Python/Node 程序没有 file caps（解释器有）
+//   - 容器内 daemon 启动子进程时保留能力
+
+// 移除：
+prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_LOWER, CAP_NET_BIND_SERVICE, 0, 0);
+// 清空：
+prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
+
+// 规则：
+//   1. Ambient 必须同时是 permitted 和 inheritable
+//   2. exec 后 effective 自动包含 ambient
+//   3. 如果 exec 后某能力不在 permitted，ambient 自动清除
+</code></pre>
+
+  <p>举例：</p>
+<pre><code># 在容器内，给 Python 程序 CAP_NET_BIND_SERVICE：
+# 传统：setcap cap_net_bind_service+ep /usr/bin/python3
+#   问题：所有 python 脚本都有这能力（不安全）
+
+# ambient 方案：
+# 1. 启动脚本获得 CAP_NET_BIND_SERVICE
+# 2. 添加到 ambient
+# 3. exec python script.py
+#    → python 进程继承 ambient
+#    → script.py 能绑定 80 端口
+# 4. 其他 python 调用没有这能力
+</code></pre>
+</section>
+
+<section id="bpf" class="toc-link">
+  <h2><span class="num">07</span> BPF 能力与 cgroup</h2>
+
+  <p>较新的能力与 cgroup 集成：</p>
+
+<pre><code>// CAP_BPF (5.8+)
+// 替代了之前的 CAP_SYS_ADMIN 用于 BPF 操作
+// 包括：加载 BPF 程序、创建 map、attach
+
+// CAP_PERFMON (5.8+)
+// 用于 perf_event_open、kprobe、uprobe
+// 替代 CAP_SYS_ADMIN 中的 perf 部分
+
+// CAP_CHECKPOINT_RESTORE (5.9+)
+// CRIU 检查点/恢复进程
+// 允许修改 /proc/self/exe、设置克隆标记等
+
+// CAP_BPF 不是完全独立的：
+//   - 内核网络操作还需要 CAP_NET_ADMIN
+//   - perf 还需要 CAP_PERFMON
+//   - 这是为了保留审计层次
+
+// namespace 与 capability：
+//   ns_capable(ns, cap) 检查能力在指定 namespace 内
+//   每个非 user namespace 都有 owner user namespace
+//   容器内的"假"能力通过 user_ns 实现
+
+// cgroup v2 的 BPF:
+//   BPF_CGROUP_* 程序由 cgroup owner 加载
+//   需要 CAP_NET_ADMIN（在 host ns）或容器 user_ns 内
+</code></pre>
+</section>
+
+<section id="docker" class="toc-link">
+  <h2><span class="num">08</span> Docker 默认能力集</h2>
+
+  <p>Docker 默认授予容器<strong>一组有限的"安全"能力</strong>：</p>
+
+<pre><code>// moby/oci/defaults.go
+var defaultCapabilities = []string{
+    "CAP_AUDIT_WRITE",            // 写 audit 日志
+    "CAP_CHOWN",                  // chown
+    "CAP_DAC_OVERRIDE",           // 忽略 DAC
+    "CAP_FOWNER",                 // 文件 owner 特权
+    "CAP_FSETID",                 // setuid bit
+    "CAP_KILL",                   // 发信号
+    "CAP_MKNOD",                  // mknod
+    "CAP_NET_BIND_SERVICE",       // 绑定 &lt; 1024 端口
+    "CAP_NET_RAW",                // RAW socket
+    "CAP_SETFCAP",                // 设置 file caps
+    "CAP_SETGID",                 // setgid
+    "CAP_SETPCAP",                // 修改 cap 集
+    "CAP_SETUID",                 // setuid
+    "CAP_SYS_CHROOT",             // chroot
+    "CAP_NET_BIND_SERVICE",
+}
+
+// 默认移除的危险能力（如 CAP_SYS_ADMIN）：
+//   CAP_SYS_ADMIN       - 太强大（mount、各种 ns 操作）
+//   CAP_SYS_MODULE      - 加载模块
+//   CAP_SYS_RAWIO       - I/O 端口
+//   CAP_SYS_PTRACE      - 调试任何进程
+//   CAP_LINUX_IMMUTABLE - 文件 immutable
+//   CAP_MAC_ADMIN       - MAC 配置
+//   CAP_MAC_OVERRIDE    - 跳过 MAC
+//   ...
+</code></pre>
+
+  <p>用户控制：</p>
+<pre><code># 添加能力
+docker run --cap-add=NET_ADMIN alpine ...
+
+# 移除能力
+docker run --cap-drop=NET_RAW alpine ...
+
+# 全部移除（最小权限）
+docker run --cap-drop=ALL --cap-add=NET_BIND_SERVICE nginx
+
+# 完全授权（危险！）
+docker run --privileged alpine ...
+//   - 所有能力启用
+//   - 所有 device cgroup 限制移除
+//   - sysfs / proc 完全可写
+//   - 不再隔离
+
+# 单独能力最佳实践：
+docker run \
+  --cap-drop=ALL \
+  --cap-add=NET_BIND_SERVICE \
+  nginx
+//   只让 nginx 绑定 80/443
+//   没有任何其他特权
+</code></pre>
+
+  <div class="callout">
+    <strong>Rootless 模式下的能力:</strong><br>
+    Rootless Docker 中，容器内的能力是<strong>"假"能力</strong>：只对容器内的资源有效。<br>
+    例如 CAP_NET_ADMIN 只能管理容器内的 veth，不能动宿主 docker0。<br>
+    这通过 user namespace 实现 — 容器 root 在宿主其实是普通用户。<br>
+    受限能力列表与特权模式相同。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">include/uapi/linux/capability.h</span>      <span class="cmt">所有 CAP_* 定义</span>
+├── <span class="file">include/linux/capability.h</span>           <span class="cmt">内核侧 has_capability 等</span>
+├── <span class="file">include/linux/cred.h</span>                 <span class="cmt">struct cred、5 个能力集</span>
+├── <span class="file">kernel/cred.c</span>                        <span class="cmt">cred 生命周期</span>
+├── <span class="file">security/commoncap/capability.c</span>     <span class="cmt">cap_capable LSM hook</span>
+├── <span class="file">security/commoncap/commoncap.c</span>      <span class="cmt">cap_bprm_set_creds 等</span>
+├── <span class="file">kernel/capability.c</span>                   <span class="cmt">sys_capset / sys_capget</span>
+├── <span class="file">fs/xattr.c</span>                            <span class="cmt">xattr 通用</span>
+├── <span class="file">fs/posix_acl.c</span>                        <span class="cmt">POSIX ACL（与 caps 交互）</span>
+├── <span class="file">tools/testing/selftests/capabilities/</span> <span class="cmt">能力测试用例</span>
+├── <span class="file">tools/lib/cap/cap.c</span>                  <span class="cmt">libcap 库源码</span>
+└── <span class="file">samples/check-exec/</span>                   <span class="cmt">exec + caps 示例</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>include/uapi/linux/capability.h</code> 全部能力的注释（必读，有详细解释）。<br>
+    <code>security/commoncap/commoncap.c</code> + <code>cap_bprm_creds_from_file()</code> 理解 exec 能力计算。<br>
+    <code>include/linux/cred.h</code> 看 5 个能力集在 cred 中的位置。<br>
+    <code>tools/lib/cap</code>（libcap 源码）看用户态如何操作能力。<br>
+    实战参考 runc 的 <code>libcontainer/cgroups/fs/</code> + <code>specconv/</code>。
+  </div>
+
+  <p>常用用户态命令：</p>
+<pre><code>capsh --print                       # 显示当前能力
+capsh --caps=cap_net_raw+ep         # 临时设置
+getcap /usr/bin/*                   # 查文件能力
+setcap cap_net_raw+ep file          # 设置文件能力
+getpcaps &lt;pid&gt;                       # 查进程能力
+prctl --cap-ambient raise CAP_NET_BIND_SERVICE
+</code></pre>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

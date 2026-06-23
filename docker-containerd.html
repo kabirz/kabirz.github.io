@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>containerd 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>containerd 深度解析</h1>
+  <p class="subtitle">CNCF 工业级容器运行时 — 核心设计与内部架构</p>
+  <span class="version">containerd 1.7 · containerd/containerd</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#architecture">架构与模块</a></li>
+    <li><a href="#content">Content Store</a></li>
+    <li><a href="#snapshot">Snapshotter</a></li>
+    <li><a href="#image">Image Management</a></li>
+    <li><a href="#task">Task Service</a></li>
+    <li><a href="#plugin">插件系统</a></li>
+    <li><a href="#cri">CRI 集成</a></li>
+    <li><a href="#sandbox">Sandbox API</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>containerd 是从 Docker 中独立出来的<strong>容器运行时核心</strong>，2017 年捐赠给 CNCF，2019 年成为毕业项目。它是 Kubernetes、Docker、Podman 的底层基础。</p>
+
+  <p>定位：</p>
+  <table>
+    <tr><th>层</th><th>项目</th><th>职责</th></tr>
+    <tr><td>编排</td><td>Kubernetes, Docker Swarm</td><td>多机调度</td></tr>
+    <tr><td>CLI / API</td><td>docker CLI, crictl, ctr</td><td>用户接口</td></tr>
+    <tr><td><strong>Container Runtime (High-level)</strong></td><td><strong>containerd, CRI-O</strong></td><td>镜像、快照、生命周期</td></tr>
+    <tr><td>Container Runtime (Low-level)</td><td>runc, crun, kata</td><td>OCI 标准执行</td></tr>
+  </table>
+
+  <p>核心特性：</p>
+  <ul>
+    <li><strong>最小化</strong>：只做容器运行时该做的事，不做编排、CLI、构建</li>
+    <li><strong>插件化</strong>：snapshotter、runtime、image store 都是插件</li>
+    <li><strong>gRPC API</strong>：完全可程序化</li>
+    <li><strong>稳定接口</strong>：API v1 向后兼容</li>
+    <li><strong>CRI 兼容</strong>：原生支持 Kubernetes</li>
+  </ul>
+
+  <p>典型使用者：</p>
+  <ul>
+    <li><strong>Docker</strong>：作为底层运行时</li>
+    <li><strong>Kubernetes</strong>：通过 CRI plugin</li>
+    <li><strong>Containerd 直接使用</strong>：IoT、嵌入式、边缘</li>
+    <li><strong>云厂商</strong>：AWS Firecracker、GCP GKE、Azure AKS 都基于 containerd</li>
+  </ul>
+</section>
+
+<section id="architecture" class="toc-link">
+  <h2><span class="num">02</span> 架构与模块</h2>
+
+<pre><code>┌─────────────────────────────────────────┐
+│       containerd Binary                 │
+│       /usr/bin/containerd               │
+└─────────────────────────────────────────┘
+                  │
+       ┌──────────┴──────────┐
+       │                     │
+┌──────▼──────────┐  ┌──────▼──────────────┐
+│   gRPC API      │  │   CRI Plugin (K8s)  │
+│   /var/run/...  │  │   /var/run/...      │
+│   containerd.sock│  │   cri-dockerd.sock  │
+└──────┬──────────┘  └─────────────────────┘
+       │
+┌──────▼──────────────────────────────────┐
+│            核心服务（plugin 集合）         │
+│  ┌──────────┐  ┌──────────┐  ┌────────┐ │
+│  │ Container│  │  Image   │  │  Task  │ │
+│  │ Service  │  │ Service  │  │Service │ │
+│  └──────────┘  └──────────┘  └────────┘ │
+│  ┌──────────┐  ┌──────────┐  ┌────────┐ │
+│  │ Content  │  │ Snapshot │  │ Event  │ │
+│  │ Service  │  │ Service  │  │Service │ │
+│  └──────────┘  └──────────┘  └────────┘ │
+│  ┌──────────┐  ┌──────────┐             │
+│  │  Lease   │  │  Diff    │             │
+│  │ Service  │  │ Service  │             │
+│  └──────────┘  └──────────┘             │
+└──────────────────────────────────────────┘
+                  │
+       ┌──────────┴──────────┐
+       │                     │
+┌──────▼──────┐    ┌─────────▼──────────┐
+│   BoltDB    │    │   Runtime          │
+│   Metadata  │    │   (containerd-shim)│
+│   Store     │    │                     │
+└─────────────┘    └─────────────────────┘
+</code></pre>
+
+  <p>核心 Go 包：</p>
+<pre><code>// containerd 主对象（containerd/services.go）
+type Services struct {
+    ContentStore     content.Store
+    ImageStore       images.Store
+    ContainerStore   containers.Store
+    TaskService      tasks.TaskService
+    Snapshotter      snapshots.Snapshotter
+    Runtime          runtime.PlatformRuntime
+    LeaseManager     leases.Manager
+    Diff             differ.Differ
+    EventService     EventService
+    TransferService  transfer.Transferrer
+    SandboxStore     sandbox.Store
+    SandboxController sandbox.Controller
+    NamespaceService namespaces.Store
+    // ...
+}
+
+// Init() 时注册所有插件：
+// plugin.Init / plugin.Register
+//   - 每个 service 注册为 plugin
+//   - 通过 type + ID 唯一标识
+//   - 依赖图确保按序启动
+</code></pre>
+</section>
+
+<section id="content" class="toc-link">
+  <h2><span class="num">03</span> Content Store</h2>
+
+  <p>Content Store 是<strong>内容寻址的 blob 存储</strong>，所有镜像数据（manifest、config、layer）都存这里。</p>
+
+<pre><code>// containerd/core/content/content.go
+type Store interface {
+    Reader(ctx context.Context, dgst digest.Digest) (ReaderAt, error)
+    Info(ctx context.Context, dgst digest.Digest) (Info, error)
+    Update(ctx context.Context, info Info, fieldpaths ...string) (Info, error)
+    Walk(ctx context.Context, fn WalkFunc, filters ...string) error
+    Delete(ctx context.Context, dgst digest.Digest) error
+    ListStatuses(ctx context.Context, filters ...string) ([]Status, error)
+    Status(ctx context.Context, ref string) (Status, error)
+    Abort(ctx context.Context, ref string) error
+    Writer(ctx context.Context, opts ...WriterOpt) (Writer, error)
+}
+
+// 每个 blob 用 digest 标识：
+type Digest = digest.Digest
+// 例: "sha256:9759..."
+
+// 文件存储路径：
+// /var/lib/containerd/io.containerd.content.v1.content/blobs/sha256/ab/abc123.../data
+
+// Info 元数据（存 BoltDB）：
+type Info struct {
+    Digest    digest.Digest
+    Size      int64
+    CreatedAt time.Time
+    UpdatedAt time.Time
+    Labels    map[string]string
+}
+
+// Writer 流式写入：
+type Writer interface {
+    io.WriteCloser
+    Digest() digest.Digest
+    Commit(ctx context.Context, size int64, expected digest.Digest, opts ...Opt) error
+    Status(ctx context.Context) (Status, error)
+    Truncate(size int64) error
+}
+
+// Status（下载进度）：
+type Status struct {
+    Ref       string
+    Offset    int64
+    Total     int64
+    Expected  digest.Digest
+    StartedAt time.Time
+    UpdatedAt time.Time
+}
+</code></pre>
+
+  <p>API gRPC：</p>
+<pre><code>// containerd/api/services/content/v1/content.proto
+service Content {
+    rpc Info(InfoRequest) returns (InfoResponse);
+    rpc List(ListContentRequest) returns (stream ListContentResponse);
+    rpc Delete(DeleteContentRequest) returns (google.protobuf.Empty);
+    rpc Read(ReadContentRequest) returns (stream ReadContentResponse);
+    rpc Status(StatusRequest) returns (StatusResponse);
+    rpc ListStatuses(ListStatusesRequest) returns (ListStatusesResponse);
+    rpc Write(stream WriteContentRequest) returns (stream WriteContentResponse);
+    rpc Abort(AbortContentRequest) returns (google.protobuf.Empty);
+}
+</code></pre>
+
+  <p>Garbage Collection：</p>
+<pre><code>// Content store 支持 GC：
+//   - 通过 lease 引用活跃 blob
+//   - 无引用的 blob 被 GC
+//   - GC 由 ScheduledGC 触发
+
+// 手动控制：
+ctr content prune            // 删除未引用
+ctr content ls               // 列出所有
+ctr content get sha256:abc...  // 下载
+</code></pre>
+</section>
+
+<section id="snapshot" class="toc-link">
+  <h2><span class="num">04</span> Snapshotter</h2>
+
+  <p>Snapshotter 把<strong>不可变的 image layer</strong> 转化为<strong>可写的容器 rootfs</strong>。</p>
+
+<pre><code>// containerd/core/snapshots/snapshotter.go
+type Snapshotter interface {
+    Stat(ctx context.Context, key string) (Info, error)
+    Update(ctx context.Context, info Info, fieldpaths ...string) (Info, error)
+    Usage(ctx context.Context, key string) (Usage, error)
+    Mounts(ctx context.Context, key string) ([]mount.Mount, error)
+    Prepare(ctx context.Context, key, parent string, opts ...Opt) ([]mount.Mount, error)
+    View(ctx context.Context, key, parent string, opts ...Opt) ([]mount.Mount, error)
+    Commit(ctx context.Context, name, key string, opts ...Opt) error
+    Remove(ctx context.Context, key string) error
+    Walk(ctx context.Context, fn WalkFunc, filters ...string) error
+    Close() error
+}
+
+// 三种 snapshot 状态：
+//   View     - 临时只读视图（用于查询）
+//   Active   - 临时可写（容器在跑）
+//   Committed- 已提交（变 image layer）
+
+// 工作流：
+//   1. image pull 时：每解压一层 → Commit 一个 snapshot
+//      snapshotter.Commit(name="layer-N", key="work-N")
+//      
+//   2. 启动容器时：Prepare 一个 Active snapshot
+//      snapshotter.Prepare(key="container-X", parent="layer-N")
+//      → 返回 mount options
+//      
+//   3. 容器运行中：mount options 挂载到 rootfs
+//      
+//   4. 容器 commit 时：Commit Active snapshot → 新的 image layer
+
+// mount.Mount：
+type Mount struct {
+    Type    string         // "overlay" / "bind" / ...
+    Source  string         // 设备名或路径
+    Target  string
+    Options []string       // mount 选项
+}
+
+// 例：overlayfs mount
+Mount{
+    Type:    "overlay",
+    Source:  "overlay",
+    Options: []string{
+        "lowerdir=/var/lib/containerd/.../snapshots/1/fs",
+        "upperdir=/var/lib/containerd/.../snapshots/2/fs",
+        "workdir=/var/lib/containerd/.../snapshots/2/work",
+    },
+}
+</code></pre>
+
+  <p>多种 snapshotter 实现：</p>
+  <table>
+    <tr><th>Snapshotter</th><th>特点</th></tr>
+    <tr><td><code>overlayfs</code></td><td>默认，Linux OverlayFS</td></tr>
+    <tr><td><code>native</td><td>完整 copy（无 union）</td></tr>
+    <tr><td><code>btrfs</td><td>Btrfs subvolume</td></tr>
+    <tr><td><code>zfs</td><td>ZFS filesystem</td></tr>
+    <tr><td><code>stargz</td><td>延迟加载（lazy pull）</td></tr>
+    <tr><td><code>nydus</td><td>镜像加速</td></tr>
+    <tr><td><code>fuse-overlayfs</td><td>用户态 overlayfs（rootless）</td></tr>
+    <tr><td><code>devmapper</td><td>device-mapper thin pool</td></tr>
+  </table>
+</section>
+
+<section id="image" class="toc-link">
+  <h2><span class="num">05</span> Image Management</h2>
+
+<pre><code>// containerd/core/images/image.go
+type Image struct {
+    Name       string
+    Labels     map[string]string
+    Target     ocispec.Descriptor
+    CreatedAt  time.Time
+    UpdatedAt  time.Time
+}
+
+// ImageStore：
+type Store interface {
+    Put(ctx context.Context, name string, desc ocispec.Descriptor, opts ...Opt) error
+    Get(ctx context.Context, name string) (Image, error)
+    List(ctx context.Context, filter ...string) ([]Image, error)
+    Delete(ctx context.Context, name string, opts ...Opt) error
+}
+
+// 拉取流程（Pull）：
+// containerd/remotes/docker/resolver.go
+func (r *dockerResolver) Resolve(ctx, ref) (name, desc, error) {
+    // 1. 解析 ref → registry, repo, tag
+    // 2. HTTP GET /v2/&lt;repo&gt;/manifests/&lt;tag&gt;
+    //    Accept: application/vnd.oci.image.index.v1+json
+    //            application/vnd.docker.distribution.manifest.list.v2+json
+    // 3. 根据 platform 选择 manifest
+    // 4. 返回 descriptor
+}
+
+func (r *dockerFetcher) Fetch(ctx, desc) (io.ReadCloser, error) {
+    // 1. HTTP GET /v2/&lt;repo&gt;/blobs/&lt;digest&gt;
+    // 2. 流式读取
+    // 3. 返回 Reader
+}
+
+// 完整的 pull 流程（pkg/.../pull.go）：
+// 1. Pull → resolver.Resolve → manifest
+// 2. Pull → Fetch(manifest) → content.Write
+// 3. Pull → 递归 Fetch(layers) → 并行写入 content store
+// 4. Pull → snapshot Apply 每个 layer
+// 5. Pull → ImageStore.Put(name, desc)
+</code></pre>
+
+  <p>Lazy Pull 优化（stargz/nydus）：</p>
+<pre><code>// 传统 pull：下载所有 layer 才能运行
+// Lazy pull：只下载 manifest + index，运行时按需
+
+// stargz 格式：
+//   - 镜像转换为 estargz 格式
+//   - 每个文件单独可定位
+//   - 通过 HTTP Range 请求
+//   - 启动容器 → 按需读取文件
+//   - 大镜像启动从分钟级降到秒级
+
+// containerd 配置：
+// config.toml:
+// [plugins."io.containerd.grpc.v1.cri".registry.configs]
+// [plugins."io.containerd.snapshotter.v1.stargz"]
+// root_path = "/var/lib/containerd-stargz-grpc"
+
+// 运行：
+ctr run --snapshotter=stargz docker.io/stargz/nginx:latest
+</code></pre>
+</section>
+
+<section id="task" class="toc-link">
+  <h2><span class="num">06</span> Task Service</h2>
+
+  <p>Task 是<strong>运行中的容器实例</strong>。一个 container 是配置，一个 task 是进程。</p>
+
+<pre><code// containerd/core/runtime/runtime.go
+type Runtime interface {
+    NewTask(ctx, containerID, opts) (Task, error)
+    GetTask(ctx, containerID) (Task, error)
+    Tasks(ctx) ([]Task, error)
+    Delete(ctx, containerID) error
+}
+
+// Task：
+type Task interface {
+    ID() string
+    Container() string
+    Status(ctx) (Status, error)
+    State(ctx) (State, error)
+    Kill(ctx, signal, mode) error
+    Pause(ctx) error
+    Resume(ctx) error
+    Exec(ctx, execPath, opts) (ExecProcess, error)
+    Pids(ctx) ([]ProcessInfo, error)
+    CloseIO(ctx, opts) error
+    Resize(ctx, w, h) error
+    Start(ctx) error
+    Wait(ctx) (ExitStatus, error)
+    IO() IO
+    PID() uint32
+}
+
+// 状态：
+type Status int
+const (
+    Created  Status = 1
+    Running  Status = 2
+    Pausing  Status = 3
+    Paused   Status = 4
+    Stopped  Status = 5
+)
+</pre></code>
+
+  <p>V2 Runtime（runc runtime）：</p>
+<pre><code>// containerd/runtime/v2/manager.go
+type Manager struct {
+    root     string
+    runtimes map[string]RuntimeInfo
+    // 注册的 runtime:
+    //   io.containerd.runc.v2   (默认)
+    //   io.containerd.kata.v2
+    //   io.containerd.runsc.v1
+}
+
+// Runtime 接口：
+type Runtime interface {
+    ID() string
+    Create(ctx, id, opts) (Task, error)
+    Get(ctx, id) (Task, error)
+    Tasks(ctx) ([]Task, error)
+    Delete(ctx, id) error
+}
+
+// 实现路径：
+// runtime/v2/runc/runtime.go
+// 每个 runtime 对应一个 shim binary
+// containerd-shim-runc-v2
+</code></pre>
+
+  <p>Task Service gRPC：</p>
+<pre><code>// containerd/api/services/tasks/v1/tasks.proto
+service Tasks {
+    rpc Create(CreateTaskRequest)    returns (CreateTaskResponse);
+    rpc Start(StartRequest)          returns (StartResponse);
+    rpc Delete(DeleteTaskRequest)    returns (DeleteResponse);
+    rpc Pause(PauseTaskRequest)      returns (google.protobuf.Empty);
+    rpc Resume(ResumeTaskRequest)    returns (google.protobuf.Empty);
+    rpc Kill(KillRequest)            returns (google.protobuf.Empty);
+    rpc Pids(PidsRequest)            returns (PidsResponse);
+    rpc Exec(ExecProcessRequest)     returns (google.protobuf.Empty);
+    rpc ResizePty(ResizePtyRequest)  returns (google.protobuf.Empty);
+    rpc CloseIO(CloseIORequest)      returns (google.protobuf.Empty);
+    rpc Checkpoint(CheckpointTaskRequest) returns (CheckpointTaskResponse);
+    rpc Update(UpdateTaskRequest)    returns (google.protobuf.Empty);
+    rpc Wait(WaitRequest)            returns (WaitResponse);
+    rpc List(ListTasksRequest)       returns (ListTasksResponse);
+    rpc Metrics(MetricsRequest)      returns (MetricsResponse);
+}
+</code></pre>
+</section>
+
+<section id="plugin" class="toc-link">
+  <h2><span class="num">07</span> 插件系统</h2>
+
+  <p>containerd 的所有组件都是<strong>插件</strong>，通过统一的 plugin 框架注册和发现：</p>
+
+<pre><code>// containerd/pkg/plugin/plugin.go
+type Plugin interface {
+    Init() error
+    Instance() interface{}
+    Meta() Registration
+}
+
+type Registration struct {
+    Type     Type       // 插件类型
+    ID       string     // 插件 ID（同 type 内唯一）
+    Config   interface{}
+    Requires []Type     // 依赖的其他插件类型
+    InitFn   func(*InitContext) (interface{}, error)
+}
+
+type Type string
+const (
+    RuntimePlugin       Type = "io.containerd.runtime.v1"
+    SnapshotPlugin      Type = "io.containerd.snapshotter.v1"
+    TaskPlugin          Type = "io.containerd.task.v1"
+    ContentPlugin       Type = "io.containerd.content.v1"
+    DiffPlugin          Type = "io.containerd.differ.v1"
+    MetadataPlugin      Type = "io.containerd.metadata.v1"
+    ImagePlugin         Type = "io.containerd.image.v1"
+    ContainerPlugin     Type = "io.containerd.container.v1"
+    LeasePlugin         Type = "io.containerd.lease.v1"
+    EventPlugin         Type = "io.containerd.event.v1"
+    RuntimePluginV2     Type = "io.containerd.runtime.v2"
+    MonitorPlugin       Type = "io.containerd.monitor.v1"
+    TransferPlugin      Type = "io.containerd.transfer.v1"
+    SandboxStorePlugin  Type = "io.containerd.sandbox.store.v1"
+    SandboxControllerPlugin Type = "io.containerd.sandbox.controller.v1"
+    GCPlugin            Type = "io.containerd.gc.v1"
+    CRIGRPCPlugin       Type = "io.containerd.cri.v1"
+    ServicePlugin       Type = "io.containerd.service.v1"
+    GRPCPlugin          Type = "io.containerd.grpc.v1"
+    TTRPCPlugin         Type = "io.containerd.ttrpc.v1"
+)
+
+// 注册插件（init.go）：
+func init() {
+    plugin.Register(&plugin.Registration{
+        Type: RuntimePluginV2,
+        ID:   "runc",
+        Requires: []plugin.Type{
+            plugin.MetadataPlugin,
+            plugin.LeasePlugin,
+            plugin.EventPlugin,
+            plugin.TaskPlugin,
+        },
+        InitFn: func(ic *plugin.InitContext) (interface{}, error) {
+            return runc.New(ic)
+        },
+    })
+}
+
+// 加载流程：
+// 1. cmd/containerd/main.go
+// 2. server.New(ctx, config)
+// 3. plugin.Load(config.Plugins)
+//    - 拓扑排序依赖
+//    - 按序调用 InitFn
+//    - 每个 plugin 返回实例
+// 4. 注册到 service
+</code></pre>
+
+  <p>配置文件：</p>
+<pre><code>// /etc/containerd/config.toml
+version = 2
+
+[plugins."io.containerd.grpc.v1.cri"]
+  # CRI plugin 配置
+
+[plugins."io.containerd.grpc.v1.cri".containerd]
+  default_runtime_name = "runc"
+  snapshotter = "overlayfs"
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.kata]
+  runtime_type = "io.containerd.kata.v2"
+
+[plugins."io.containerd.snapshotter.v1.overlayfs"]
+  root_path = "/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs"
+
+[plugins."io.containerd.metadata.v1.bolt"]
+  content_sharing_policy = "shared"
+</code></pre>
+</section>
+
+<section id="cri" class="toc-link">
+  <h2><span class="num">08</span> CRI 集成</h2>
+
+  <p>CRI (Container Runtime Interface) 是 Kubernetes 定义的<strong>容器运行时接口</strong>。containerd 通过 cri-plugin 实现 CRI。</p>
+
+<pre><code>// CRI 是 gRPC 服务，定义在 kubernetes/cri-api
+// 两个服务：RuntimeService + ImageService
+
+// RuntimeService:
+service RuntimeService {
+    rpc Version(VersionRequest) returns (VersionResponse);
+    rpc RunPodSandbox(RunPodSandboxRequest) returns (RunPodSandboxResponse);
+    rpc StopPodSandbox(StopPodSandboxRequest) returns (StopPodSandboxResponse);
+    rpc RemovePodSandbox(RemovePodSandboxRequest) returns (RemovePodSandboxResponse);
+    rpc PodSandboxStatus(PodSandboxStatusRequest) returns (PodSandboxStatusResponse);
+    rpc ListPodSandbox(ListPodSandboxRequest) returns (ListPodSandboxResponse);
+    rpc CreateContainer(CreateContainerRequest) returns (CreateContainerResponse);
+    rpc StartContainer(StartContainerRequest) returns (StartContainerResponse);
+    rpc StopContainer(StopContainerRequest) returns (StopContainerResponse);
+    rpc RemoveContainer(RemoveContainerRequest) returns (RemoveContainerResponse);
+    rpc ListContainers(ListContainersRequest) returns (ListContainersResponse);
+    rpc ContainerStatus(ContainerStatusRequest) returns (ContainerStatusResponse);
+    rpc ExecSync(ExecSyncRequest) returns (ExecSyncResponse);
+    rpc Exec(ExecRequest) returns (ExecResponse);
+    rpc Attach(AttachRequest) returns (AttachResponse);
+    rpc PortForward(PortForwardRequest) returns (PortForwardResponse);
+    rpc ContainerStats(ContainerStatsRequest) returns (ContainerStatsResponse);
+    rpc ListContainerStats(ListContainerStatsRequest) returns (ListContainerStatsResponse);
+    rpc UpdateRuntimeConfig(UpdateRuntimeConfigRequest) returns (UpdateRuntimeConfigResponse);
+    rpc Status(StatusRequest) returns (StatusResponse);
+}
+
+// ImageService:
+service ImageService {
+    rpc ListImages(ListImagesRequest) returns (ListImagesResponse);
+    rpc ImageStatus(ImageStatusRequest) returns (ImageStatusResponse);
+    rpc PullImage(PullImageRequest) returns (PullImageResponse);
+    rpc RemoveImage(RemoveImageRequest) returns (RemoveImageResponse);
+    rpc ImageFsInfo(ImageFsInfoRequest) returns (ImageFsInfoResponse);
+}
+
+// containerd 实现：
+// containerd/pkg/cri/server/
+//   - PodSandbox  = containerd Sandbox + 多个 Container
+//   - 通过 sandbox API 管理 pod 沙箱
+//   - 通过 task API 管理容器
+
+// CRI 概念到 containerd 概念的映射：
+//   CRI PodSandbox   →   containerd Sandbox (sandbox API v2)
+//   CRI Container    →   containerd Container + Task
+//   CRI Image        →   containerd Image
+//   CRI Image Pull   →   containerd Image Pull
+</code></pre>
+
+  <p>Kubelet 与 containerd 的交互：</p>
+<pre><code>// Kubelet 通过 CRI gRPC 调用 containerd
+// Socket: /run/containerd/containerd.sock
+
+// 启动 Pod：
+// 1. Kubelet → RunPodSandbox(pod_sandbox_config)
+//    containerd:
+//    - 创建 sandbox container（pause 容器）
+//    - 配置网络（CNI）
+//    - 持有 sandbox namespace
+//
+// 2. Kubelet → CreateContainer(pod_sandbox_id, container_config)
+//    containerd:
+//    - 解析 image
+//    - 创建 containerd container（共享 sandbox ns）
+//
+// 3. Kubelet → StartContainer(container_id)
+//    containerd:
+//    - 启动 task
+//
+// 4. 停止：
+//    StopPodSandbox → 停止所有容器，保留沙箱
+//    RemovePodSandbox → 删除沙箱和容器
+
+// pause 容器（pause image）：
+//   一个永远 sleep 的极简进程
+//   持有 pod 的所有 namespace（PID、NET、IPC、UTS）
+//   其他容器共享 pause 的 namespace
+//   pause 死亡 → 整个 pod 死亡
+</code></pre>
+</section>
+
+<section id="sandbox" class="toc-link">
+  <h2><span class="num">09</span> Sandbox API</h2>
+
+  <p>Sandbox API 是 containerd 1.7+ 引入的新接口，把<strong>Pod 沙箱作为一等公民</strong>。</p>
+
+<pre><code// containerd/api/services/sandbox/v1/sandbox.proto
+service SandboxStore {
+    rpc Create(CreateSandboxRequest) returns (CreateSandboxResponse);
+    rpc Update(UpdateSandboxRequest) returns (UpdateSandboxResponse);
+    rpc Delete(DeleteSandboxRequest) returns (DeleteSandboxResponse);
+    rpc List(ListSandboxesRequest) returns (ListSandboxesResponse);
+    rpc Get(GetSandboxRequest) returns (GetSandboxResponse);
+}
+
+service SandboxController {
+    rpc Start(StartSandboxRequest) returns (StartSandboxResponse);
+    rpc Stop(StopSandboxRequest) returns (StopSandboxResponse);
+    rpc Wait(WaitSandboxRequest) returns (WaitSandboxResponse);
+    rpc Status(StatusSandboxRequest) returns (StatusSandboxResponse);
+    rpc Shutdown(ShutdownSandboxRequest) returns (ShutdownSandboxResponse);
+    rpc Publish(PublishRequest) returns (PublishResponse);
+}
+
+// Sandbox 概念：
+type Sandbox struct {
+    ID         string
+    Labels     map[string]string
+    Runtime    string          // sandbox runtime name
+    Spec       *ptypes.Any     // OCI spec
+    CreatedAt  time.Time
+    UpdatedAt  time.Time
+    Sandboxer  string
+}
+
+// 与 Pod 关系：
+//   - 一个 Sandbox 对应一个 Kubernetes Pod
+//   - Sandbox 持有 namespace（NET/IPC/UTS）
+//   - Sandbox 内的容器共享 namespace
+//
+// Sandboxer（控制方式）：
+//   - runc.v2  (默认 - shim 管理)
+//   - podsandbox (pause 容器方式，CRI 老式)
+//   - wasm    (WASM 沙箱)
+//   - vm      (虚拟机沙箱，如 Kata)
+
+// 优势：
+//   1. 不再依赖 pause 镜像
+//   2. 更细粒度的沙箱控制
+//   3. 支持非容器沙箱（WASM、VM）
+//   4. 统一 API 跨多种沙箱实现
+</pre></code>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">10</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+containerd/containerd (github.com/containerd/containerd)
+├── <span class="file">cmd/containerd/</span>                 <span class="cmt">containerd main</span>
+├── <span class="file">cmd/containerd-shim-runc-v2/</span>     <span class="cmt">shim v2 main</span>
+├── <span class="file">cmd/ctr/</span>                          <span class="cmt">ctr CLI 工具</span>
+├── <span class="file">api/</span>                                <span class="cmt">gRPC proto 定义</span>
+│   ├── <span class="file">services/</span>                       <span class="cmt">服务定义</span>
+│   │   ├── <span class="file">containers/v1/</span>                <span class="cmt">ContainerService</span>
+│   │   ├── <span class="file">content/v1/</span>                   <span class="cmt">ContentService</span>
+│   │   ├── <span class="file">diff/v1/</span>                       <span class="cmt">DiffService</span>
+│   │   ├── <span class="file">events/v1/</span>                     <span class="cmt">EventService</span>
+│   │   ├── <span class="file">images/v1/</span>                     <span class="cmt">ImageService</span>
+│   │   ├── <span class="file">introspection/v1/</span>              <span class="cmt">IntrospectionService</span>
+│   │   ├── <span class="file">leases/v1/</span>                     <span class="cmt">LeaseService</span>
+│   │   ├── <span class="file">namespaces/v1/</span>                 <span class="cmt">NamespaceService</span>
+│   │   ├── <span class="file">sandbox/v1/</span>                    <span class="cmt">SandboxStore + Controller</span>
+│   │   ├── <span class="file">snapshots/v1/</span>                  <span class="cmt">SnapshotService</span>
+│   │   ├── <span class="file">tasks/v1/</span>                       <span class="cmt">TaskService</span>
+│   │   ├── <span class="file">transfer/v1/</span>                   <span class="cmt">TransferService</span>
+│   │   └── <span class="file">version/v1/</span>                    <span class="cmt">VersionService</span>
+│   └── <span class="file">types/</span>                            <span class="cmt">通用类型</span>
+├── <span class="file">core/</span>                              <span class="cmt">核心实现</span>
+│   ├── <span class="file">container/</span>                      <span class="cmt">container 对象</span>
+│   ├── <span class="file">content/</span>                        <span class="cmt">content store</span>
+│   ├── <span class="file">diff/</span>                            <span class="cmt">diff 实现</span>
+│   ├── <span class="file">events/</span>                          <span class="cmt">events 实现</span>
+│   ├── <span class="file">images/</span>                          <span class="cmt">image 管理</span>
+│   ├── <span class="file">leases/</span>                          <span class="cmt">lease 管理</span>
+│   ├── <span class="file">metadata/</span>                       <span class="cmt">BoltDB metadata</span>
+│   ├── <span class="file">mount/</span>                            <span class="cmt">mount 操作</span>
+│   ├── <span class="file">remotes/</span>                          <span class="cmt">registry 客户端</span>
+│   │   ├── <span class="file">docker/</span>                        <span class="cmt">Docker registry</span>
+│   │   ├── <span class="file">errors.go</span>                       <span class="cmt">错误类型</span>
+│   │   └── <span class="file">resolver.go</span>                     <span class="cmt">Resolver 接口</span>
+│   ├── <span class="file">runtime/</span>                          <span class="cmt">runtime 框架</span>
+│   │   ├── <span class="file">linux/</span>                          <span class="cmt">Linux runtime</span>
+│   │   └── <span class="file">v2/</span>                             <span class="cmt">V2 runtime</span>
+│   │       ├── <span class="file">runc/</span>                        <span class="cmt">runc runtime</span>
+│   │       ├── <span class="file">queue/</span>                       <span class="cmt">task 队列</span>
+│   │       ├── <span class="file">shim/</span>                        <span class="cmt">shim 客户端</span>
+│   │       └── <span class="file">task/</span>                        <span class="cmt">task service impl</span>
+│   ├── <span class="file">sandbox/</span>                          <span class="cmt">sandbox 实现</span>
+│   │   ├── <span class="file">proxy/</span>                          <span class="cmt">proxy controller</span>
+│   │   └── <span class="file">store/</span>                          <span class="cmt">sandbox store</span>
+│   ├── <span class="file">services/</span>                          <span class="cmt">服务实现</span>
+│   │   ├── <span class="file">containers/</span>
+│   │   ├── <span class="file">content/</span>
+│   │   ├── <span class="file">diff/</span>
+│   │   ├── <span class="file">events/</span>
+│   │   ├── <span class="file">images/</span>
+│   │   ├── <span class="file">leases/</span>
+│   │   ├── <span class="file">opt/</span>
+│   │   ├── <span class="file">sandbox/</span>
+│   │   ├── <span class="file">server/</span>
+│   │   ├── <span class="file">snapshots/</span>
+│   │   ├── <span class="file">tasks/</span>
+│   │   └── <span class="file">transfer/</span>
+│   ├── <span class="file">snapshot/</span>                          <span class="cmt">snapshot 接口</span>
+│   ├── <span class="file">sys/</span>                               <span class="cmt">系统调用</span>
+│   └── <span class="file">urlbridge/</span>                       <span class="cmt">URL 解析</span>
+├── <span class="file">pkg/</span>                                <span class="cmt">辅助包</span>
+│   ├── <span class="file">api/</span>
+│   ├── <span class="file">archive/</span>                          <span class="cmt">tar/gzip</span>
+│   ├── <span class="file">cgroup/</span>                           <span class="cmt">cgroup 操作</span>
+│   ├── <span class="file">cri/</span>                              <span class="cmt">CRI server (K8s)</span>
+│   │   ├── <span class="file">server/</span>                        <span class="cmt">CRI 服务实现</span>
+│   │   ├── <span class="file">store/</span>                          <span class="cmt">CRI 自有 store</span>
+│   │   ├── <span class="file">opts/</span>                            <span class="cmt">option helpers</span>
+│   │   ├── <span class="file">images/</span>                          <span class="cmt">CRI image 管理</span>
+│   │   └── <span class="file">container/</span>                     <span class="cmt">CRI container 管理</span>
+│   ├── <span class="file">/deprecation/</span>                     <span class="cmt">弃用管理</span>
+│   ├── <span class="file">errdefs/</span>                           <span class="cmt">错误定义</span>
+│   ├── <span class="file">events/</span>                            <span class="cmt">事件格式</span>
+│   ├── <span class="file">filters/</span>                           <span class="cmt">过滤器</span>
+│   ├── <span class="file">gc/</span>                                <span class="cmt">GC 实现</span>
+│   ├── <span class="file">images/</span>                            <span class="cmt">image helpers</span>
+│   ├── <span class="file">kube/</span>                              <span class="cmt">Kubernetes helper</span>
+│   ├── <span class="file">labels/</span>                            <span class="cmt">label helpers</span>
+│   ├── <span class="file">leases/</span>                            <span class="cmt">lease helpers</span>
+│   ├── <span class="file">lock/</span>                               <span class="cmt">锁</span>
+│   ├── <span class="file">mount/</span>                              <span class="cmt">mount helpers</span>
+│   ├── <span class="file">namespaces/</span>                       <span class="cmt">namespace helpers</span>
+│   ├── <span class="file">oci/</span>                                <span class="cmt">OCI spec helpers</span>
+│   ├── <span class="file">os/</span>                                  <span class="cmt">OS helpers</span>
+│   ├── <span class="file">platforms/</span>                          <span class="cmt">平台定义</span>
+│   ├── <span class="file">plugin/</span>                            <span class="cmt">plugin 框架</span>
+│   ├── <span class="file">process/</span>                            <span class="cmt">进程管理</span>
+│   ├── <span class="file">progress/</span>                           <span class="cmt">进度显示</span>
+│   ├── <span class="file">protobuf/</span>                           <span class="cmt">proto helpers</span>
+│   ├── <span class="file">retry/</span>                              <span class="cmt">重试</span>
+│   ├── <span class="file">rootfs/</span>                              <span class="cmt">rootfs 操作</span>
+│   ├── <span class="file">runtime/</span>                            <span class="cmt">runtime helpers</span>
+│   ├── <span class="file">server/</span>                              <span class="cmt">server helpers</span>
+│   ├── <span class="file">services/</span>                            <span class="cmt">service helpers</span>
+│   ├── <span class="file">sha256/</span>                              <span class="cmt">SHA256 helpers</span>
+│   ├── <span class="file">snapshot/</span>                            <span class="cmt">snapshot helpers</span>
+│   ├── <span class="file">streaming/</span>                           <span class="cmt">流（exec/attach）</span>
+│   ├── <span class="file">sys/</span>                                  <span class="cmt">syscall helpers</span>
+│   ├── <span class="file">testutil/</span>                            <span class="cmt">测试工具</span>
+│   ├── <span class="file">timeout/</span>                              <span class="cmt">超时</span>
+│   ├── <span class="file">tracing/</span>                              <span class="cmt">tracing</span>
+│   ├── <span class="file">transfer/</span>                              <span class="cmt">transfer</span>
+│   ├── <span class="file">ttrpcutil/</span>                            <span class="cmt">ttrpc helper</span>
+│   ├── <span class="file">userns/</span>                              <span class="cmt">user namespace</span>
+│   └── <span class="file">util/</span>                                  <span class="cmt">杂项</span>
+├── <span class="file">snapshots/</span>                             <span class="cmt">snapshotter 实现</span>
+│   ├── <span class="file">overlayfs/</span>                          <span class="cmt">默认 overlayfs</span>
+│   ├── <span class="file">native/</span>                              <span class="cmt">完整 copy</span>
+│   ├── <span class="file">btrfs/</span>
+│   ├── <span class="file">zfs/</span>
+│   ├── <span class="file">devmapper/</span>
+│   └── <span class="file">proxy/</span>                              <span class="cmt">代理 snapshotter</span>
+├── <span class="file">test/</span>                                  <span class="cmt">测试</span>
+├── <span class="file">vendor/</span>                                <span class="cmt">依赖</span>
+└── <span class="file">contrib/</span>                               <span class="cmt">附加工具</span>
+    ├── <span class="file">fuzz/</span>                                <span class="cmt">fuzz 测试</span>
+    └── <span class="file">seccasm/</span>                             <span class="cmt">seccomp 工具</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>cmd/containerd/main.go</code> 入口。<br>
+    <code>core/services/server/server.go</code> 服务加载。<br>
+    <code>core/snapshots/overlayfs/overlayfs.go</code> snapshot 实现。<br>
+    <code>core/remotes/docker/resolver.go</code> registry 客户端。<br>
+    <code>pkg/cri/server/</code> CRI 实现（最复杂）。<br>
+    <code>runtime/v2/runc/runtime.go</code> 看 shim 启动。<br>
+    工具：<code>ctr</code>（containerd CLI）源码 <code>cmd/ctr/</code>。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

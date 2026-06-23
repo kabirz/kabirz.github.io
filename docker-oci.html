@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OCI 规范 — 容器生态标准深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>OCI 规范 — 容器生态标准深度解析</h1>
+  <p class="subtitle">Open Container Initiative — Runtime & Image & Distribution</p>
+  <span class="version">v1.1 · Runtime Spec / Image Spec / Distribution Spec</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#runtime">Runtime Spec</a></li>
+    <li><a href="#lifecycle">容器生命周期</a></li>
+    <li><a href="#operations">Operations 操作</a></li>
+    <li><a href="#config">Runtime Config</a></li>
+    <li><a href="#image-spec">Image Spec</a></li>
+    <li><a href="#manifest">Image Manifest</a></li>
+    <li><a href="#distribution">Distribution Spec</a></li>
+    <li><a href="#ecosystem">生态兼容</a></li>
+    <li><a href="#files">参考实现索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>OCI (Open Container Initiative) 是 2015 年由 Docker、CoreOS、Google、IBM 等共同成立的<strong>开放容器标准组织</strong>，Linux 基金会项目。</p>
+
+  <p>OCI 定义三大规范：</p>
+
+  <table>
+    <tr><th>规范</th><th>定义</th><th>主要实现</th></tr>
+    <tr><td><strong>Runtime Spec</strong></td><td>容器如何被运行（生命周期、操作、状态）</td><td>runc, crun, kata, runsc</td></tr>
+    <tr><td><strong>Image Spec</strong></td><td>镜像格式（manifest、layer、config）</td><td>docker, buildah, umoci</td></tr>
+    <tr><td><strong>Distribution Spec</strong></td><td>镜像仓库 API（pull/push）</td><td>docker registry, harbor, quay</td></tr>
+  </table>
+
+  <p>核心目标：</p>
+  <ul>
+    <li><strong>可移植</strong>：任何 OCI 镜像在任何 OCI runtime 上运行</li>
+    <li><strong>标准化</strong>：避免厂商锁定</li>
+    <li><strong>稳定性</strong>：API 向后兼容</li>
+    <li><strong>最小化</strong>：仅规定必要的接口，不限制实现</li>
+  </ul>
+
+  <p>演进时间线：</p>
+<pre><code>2013  Docker 引入容器概念（私有 API）
+2014  CoreOS 推出 rkt（竞争）
+2015  OCI 成立，统一标准
+2016  Runtime Spec v1.0
+2017  Image Spec v1.0
+2018  runc 成为标准 runtime
+2021  Distribution Spec v1.0
+2024  Runtime/Image Spec v1.1
+</code></pre>
+
+  <p>OCI 与 CNCF 的关系：</p>
+<pre><code>┌─────────────────────────────────────────┐
+│   OCI (Linux Foundation)                 │
+│   - 规范制定                              │
+│   - 工具：runtime-spec/image-spec         │
+└────────────────┬────────────────────────┘
+                 │ 规范
+       ┌─────────┴──────────┐
+       │                    │
+┌──────▼──────┐      ┌──────▼──────┐
+│  Runtimes   │      │  Images     │
+│  runc/crun  │      │  Docker,    │
+│  kata/runsc │      │  containerd,│
+│             │      │  podman     │
+└─────────────┘      └─────────────┘
+
+┌─────────────────────────────────────────┐
+│   CNCF (Cloud Native Computing Found.)  │
+│   - 上层生态                              │
+│   - 项目：containerd, Kubernetes          │
+└─────────────────────────────────────────┘
+</code></pre>
+</section>
+
+<section id="runtime" class="toc-link">
+  <h2><span class="num">02</span> Runtime Spec</h2>
+
+  <p>Runtime Spec 定义了<strong>容器运行时的行为</strong>：什么是容器、如何创建、操作、终止。</p>
+
+<pre><code>// runtime-spec/schema/config-schema.json
+// 一个 bundle（容器包）的目录结构：
+./mycontainer/
+├── config.json   ← runtime spec 配置
+└── rootfs/       ← 容器根文件系统
+
+// 创建容器：
+$ runc create mycontainer
+// runc 读取 config.json，按定义创建容器
+</code></pre>
+
+  <p>顶层 spec 结构：</p>
+<pre><code>// config.json 顶层结构（伪 JSON）
+{
+  "ociVersion": "1.1.0",
+  
+  "root": {
+    "path": "rootfs",                  // rootfs 路径（相对 bundle）
+    "readonly": true                    // 是否只读
+  },
+  
+  "hostname": "my-container",          // 主机名
+  
+  "mounts": [                          // 挂载点
+    {
+      "destination": "/proc",
+      "type": "proc",
+      "source": "proc",
+      "options": ["nosuid","noexec","nodev"]
+    },
+    {
+      "destination": "/dev",
+      "type": "tmpfs",
+      "source": "tmpfs",
+      "options": ["nosuid","strictatime","mode=755","size=65536k"]
+    }
+  ],
+  
+  "process": {                          // 初始进程
+    "terminal": true,
+    "user": {
+      "uid": 0,
+      "gid": 0,
+      "additionalGids": [10, 100]
+    },
+    "args": ["/bin/sh"],
+    "env": ["PATH=/usr/local/sbin:/usr/local/bin", "TERM=xterm"],
+    "cwd": "/",
+    "capabilities": {
+      "bounding": ["CAP_AUDIT_WRITE", "CAP_KILL", ...],
+      "effective": [...],
+      "inheritable": [...],
+      "permitted": [...],
+      "ambient": []
+    },
+    "rlimits": [
+      {"type": "RLIMIT_NOFILE", "hard": 1024, "soft": 1024}
+    ],
+    "noNewPrivileges": true,
+    "apparmorProfile": "acme_secure_profile",
+    "selinuxLabel": "system_u:system_r:svirt_lxc_net_t:s0:c123,c456"
+  },
+  
+  "linux": {                            // Linux 特定
+    "uidMappings": [
+      {"containerID": 0, "hostID": 1000, "size": 1}
+    ],
+    "gidMappings": [
+      {"containerID": 0, "hostID": 1000, "size": 1}
+    ],
+    "sysctl": {
+      "net.ipv4.ip_forward": "1"
+    },
+    "resources": {
+      "memory": {"limit": 536870912, "swap": 536870912},
+      "cpu": {"shares": 1024, "quota": 100000, "period": 100000},
+      "devices": [{"allow": false, "access": "rwm"}]
+    },
+    "namespaces": [                     // 各 namespace
+      {"type": "pid"},
+      {"type": "network"},
+      {"type": "ipc"},
+      {"type": "uts"},
+      {"type": "mount"}
+    ],
+    "cgroupsPath": "myapp.slice",
+    "seccomp": {
+      "defaultAction": "SCMP_ACT_ERRNO",
+      "architectures": ["SCMP_ARCH_X86_64"],
+      "syscalls": [
+        {"names": ["accept", "bind"], "action": "SCMP_ACT_ALLOW"}
+      ]
+    }
+  },
+  
+  "annotations": {
+    "org.opencontainers.image.author": "DevOps"
+  }
+}
+</code></pre>
+</section>
+
+<section id="lifecycle" class="toc-link">
+  <h2><span class="num">03</span> 容器生命周期</h2>
+
+  <p>Runtime Spec 定义容器的<strong>状态</strong>和<strong>状态转换</strong>：</p>
+
+<pre><code>// 容器状态：
+//   creating     - 创建中（spec 已解析，namespace 还没切换）
+//   created      - 已创建（用户进程未启动）
+//   running      - 运行中
+//   stopped      - 已停止
+
+// 状态机：
+                     ┌──────────┐
+                     │ creating │ ← create
+                     └────┬─────┘
+                          │
+                     ┌────▼─────┐
+        ┌─ kill ─────│  created │
+        │            └────┬─────┘
+        │                 │ start
+        │            ┌────▼─────┐
+        │            │ running  │
+        │            └────┬─────┘
+        │                 │ exit
+        │            ┌────▼─────┐
+        └───────────►│ stopped  │
+                     └──────────┘
+
+// state.json 文件（runtime 维护）：
+{
+  "ociVersion": "1.1.0",
+  "id": "my-container-id",
+  "pid": 12345,           // 容器进程 PID（在宿主 ns 中）
+  "status": "running",
+  "bundle": "/path/to/bundle",
+  "annotations": {...}
+}
+
+// runc 把 state 存在 /run/runc/&lt;id&gt;/state.json
+</code></pre>
+</section>
+
+<section id="operations" class="toc-link">
+  <h2><span class="num">04</span> Operations 操作</h2>
+
+  <p>Runtime Spec 规定了 runtime CLI 必须支持的操作：</p>
+
+<pre><code>// CLI 命令格式：runtime &lt;command&gt; &lt;id&gt;
+
+// 1. create — 创建容器（不启动）
+runc create my-container
+
+// 2. start — 启动已创建的容器（执行 process）
+runc start my-container
+
+// 3. state — 查询容器状态
+runc state my-container
+// → 输出 state.json 内容
+
+// 4. kill — 发送信号
+runc kill my-container KILL
+
+// 5. delete — 删除容器（仅 stopped 状态）
+runc delete my-container
+
+// 6. exec — 在运行中的容器执行新进程
+runc exec my-container /bin/bash
+//   读 process.json，启动新进程
+//   process.json 类似 config.json 的 process 部分
+
+// 7. run — 便捷命令（create + start 等价）
+runc run my-container
+
+// 8. list — 列出所有容器
+runc list
+// → ID, PID, STATUS, BUNDLE, CREATED, OWNER
+
+// 9. pause / resume — 暂停/恢复（cgroup freezer）
+runc pause my-container
+runc resume my-container
+
+// 10. ps — 列出容器内进程
+runc ps my-container
+
+// 11. spec — 生成默认 spec
+runc spec
+// → 输出默认 config.json
+</code></pre>
+
+  <p>Hooks（钩子）：runtime 在特定时刻执行用户脚本</p>
+<pre><code>// Runtime Spec 定义三种 hooks：
+
+// 1. Prestart（已废弃，被三个钩子替代）
+// 2. CreateRuntime    - create 之后、start 之前（在容器 ns 中）
+// 3. CreateContainer  - 容器 ns 已设置、process 未启动
+// 4. StartContainer   - 容器启动前最后一刻
+
+// config.json:
+{
+  "hooks": {
+    "createRuntime": [
+      {
+        "path": "/usr/bin/my-hook",
+        "args": ["my-hook", "--arg1=value"],
+        "env": ["HOOK_ENV=value"],
+        "timeout": 5
+      }
+    ],
+    "startContainer": [...]
+  }
+}
+
+// 容器 init 进程 stdin 收到 spec JSON
+</code></pre>
+</section>
+
+<section id="config" class="toc-link">
+  <h2><span class="num">05</span> Runtime Config</h2>
+
+  <p>config.json 的关键字段详解：</p>
+
+<pre><code>// Linux 特定扩展（linux 字段）：
+
+"linux": {
+  // UID/GID 映射（user namespace）
+  "uidMappings": [
+    {"containerID": 0, "hostID": 100000, "size": 65536}
+  ],
+  "gidMappings": [
+    {"containerID": 0, "hostID": 100000, "size": 65536}
+  ],
+  
+  // sysctl 配置
+  "sysctl": {
+    "net.ipv4.ip_forward": "1",
+    "kernel.shm_rmid_forced": "1"
+  },
+  
+  // 资源限制（cgroup v2）
+  "resources": {
+    "memory": {
+      "limit": 536870912,        // 字节
+      "reservation": 268435456,
+      "swap": 536870912,
+      "swappiness": 60,
+      "disableOOMKiller": false
+    },
+    "cpu": {
+      "shares": 1024,
+      "quota": 100000,            // us（100ms）
+      "period": 100000,
+      "realtimeRuntime": 950000,
+      "realtimePeriod": 1000000,
+      "cpus": "0-3",               // 绑定 CPU
+      "mems": "0"                  // NUMA 节点
+    },
+    "devices": [
+      {"allow": false, "access": "rwm"},
+      {"allow": true, "type": "c", "major": 1, "minor": 5, "access": "rw"}  // /dev/zero
+    ],
+    "blockIO": {
+      "weight": 500,
+      "weightDevice": [...],
+      "throttleReadBpsDevice": [...],
+      "throttleWriteBpsDevice": [...]
+    },
+    "pids": {"limit": 1000},
+    "network": {
+      "classID": 0x100001,
+      "priorities": [...]
+    }
+  },
+  
+  // cgroup 路径
+  "cgroupsPath": "/myapp/mycontainer",
+  
+  // namespaces
+  "namespaces": [
+    {"type": "pid"},
+    {"type": "network", "path": "/proc/123/ns/net"},
+    {"type": "mount", "path": "/proc/123/ns/mnt"}
+  ],
+  
+  // 设备节点（除了默认的）
+  "devices": [
+    {
+      "path": "/dev/sda1",
+      "type": "b",
+      "major": 8,
+      "minor": 1,
+      "fileMode": 432,
+      "uid": 0,
+      "gid": 0
+    }
+  ],
+  
+  // seccomp BPF
+  "seccomp": {
+    "defaultAction": "SCMP_ACT_ERRNO",
+    "defaultErrnoRet": 1,
+    "architectures": ["SCMP_ARCH_X86_64", "SCMP_ARCH_X86"],
+    "syscalls": [
+      {
+        "names": ["accept", "accept4", "bind", ...],
+        "action": "SCMP_ACT_ALLOW",
+        "args": [],
+        "comment": "common syscalls",
+        "includes": {},
+        "excludes": {},
+        "errnoRet": 1
+      },
+      {
+        "names": ["mount"],
+        "action": "SCMP_ACT_ERRNO",
+        "args": []
+      }
+    ]
+  },
+  
+  // rootfs readonly 路径屏蔽
+  "rootfsPropagation": "slave",
+  
+  // maskedPaths: 这些路径 mount /dev/null
+  "maskedPaths": [
+    "/proc/acpi",
+    "/proc/asound",
+    "/proc/kcore"
+  ],
+  
+  // readonlyPaths: 这些路径 readonly bind mount
+  "readonlyPaths": [
+    "/proc/bus",
+    "/proc/fs",
+    "/proc/irq",
+    "/proc/sys",
+    "/proc/sysrq-trigger"
+  ],
+  
+  // mount label
+  "mountLabel": "system_u:object_r:svirt_sandbox_file_t:s0:c715,c811"
+}
+</code></pre>
+</section>
+
+<section id="image-spec" class="toc-link">
+  <h2><span class="num">06</span> Image Spec</h2>
+
+  <p>OCI Image Spec 定义<strong>镜像格式</strong>。一个镜像由 manifest + config + layers 组成：</p>
+
+<pre><code>// 镜像文件组成：
+// 1. Manifest         — 入口清单
+// 2. Config           — 镜像配置（环境、cmd、entrypoint、layer 顺序）
+// 3. Layer            — 文件系统层（tar+gzip）
+// 4. Index            — 多平台镜像清单
+
+// 各文件用 SHA256 作为内容寻址
+
+// ┌─────────────────┐
+// │     Index       │  ←─ docker pull 时先拿这个
+// └────────┬────────┘
+//          │
+//   ┌──────┴──────┐
+//   │             │
+// ┌─▼────────┐ ┌──▼─────────┐
+// │ Manifest │ │ Manifest   │  ←─ 不同平台
+// │ (amd64)  │ │ (arm64)    │
+// └────┬─────┘ └────────────┘
+//      │
+// ┌────▼──────────────────┐
+// │ Config (JSON)          │  ←─ 配置、env、cmd
+// │ SHA:abc123...          │
+// └────────────────────────┘
+//      │
+// ┌────▼──────────────────┐
+// │ Layer 1 (tar.gz)       │  ←─ 实际文件
+// │ SHA:def456...          │
+// ├────────────────────────┤
+// │ Layer 2                │
+// │ SHA:ghi789...          │
+// ├────────────────────────┤
+// │ Layer N                │
+// └────────────────────────┘
+
+// 文件名规则（registry 存储）：
+// /var/lib/registry/docker/registry/v2/blobs/sha256/ab/abc123.../data
+</code></pre>
+
+  <p>Image Manifest 示例：</p>
+<pre><code>// manifest.json
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "config": {
+    "mediaType": "application/vnd.oci.image.config.v1+json",
+    "digest": "sha256:b6cef1...,",
+    "size": 7023
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:9759...,",
+      "size": 31234898
+    },
+    {
+      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+      "digest": "sha256:abc12...,",
+      "size": 4567
+    }
+  ],
+  "annotations": {
+    "org.opencontainers.image.created": "2024-01-01T00:00:00Z"
+  }
+}
+</code></pre>
+
+  <p>Image Config 示例：</p>
+<pre><code>// config JSON 内容：
+{
+  "created": "2024-01-01T00:00:00Z",
+  "author": "Maintainer",
+  "architecture": "amd64",
+  "os": "linux",
+  "config": {
+    "User": "app",
+    "ExposedPorts": {"8080/tcp": {}},
+    "Env": ["PATH=/usr/bin", "LANG=C.UTF-8"],
+    "Entrypoint": ["/docker-entrypoint.sh"],
+    "Cmd": ["nginx", "-g", "daemon off;"],
+    "Volumes": {"/var/cache/nginx": {}},
+    "WorkingDir": "/usr/share/nginx",
+    "Labels": {"maintainer": "NGINX"}
+  },
+  "rootfs": {
+    "type": "layers",
+    "diff_ids": [
+      "sha256:...",       // 解压后的 layer SHA（去 gzip）
+      "sha256:..."
+    ]
+  },
+  "history": [
+    {"created": "...", "created_by": "ADD file:... "},
+    {"created": "...", "created_by": "CMD [\"nginx\"]"},
+    {"created": "...", "created_by": "RUN apt-get update"}
+  ]
+}
+</code></pre>
+</section>
+
+<section id="manifest" class="toc-link">
+  <h2><span class="num">07</span> Image Manifest</h2>
+
+  <p>多平台镜像通过 Image Index 支持：</p>
+
+<pre><code>// Image Index (类比 Docker Manifest List)
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:amd64-manifest-hash",
+      "size": 1234,
+      "platform": {
+        "architecture": "amd64",
+        "os": "linux"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:arm64-manifest-hash",
+      "size": 1234,
+      "platform": {
+        "architecture": "arm64",
+        "os": "linux",
+        "variant": "v8"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:windows-manifest-hash",
+      "platform": {
+        "architecture": "amd64",
+        "os": "windows"
+      }
+    }
+  ],
+  "annotations": {
+    "org.opencontainers.image.created": "2024-..."
+  }
+}
+
+// docker pull nginx 默认按当前架构选择
+// docker pull --platform=linux/arm64 nginx 强制选 arm64
+</code></pre>
+
+  <p>Layer 格式：</p>
+<pre><code>// 1. 标准格式：tar.gz
+//    mediaType: application/vnd.oci.image.layer.v1.tar+gzip
+
+// 2. 无压缩：tar
+//    mediaType: application/vnd.oci.image.layer.v1.tar
+
+// 3. zstd 压缩（v1.1+）：
+//    mediaType: application/vnd.oci.image.layer.v1.tar+zstd
+
+// 4. 非分层（替代方案）：
+//    mediaType: application/vnd.oci.image.layer.nondistributable.v1.tar+gzip
+//    用于 vendor-specific binary（如 Windows sys files）
+
+// 每个 layer 是一个 tarball：
+//   - 通常包含文件系统的增量
+//   - 删除的文件用 .wh.* 标记（参考 OverlayFS）
+//   - 必须保持顺序（按 history 顺序）
+</code></pre>
+</section>
+
+<section id="distribution" class="toc-link">
+  <h2><span class="num">08</span> Distribution Spec</h2>
+
+  <p>Distribution Spec 定义镜像仓库的<strong>HTTP API</strong>：</p>
+
+<pre><code>// 基础 URL: https://registry/v2/
+
+// 1. 版本检查
+GET /v2/
+// 200 OK 表示支持 v2 API
+
+// 2. 拉取 manifest
+GET /v2/&lt;name&gt;/manifests/&lt;reference&gt;
+// name: 镜像名（如 library/nginx）
+// reference: tag 或 digest（sha256:abc...）
+// Accept: application/vnd.oci.image.manifest.v1+json
+//        application/vnd.oci.image.index.v1+json
+//        application/vnd.docker.distribution.manifest.v2+json
+//        ...
+
+// 3. 拉取 blob（config / layer）
+GET /v2/&lt;name&gt;/blobs/&lt;digest&gt;
+
+// 4. 上传 blob（两步）
+// 4.1 启动上传
+POST /v2/&lt;name&gt;/blobs/uploads/
+// 返回 Location: /v2/.../uploads/uuid
+//
+// 4.2 PUT 数据
+PUT &lt;location&gt;&amp;digest=sha256:...
+// Content-Type: application/octet-stream
+// body: blob 数据
+
+// 5. 推送 manifest
+PUT /v2/&lt;name&gt;/manifests/&lt;reference&gt;
+
+// 6. 列出 tag
+GET /v2/&lt;name&gt;/tags/list
+
+// 7. 删除 manifest（如果允许）
+DELETE /v2/&lt;name&gt;/manifests/&lt;reference&gt;
+
+// 8. catalog
+GET /v2/_catalog
+</code></pre>
+
+  <p>认证流程：</p>
+<pre><code>// 1. 客户端请求
+GET /v2/library/nginx/manifests/latest
+
+// 2. 服务器返回 401 + WWW-Authenticate header
+401 Unauthorized
+WWW-Authenticate: Bearer realm="https://auth.docker.io/token",
+                  service="registry.docker.io",
+                  scope="repository:library/nginx:pull"
+
+// 3. 客户端请求 token
+GET https://auth.docker.io/token?service=...&amp;scope=...
+// 返回:
+{"token": "JWT...", "expires_in": 300}
+
+// 4. 重试带 token
+GET /v2/.../manifests/...
+Authorization: Bearer &lt;token&gt;
+</code></pre>
+
+  <p>内容寻址：</p>
+<pre><code>// 所有数据用 SHA256 摘要标识
+// manifest digest = sha256(manifest 内容)
+// blob digest = sha256(blob 内容)
+// 引用通过 digest 完全可重现
+
+// 验证完整性：
+// docker trust sign / verify（使用 cosign 等工具）
+
+// 镜像签名：
+// cosign sign &lt;image&gt;
+// 生成 sigs/ 目录的特殊 manifest
+</code></pre>
+</section>
+
+<section id="ecosystem" class="toc-link">
+  <h2><span class="num">09</span> 生态兼容</h2>
+
+  <p>OCI Runtime 实现：</p>
+  <table>
+    <tr><th>Runtime</th><th>隔离方式</th><th>特点</th></tr>
+    <tr><td><code>runc</code></td><td>Linux namespaces + cgroups</td><td>OCI 标准 reference 实现</td></tr>
+    <tr><td><code>crun</code></td><td>同上</td><td>C 语言，更小更快</td></tr>
+    <tr><td><code>kata-runtime</code></td><td>QEMU/KVM 虚拟机</td><td>VM 级别隔离</td></tr>
+    <tr><td><code>runsc</code></td><td>gVisor 用户态内核</td><td>系统调用拦截</td></tr>
+    <tr><td><code>youki</code></td><td>Linux containers</td><td>Rust 实现</td></tr>
+    <tr><td><code>nvidia-container-runtime</code></td><td>runc + hook</td><td>GPU 支持</td></tr>
+  </table>
+
+  <p>OCI Image 工具：</p>
+  <table>
+    <tr><th>工具</th><th>用途</th></tr>
+    <tr><td><code>docker build</code> + <code>buildkit</code></td><td>构建 OCI 镜像</td></tr>
+    <tr><td><code>buildah</code></td><td>无 daemon 构建</td></tr>
+    <tr><td><code>podman build</code></td><td>兼容 Docker CLI</td></tr>
+    <tr><td><code>umoci</code></td><td>镜像操作工具</td></tr>
+    <tr><td><code>skopeo</code></td><td>镜像复制 / 转换</td></tr>
+    <tr><td><code>crane</code></td><td>registry 客户端</td></tr>
+    <tr><td><code>oras</code></td><td>OCI Artifacts（非镜像工件）</td></tr>
+  </table>
+
+  <p>OCI Distribution 实现：</p>
+  <table>
+    <tr><th>项目</th><th>特点</th></tr>
+    <tr><td><code>registry</code> (distribution)</td><td>官方 reference 实现</td></tr>
+    <tr><td><code>harbor</code></td><td>企业级，支持 RBAC、扫描</td></tr>
+    <tr><td><code>quay</code></td><td>Red Hat 商业产品</td></tr>
+    <tr><td><code>ACR / ECR / GCR</code></td><td>云厂商托管</td></tr>
+    <tr><td><code>zot</code></td><td>轻量级，无外部依赖</td></tr>
+  </table>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">10</span> 参考实现索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+oci/specs/  (github.com/opencontainers/specs)
+├── <span class="file">runtime-spec/</span>
+│   ├── <span class="file">schema/config-schema.json</span>      <span class="cmt">Runtime Spec JSON Schema</span>
+│   ├── <span class="file">schema/state-schema.json</span>
+│   ├── <span class="file">schema/defs.json</span>                <span class="cmt">通用定义（mount、user 等）</span>
+│   ├── <span class="file">schema/defs-linux.json</span>          <span class="cmt">Linux 特定（namespace、cgroup）</span>
+│   ├── <span class="file">config.md</span>                       <span class="cmt">配置文档</span>
+│   ├── <span class="file">runtime.md</span>                      <span class="cmt">Runtime 行为定义</span>
+│   ├── <span class="file">lifecycle.md</span>                    <span class="cmt">生命周期与状态</span>
+│   ├── <span class="file">operations.md</span>                   <span class="cmt">CLI 命令</span>
+│   └── <span class="file">hooks.md</span>                         <span class="cmt">Hook 机制</span>
+└── <span class="file">image-spec/</span>
+    ├── <span class="file">schema/</span>
+    │   ├── <span class="file">image-manifest-schema.json</span>
+    │   ├── <span class="file">image-index-schema.json</span>
+    │   ├── <span class="file">image-config-schema.json</span>
+    │   └── <span class="file">descriptor.json</span>
+    ├── <span class="file">manifest.md</span>
+    ├── <span class="file">media-types.md</span>
+    ├── <span class="file">layer.md</span>
+    └── <span class="file">annotations.md</span>
+
+runc/  (github.com/opencontainers/runc)
+├── <span class="file">libcontainer/</span>
+│   ├── <span class="file">specs/</span>                          <span class="cmt">Spec 类型定义</span>
+│   ├── <span class="file">namespace/</span>                      <span class="cmt">Namespace 操作</span>
+│   ├── <span class="file">cgroups/</span>                        <span class="cmt">Cgroup 操作</span>
+│   ├── <span class="file">system/</span>                         <span class="cmt">系统调用封装</span>
+│   ├── <span class="file">user/</span>                           <span class="cmt">User/ID 映射</span>
+│   ├── <span class="file">rootfs_linux.go</span>                 <span class="cmt">Rootfs 准备</span>
+│   ├── <span class="file">process_linux.go</span>                <span class="cmt">进程启动</span>
+│   ├── <span class="file">container_linux.go</span>             <span class="cmt">容器主对象</span>
+│   ├── <span class="file">specconv/spec_linux.go</span>          <span class="cmt">OCI spec → 内部结构转换</span>
+│   └── <span class="file">nsenter/nsenter.go</span>              <span class="cmt">Enter namespace 工具</span>
+├── <span class="file">main.go</span>                             <span class="cmt">CLI 入口</span>
+└── <span class="file">man/</span>                                <span class="cmt">man pages</span>
+
+distribution/  (github.com/distribution/distribution)
+├── <span class="file">registry/</span>                           <span class="cmt">Registry HTTP 服务</span>
+├── <span class="file">client/</span>                             <span class="cmt">Go 客户端库</span>
+└── <span class="file">storage/</span>                            <span class="cmt">Blob/Manifest 存储</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    官方文档：<code>github.com/opencontainers/runtime-spec</code> 的 README 与各 *.md 文件。<br>
+    <code>image-spec/media-types.md</code> 理解所有 mediaType。<br>
+    <code>runc/libcontainer/specconv</code> 看 spec → 系统调用映射。<br>
+    <code>runc/libcontainer/container_linux.go</code> 看完整容器启动。<br>
+    实战：<code>crane</code>、<code>skopeo</code>、<code>umoci</code> 的源码（小而清晰）。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

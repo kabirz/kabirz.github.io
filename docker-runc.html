@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>runc 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>runc 深度解析</h1>
+  <p class="subtitle">OCI Runtime 标准参考实现 — 从 spec 到容器进程</p>
+  <span class="version">runc 1.1 · opencontainers/runc</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#architecture">架构总览</a></li>
+    <li><a href="#create">create 流程</a></li>
+    <li><a href="#start">start 流程</a></li>
+    <li><a href="#init-process">init 进程</a></li>
+    <li><a href="#cgroup">cgroup 配置</a></li>
+    <li><a href="#rootfs">rootfs 准备</a></li>
+    <li><a href="#kill">kill / signal</a></li>
+    <li><a href="#exec">exec 实现</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>runc 是 OCI Runtime Spec 的<strong>参考实现</strong>。它读取 OCI config.json，把容器进程跑起来。是 Docker / containerd / Kubernetes 等所有上层系统的最底层依赖。</p>
+
+  <p>历史：</p>
+  <ul>
+    <li>2013 — Docker 内部的 libcontainer</li>
+    <li>2015 — 捐给 OCI，命名 runc</li>
+    <li>2016 — Runtime Spec v1.0 兼容</li>
+    <li>现在 — 业界事实标准，月下载超 100 亿次</li>
+  </ul>
+
+  <p>runc 是<strong>命令行工具</strong>，不是 daemon：</p>
+<pre><code># 在 bundle 目录（包含 config.json + rootfs/）
+$ runc create my-container
+$ runc start my-container
+$ runc list
+ID               PID         STATUS      BUNDLE                         CREATED                      OWNER
+my-container     12345       created     /path/to/bundle                2024-...                     root
+
+$ runc kill my-container KILL
+$ runc delete my-container
+</code></pre>
+
+  <p>设计原则：</p>
+  <ul>
+    <li><strong>一次性命令</strong>：每次 runc 调用完成后立即退出，不常驻</li>
+    <li><strong>最小依赖</strong>：仅依赖 Linux 内核特性，无第三方库</li>
+    <li><strong>OCI 标准</strong>：严格遵循 spec，不增加额外功能</li>
+    <li><strong>无状态</strong>：状态持久化在文件系统，runc 重新读取</li>
+  </ul>
+
+  <p>同类替代：</p>
+  <table>
+    <tr><th>Runtime</th><th>实现</th><th>特点</th></tr>
+    <tr><td>runc</td><td>Go</td><td>OCI reference</td></tr>
+    <tr><td>crun</td><td>C</td><td>更小、更快、低依赖</td></tr>
+    <tr><td>runsc</td><td>Go + gVisor</td><td>系统调用拦截</td></tr>
+    <tr><td>kata-runtime</td><td>Go + QEMU</td><td>VM 隔离</td></tr>
+    <tr><td>youki</td><td>Rust</td><td>现代 Rust 实现</td></tr>
+  </table>
+</section>
+
+<section id="architecture" class="toc-link">
+  <h2><span class="num">02</span> 架构总览</h2>
+
+<pre><code>┌─────────────────────────────────────────┐
+│  runc CLI (cmd/runc/main.go)            │
+│  runc create | start | kill | exec ... │
+└────────────────┬────────────────────────┘
+                 │
+┌────────────────▼────────────────────────┐
+│  libcontainer (libcontainer/)           │
+│  - container_linux.go   容器主对象       │
+│  - specconv/            spec 转换        │
+│  - process_linux.go     进程启动          │
+│  - rootfs_linux.go      rootfs 准备      │
+│  - cgroups/             cgroup 操作      │
+│  - namespaces/          namespace 操作   │
+│  - system/linux/        syscall 封装     │
+│  - user/                user ns          │
+│  - seccomp/             seccomp 配置     │
+│  - apparmor/            AppArmor         │
+│  - utils/               辅助             │
+└────────────────┬────────────────────────┘
+                 │
+┌────────────────▼────────────────────────┐
+│  Linux Kernel                           │
+│  - namespaces + cgroups                 │
+│  - seccomp BPF                          │
+│  - capabilities                         │
+│  - overlayfs, etc.                      │
+└─────────────────────────────────────────┘
+</code></pre>
+
+  <p>runc 的进程模型（关键的"两阶段"）：</p>
+<pre><code>// 启动容器涉及三个进程：
+
+// 1. runc 主进程（用户调用）
+$ runc create my-container
+//    - fork 子进程进入新 namespace
+//    - 子进程做 rootfs 准备
+//    - 完成后立即退出
+
+// 2. runc init 进程（在容器 namespace 内）
+//    - /proc/self/exe with "init" 参数
+//    - 完成 namespace 设置
+//    - pivot_root
+//    - 等待 runc 主进程的指令
+//    - exec ENTRYPOINT
+
+// 3. 容器进程（用户期望的）
+//    - 实际运行的进程（如 nginx）
+
+// 关键：runc init 通过 re-exec 自己（/proc/self/exe）
+// 实现"在新 namespace 中执行"的效果
+</code></pre>
+</section>
+
+<section id="create" class="toc-link">
+  <h2><span class="num">03</span> create 流程</h2>
+
+<pre><code>// runc create my-container
+
+// 1. CLI 解析
+// cmd/runc/create.go
+func createCommand(context *cli.Context) error {
+    spec, _ := setupSpec(context)
+    container, _ := loadContainer(context, id)
+    return container.Start(context)
+}
+
+// 2. 加载 spec
+// libcontainer/specconv/spec_linux.go
+func CreateLibcontainerConfig(opts CreateOpts) (*configs.Config, error) {
+    c := &configs.Config{
+        Rootfs:       opts.RootlessConfig.Rootfs,
+        Readonlyfs:   spec.Root.Readonly,
+        Hostname:     spec.Hostname,
+        Capabilities: convertCapabilities(spec.Process.Capabilities),
+        Mounts:       convertMounts(spec.Mounts),
+        Namespaces:   convertNamespaces(spec.Linux.Namespaces),
+        Cgroups:      convertCgroups(spec.Linux.Resources),
+        Seccomp:      convertSeccomp(spec.Linux.Seccomp),
+        // ... 大量字段转换 ...
+    }
+    return c, nil
+}
+
+// 3. 创建 container 对象
+// libcontainer/container_linux.go
+func (c *linuxContainer) Start(process *Process) error {
+    return c.start(process, ...)
+}
+
+func (c *linuxContainer) start(process *Process, isInit bool) error {
+    // 关键：调用 runc init（在新 namespace 中）
+    parent, err := c.newParentProcess(process, isInit)
+    // parent 是个 exec.Cmd，目标是 /proc/self/exe
+    
+    if err := parent.start(); err != nil {
+        return err
+    }
+    
+    // 等待 init 完成
+    c.created = time.Now()
+    c.state = &createdState{c: c}
+    return nil
+}
+
+// 4. newParentProcess
+// libcontainer/process_linux.go
+func (c *linuxContainer) newParentProcess(p *Process, isInit bool) (parent, error) {
+    // 1. 准备 pipe 通信
+    parentPipe, childPipe, _ := os.Pipe()
+    
+    // 2. 构造 cmd
+    cmd := exec.Command("/proc/self/exe", "init")
+    cmd.Args[0] = "runc"
+    cmd.ExtraFiles = []*os.File{childPipe}
+    cmd.Env = append(cmd.Env, "_LIBCONTAINER_INITPIPE=3")
+    
+    // 3. 设置 clone flags（新 namespace）
+    cmd.SysProcAttr = &syscall.SysProcAttr{
+        Cloneflags: getCloneFlags(c.config.Namespaces),
+        Setpgid:    true,
+    }
+    
+    // 4. 配置 IO
+    cmd.Stdin = p.Stdin
+    cmd.Stdout = p.Stdout
+    cmd.Stderr = p.Stderr
+    
+    return p, nil
+}
+
+// 5. clone flags 转换
+func getCloneFlags(namespaces []configs.Namespace) uintptr {
+    var flag uintptr
+    for _, ns := range namespaces {
+        switch ns.Type {
+        case configs.PID:
+            flag |= syscall.CLONE_NEWPID
+        case configs.NETWORK:
+            flag |= syscall.CLONE_NEWNET
+        case configs.MOUNT:
+            flag |= syscall.CLONE_NEWNS
+        case configs.NEWUSER:
+            flag |= syscall.CLONE_NEWUSER
+        case configs.IPC:
+            flag |= syscall.CLONE_NEWIPC
+        case configs.UTS:
+            flag |= syscall.CLONE_NEWUTS
+        case configs.CGROUP:
+            flag |= syscall.CLONE_NEWCGROUP
+        case configs.TIME:
+            flag |= syscall.CLONE_NEWTIME
+        }
+    }
+    return flag
+}
+</code></pre>
+</section>
+
+<section id="start" class="toc-link">
+  <h2><span class="num">04</span> start 流程</h2>
+
+<pre><code>// runc start my-container
+
+// libcontainer/container_linux.go
+func (c *linuxContainer) exec() error {
+    // 1. 通过 socket 通知 runc init 进程继续
+    // 2. init 进程这时已经在 created 状态等待
+    // 3. 收到 start 信号后调用 execve(ENTRYPOINT)
+    
+    return nil
+}
+
+// runc init 进程的代码：
+// libcontainer/init_linux.go
+func init() {
+    if len(os.Args) &gt; 1 &amp;&amp; os.Args[1] == "init" {
+        r := reexec.Init()
+        os.Exit(r)
+    }
+}
+
+// 详细的 init 函数：
+// libcontainer/standard_init_linux.go
+func (l *linuxStandardInit) Init() error {
+    // 1. 设置 cgroup
+    if err := setupCgroup(l.config); err != nil {
+        return err
+    }
+    
+    // 2. pivot_root（切换根目录）
+    if err := prepareRootfs(l.pipe, l.config); err != nil {
+        return err
+    }
+    
+    // 3. setup 各 namespace
+    if err := l.setupNetwork(); err != nil {
+        return err
+    }
+    if err := l.setupRoute(); err != nil {
+        return err
+    }
+    
+    // 4. 设置 hostname
+    if err := setHostname(l.config.Hostname); err != nil {
+        return err
+    }
+    
+    // 5. 应用 seccomp 规则
+    if l.config.Seccomp != nil {
+        if err := seccomp.InitSeccomp(l.config.Seccomp); err != nil {
+            return err
+        }
+    }
+    
+    // 6. 应用 AppArmor/SELinux
+    if err := apparmor.ApplyProfile(l.config.AppArmorProfile); err != nil {
+        return err
+    }
+    
+    // 7. 设置 capabilities
+    if err := capabilities.Set(nil, l.config.Capabilities); err != nil {
+        return err
+    }
+    
+    // 8. 设置 rlimits、ulimit
+    if err := rlimit.SetRlimit(l.config.Rlimits); err != nil {
+        return err
+    }
+    
+    // 9. 通知 runc 主进程：设置完成
+    // 等待 start 信号
+    
+    // 10. execve 用户进程
+    if err := syscall.Exec(l.config.Args[0], l.config.Args, os.Environ()); err != nil {
+        return err
+    }
+    
+    return nil
+}
+</code></pre>
+</section>
+
+<section id="init-process" class="toc-link">
+  <h2><span class="num">05</span> init 进程</h2>
+
+  <p>runc init 是关键的<strong>过渡进程</strong>：</p>
+
+<pre><code>// runc init 必须做的事：
+//   1. 在新 namespace 中
+//   2. 设置 cgroup
+//   3. 准备 rootfs（mount）
+//   4. pivot_root 切换 rootfs
+//   5. 配置网络
+//   6. 应用安全策略
+//   7. execve 用户进程
+
+// 为什么用 /proc/self/exe re-exec？
+//   - 直接 execve("/usr/bin/runc", "init") 也可以
+//   - 但 runc binary 路径可能在 rootfs 之外
+//   - 容器内可能没有 runc 二进制
+//   - /proc/self/exe 是内核提供的引用，总是有效
+
+// 不同 init 类型：
+// libcontainer/factory_linux.go
+type InitType int
+const (
+    InitStandard InitType = iota  // 标准容器
+    InitSetns                      // 加入已存在 ns (exec)
+)
+
+// standard_init_linux.go - 新容器
+// setns_init_linux.go - 已有容器中 exec
+
+// Init 协议：
+//   runc 主进程 &lt;--&gt; runc init 通过 socketpair 通信
+//   
+//   1. runc 启动 init (clone with CLONE_NEW*)
+//   2. init 在新 ns 中执行 setupCgroup、mount、pivot_root
+//   3. init 通过 socket 发送 "ready" 到 runc 主进程
+//   4. runc 主进程通知 "start"
+//   5. init 调用 execve(ENTRYPOINT)
+//   6. ENTRYPOINT 取代 init，进程 ID 不变
+</code></pre>
+
+  <p>pivot_root 关键操作：</p>
+<pre><code>// libcontainer/rootfs_linux.go
+func pivotRoot(rootfs string, pivotBaseDir string) error {
+    // pivot_root 系统调用：
+    // 把当前 root 移到 put_old
+    // 把 new_root 设为新的 /
+    
+    // 步骤：
+    // 1. mount("", "/", "", MS_SLAVE|MS_REC, "")
+    //    让 / 不再传播 mount 事件
+    // 2. mount(rootfs, rootfs, "bind", MS_BIND|MS_REC, "")
+    //    bind mount rootfs 到自己
+    // 3. mkdir(rootfs + pivotBaseDir)
+    // 4. syscall.PivotRoot(rootfs, rootfs + pivotBaseDir)
+    //    - new_root = rootfs
+    //    - put_old  = rootfs/oldroot
+    // 5. chdir("/")
+    // 6. umount2("/oldroot", MNT_DETACH)
+    // 7. rmdir("/oldroot")
+    
+    return nil
+}
+
+// pivot_root vs chroot：
+//   pivot_root：
+//     - 整个 root 切换
+//     - mount ns 也跟着变
+//     - 旧 root 可被 umount
+//     - 难以逃逸（更安全）
+//   
+//   chroot：
+//     - 只改变路径解析起点
+//     - 旧 root 仍可见（通过 fd）
+//     - 容易被逃逸
+//     - 不适合容器
+</code></pre>
+</section>
+
+<section id="cgroup" class="toc-link">
+  <h2><span class="num">06</span> cgroup 配置</h2>
+
+<pre><code>// libcontainer/cgroups/fs2/fs2.go (cgroup v2)
+// libcontainer/cgroups/fs/...   (cgroup v1)
+
+// cgroup 路径：
+//   spec.Linux.CgroupsPath = "myapp/container-1"
+//   v2: /sys/fs/cgroup/myapp/container-1
+//   v1: 每个子系统独立
+
+// runc 创建 cgroup：
+func (m *Manager) Apply(pid int) error {
+    // 1. 创建 cgroup 目录
+    if err := os.MkdirAll(m.Path, 0755); err != nil {
+        return err
+    }
+    
+    // 2. 写入 cgroup.procs
+    if err := os.WriteFile(
+        filepath.Join(m.Path, "cgroup.procs"),
+        []byte(strconv.Itoa(pid)), 0644); err != nil {
+        return err
+    }
+    
+    // 3. 应用各 controller 配置
+    if err := m.setResources(); err != nil {
+        return err
+    }
+    
+    return nil
+}
+
+// v2 资源设置（部分）：
+func (m *Manager) setResources() error {
+    // memory
+    if r := m.Resources.Memory; r != nil {
+        writeFile(path, "memory.max", strconv.FormatInt(r.Limit, 10))
+        writeFile(path, "memory.swap.max", strconv.FormatInt(r.Swap, 10))
+        // ...
+    }
+    
+    // cpu
+    if r := m.Resources.Cpu; r != nil {
+        writeFile(path, "cpu.max", strconv.FormatInt(r.Quota, 10) +
+                              " " + strconv.FormatInt(r.Period, 10))
+        writeFile(path, "cpu.weight", strconv.FormatUint(uint64(r.Shares), 10))
+        writeFile(path, "cpuset.cpus", r.Cpus)
+    }
+    
+    // pids
+    if r := m.Resources.Pids; r != nil {
+        writeFile(path, "pids.max", strconv.FormatInt(r.Limit, 10))
+    }
+    
+    // io
+    if r := m.Resources.BlockIO; r != nil {
+        writeFile(path, "io.weight", strconv.FormatUint(uint64(r.Weight), 10))
+        // ...
+    }
+    
+    // devices（通过 BPF）
+    if len(m.Resources.Devices) &gt; 0 {
+        // 加载 eBPF 程序过滤 device access
+        bpfProg := createDeviceBPFProgram(m.Resources.Devices)
+        attachBPF(path, bpfProg)
+    }
+    
+    return nil
+}
+
+// 读取 cgroup 版本：
+// /sys/fs/cgroup/cgroup.controllers 存在 → v2
+// /sys/fs/cgroup/memory 存在 → v1
+</code></pre>
+
+  <div class="callout">
+    <strong>device cgroup 在 v2 中的特殊性:</strong><br>
+    cgroup v2 没有 devices controller。<br>
+    runc 通过 <strong>eBPF</strong> 程序替代。<br>
+    attachBPF 到 cgroup，过滤 file open 的设备类型。<br>
+    这是 cgroup v2 的设计哲学：cgroup 只管资源，安全用 BPF。
+  </div>
+</section>
+
+<section id="rootfs" class="toc-link">
+  <h2><span class="num">07</span> rootfs 准备</h2>
+
+<pre><code>// libcontainer/rootfs_linux.go
+
+func prepareRootfs(pipe *os.File, config *configs.Config) error {
+    // 1. mount rootfs (来自 spec.rootfs)
+    if err := mountRootfs(config.Rootfs, config.RootfsPropagation); err != nil {
+        return err
+    }
+    
+    // 2. 准备 mount points
+    for _, m := range config.Mounts {
+        // /proc, /sys, /dev, /dev/pts, ...
+        if err := mountToRootfs(m, config.Rootfs); err != nil {
+            return err
+        }
+    }
+    
+    // 3. 设置 maskedPaths
+    //    这些路径被覆盖为 /dev/null
+    //    "/proc/kcore" 等敏感文件
+    for _, p := range config.MaskPaths {
+        maskFile(filepath.Join(config.Rootfs, p))
+    }
+    
+    // 4. 设置 readonlyPaths
+    //    这些路径被 bind mount 为 readonly
+    for _, p := range config.ReadonlyPaths {
+        remountReadonly(filepath.Join(config.Rootfs, p))
+    }
+    
+    return nil
+}
+
+// 默认挂载（在 specconv 中生成）：
+defaultMounts = []*Mount{
+    // /proc
+    {Destination: "/proc", Source: "proc", Type: "proc"},
+    
+    // /dev（tmpfs）
+    {Destination: "/dev", Source: "tmpfs", Type: "tmpfs",
+     Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"}},
+    
+    // /dev/pts
+    {Destination: "/dev/pts", Source: "pts", Type: "devpts",
+     Options: []string{"nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620"}},
+    
+    // /dev/shm
+    {Destination: "/dev/shm", Source: "shm", Type: "tmpfs",
+     Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"}},
+    
+    // /dev/mqueue
+    {Destination: "/dev/mqueue", Source: "mqueue", Type: "mqueue"},
+    
+    // /sys
+    {Destination: "/sys", Source: "sysfs", Type: "sysfs",
+     Options: []string{"nosuid", "noexec", "nodev", "ro"}},
+    
+    // /sys/fs/cgroup (bind mount from host)
+    {Destination: "/sys/fs/cgroup", Source: "cgroup", Type: "cgroup"},
+}
+
+// maskedPaths (默认)：
+//   /proc/acpi
+//   /proc/asound
+//   /proc/kcore
+//   /proc/keys
+//   /proc/latency_stats
+//   /proc/timer_list
+//   /proc/timer_stats
+//   /proc/sched_debug
+//   /proc/scsi
+//   /sys/firmware
+//   /sys/devices/virtual/powercap
+
+// readonlyPaths (默认)：
+//   /proc/bus
+//   /proc/fs
+//   /proc/irq
+//   /proc/sys
+//   /proc/sysrq-trigger
+</code></pre>
+</section>
+
+<section id="kill" class="toc-link">
+  <h2><span class="num">08</span> kill / signal</a></h2>
+
+<pre><code>// runc kill my-container [SIGTERM]
+
+// libcontainer/container_linux.go
+func (c *linuxContainer) Signal(process *Process, sig os.Signal, all bool) error {
+    // 1. 找到容器主进程 PID
+    pids, err := c.Processes()
+    
+    // 2. 发信号
+    if all {
+        // 给所有容器内进程发信号
+        for _, pid := range pids {
+            syscall.Kill(pid, sig.(syscall.Signal))
+        }
+    } else {
+        // 只给 init (PID 1 in container) 发
+        syscall.Kill(initPid, sig.(syscall.Signal))
+    }
+    
+    return nil
+}
+
+// 关键问题：容器内 PID 1 不接收默认信号
+//   - 如果 PID 1 是僵尸接收器（如 tini）
+//     能正常处理 SIGTERM
+//   - 如果 PID 1 是 nginx/java
+//     可能没有信号处理 → SIGTERM 被丢弃
+//     → docker stop 等待 10s 后 SIGKILL
+
+// 最佳实践：
+//   1. 让 ENTRYPOINT 是设计良好的 init (tini, dumb-init)
+//   2. 或者 docker run --init（自动加 tini）
+//   3. 容器内进程必须处理 SIGTERM
+</code></pre>
+</section>
+
+<section id="exec" class="toc-link">
+  <h2><span class="num">09</span> exec 实现</h2>
+
+<pre><code// runc exec my-container /bin/bash
+
+// 在已有容器中启动新进程
+// 不创建新容器，进入容器的 namespace
+
+// libcontainer/container_linux.go
+func (c *linuxContainer) Start(process *Process) error {
+    if c.running() {
+        // 已运行 → exec 模式
+        return c.start(process, false)
+    }
+    // ...
+}
+
+// exec 流程：
+// 1. 读取容器 state（获取 PID、namespace）
+// 2. 创建新进程
+//    - open /proc/&lt;init_pid&gt;/ns/* 文件
+//    - clone() with setns fd (CLONE_NEW*)
+//    - 进入容器 namespace
+// 3. 在新进程内：
+//    - 已经在容器 namespace
+//    - chroot 到容器 rootfs
+//    - exec 用户命令
+
+// setns 流程：
+// libcontainer/process_linux.go
+cmd.SysProcAttr = &syscall.SysProcAttr{
+    Cloneflags: syscall.CLONE_NEWNS,
+}
+
+// 通过 fd 设置：
+for _, fd := range nsFds {
+    if err := unix.Setns(fd, nsType); err != nil {
+        return err
+    }
+}
+</pre></code>
+
+  <p>exec 命令的常见用途：</p>
+<pre><code># 调试
+docker exec -it &lt;c&gt; bash
+kubectl exec -it &lt;pod&gt; -c &lt;c&gt; -- bash
+
+# 收集信息
+docker exec &lt;c&gt; ps aux
+docker exec &lt;c&gt; netstat -tulpn
+
+# 执行命令
+docker exec &lt;c&gt; nginx -t
+
+# runc 原生：
+runc exec &lt;c&gt; /bin/bash
+# 默认从 process.json 读配置
+</code></pre>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">10</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+runc/ (github.com/opencontainers/runc)
+├── <span class="file">main.go</span>                              <span class="cmt">入口</span>
+├── <span class="file">MANIFEST.toml</span>                       <span class="cmt">构建配置</span>
+├── <span class="file">README.md</span>
+├── <span class="file">LICENSE</span>
+├── <span class="file">Dockerfile</span>
+├── <span class="file">Makefile</span>
+├── <span class="file">contrib/</span>                            <span class="cmt">辅助脚本、CI</span>
+│   └── <span class="file">cmd/</span>                              <span class="cmt">辅助工具</span>
+├── <span class="file">docs/</span>                                <span class="cmt">用户文档</span>
+├── <span class="file">libcontainer/</span>                       <span class="cmt">核心库（最重要）</span>
+│   ├── <span class="file">specs/</span>                            <span class="cmt">spec 类型</span>
+│   ├── <span class="file">configs/</span>                          <span class="cmt">内部 config 类型</span>
+│   │   ├── <span class="file">config.go</span>                       <span class="cmt">Config 主结构</span>
+│   │   ├── <span class="file">mount.go</span>                         <span class="cmt">Mount 类型</span>
+│   │   ├── <span class="file">namespaces.go</span>                   <span class="cmt">Namespace 类型</span>
+│   │   ├── <span class="file">cgroup_v1.go, cgroup_v2.go</span>      <span class="cmt">cgroup config</span>
+│   │   └── <span class="file">device.go</span>
+│   ├── <span class="file">containers/</span>                       <span class="cmt">ContainerStore</span>
+│   ├── <span class="file">cgroups/</span>                           <span class="cmt">cgroup 操作</span>
+│   │   ├── <span class="file">fs/</span>                             <span class="cmt">cgroup v1 subsystem</span>
+│   │   ├── <span class="file">fs2/</span>                            <span class="cmt">cgroup v2</span>
+│   │   ├── <span class="file">systemd/</span>                        <span class="cmt">systemd cgroup driver</span>
+│   │   └── <span class="file">stats/</span>                          <span class="cmt">stats 读取</span>
+│   ├── <span class="file">integration/</span>                       <span class="cmt">集成测试</span>
+│   ├── <span class="file">keys/</span>                              <span class="cmt">keyring 操作</span>
+│   ├── <span class="file">logs/</span>                              <span class="cmt">日志</span>
+│   ├── <span class="file">nsenter/</span>                           <span class="cmt">namespace enter (C)</span>
+│   │   ├── <span class="file">nsenter.go</span>
+│   │   └── <span class="file">nsenter_gccgo.go</span>
+│   ├── <span class="file">seccomp/</span>                           <span class="cmt">seccomp 配置</span>
+│   ├── <span class="file">specconv/</span>                          <span class="cmt">spec → 内部 config</span>
+│   │   └── <span class="file">spec_linux.go</span>                   <span class="cmt">核心转换</span>
+│   ├── <span class="file">stacktrace/</span>                       <span class="cmt">stack trace</span>
+│   ├── <span class="file">system/</span>                            <span class="cmt">系统调用封装</span>
+│   │   ├── <span class="file">linux/</span>
+│   │   └── <span class="file">proc.go</span>                         <span class="cmt">/proc 读取</span>
+│   ├── <span class="file">user/</span>                              <span class="cmt">user namespace</span>
+│   ├── <span class="file">utils/</span>                             <span class="cmt">辅助</span>
+│   ├── <span class="file">apparmor/</span>                          <span class="cmt">AppArmor 集成</span>
+│   ├── <span class="file">capabilities/</span>                      <span class="cmt">capabilities 操作</span>
+│   ├── <span class="file">utils/cmsg.go</span>                       <span class="cmt">socket control msg</span>
+│   ├── <span class="file">container_linux.go</span>                <span class="cmt">LinuxContainer 主类</span>
+│   ├── <span class="file">container_linux_test.go</span>
+│   ├── <span class="file">error.go</span>                           <span class="cmt">错误类型</span>
+│   ├── <span class="file">factory_linux.go</span>                   <span class="cmt">Container 工厂</span>
+│   ├── <span class="file">generic_error.go</span>
+│   ├── <span class="file">init_linux.go</span>                      <span class="cmt">runc init 入口</span>
+│   ├── <span class="file">message_linux.go</span>                   <span class="cmt">socket 协议消息</span>
+│   ├── <span class="file">network_linux.go</span>                   <span class="cmt">网络配置</span>
+│   ├── <span class="file">notify_linux.go</span>                    <span class="cmt">通知（OOM 等）</span>
+│   ├── <span class="file">process.go</span>                          <span class="cmt">Process 类型</span>
+│   ├── <span class="file">process_linux.go</span>                   <span class="cmt">process 启动</span>
+│   ├── <span class="file">rootfs_linux.go</span>                    <span class="cmt">rootfs 准备</span>
+│   ├── <span class="file">setns_init_linux.go</span>                <span class="cmt">exec 的 init</span>
+│   ├── <span class="file">standard_init_linux.go</span>             <span class="cmt">普通容器的 init</span>
+│   ├── <span class="file">state_linux.go</span>                      <span class="cmt">容器状态管理</span>
+│   ├── <span class="file">stats_linux.go</span>                      <span class="cmt">cgroup stats</span>
+│   └── <span class="file">sync.go</span>                             <span class="cmt">sync (syncType 等)</span>
+├── <span class="file">script/</span>                                <span class="cmt">构建脚本</span>
+├── <span class="file">tests/</span>                                 <span class="cmt">测试</span>
+│   ├── <span class="file">integration/</span>                       <span class="cmt">集成测试</span>
+│   └── <span class="file">unit/</span>                              <span class="cmt">单元测试</span>
+├── <span class="file">types/</span>                                 <span class="cmt">公开类型</span>
+│   └── <span class="file">features/</span>                          <span class="cmt">features.json</span>
+├── <span class="file">vendor/</span>                                <span class="cmt">依赖</span>
+└── <span class="file">.gitignore, .golangci.yml, .pymodmt.cfg ...</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>main.go</code> + <code>cmd/</code> 看 CLI。<br>
+    <code>libcontainer/specconv/spec_linux.go</code> 看 spec → 内部 config 转换（5000+ 行）。<br>
+    <code>libcontainer/container_linux.go</code> LinuxContainer 主对象。<br>
+    <code>libcontainer/process_linux.go</code> 进程启动、clone flags。<br>
+    <code>libcontainer/standard_init_linux.go</code> init 主流程。<br>
+    <code>libcontainer/rootfs_linux.go</code> rootfs 准备、pivot_root。<br>
+    <code>libcontainer/cgroups/fs2/</code> cgroup v2 设置。<br>
+    <code>libcontainer/nsenter/nsenter.c</span> namespace enter C 实现。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

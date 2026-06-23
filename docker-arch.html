@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker 引擎架构深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Docker 引擎架构深度解析</h1>
+  <p class="subtitle">dockerd → containerd → runc — 完整调用链</p>
+  <span class="version">Docker 26.x · moby/moby</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#components">组件分工</a></li>
+    <li><a href="#api">Docker API 路径</a></li>
+    <li><a href="#gRPC">containerd gRPC 接口</a></li>
+    <li><a href="#create">创建容器全链路</a></li>
+    <li><a href="#start">启动容器全链路</a></li>
+    <li><a href="#image-pull">镜像拉取链路</a></li>
+    <li><a href="#shim">containerd-shim</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Docker 不是单一进程，而是一组协作的组件。从 Docker 1.11（2016）开始架构演进为<strong>三层模型</strong>：</p>
+
+<pre><code>┌─────────────────────────────────────────┐
+│   docker CLI                            │
+│   /usr/bin/docker                       │
+└────────────────┬────────────────────────┘
+                 │ REST API (/var/run/docker.sock)
+┌────────────────▼────────────────────────┐
+│   dockerd (Docker Daemon)               │
+│   - HTTP API server                     │
+│   - 镜像管理（layer store）              │
+│   - Volume/Network 逻辑                 │
+│   - BuildKit 调度                       │
+└────────────────┬────────────────────────┘
+                 │ gRPC (Unix socket)
+┌────────────────▼────────────────────────┐
+│   containerd                           │
+│   - 容器生命周期管理                     │
+│   - 镜像分发（distribution）             │
+│   - snapshot 管理                       │
+│   - containerd-shim 启动                │
+└────────────────┬────────────────────────┘
+                 │ execve
+┌────────────────▼────────────────────────┐
+│   containerd-shim (每容器一个)           │
+│   - runc 调用                           │
+│   - 收集容器退出码                       │
+│   - 守护 runc（runc 是一次性的）          │
+└────────────────┬────────────────────────┘
+                 │ execve
+┌────────────────▼────────────────────────┐
+│   runc                                  │
+│   - 创建 namespace/cgroup               │
+│   - 调用 OCI runtime spec               │
+│   - 启动容器进程                         │
+└─────────────────────────────────────────┘
+</code></pre>
+
+  <p>历史演进：</p>
+  <table>
+    <tr><th>版本</th><th>架构</th><th>关键变化</th></tr>
+    <tr><td>Docker 0.x - 1.10</td><td>monolithic daemon</td><td>所有逻辑在 dockerd</td></tr>
+    <tr><td>Docker 1.11+</td><td>引入 containerd+runc</td><td>OCI runtime 标准</td></tr>
+    <tr><td>Docker 1.12+</td><td>containerd 独立</td><td>支持 swarmkit</td></tr>
+    <tr><td>Docker 17.06+</td><td>containerd 1.0</td><td>稳定 CNCF 项目</td></tr>
+    <tr><td>Docker 18.06+</td><td>BuildKit 默认</td><td>并行构建</td></tr>
+    <tr><td>Docker 23.0+</td><td>containerd image store</td><td>完全现代化</td></tr>
+    <tr><td>Docker 26+</td><td>containerd 1.7</td><td>sandbox API</td></tr>
+  </table>
+</section>
+
+<section id="components" class="toc-link">
+  <h2><span class="num">02</span> 组件分工</h2>
+
+<pre><code>// 1. dockerd（moby/daemon）
+//    二进制：/usr/bin/dockerd
+//    Socket：/var/run/docker.sock
+//    工作目录：/var/lib/docker/
+//    
+//    职责：
+//    - HTTP/HTTPS API server
+//    - REST API（v1.xx）兼容
+//    - 镜像层管理（image store）
+//    - 网络驱动（bridge/overlay/...）
+//    - Volume 驱动
+//    - 镜像构建（BuildKit daemon）
+//    - 安全策略（seccomp、AppArmor、cap）
+//    - 事件聚合
+
+// 2. containerd
+//    二进制：/usr/bin/containerd
+//    Socket：/run/containerd/containerd.sock
+//    工作目录：/var/lib/containerd/
+//    
+//    职责：
+//    - 容器生命周期（创建、启动、停止、删除）
+//    - 镜像 pull/push（content store）
+//    - 快照管理（snapshotter）
+//    - 任务（task）管理
+//    - containerd-shim 守护
+//    - 事件、命名空间、租约（lease）
+
+// 3. containerd-shim
+//    二进制：/usr/bin/containerd-shim-runc-v2
+//    每个容器一个 shim 进程
+//    
+//    职责：
+//    - 启动 runc create
+//    - 持有容器 stdin/stdout/stderr
+//    - 监控容器进程，记录退出码
+//    - 让 dockerd 重启不影响容器
+//    - resize TTY
+//    - exec 子进程
+
+// 4. runc
+//    二进制：/usr/bin/runc
+//    
+//    职责：
+//    - 读取 OCI runtime spec (config.json)
+//    - 创建 namespaces
+//    - 设置 cgroups
+//    - 准备 rootfs (mount, pivot_root)
+//    - 启动容器进程
+//    - 退出（让 shim 接管）
+</code></pre>
+
+  <p>进程拓扑：</p>
+<pre><code>$ ps -ef | grep -E "docker|containerd|shim|runc"
+
+# 守护进程
+root   1234  /usr/bin/dockerd -H fd://
+root   1240  /usr/bin/containerd
+
+# 每个容器一个 shim
+root   2345  /usr/bin/containerd-shim-runc-v2 \
+             -namespace moby \
+             -address /run/containerd/.../socket.ttrpc \
+             -publish-binary /usr/bin/containerd \
+             -id &lt;container_id&gt;
+
+# shim 启动 runc（短命）
+# runc 创建容器并退出
+# 容器进程（PID 在容器 ns 内为 1）
+
+# 容器进程
+root   2350  nginx -g "daemon off;"
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> Docker API 路径</h2>
+
+  <p>用户从 <code>docker run</code> 到 dockerd 的路径：</p>
+
+<pre><code>// CLI 命令：
+$ docker run -d --name web -p 80:80 nginx
+
+// CLI 解析步骤：
+// 1. docker/cli 解析参数
+// 2. 调用 /containers/create 创建
+//    POST /v1.45/containers/create?name=web
+//    Body: {
+//      "Image": "nginx",
+//      "HostConfig": {
+//        "PortBindings": {"80/tcp": [{"HostPort": "80"}]}
+//      }
+//    }
+//    Response: {"Id": "abc123...", ...}
+//
+// 3. 调用 /containers/{id}/start 启动
+//    POST /v1.45/containers/abc123.../start
+
+// CLI → dockerd 的 HTTP API
+$ curl --unix-socket /var/run/docker.sock \
+       -H "Content-Type: application/json" \
+       -d '{"Image":"nginx"}' \
+       http://localhost/v1.45/containers/create
+
+// 主要 API 端点：
+// 容器：
+POST   /containers/create
+POST   /containers/{id}/start
+POST   /containers/{id}/stop
+POST   /containers/{id}/kill
+DELETE /containers/{id}
+GET    /containers/json
+GET    /containers/{id}/json
+POST   /containers/{id}/exec
+POST   /containers/{id}/attach
+GET    /containers/{id}/logs
+
+// 镜像：
+POST   /images/create?fromImage=...
+GET    /images/json
+GET    /images/{name}/json
+DELETE /images/{name}
+POST   /images/{name}/push
+POST   /build
+
+// 系统：
+GET    /info
+GET    /version
+GET    /events
+GET    /_ping
+</code></pre>
+</section>
+
+<section id="gRPC" class="toc-link">
+  <h2><span class="num">04</span> containerd gRPC 接口</h2>
+
+<pre><code>// dockerd 通过 gRPC 调用 containerd
+// Socket: /run/containerd/containerd.sock
+// Protocol: gRPC over Unix socket
+// API version: v1 (containerd.v1.*)
+
+// 主要 gRPC 服务：
+// containerd.services.* 
+
+// 1. ContainerService（容器管理）
+rpc Create(CreateContainerRequest) returns (CreateContainerResponse);
+rpc Update(UpdateContainerRequest) returns (UpdateContainerResponse);
+rpc Delete(DeleteContainerRequest) returns (DeleteContainerResponse);
+rpc List(ListContainersRequest) returns (ListContainersResponse);
+rpc Get(GetContainerRequest) returns (GetContainerResponse);
+
+// 2. TaskService（运行时管理）
+rpc Create(CreateTaskRequest) returns (CreateTaskResponse);  // 创建任务（不启动）
+rpc Start(StartRequest) returns (StartResponse);              // 启动容器进程
+rpc Delete(DeleteTaskRequest) returns (DeleteResponse);       // 删除任务
+rpc Pids(PidsRequest) returns (PidsResponse);                 // 列出容器内 PID
+rpc Exec(ExecRequest) returns (ExecResponse);
+rpc ResizePty(ResizePtyRequest) returns (google.protobuf.Empty);
+rpc Kill(KillRequest) returns (google.protobuf.Empty);
+rpc Pause(PauseTaskRequest) returns (google.protobuf.Empty);
+rpc Resume(ResumeTaskRequest) returns (google.protobuf.Empty);
+rpc Checkpoint(CheckpointTaskRequest) returns (CheckpointTaskResponse);
+
+// 3. ImageService（镜像管理）
+rpc Pull(PullImageRequest) returns (PullImageResponse);
+rpc Push(PushImageRequest) returns (PushImageResponse);
+rpc List(ListImagesRequest) returns (ListImagesResponse);
+rpc Get(GetImageRequest) returns (GetImageResponse);
+rpc Delete(DeleteImageRequest) returns (DeleteImageResponse);
+
+// 4. ContentService（blob 存储）
+rpc Read(ReadContentRequest) returns (stream ReadContentResponse);
+rpc Write(WriteContentRequest) returns (stream WriteContentResponse);
+rpc List(ListContentRequest) returns (stream ListContentResponse);
+
+// 5. SnapshotService（快照/分层）
+rpc Prepare(PrepareSnapshotRequest) returns (PrepareSnapshotResponse);
+rpc Commit(CommitSnapshotRequest) returns (google.protobuf.Empty);
+rpc Remove(RemoveSnapshotRequest) returns (google.protobuf.Empty);
+
+// 6. EventService（事件）
+rpc Publish(PublishRequest) returns (google.protobuf.Empty);
+rpc Subscribe(SubscribeRequest) returns (stream Envelope);
+
+// 7. LeasesService（租约）
+rpc Create(CreateLeaseRequest) returns (CreateLeaseResponse);
+</code></pre>
+</section>
+
+<section id="create" class="toc-link">
+  <h2><span class="num">05</span> 创建容器全链路</h2>
+
+<pre><code>// docker run nginx
+
+// 1. CLI 调用 dockerd HTTP API
+//    POST /v1.45/containers/create
+//    body: { Image: "nginx", HostConfig: {...} }
+
+// 2. dockerd 处理（daemon/server/router_routes.go）
+//    - 解析 Image name → 解析为 reference
+//    - 查找本地镜像
+//    - 如果不存在 → 自动 pull
+//    - 生成容器配置
+//    - 计算容器 ID (随机 SHA256)
+//    - 在 image store 创建记录
+//    
+//    关键步骤：
+//    a. m.Create(client.ContainerCreate, options)  // daemon/create.go
+//    b. daemon.createContainer(config)             // 创建 container 对象
+//    c. daemon.registerName(name, container)       // 注册名字
+//    d. daemon.Register(container)                 // 注册到 state
+//    
+//    内部：container.ToDisk() 持久化配置到
+//    /var/lib/docker/containers/&lt;id&gt;/config.v2.json
+
+// 3. dockerd 调用 containerd
+//    dockerd → containerd.ContainerService.Create
+//    gRPC request:
+//    {
+//      id: "&lt;container_id&gt;",
+//      image: "docker.io/library/nginx:latest",
+//      runtime: "io.containerd.runc.v2",
+//      spec: &lt;OCI spec&gt;,  // 生成 OCI runtime spec
+//      rootfs: {
+//        type: "layers",
+//        diff_ids: [...]
+//      },
+//      snapshotter: "overlayfs"
+//    }
+//    
+//    containerd 处理：
+//    a. 解析 spec
+//    b. 调用 snapshotter.Prepare()
+//       → 创建 overlayfs mountpoint
+//       → /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/...
+//    c. 持久化容器元数据
+//    d. 返回 container id
+
+// 4. 用户调用 start
+//    POST /containers/{id}/start
+
+// 5. dockerd 调用 containerd.TaskService.Create
+//    gRPC request:
+//    {
+//      container_id: "&lt;container_id&gt;",
+//      rootfs: { mounts: [...] },         // 来自 snapshotter
+//      terminal: false,
+//      stdin: "/dev/null",
+//      stdout: "/var/lib/.../stdout",
+//      stderr: "/var/lib/.../stderr"
+//    }
+//    
+//    containerd 处理：
+//    a. 启动 containerd-shim-runc-v2（独立进程）
+//    b. 通过 shim Create RPC
+//       → shim 调用 runc binary
+//       → runc create &lt;id&gt;
+//       → 容器进程已创建（处于 created 状态）
+
+// 6. dockerd 调用 containerd.TaskService.Start
+//    gRPC request: { container_id: ... }
+//    
+//    containerd 转发到 shim:
+//    a. shim.Start RPC
+//    b. shim 调用 runc start &lt;id&gt;
+//    c. 容器进程真正执行 ENTRYPOINT
+
+// 7. 容器退出
+//    runc 已退出（创建后立即退出）
+//    shim 守护容器，wait() 容器进程
+//    容器退出 → shim 通过 gRPC 通知 containerd
+//    containerd → publish event → dockerd
+//    dockerd → 更新容器状态 → 触发事件给用户
+</code></pre>
+</section>
+
+<section id="start" class="toc-link">
+  <h2><span class="num">06</span> 启动容器全链路</h2>
+
+<pre><code>// 深入看 containerd → shim → runc
+
+// 1. dockerd 调用 containerd.Create (Task)
+//    containerd/internal/oci/task.go
+func (l *local) Create(ctx context.Context, r *CreateTaskRequest, ...) {
+    container, _ := l.getContainer(r.ContainerID)
+    return container.NewTask(ctx, ...)
+}
+
+// container.NewTask（containerd/internal/oci/spec.go）：
+func (c *container) NewTask(ctx, ...) {
+    // 1. 调用 snapshotter.Prepare
+    mounts, err := c.runtime.snapshotter.Prepare(ctx, key, c.Image.Target.Digest)
+    
+    // 2. 设置 rootfs mount
+    s.Mounts = mounts
+    
+    // 3. 调用 runtime（io.containerd.runc.v2）
+    task, err := c.runtime.Create(ctx, c.ID, s)
+    // c.runtime 是 io.containerd.runc.v2.Runtime
+    // 它会启动 shim
+}
+
+// 2. shim 启动（containerd/runtime/v2/runc/runtime.go）
+func (r *Runtime) Create(ctx, id, opts) (Task, error) {
+    // 1. 启动 shim 进程
+    shim, err := r.startShim(ctx, bundle, id, opts)
+    
+    // 2. 通过 ttrpc 调用 shim.Create
+    return shim.Create(ctx, opts)
+}
+
+// 3. shim 进程
+//    containerd-shim-runc-v2 -namespace ... -id ... -address ...
+//    
+//    shim 二进制 main()：
+//    - 创建 ttrpc server
+//    - 注册 task service
+//    - 监听 Unix socket
+
+// 4. shim.Create（runtime/v2/runc/task/service.go）
+func (s *service) Create(ctx, req) error {
+    // 准备 OCI spec 文件
+    // 调用 runc 命令
+    cmd := exec.Command("runc", "create", id)
+    cmd.Stdin = ...
+    err := cmd.Run()
+    // runc create 后容器进程已存在（suspended）
+}
+
+// 5. shim.Start
+func (s *service) Start(ctx, req) error {
+    cmd := exec.Command("runc", "start", id)
+    return cmd.Run()
+}
+
+// 6. runc create 内部（libcontainer/container_linux.go）
+func (c *linuxContainer) Start(process *Process) error {
+    // 1. 创建 cgroup 路径
+    // 2. 设置 namespaces (clone with CLONE_NEW*)
+    // 3. mount rootfs
+    // 4. pivot_root
+    // 5. setup networking
+    // 6. 执行 ENTRYPOINT
+    return c.start(process)
+}
+
+// 整个调用链：
+// CLI → HTTP API → dockerd → gRPC → containerd 
+//      → shim spawn → runc exec → kernel namespace/cgroup
+</code></pre>
+</section>
+
+<section id="image-pull" class="toc-link">
+  <h2><span class="num">07</span> 镜像拉取链路</h2>
+
+<pre><code>// docker pull nginx
+
+// 1. dockerd 接收
+POST /images/create?fromImage=nginx&amp;tag=latest
+
+// 2. dockerd 解析：
+//    nginx → docker.io/library/nginx:latest
+//    （默认添加 docker.io/library/ 前缀）
+//    
+//    镜像引用格式：
+//    docker.io/library/nginx:latest
+//    registry / namespace / repo : tag
+
+// 3. dockerd 委托 containerd pull（如果 containerd image store 模式）
+//    containerd.PullImage():
+//    a. resolver 解析 registry
+//    b. HTTP 请求 GET /v2/library/nginx/manifests/latest
+//    c. 获取 image manifest
+//    d. 检查本地是否已有所有 layer
+//    e. 顺序/并行下载缺失的 layer
+//    f. 校验 SHA256
+//    g. 解压 layer 到 snapshotter
+
+// 4. containerd pull 实现（containerd/pkg/...）
+//    containerd.remotes.docker.Fetcher
+//    
+//    单个 layer 下载：
+//    GET /v2/library/nginx/blobs/sha256:abc...
+//    Range: bytes=0-1048575  (分块)
+//    → 流式写入 content store
+//    
+//    content store：/var/lib/containerd/io.containerd.content.v1.content/blobs/
+
+// 5. 解压 layer
+//    containerd/snapshots/overlayfs/overlayfs.go
+//    
+//    snapshotter.Prepare():
+//    a. 读 layer tar
+//    b. 解压到 /var/lib/containerd/.../snapshots/&lt;key&gt;/fs/
+//    c. 在 upper 层准备 mount
+//    
+//    snapshotter.Commit():
+//    a. 标记 snapshot 为不可变
+//    b. 后续容器以此为基础
+
+// 6. 注册 image
+//    containerd/images/image.go
+//    a. 在 image store 注册引用
+//    b. digest = manifest digest
+//    c. 后续 docker images 可见
+</code></pre>
+</section>
+
+<section id="shim" class="toc-link">
+  <h2><span class="num">08</span> containerd-shim</h2>
+
+  <p>containerd-shim 是<strong>每容器独立守护进程</strong>，承担关键角色：</p>
+
+<pre><code>// 为什么需要 shim？
+
+// runc 设计：runc 是"一次性"工具
+//   1. runc create → 创建容器进程，runc 立即退出
+//   2. runc start → 唤醒容器进程，runc 立即退出
+//   3. 容器进程的 stdin/stdout 需要"父亲"
+//      如果父进程退出，fd 关闭
+
+// shim 的作用：
+//   1. 作为容器进程的"父亲"
+//   2. 持有 stdin/stdout/stderr
+//   3. 收集容器退出码
+//   4. 即使 dockerd/containerd 重启，容器仍运行
+//   5. 提供 exec 接口（在容器内启动新进程）
+//   6. 监控容器状态
+
+// shim 二进制变体：
+//   containerd-shim-runc-v1   ← 老 v1 (per-container shim instance)
+//   containerd-shim-runc-v2   ← 现代 v2 (一个 shim 管多个容器)
+//   containerd-shim-kata-v2   ← Kata Containers
+//   containerd-shim-runsc-v1  ← gVisor
+
+// v2 的优势：
+//   - 一个 shim 管多个容器（容器组 sandbox）
+//   - 减少进程数
+//   - 共享上下文
+
+// shim 启动参数：
+containerd-shim-runc-v2 \
+  -namespace moby \                      # namespace
+  -id &lt;container_id&gt; \                   # 容器 ID
+  -address /run/containerd/.../socket.ttrpc \  # ttrpc 地址
+  -publish-binary /usr/bin/containerd \  # 事件发布
+  -bundle /run/containerd/io.containerd.runtime.v2.task/moby/&lt;id&gt;
+
+// shim 接口（ttrpc）：
+// service Task {
+//   rpc Create(CreateTaskRequest)       returns (CreateTaskResponse);
+//   rpc Start(StartRequest)              returns (StartResponse);
+//   rpc Delete(DeleteRequest)            returns (DeleteResponse);
+//   rpc Exec(ExecRequest)                returns (ExecResponse);
+//   rpc Pids(PidsRequest)                returns (PidsResponse);
+//   rpc ResizePty(ResizePtyRequest)      returns (Empty);
+//   rpc Kill(KillRequest)                returns (Empty);
+//   rpc Pause / Resume / Checkpoint / Update ...
+// }
+</code></pre>
+
+  <div class="callout">
+    <strong>Daemonless 容器:</strong><br>
+    shim 设计让容器与 daemon 解耦：<br>
+    1. dockerd 崩溃 → 容器继续运行（shim 接管）<br>
+    2. containerd 重启 → 容器继续运行，containerd 重连 shim<br>
+    3. 升级 dockerd 不影响在跑的容器<br>
+    这是相比 Docker 早期版本的重大架构改进。
+  </div>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+moby/moby (github.com/moby/moby, "dockerd")
+├── <span class="file">cmd/dockerd/</span>                    <span class="cmt">dockerd main</span>
+├── <span class="file">daemon/</span>                          <span class="cmt">守护进程核心</span>
+│   ├── <span class="file">api/types/</span>                   <span class="cmt">API 类型</span>
+│   ├── <span class="file">config/</span>                       <span class="cmt">配置</span>
+│   ├── <span class="file">container/</span>                    <span class="cmt">容器对象</span>
+│   ├── <span class="file">daemon.go</span>                     <span class="cmt">Daemon 主对象</span>
+│   ├── <span class="file">create.go</span>                     <span class="cmt">容器创建入口</span>
+│   ├── <span class="file">start.go</span>                      <span class="cmt">容器启动入口</span>
+│   ├── <span class="file">stop.go</span>                       <span class="cmt">容器停止</span>
+│   ├── <span class="file">delete.go</span>                     <span class="cmt">容器删除</span>
+│   ├── <span class="file">events/</span>                       <span class="cmt">事件</span>
+│   ├── <span class="file">exec/</span>                         <span class="cmt">exec</span>
+│   ├── <span class="file">graphdriver/</span>                  <span class="cmt">存储驱动</span>
+│   ├── <span class="file">network/</span>                      <span class="cmt">网络驱动</span>
+│   ├── <span class="file">runtime/</span>                      <span class="cmt">runtime adapter</span>
+│   └── <span class="file">server/</span>                       <span class="cmt">HTTP server</span>
+├── <span class="file">api/types/</span>                        <span class="cmt">API 类型定义</span>
+├── <span class="file">api/server/</span>                       <span class="cmt">HTTP router</span>
+├── <span class="file">builder/</span>                          <span class="cmt">老构建器（被 BuildKit 替代）</span>
+├── <span class="file">image/</span>                            <span class="cmt">镜像对象</span>
+├── <span class="file">layer/</span>                            <span class="cmt">layer store</span>
+├── <span class="file">plugin/</span>                           <span class="cmt">plugin manager</span>
+├── <span class="file">registry/</span>                         <span class="cmt">registry auth</span>
+├── <span class="file">volume/</span>                           <span class="cmt">volume driver</span>
+└── <span class="file">runconfig/</span>                        <span class="cmt">CLI 选项解析</span>
+
+containerd/containerd (github.com/containerd/containerd)
+├── <span class="file">cmd/containerd/</span>                 <span class="cmt">containerd main</span>
+├── <span class="file">cmd/containerd-shim-runc-v2/</span>     <span class="cmt">shim v2 main</span>
+├── <span class="file">api/</span>                                <span class="cmt">gRPC API 定义</span>
+│   ├── <span class="file">services/</span>                       <span class="cmt">服务定义</span>
+│   │   ├── <span class="file">containers/v1/</span>                <span class="cmt">ContainerService</span>
+│   │   ├── <span class="file">tasks/v1/</span>                     <span class="cmt">TaskService</span>
+│   │   ├── <span class="file">images/v1/</span>                    <span class="cmt">ImageService</span>
+│   │   ├── <span class="file">content/v1/</span>                   <span class="cmt">ContentService</span>
+│   │   ├── <span class="file">snapshots/v1/</span>                 <span class="cmt">SnapshotService</span>
+│   │   ├── <span class="file">leases/v1/</span>                    <span class="cmt">LeaseService</span>
+│   │   ├── <span class="file">events/v1/</span>                    <span class="cmt">EventService</span>
+│   │   └── <span class="file">diff/v1/, transfer/v1/, ...</span>
+├── <span class="file">core/</span>                              <span class="cmt">核心实现</span>
+│   ├── <span class="file">container/</span>                      <span class="cmt">容器对象</span>
+│   ├── <span class="file">content/</span>                        <span class="cmt">content store</span>
+│   ├── <span class="file">images/</span>                         <span class="cmt">image store</span>
+│   ├── <span class="file">metadata/</span>                       <span class="cmt">boltdb metadata</span>
+│   ├── <span class="file">mount/</span>                          <span class="cmt">mount 操作</span>
+│   ├── <span class="file">remotes/</span>                        <span class="cmt">registry 客户端</span>
+│   │   ├── <span class="file">docker/</span>                       <span class="cmt">Docker registry</span>
+│   │   └── <span class="file">resolver.go</span>
+│   ├── <span class="file">runtime/</span>                        <span class="cmt">runtime 框架</span>
+│   └── <span class="file">snapshots/</span>                       <span class="cmt">snapshot 框架</span>
+├── <span class="file">runtime/v2/runc/</span>                   <span class="cmt">runc runtime 适配</span>
+├── <span class="file">pkg/</span>                                <span class="cmt">辅助包</span>
+│   ├── <span class="file">cri/</span>                            <span class="cmt">CRI server (Kubernetes)</span>
+│   ├── <span class="file">process/</span>                        <span class="cmt">进程管理</span>
+│   └── <span class="file">retry/</span>                          <span class="cmt">重试逻辑</span>
+└── <span class="file">snapshots/</span>                          <span class="cmt">snapshotter 实现</span>
+    ├── <span class="file">overlayfs/</span>                      <span class="cmt">overlayfs snapshotter</span>
+    ├── <span class="file">btrfs/</span>
+    ├── <span class="file">native/</span>
+    └── <span class="file">zfs/</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>moby/daemon/daemon.go</code> + <code>moby/daemon/create.go</code> dockerd 核心。<br>
+    <code>containerd/api/services/tasks/v1/tasks.proto</code> 看 TaskService 接口。<br>
+    <code>containerd/core/runtime/v2/runc/</code> 看 shim 启动。<br>
+    <code>runc/libcontainer/container_linux.go</code> 看容器创建细节。<br>
+    文档：<code>containerd.io</code>、<code>docs.docker.com/engine/</code>。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

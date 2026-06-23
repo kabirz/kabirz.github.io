@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker Compose 多容器编排深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Docker Compose 多容器编排深度解析</h1>
+  <p class="subtitle">声明式多服务编排 — YAML 模型与生命周期</p>
+  <span class="version">Compose v2 · docker/compose</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#format">Compose 文件格式</a></li>
+    <li><a href="#services">服务定义</a></li>
+    <li><a href="#volumes">卷与网络</a></li>
+    <li><a href="#deploy">部署与资源</a></li>
+    <li><a href="#profiles">Profile 与多环境</a></li>
+    <li><a href="#v2">Compose v2 架构</a></li>
+    <li><a href="#commands">主要命令</a></li>
+    <li><a href="#swarm">Swarm 模式</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Docker Compose 是<strong>多容器应用编排工具</strong>。用 YAML 文件定义应用的所有服务、网络、卷，一键启动/停止整个应用栈。</p>
+
+  <p>历史：</p>
+  <table>
+    <tr><th>版本</th><th>实现</th><th>特点</th></tr>
+    <tr><td>Fig (2013)</td><td>Python</td><td>Compose 的前身</td></tr>
+    <tr><td>docker-compose 1.x</td><td>Python</td><td>独立 CLI</td></tr>
+    <tr><td>docker-compose v2 (2021+)</td><td>Go</td><td>集成到 docker CLI 的 plugin</td></tr>
+  </table>
+
+  <p>典型场景：</p>
+  <ul>
+    <li>开发环境：一键拉起后端 + DB + 缓存 + 代理</li>
+    <li>CI/CD：测试环境</li>
+    <li>小型生产（配合 Swarm）</li>
+    <li>演示和文档</li>
+  </ul>
+
+  <p>最小示例：</p>
+<pre><code># docker-compose.yml
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./html:/usr/share/nginx/html
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+
+volumes:
+  dbdata:
+</code></pre>
+
+<pre><code># 启动
+$ docker compose up -d
+
+# 状态
+$ docker compose ps
+NAME                SERVICE   STATUS     PORTS
+myapp-web-1         web       Up         0.0.0.0:80->80/tcp
+myapp-db-1          db        Up         5432/tcp
+
+# 日志
+$ docker compose logs -f web
+
+# 停止
+$ docker compose down
+
+# 停止并删卷
+$ docker compose down -v
+</code></pre>
+</section>
+
+<section id="format" class="toc-link">
+  <h2><span class="num">02</span> Compose 文件格式</h2>
+
+<pre><code>// Compose 文件顶层结构（v3+）：
+{
+  // 版本（v2 后可选）
+  "version": "3.9",
+
+  // 服务定义（核心）
+  "services": {
+    "&lt;service_name&gt;": { ServiceConfig },
+    ...
+  },
+
+  // 自定义网络
+  "networks": {
+    "&lt;network_name&gt;": { NetworkConfig },
+    ...
+  },
+
+  // 自定义卷
+  "volumes": {
+    "&lt;volume_name&gt;": { VolumeConfig },
+    ...
+  },
+
+  // Swarm secrets
+  "secrets": {
+    "&lt;secret_name&gt;": { SecretConfig },
+    ...
+  },
+
+  // Swarm configs
+  "configs": {
+    "&lt;config_name&gt;": { ConfigConfig },
+    ...
+  }
+}
+</code></pre>
+
+  <p>多文件合并规则：</p>
+<pre><code># Compose 文件优先级（从低到高）：
+# 1. 默认：docker-compose.yml + docker-compose.override.yml
+# 2. -f 指定的多个文件，按顺序合并
+# 3. COMPOSE_FILE 环境变量
+# 4. -f 覆盖
+
+# 多环境示例：
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+# docker-compose.yml - 基础
+# docker-compose.prod.yml - 生产 override
+#   覆盖/扩展基础配置
+
+# 合并规则：
+# - services: 同名服务合并配置
+# - networks: 同名网络合并
+# - 大部分字段：override 覆盖
+# - 列表字段（如 ports）：append
+# - 环境变量：合并（override 优先）
+
+# COMPOSE_FILE：
+export COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
+docker compose up
+</code></pre>
+
+  <p>变量插值：</p>
+<pre><code># .env 文件（自动加载）
+POSTGRES_PASSWORD=secret
+APP_PORT=8080
+
+# docker-compose.yml
+services:
+  db:
+    image: postgres
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  web:
+    ports:
+      - "${APP_PORT}:80"
+
+# 优先级（从高到低）：
+# 1. shell environment
+# 2. .env file
+# 3. Dockerfile ARG
+# 4. 默认值
+
+# 默认值语法：
+image: ${IMAGE:-nginx:latest}
+port: ${PORT:?required}
+</code></pre>
+</section>
+
+<section id="services" class="toc-link">
+  <h2><span class="num">03</span> 服务定义</h2>
+
+<pre><code>services:
+  web:
+    # 镜像（image 或 build 二选一）
+    image: nginx:alpine
+    # OR 构建
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        VERSION: 1.0
+      target: production
+      cache_from:
+        - myapp:cache
+      labels:
+        - "com.myapp.description=Web"
+
+    # 容器名（默认 &lt;project&gt;-&lt;service&gt;-&lt;index&gt;）
+    container_name: web-server
+
+    # 副本数（仅 Swarm 启用）
+    deploy:
+      replicas: 3
+    
+    # 端口
+    ports:
+      - "80:80"
+      - "443:443"
+      - target: 8080          # 长语法
+        published: "8080"
+        protocol: tcp
+        mode: host
+    
+    # 暴露端口（仅容器间）
+    expose:
+      - "8080"
+    
+    # 卷
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+      - dbdata:/var/lib/mysql
+      - type: volume
+        source: mydata
+        target: /data
+        read_only: true
+    
+    # 环境
+    environment:
+      - DEBUG=1
+      - DB_HOST=db
+      RAILS_ENV: production   # 字典语法
+    
+    # 从文件加载环境
+    env_file:
+      - .env
+      - .env.production
+    
+    # 依赖（启动顺序）
+    depends_on:
+      - db
+      - cache
+      # 健康检查：
+      - db:
+          condition: service_healthy
+      - cache:
+          condition: service_started
+    
+    # 网络配置
+    networks:
+      - frontend
+      - backend:
+          aliases:
+            - my-service
+    
+    # 重启策略
+    restart: always  # no | always | on-failure | unless-stopped
+    
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # 资源限制（仅 Swarm）
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    
+    # 本地资源限制（compose v2 支持）
+    mem_limit: 512m
+    cpus: 0.5
+    
+    # 用户/权限
+    user: "1000:1000"
+    cap_add:
+      - NET_ADMIN
+    cap_drop:
+      - ALL
+    privileged: false
+    read_only: true
+    
+    # 命令
+    command: ["nginx", "-g", "daemon off;"]
+    entrypoint: /custom-entrypoint.sh
+    
+    # 工作目录
+    working_dir: /app
+    
+    # 标签
+    labels:
+      - "com.myapp.role=web"
+    
+    # 日志
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # sysctls
+    sysctls:
+      net.core.somaxconn: 1024
+    
+    # ulimits
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 20000
+        hard: 40000
+    
+    # tmpfs
+    tmpfs:
+      - /run
+      - /tmp
+    
+    # TTY/STDIN
+    tty: true
+    stdin_open: true
+    
+    # extra_hosts（/etc/hosts 添加）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    
+    # DNS
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+    dns_search: example.com
+    
+    # 外部链接（连接非本 compose 的容器）
+    external_links:
+      - some_container
+    
+    # 网络模式
+    network_mode: bridge  # bridge | host | none | service:[service name] | container:[name/id]
+    
+    # PID 共享
+    pid: "service:db"  # 或 "host"
+    
+    # IPC 共享
+    ipc: "service:cache"
+</code></pre>
+</section>
+
+<section id="volumes" class="toc-link">
+  <h2><span class="num">04</span> 卷与网络</h2>
+
+<pre><code>volumes:
+  # 默认（自动创建）
+  dbdata:
+  
+  # 命名卷（外部存在）
+  existing_volume:
+    external: true
+  
+  # driver 配置
+  nfs_data:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=nfs.local,rw
+      device: ":/share"
+  
+  # 标签
+  labeled_vol:
+    labels:
+      - "com.myapp.type=data"
+
+networks:
+  # 默认 bridge
+  frontend:
+  
+  # 自定义子网
+  backend:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          ip_range: 172.20.0.0/24
+          gateway: 172.20.0.1
+  
+  # 外部网络
+  existing:
+    external: true
+    name: shared_net
+  
+  # overlay（swarm）
+  overlay_net:
+    driver: overlay
+    attachable: true   # 允许独立容器加入
+  
+  # macvlan
+  macvlan_net:
+    driver: macvlan
+    driver_opts:
+      parent: eth0
+    ipam:
+      config:
+        - subnet: 192.168.1.0/24
+</code></pre>
+</section>
+
+<section id="deploy" class="toc-link">
+  <h2><span class="num">05</span> 部署与资源</h2>
+
+<pre><code>services:
+  web:
+    image: nginx
+    deploy:
+      # 副本数
+      mode: replicated  # replicated | global
+      replicas: 3
+      
+      # 资源
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      
+      # 重启策略
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      
+      # 更新策略
+      update_config:
+        parallelism: 2
+        delay: 10s
+        failure_action: rollback
+        monitor: 30s
+        max_failure_ratio: 0.3
+        order: start-first  # start-first | stop-first
+      
+      # 回滚策略
+      rollback_config:
+        parallelism: 0
+        order: stop-first
+      
+      # 放置约束
+      placement:
+        constraints:
+          - node.role == manager
+          - engine.labels.ssd == true
+        preferences:
+          - spread: node.labels.zone
+      
+      # 端口模式
+      endpoint_mode: vip  # vip | dnsrr
+      
+      # 标签
+      labels:
+        - "com.myapp.service=web"
+</code></pre>
+
+  <p>非 Swarm 警告：</p>
+<pre><code># deploy 字段仅在 swarm 模式生效（docker stack deploy）
+# 普通 compose up 时会被忽略（除 resources 限制）
+
+# 单机资源限制（compose v2 真正生效）：
+services:
+  web:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    # 在 compose v2 + Linux 上能生效
+</code></pre>
+</section>
+
+<section id="profiles" class="toc-link">
+  <h2><span class="num">06</span> Profile 与多环境</h2>
+
+<pre><code>services:
+  web:
+    image: nginx
+    profiles:
+      - prod
+      - staging
+  
+  debug:
+    image: nginx-debug
+    profiles:
+      - debug
+
+# 启动 prod 服务
+docker compose --profile prod up
+
+# 启动 debug 服务
+docker compose --profile debug up
+
+# 启动所有服务（所有 profile）
+docker compose --profile "*" up
+
+# 多 profile
+docker compose --profile prod --profile monitor up
+
+# 没指定 profile 的服务默认启动
+</code></pre>
+
+  <p>多环境模式（推荐）：</p>
+<pre><code># docker-compose.yml（基础）
+# docker-compose.override.yml（开发默认）
+# docker-compose.prod.yml（生产）
+
+# 调用：
+docker compose up                      # 用 override
+docker compose -f docker-compose.yml \
+               -f docker-compose.prod.yml up
+
+# .env 区分
+# .env      - 共享
+# .env.dev  - 开发
+# .env.prod - 生产
+docker compose --env-file .env.prod up
+</code></pre>
+</section>
+
+<section id="v2" class="toc-link">
+  <h2><span class="num">07</span> Compose v2 架构</h2>
+
+  <p>Compose v2 完全用 Go 重写，集成到 docker CLI 作为 plugin：</p>
+
+<pre><code>// 调用方式：
+docker compose up    # 新（v2）
+docker-compose up    # 老（v1，Python）
+
+// Plugin 位置：
+// /usr/lib/docker/cli-plugins/docker-compose
+// 或 ~/.docker/cli-plugins/docker-compose
+
+// Compose v2 优势：
+//   1. 速度（Go 编译，比 Python 快 10 倍）
+//   2. 与 docker CLI 集成
+//   3. 更好的错误信息
+//   4. 与 BuildKit 集成
+//   5. 持续维护（v1 已停止）
+</code></pre>
+
+  <p>Compose v2 内部架构：</p>
+<pre><code>┌─────────────────────────────────────────┐
+│  docker CLI                              │
+│  ↓ dispatch                              │
+├─────────────────────────────────────────┤
+│  docker compose plugin                   │
+│  (github.com/docker/compose)             │
+│                                          │
+│  ┌──────────────────────────────────┐   │
+│  │ cmd/compose/main.go              │   │
+│  │ - 命令解析                        │   │
+│  │ - 错误处理                        │   │
+│  └──────────────────────────────────┘   │
+│  ┌──────────────────────────────────┐   │
+│  │ internal/cmd/                    │   │
+│  │ - up.go, down.go, ps.go, ...     │   │
+│  └──────────────────────────────────┘   │
+│  ┌──────────────────────────────────┐   │
+│  │ pkg/compose/                     │   │
+│  │ - 项目结构（services, volumes, …）│   │
+│  │ - YAML 解析                       │   │
+│  │ - 与 docker SDK 通信              │   │
+│  └──────────────────────────────────┘   │
+└────────────────┬────────────────────────┘
+                 │ HTTP API
+┌────────────────▼────────────────────────┐
+│   dockerd                                │
+└─────────────────────────────────────────┘
+</code></pre>
+
+  <p>关键 Go 类型：</p>
+<pre><code>// pkg/compose/types.go
+type Project struct {
+    Name         string
+    WorkingDir   string
+    Services     Services  // map[string]ServiceConfig
+    Networks     map[string]NetworkConfig
+    Volumes      map[string]VolumeConfig
+    Secrets      map[string]SecretConfig
+    Configs      map[string]ConfigConfig
+    Extensions   map[string]interface{}
+    Composition  *composetypes.Config
+    Environment  map[string]string
+}
+
+type ServiceConfig struct {
+    Name           string
+    Image          string
+    Build          *BuildConfig
+    Command        ShellCommand
+    Environment    MappingWithEquals
+    Networks       map[string]*ServiceNetworkConfig
+    Ports          []ServicePortConfig
+    Volumes        []ServiceVolumeConfig
+    // ... 大量字段 ...
+}
+
+// YAML 解析：
+// go.yaml.in/yaml.v3 + compose v3 schema
+</code></pre>
+</section>
+
+<section id="commands" class="toc-link">
+  <h2><span class="num">08</span> 主要命令</h2>
+
+  <table>
+    <tr><th>命令</th><th>作用</th></tr>
+    <tr><td><code>up</code></td><td>启动整个应用（构建、创建、启动）</td></tr>
+    <tr><td><code>down</code></td><td>停止并移除容器、网络（-v 同时删卷）</td></tr>
+    <tr><td><code>start</code></td><td>启动已存在的容器</td></tr>
+    <tr><td><code>stop</code></td><td>停止容器（不删除）</td></tr>
+    <tr><td><code>restart</code></td><td>重启容器</td></tr>
+    <tr><td><code>pause</code> / <code>unpause</code></td><td>暂停 / 恢复</td></tr>
+    <tr><td><code>build</code></td><td>构建或重建服务镜像</td></tr>
+    <tr><td><code>pull</code></td><td>拉取服务镜像</td></tr>
+    <tr><td><code>push</code></td><td>推送服务镜像</td></tr>
+    <tr><td><code>logs</code></td><td>查看日志（-f 跟随）</td></tr>
+    <tr><td><code>ps</code></td><td>列出容器</td></tr>
+    <tr><td><code>top</code></td><td>查看进程</td></tr>
+    <tr><td><code>exec</code></td><td>在运行容器执行命令</td></tr>
+    <tr><td><code>run</code></td><td>启动一次性容器（如迁移）</td></tr>
+    <tr><td><code>scale</code></td><td>扩展服务（swarm 或多副本）</td></tr>
+    <tr><td><code>events</code></td><td>实时事件流</td></tr>
+    <tr><td><code>config</code></td><td>校验并显示合并后的配置</td></tr>
+    <tr><td><code>images</code></td><td>列出使用的镜像</td></tr>
+    <tr><td><code>port</code></td><td>查看端口映射</td></tr>
+    <tr><td><code>cp</code></td><td>在容器和宿主间复制文件</td></tr>
+  </table>
+
+  <p>常用选项：</p>
+<pre><code>docker compose up -d                 # 后台运行
+docker compose up --build            # 强制重新构建
+docker compose up --force-recreate   # 强制重建容器
+docker compose up --scale web=3      # 启动 3 个 web 实例
+
+docker compose exec web sh           # 进入容器
+docker compose run --rm web rake db:migrate  # 一次性任务
+
+docker compose logs -f --tail=100 web
+
+docker compose ps --services         # 仅列服务名
+docker compose ps -a                 # 包含已停止
+
+docker compose config                # 显示合并后配置（含变量替换）
+docker compose convert               # 同上（v2 名字）
+</code></pre>
+</section>
+
+<section id="swarm" class="toc-link">
+  <h2><span class="num">09</span> Swarm 模式</h2>
+
+  <p>Compose 是 Swarm 的<strong>声明式输入</strong>。可以部署到集群：</p>
+
+<pre><code># 启用 swarm
+docker swarm init
+docker swarm join --token ... &lt;manager_ip&gt;:2377
+
+# 部署 stack
+docker stack deploy -c docker-compose.yml myapp
+
+# 查看
+docker stack services myapp
+docker service ls
+
+# 删除
+docker stack rm myapp
+</code></pre>
+
+  <p>Swarm 特有概念：</p>
+<pre><code>// 1. Stack
+//    一组相关服务的集合
+//    来自 compose 文件
+
+// 2. Service
+//    服务模板（如 web）
+//    可有多个副本（task）
+
+// 3. Task
+//    单个容器实例
+//    调度到 node 上
+
+// 4. Node
+//    swarm 集群的机器
+//    manager / worker
+
+// Compose → Swarm：
+//   Compose 用于开发/小生产
+//   Swarm 用于集群部署
+//   K8s 是更高级的集群方案（与 Swarm 同类）
+
+// Swarm vs K8s：
+//   Swarm: Docker 内置，简单
+//   K8s:   功能丰富，生态广
+//   现代生产几乎都选 K8s
+</code></pre>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">10</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+docker/compose (github.com/docker/compose)
+├── <span class="file">cmd/compose/main.go</span>                <span class="cmt">主入口</span>
+├── <span class="file">cmd/compose/compose.go</span>             <span class="cmt">plugin 注册</span>
+├── <span class="file">internal/cmd/</span>                       <span class="cmt">命令实现</span>
+│   ├── <span class="file">up.go</span>                              <span class="cmt">up 命令</span>
+│   ├── <span class="file">down.go</span>                            <span class="cmt">down 命令</span>
+│   ├── <span class="file">build.go</span>                           <span class="cmt">build 命令</span>
+│   ├── <span class="file">exec.go</span>                            <span class="cmt">exec 命令</span>
+│   ├── <span class="file">run.go</span>                             <span class="cmt">run 命令</span>
+│   ├── <span class="file">logs.go</span>                            <span class="cmt">logs 命令</span>
+│   ├── <span class="file">ps.go</span>                              <span class="cmt">ps 命令</span>
+│   ├── <span class="file">convert.go</span>                         <span class="cmt">config 命令</span>
+│   └── ... 共 ~30 个命令
+├── <span class="file">pkg/compose/</span>                         <span class="cmt">核心库</span>
+│   ├── <span class="file">compose.go</span>                         <span class="cmt">Project 主对象</span>
+│   ├── <span class="file">types.go</span>                           <span class="cmt">类型定义</span>
+│   ├── <span class="file">services.go</span>                        <span class="cmt">服务管理</span>
+│   ├── <span class="file">up.go</span>                              <span class="cmt">up 逻辑</span>
+│   ├── <span class="file">down.go</span>                            <span class="cmt">down 逻辑</span>
+│   ├── <span class="file">build.go</span>                           <span class="cmt">build 逻辑</span>
+│   ├── <span class="file">exec.go</span>                            <span class="cmt">exec 逻辑</span>
+│   ├── <span class="file">run.go</span>                             <span class="cmt">run 逻辑</span>
+│   ├── <span class="file">logs.go</span>                            <span class="cmt">logs 逻辑</span>
+│   ├── <span class="file">ps.go</span>                              <span class="cmt">ps 逻辑</span>
+│   ├── <span class="file">stop.go</span>                            <span class="cmt">stop 逻辑</span>
+│   ├── <span class="file">start.go</span>                           <span class="cmt">start 逻辑</span>
+│   ├── <span class="file">restart.go</span>                         <span class="cmt">restart 逻辑</span>
+│   ├── <span class="file">scale.go</span>                           <span class="cmt">scale 逻辑</span>
+│   ├── <span class="file">pull.go</span>                            <span class="cmt">pull 逻辑</span>
+│   ├── <span class="file">push.go</span>                            <span class="cmt">push 逻辑</span>
+│   ├── <span class="file">top.go</span>                             <span class="cmt">top 逻辑</span>
+│   ├── <span class="file">events.go</span>                          <span class="cmt">events 逻辑</span>
+│   ├── <span class="file">port.go</span>                            <span class="cmt">port 逻辑</span>
+│   ├── <span class="file">cp.go</span>                              <span class="cmt">cp 逻辑</span>
+│   ├── <span class="file">images.go</span>                          <span class="cmt">images 逻辑</span>
+│   ├── <span class="file">completion/</span>                        <span class="cmt">shell completion</span>
+│   ├── <span class="file">attach/</span>                            <span class="cmt">attach</span>
+│   ├── <span class="file">containers/</span>                       <span class="cmt">容器管理</span>
+│   ├── <span class="file">errdefs/</span>                          <span class="cmt">错误定义</span>
+│   ├── <span class="file">env/</span>                              <span class="cmt">环境变量</span>
+│   ├── <span class="file">interpolation/</span>                    <span class="cmt">变量插值</span>
+│   ├── <span class="file">labels.go</span>                          <span class="cmt">容器标签</span>
+│   ├── <span class="file">progress/</span>                         <span class="cmt">进度显示</span>
+│   ├── <span class="file">secrets.go</span>                         <span class="cmt">secret 管理</span>
+│   ├── <span class="file">utils/</span>                            <span class="cmt">辅助</span>
+│   ├── <span class="file">volumes/</span>                          <span class="cmt">volume 管理</span>
+│   └── <span class="file">warnings.go</span>                        <span class="cmt">警告</span>
+├── <span class="file">pkg/api/</span>                                <span class="cmt">API 接口</span>
+│   ├── <span class="file">api.go</span>                              <span class="cmt">ServiceAPI 接口</span>
+│   └── <span class="file">labels.go</span>                          <span class="cmt">标签定义</span>
+├── <span class="file">pkg/compose/</span>
+├── <span class="file">pkg/progress/</span>                          <span class="cmt">进度条</span>
+├── <span class="file">pkg/yaml/</span>                              <span class="cmt">YAML 解析</span>
+├── <span class="file">docs/</span>                                   <span class="cmt">文档</span>
+│   ├── <span class="file">reference/</span>                         <span class="cmt">命令参考</span>
+│   └── <span class="file">compose-file/</span>                      <span class="cmt">compose spec</span>
+└── <span class="file">e2e/</span>                                    <span class="cmt">E2E 测试</span>
+
+compose-spec (github.com/compose-spec/compose-spec)
+└── <span class="file">schema/</span>                                  <span class="cmt">JSON Schema</span>
+    └── <span class="file">compose-spec.json</span>                   <span class="cmt">官方 schema</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>cmd/compose/main.go</code> + <code>internal/cmd/up.go</code> 看 up 命令实现。<br>
+    <code>pkg/compose/compose.go</code> Project 主对象。<br>
+    <code>pkg/compose/types.go</code> 所有配置类型。<br>
+    <code>pkg/compose/up.go</code> 实际启动逻辑。<br>
+    <code>compose-spec/schema/compose-spec.json</code> 官方 schema（最权威）。<br>
+    实战：官方 example 项目 <code>awesome-compose</code>。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

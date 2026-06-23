@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker 存储卷与持久化深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Docker 存储卷与持久化深度解析</h1>
+  <p class="subtitle">Volume / Bind Mount / tmpfs — 容器数据的三种生命周期</p>
+  <span class="version">Docker 26.x · moby/moby/volume/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#compare">三种挂载对比</a></li>
+    <li><a href="#volume">Volume（命名卷）</a></li>
+    <li><a href="#bind">Bind Mount</a></li>
+    <li><a href="#tmpfs">tmpfs Mount</a></li>
+    <li><a href="#image">image-packed 卷</a></li>
+    <li><a href="#cluster">集群存储</a></li>
+    <li><a href="#plugins">Volume Plugins</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>容器默认<strong>无状态</strong>：容器删除后，其文件系统（容器层）一起删除。要持久化数据，需要挂载外部存储。</p>
+
+  <p>Docker 提供三种挂载方式：</p>
+
+  <table>
+    <tr><th>类型</th><th>存储位置</th><th>管理方</th><th>典型场景</th></tr>
+    <tr><td><strong>Volume</strong></td><td><code>/var/lib/docker/volumes/</code></td><td>Docker</td><td>数据库、应用数据</td></tr>
+    <tr><td><strong>Bind Mount</strong></td><td>任意宿主路径</td><td>用户</td><td>开发、配置注入</td></tr>
+    <tr><td><strong>tmpfs</strong></td><td>宿主内存</td><td>内核</td><td>敏感数据、临时</td></tr>
+  </table>
+
+  <p>挂载示意图：</p>
+<pre><code>┌─────────────────────────────────────────────┐
+│  Host                                       │
+│  ┌─────────────────────────────────────┐   │
+│  │ /var/lib/docker/volumes/myvol/_data │   │
+│  │  (Volume)                            │   │
+│  └─────────────────────────────────────┘   │
+│                                             │
+│  ┌─────────────────────────────────────┐   │
+│  │ /home/user/config (任意路径)        │   │
+│  │  (Bind Mount)                        │   │
+│  └─────────────────────────────────────┘   │
+│                                             │
+│  ┌─────────────────────────────────────┐   │
+│  │ RAM (tmpfs)                          │   │
+│  │  (tmpfs Mount)                       │   │
+│  └─────────────────────────────────────┘   │
+│                                             │
+│  ┌─────────────────────────────────────┐   │
+│  │ Container (overlayfs)               │   │
+│  │  ┌─ /etc/nginx/nginx.conf &lt;─ bind ─┐  │   │
+│  │  ├─ /var/lib/mysql     &lt;─ volume ─┤ │   │
+│  │  └─ /tmp                &lt;─ tmpfs  ─┘  │   │
+│  └─────────────────────────────────────┘   │
+└─────────────────────────────────────────────┘
+</code></pre>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">02</span> 三种挂载对比</h2>
+
+  <table>
+    <tr><th></th><th>Volume</th><th>Bind Mount</th><th>tmpfs</th></tr>
+    <tr><td>创建</td><td>docker volume create / 自动</td><td>用户预先创建</td><td>挂载时创建</td></tr>
+    <tr><td>位置</td><td>Docker 管理目录</td><td>任意宿主路径</td><td>RAM</td></tr>
+    <tr><td>跨主机</td><td>支持（需 driver）</td><td>不支持</td><td>不支持</td></tr>
+    <tr><td>权限</td><td>Docker 管理 SELinux 标签</td><td>用户负责</td><td>用户负责</td></tr>
+    <tr><td>备份</td><td>docker volume backup</td><td>普通文件备份</td><td>无（重启丢失）</td></tr>
+    <tr><td>性能</td><td>接近原生</td><td>原生</td><td>最快（内存）</td></tr>
+    <tr><td>生命周期</td><td>容器删了卷还在</td><td>独立于容器</td><td>容器停了就没了</td></tr>
+    <tr><td>推荐</td><td>生产数据</td><td>开发环境</td><td>临时数据</td></tr>
+  </table>
+
+  <p>命令对比：</p>
+<pre><code># 1. Volume（命名卷）
+docker run -v myvol:/data nginx
+docker run --mount type=volume,src=myvol,dst=/data nginx
+
+# 2. Bind Mount
+docker run -v /home/me/config:/etc/nginx nginx
+docker run --mount type=bind,src=/home/me/config,dst=/etc/nginx nginx
+
+# 3. tmpfs
+docker run --tmpfs /cache nginx
+docker run --mount type=tmpfs,dst=/cache nginx
+
+# 推荐使用 --mount（更清晰、可读性更好）
+# -v 是老语法，简写但有歧义
+</code></pre>
+</section>
+
+<section id="volume" class="toc-link">
+  <h2><span class="num">03</span> Volume（命名卷）</h2>
+
+<pre><code># 创建
+docker volume create myvol
+
+# 列表
+docker volume ls
+DRIVER    VOLUME NAME
+local     myvol
+
+# 详情
+docker volume inspect myvol
+[
+  {
+    "CreatedAt": "2024-...",
+    "Driver": "local",
+    "Labels": {},
+    "Mountpoint": "/var/lib/docker/volumes/myvol/_data",
+    "Name": "myvol",
+    "Options": {},
+    "Scope": "local"
+  }
+]
+
+# 删除
+docker volume rm myvol
+
+# 清理无用卷
+docker volume prune
+</code></pre>
+
+  <p>使用：</p>
+<pre><code># 1. 显式使用
+docker run -d \
+  --name db \
+  -v myvol:/var/lib/mysql \
+  mysql:8
+
+# 2. 自动创建匿名卷
+# Dockerfile: VOLUME /var/lib/mysql
+# 启动时自动创建随机名卷
+docker run mysql:8
+# 创建类似 6c4f0a8b... 的匿名卷
+
+# 3. 只读挂载
+docker run -v myvol:/data:ro nginx
+docker run --mount type=volume,src=myvol,dst=/data,ro nginx
+
+# 4. 卷共享（容器间）
+docker run -d -v sharedvol:/data --name app1 nginx
+docker run -d --volumes-from app1 --name app2 nginx
+# app2 共享 app1 的所有卷
+</code></pre>
+
+  <p>Volume Driver：</p>
+<pre><code>// 默认 driver: local
+// 卷存在 /var/lib/docker/volumes/&lt;name&gt;/_data
+
+// 其他 driver（通过 plugin）：
+//   local + nfs      - 通过 NFS 挂载
+//   local + tmpfs    - 内存卷
+//   local + btrfs    - btrfs 子卷
+//   local + zfs      - zfs 数据集
+
+// 使用 NFS：
+docker volume create \
+  --driver local \
+  --opt type=nfs \
+  --opt o=addr=192.168.1.10,rw \
+  --opt device=:/path/to/share \
+  nfsvol
+
+// CSI 驱动（Cloud Volume）：
+//   - AWS EBS
+//   - GCE Persistent Disk
+//   - Azure Disk
+//   - Ceph RBD
+//   - Longhorn
+</code></pre>
+</section>
+
+<section id="bind" class="toc-link">
+  <h2><span class="num">04</span> Bind Mount</h2>
+
+<pre><code># 1. 基本用法
+docker run -v /home/me/app:/app nginx
+docker run --mount type=bind,src=/home/me/app,dst=/app nginx
+
+# 2. 只读
+docker run -v /home/me/config:/etc/nginx:ro nginx
+docker run --mount type=bind,src=/home/me/config,dst=/etc/nginx,ro nginx
+
+# 3. SELinux 标签（:z / :Z）
+docker run -v /home/me/config:/etc/nginx:z nginx
+# :z  - 共享标签（多个容器共享）
+# :Z  - 私有标签（仅此容器）
+
+# 4. 单文件 bind
+docker run -v /home/me/nginx.conf:/etc/nginx/nginx.conf:ro nginx
+</code></pre>
+
+  <div class="callout">
+    <strong>Bind Mount 的坑:</strong><br>
+    1. <strong>路径必须存在</strong>（否则 Docker 创建空目录，导致容器看到空文件）<br>
+    2. <strong>权限</strong>：宿主文件 owner 与容器内不一致时，可能无法读写<br>
+    3. <strong>覆盖容器内容</strong>：bind mount 覆盖容器内目录（如果目标有镜像文件）<br>
+    4. <strong>跨主机不可移植</strong>：路径在每台机器上不同<br>
+    5. <strong>安全</strong>：bind mount 可让容器写宿主敏感路径<br>
+    推荐：开发环境用 bind mount（hot reload），生产用 volume。
+  </div>
+
+  <p>典型开发场景：</p>
+<pre><code># Web 开发：源代码挂载到容器
+docker run -d \
+  -v $(pwd)/src:/app/src \
+  -v $(pwd)/config:/app/config \
+  -p 3000:3000 \
+  node-app
+
+// 容器内修改文件 → 宿主同步
+// 宿主修改文件 → 容器看到（hot reload）
+// 无需重建镜像
+</code></pre>
+</section>
+
+<section id="tmpfs" class="toc-link">
+  <h2><span class="num">05</span> tmpfs Mount</h2>
+
+<pre><code># 基本用法
+docker run -d --tmpfs /cache nginx
+docker run -d --mount type=tmpfs,dst=/cache nginx
+
+# 选项
+docker run -d \
+  --mount type=tmpfs,dst=/cache,tmpfs-size=1g,tmpfs-mode=1777 \
+  nginx
+
+# 特点：
+# - 数据在内存（不写磁盘）
+# - 容器停止后数据消失
+# - 性能极高
+# - 不计入镜像
+
+# 用途：
+# - 敏感数据（密码、密钥）
+# - 临时缓存
+# - 防止磁盘写入（安全）
+
+# 与容器内 /tmp 区别：
+# - /tmp 默认在 overlayfs（写时复制）
+# - tmpfs 是独立的内存文件系统
+# - 容器删除后，/tmp 数据消失
+# - tmpfs 数据也消失，但更快
+</code></pre>
+</section>
+
+<section id="image" class="toc-link">
+  <h2><span class="num">06</span> image-packed 卷</h2>
+
+  <p>Docker 26+ / BuildKit 引入的新特性：<strong>从镜像中打包卷</strong>：</p>
+
+<pre><code># 卷创建时从镜像复制内容
+docker volume create myvol --opt type=image --opt o=subpath=/data --opt device=myimage:latest
+
+# 用途：
+# - 预填充配置数据
+# - 预填充基础数据（如 GeoIP 数据库）
+# - 跨容器共享只读内容
+
+# 老办法（仍在用）：
+# 1. 镜像构建时 COPY 数据到容器
+# 2. 启动容器时 cp 数据到卷
+# 3. 删除原文件
+
+# 新办法：
+# 直接从镜像创建卷，跳过手动复制
+</code></pre>
+</section>
+
+<section id="cluster" class="toc-link">
+  <h2><span class="num">07</span> 集群存储</a></h2>
+
+  <p>跨主机的卷（Swarm 或 K8s）：</p>
+
+<pre><code>// Docker Swarm：
+//   集群卷通过 driver 实现
+//   例：使用 NFS / GlusterFS / Ceph
+
+docker volume create \
+  --driver nfs \
+  --opt type=nfs \
+  --opt o=addr=nfs.local,rw \
+  --opt device=:/share \
+  shared
+
+// 在任何节点都能挂载
+docker service create --mount type=volume,src=shared,dst=/data web
+
+// Kubernetes：
+//   通过 CSI（Container Storage Interface）插件
+//   - PVC (Persistent Volume Claim)
+//   - PV  (Persistent Volume)
+//   - StorageClass
+
+// yaml 示例：
+// apiVersion: v1
+// kind: PersistentVolumeClaim
+// metadata:
+//   name: my-pvc
+// spec:
+//   accessModes: [ReadWriteOnce]
+//   resources:
+//     requests:
+//       storage: 10Gi
+//   storageClassName: standard
+</code></pre>
+</section>
+
+<section id="plugins" class="toc-link">
+  <h2><span class="num">08</span> Volume Plugins</a></h2>
+
+<pre><code>// Volume plugin 接口（HTTP API）：
+// 路径：/VolumeDriver.{Action}
+
+// 主要 action：
+POST /VolumeDriver.Create
+{ "Name": "myvol", "Opts": {} }
+
+POST /VolumeDriver.Remove
+{ "Name": "myvol" }
+
+POST /VolumeDriver.Mount
+{ "Name": "myvol" }
+// 返回: { "Mountpoint": "/path/to/mount" }
+
+POST /VolumeDriver.Unmount
+{ "Name": "myvol" }
+
+POST /VolumeDriver.Path
+{ "Name": "myvol" }
+// 返回: { "Mountpoint": "/path/to/mount" }
+
+POST /VolumeDriver.Get
+{ "Name": "myvol" }
+// 返回卷详细信息
+
+POST /VolumeDriver.List
+// 返回所有卷
+
+POST /VolumeDriver.Capabilities
+// 返回 driver 能力
+
+// Plugin 注册：
+// /etc/docker/plugins/mydriver.spec
+// 或 docker plugin install
+
+// 知名 Volume Plugins：
+//   - blockbridge
+//   - convoy
+//   - rexray (多种 backend)
+//   - purestorage
+//   - portworx
+//   - storageos
+</code></pre>
+
+  <p>CSI（Container Storage Interface）：</p>
+<pre><code>// CSI 是 K8s/CRI-O/Containerd 共同的标准
+// 三种 gRPC 服务：
+//   IdentityServer  - 插件信息
+//   ControllerServer - 卷管理（create/delete/attach）
+//   NodeServer       - 节点端（mount/unmount）
+
+// 知名 CSI：
+//   - AWS EBS CSI
+//   - GCE PD CSI
+//   - Azure Disk CSI
+//   - Ceph CSI
+//   - Longhorn (Rancher)
+//   - OpenEBS
+//   - Portworx
+//   - Rook
+
+// CSI 与 Docker Volume Plugin 区别：
+//   Docker Volume Plugin - HTTP API，仅 Docker
+//   CSI                  - gRPC，跨平台（K8s/Mesos/Containerd）
+</code></pre>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+moby/moby (github.com/moby/moby)
+├── <span class="file">volume/</span>                                <span class="cmt">Volume 核心实现</span>
+│   ├── <span class="file">volume.go</span>                          <span class="cmt">VolumeDriver 接口</span>
+│   ├── <span class="file">store.go</span>                            <span class="cmt">VolumeStore</span>
+│   ├── <span class="file">local/</span>                              <span class="cmt">local driver 实现</span>
+│   ├── <span class="file">drivers/</span>                            <span class="cmt">其他内置 driver</span>
+│   │   └── <span class="file">tmpfs.go</span>                        <span class="cmt">tmpfs driver</span>
+│   ├── <span class="file">testutils/</span>                          <span class="cmt">测试工具</span>
+│   └── <span class="file">errors.go</span>
+├── <span class="file">plugin/manager_v2.go</span>                    <span class="cmt">plugin manager</span>
+├── <span class="file">daemon/server/router/volume/</span>            <span class="cmt">Volume HTTP API</span>
+├── <span class="file">daemon/volume/</span>                          <span class="cmt">daemon volume 集成</span>
+├── <span class="file">container/mount.go</span>                      <span class="cmt">挂载点管理</span>
+├── <span class="file">api/types/mount/mount.go</span>                <span class="cmt">mount 类型</span>
+└── <span class="file">runconfig/opts/parse.go</span>                 <span class="cmt">-v / --mount 解析</span>
+
+containerd/containerd
+├── <span class="file">core/mount/mount.go</span>                      <span class="cmt">mount 操作</span>
+└── <span class="file">pkg/cri/server/</span>                         <span class="cmt">CRI 集成</span>
+    └── <span class="file">container_volume_handler.go</span>          <span class="cmt">volume 处理</span>
+
+CSI (container-storage-interface/spec)
+├── <span class="file">csi.proto</span>                                <span class="cmt">CSI gRPC spec</span>
+├── <span class="file">identity.proto</span>
+└── <span class="file">lib/go/</span>                                  <span class="cmt">Go 库</span>
+
+Kubernetes CSI Driver 实现（示例）
+├── <span class="file">pkg/csiadapters/</span>
+└── <span class="file">pkg/volume/csi/</span>
+
+第三方 Volume Plugins
+├── <span class="file">portworx/terraform-portworx</span>
+├── <span class="file">storageos/storageos</span>
+├── <span class="file">openebs/openebs</span>
+├── <span class="file">longhorn/longhorn</span>
+└── <span class="file">rook/rook</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>moby/volume/volume.go</code> + <code>local/</code> 默认 local driver。<br>
+    <code>moby/runconfig/opts/parse.go</code> 看 -v / --mount 解析。<br>
+    <code>containerd/core/mount/</code> 看 mount 操作。<br>
+    <code>container-storage-interface/spec/csi.proto</code> CSI 标准。<br>
+    实战：openebs、longhorn 源码 — 分布式存储。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

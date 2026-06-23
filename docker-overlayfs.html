@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OverlayFS 与容器镜像存储深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>OverlayFS 与容器镜像存储深度解析</h1>
+  <p class="subtitle">联合文件系统 — 容器镜像分层与写时复制</p>
+  <span class="version">Linux 7.0.12 · fs/overlayfs/ · Docker 视角</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#layers">分层模型</a></li>
+    <li><a href="#lookup">路径查找与合并</a></li>
+    <li><a href="#copy-up">写时复制 (Copy-Up)</a></li>
+    <li><a href="#redirect">重定向与元数据</a></li>
+    <li><a href="#whiteout">whiteout 与不透明目录</a></li>
+    <li><a href="#inodes">inode 与硬链接</a></li>
+    <li><a href="#docker">Docker 的使用</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>OverlayFS 是 Linux 内核的<strong>联合文件系统</strong>（Union Filesystem）。由 Miklos Szeredi 在 Linux 3.18 中合入，是 Docker 等容器技术的默认存储驱动。</p>
+
+  <p>核心思想：<strong>把多个目录"叠加"成一个视图</strong>，下层只读、上层可写。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">传统文件系统</div>
+<pre><code>/data
+├── file1
+├── file2
+└── dir/
+    └── file3</code></pre>
+      <p>每个文件实际在一处</p>
+    </div>
+    <div class="card">
+      <div class="card-title">OverlayFS</div>
+<pre><code>upper (rw): /upper
+  └── file1
+lower (ro): /lower
+  ├── file1 (旧)
+  ├── file2
+  └── dir/
+view:        /merged
+  ├── file1 (来自 upper)
+  ├── file2 (来自 lower)
+  └── dir/file3</code></pre>
+      <p>合并视图，写时复制</p>
+    </div>
+  </div>
+
+  <p>主要用途：</p>
+  <ul>
+    <li><strong>容器镜像</strong>：基础层 + 增量层 + 容器写层</li>
+    <li><strong>Live USB / Live CD</strong>：只读 squashfs + tmpfs 可写层</li>
+    <li><strong>系统升级</strong>：基础 rootfs + 增量更新</li>
+    <li><strong>版本切换</strong>：原子切换只读层</li>
+  </ul>
+</section>
+
+<section id="layers" class="toc-link">
+  <h2><span class="num">02</span> 分层模型</h2>
+
+  <p>OverlayFS 的基本概念：</p>
+
+<pre><code>// mount -t overlay overlay \
+//   -o lowerdir=L1:L2:L3,upperdir=U,workdir=W \
+//   /merged
+
+//  ┌──────────────────────────────────┐
+//  │ /merged (用户看到的合并视图)      │
+//  └────┬───────────────────┬─────────┘
+//       │ upper (读写)        │ lower (只读)
+//  ┌────▼──────────┐   ┌─────▼────────────┐
+//  │ /U            │   │ /L3 (top of lower)│
+//  │  file1 (新)   │   ├──────────────────┤
+//  │  dir (改)     │   │ /L2              │
+//  └───────────────┘   ├──────────────────┤
+//                       │ /L1 (bottom)     │
+//                       └──────────────────┘
+
+// lowerdir：可多个，用冒号分隔，左侧优先级最高
+// upperdir：唯一的可写层
+// workdir：overlayfs 内部使用（必须空目录）
+// 必须都在同一文件系统上
+</code></pre>
+
+  <p>Docker 的镜像分层结构：</p>
+<pre><code>docker pull nginx
+// 下载：
+//   layer 1: base os (debian)
+//   layer 2: nginx binary
+//   layer 3: nginx config
+// 每层都是一个 tarball
+
+// 启动容器时：
+//   lowerdir = 所有 image layers (只读)
+//   upperdir = 容器实例的写层
+//   merged   = /var/lib/docker/overlay2/.../merged
+
+// docker inspect &lt;c&gt; | grep -A 5 GraphDriver
+// "LowerDir": "/var/lib/docker/overlay2/...-init:.../diff:.../diff"
+// "UpperDir": "/var/lib/docker/overlay2/.../diff"
+// "WorkDir":  "/var/lib/docker/overlay2/.../work"
+// "MergedDir":"/var/lib/docker/overlay2/.../merged"
+</code></pre>
+
+  <p>OverlayFS 内部数据结构：</p>
+<pre><code>// fs/overlayfs/ovl_entry.h
+struct ovl_fs {
+    struct vfsmount       *__upper_mnt;
+    struct vfsmount       **lower_mnts;        // 多个 lower mounts
+    struct ovl_entry      *oe;                 // root entry
+    struct inode          *upperdir;
+    struct inode          *lowerdir;
+    unsigned int           numlower;
+    unsigned int           numlowerlayer;
+    unsigned long          row_shift;
+    /* path type mask */
+    struct ovl_config      config;
+    bool                   noxattr;
+    /* 标志 */
+    long                   namelen;
+    /* crypto */
+    struct crypto_shash    *shash;
+    struct {
+        unsigned int       xinator_seq;
+        unsigned int       redirect_seq;
+        unsigned int       metacopy_seq;
+    };
+    struct dentry         *workdir;
+    struct vfsmount       *upper_mnt;
+    struct path            upperpath;
+    struct inode          *workbasedir_inode;
+    struct dentry         *whiteout;
+    struct dentry         *workbasedir;
+    struct ovl_layer      *layers;             // 所有层
+};
+
+struct ovl_layer {
+    struct vfsmount       *mnt;
+    /* Trap to detect forward / reverse lookup */
+    struct dentry         *trap;
+    struct ovl_cache      *cache;
+    int                    idx;
+    int                    fsid;
+    bool                   fsid_checked;
+    char                  *name;
+    bool                   opaque;
+    const char            *redirect;
+    struct rcu_head        rcu;
+};
+</code></pre>
+</section>
+
+<section id="lookup" class="toc-link">
+  <h2><span class="num">03</span> 路径查找与合并</h2>
+
+  <p>当用户访问 <code>/merged/some/path</code> 时，OverlayFS 决定从哪一层读取：</p>
+
+<pre><code>// fs/overlayfs/super.c
+static struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
+                                   unsigned int flags)
+{
+    struct ovl_entry *oe;
+    struct ovl_path *stack = NULL;
+    struct dentry *upperdir, *upperdentry = NULL;
+    struct dentry *lowerdir, *lowerstack[2];
+    struct inode *inode = NULL;
+    bool stop = false;
+    int i;
+    
+    // 1. 在 upper 层查找
+    upperdir = ovl_dentry_upper(dentry);
+    if (upperdir) {
+        upperdentry = ovl_lookup_upper(upperdir, dentry, flags);
+        if (IS_ERR(upperdentry))
+            return upperdentry;
+        if (upperdentry &amp;&amp; d_is_negative(upperdentry))
+            upperdentry = NULL;
+    }
+    
+    // 2. 在每个 lower 层查找
+    for (i = 0; !stop &amp;&amp; i &lt; oe->numlower; i++) {
+        lowerdir = ovl_dentry_lowerdata(dentry, &amp;i);
+        // ...
+        // 找到 → 加入 stack
+        // 如果是 opaque 目录 → 停止继续向下
+        // 如果是 whiteout → 标记
+    }
+    
+    // 3. 合并：upper 优先
+    //    upper 存在 → 用 upper
+    //    否则 → 用第一个找到的 lower
+    
+    return d_splice_alias(inode, dentry);
+}
+
+// 性能优化：
+//   - dentry cache 缓存结果
+//   - ovl_cache 持久化目录列表
+//   - 元数据（mtime/size）合并
+</code></pre>
+
+  <p>文件的"来源"标识：</p>
+<pre><code>// include/uapi/linux/linux/fs.h
+#define OVL_TYPE_UPPER(t)   (t &amp; (1 &lt;&lt; 0))
+#define OVL_TYPE_MERGE(t)   (t &amp; (1 &lt;&lt; 1))
+#define OVL_TYPE_ORIGIN(t)  (t &amp; (1 &lt;&lt; 2))
+
+// 检查文件在哪一层：
+// getfattr -n user.overlay.origin /merged/file
+// 显示文件来自哪个 lower
+
+// stat 的 st_ino、st_dev 在 overlayfs 上是虚拟的
+// 实际 inode 由底层文件系统持有
+</code></pre>
+</section>
+
+<section id="copy-up" class="toc-link">
+  <h2><span class="num">04</span> 写时复制 (Copy-Up)</h2>
+
+  <p>当用户修改一个来自 lower 层的文件时，OverlayFS 会<strong>先把它复制到 upper 层</strong>，再修改副本。这就是写时复制 (Copy-Up, COW)。</p>
+
+<pre><code>// fs/overlayfs/copy_up.c
+int ovl_copy_up(struct dentry *dentry)
+{
+    int err;
+    
+    // 1. 检查是否需要 copy-up（已经在 upper 则跳过）
+    if (ovl_dentry_upper(dentry))
+        return 0;
+    
+    // 2. 从最深的 lower 层开始向上 copy
+    err = ovl_copy_up_one(dentry, ...);
+    
+    return err;
+}
+
+// copy-up 的步骤（关键操作）：
+static int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
+                             int flags)
+{
+    struct path lowerpath, upperpath;
+    struct file *lower_file, *upper_file;
+    struct ovl_copy_up_args cua;
+    
+    // 1. 创建临时文件在 workdir
+    ovl_path_lower(dentry, &lowerpath);
+    ovl_path_upper(dentry, &upperpath);
+    
+    // 2. 复制文件内容
+    err = ovl_copy_up_data(lowerpath, upperpath, i_size);
+    
+    // 3. 复制元数据（owner、mode、xattrs、time）
+    err = ovl_copy_up_inode(dentry, upperpath.dentry);
+    
+    // 4. 重命名到 upper (原子操作)
+    err = ovl_do_rename(...);
+    
+    return err;
+}
+
+// 触发 copy-up 的操作：
+//   - write
+//   - truncate
+//   - chmod, chown
+//   - utime
+//   - xattr 修改
+//   - open with O_WRONLY / O_RDWR / O_APPEND
+//   - link, rename
+//
+// 不触发 copy-up 的操作：
+//   - read
+//   - stat
+//   - getxattr
+//   - readdir (对目录)
+//   - mmap 读
+</code></pre>
+
+  <p>Copy-Up 的性能影响：</p>
+<pre><code>// 1. 第一次修改大文件代价高
+//    $ time docker exec container sh -c "echo x >> /usr/bin/file"
+//    若 /usr/bin/file 是 100MB（在 lower），需要复制 100MB
+
+// 2. 性能优化：
+//    - metacopy=on (元数据分离)
+//      只复制元数据，数据仍在 lower
+//    - redirect_dir=on
+//      目录重命名时只改 redirect，不 copy
+//    - volatile 优化
+//      mount -o volatile，不保证 fsync
+
+// 3. 系统调用追踪：
+strace -e copy_file_range -p &lt;container_pid&gt;
+// 看到 copy_up 时会调用 copy_file_range 或 sendfile
+</code></pre>
+
+  <div class="callout">
+    <strong>Copy-up 隐藏成本:</strong><br>
+    1. <strong>磁盘 I/O</strong>：第一次修改大文件时复制全部数据。<br>
+    2. <strong>inode 变化</strong>：copy-up 后 inode 号变化（即使路径不变）。<br>
+    3. <strong>链接断裂</strong>：硬链接在 copy-up 后变独立文件。<br>
+    4. <strong>权限检查</strong>：copy-up 时需要写 upper 的权限。<br>
+    避免方法：将频繁修改的文件放 volume；或预填充到容器层。
+  </div>
+</section>
+
+<section id="redirect" class="toc-link">
+  <h2><span class="num">05</span> 重定向与元数据</h2>
+
+  <p>OverlayFS 提供两个性能优化的扩展属性：</p>
+
+<pre><code>// 1. redirect dir（重定向目录）
+//    -o redirect_dir=on
+//    当重命名一个目录时，不复制目录内容
+//    而是在 upper 创建一个 redirect 文件，指向原位置
+
+// 用户操作：
+//    mv /merged/lowerdir /merged/newname
+// 实际：
+//    upper/newname/redirect="lowerdir"
+//    lowerdir 内容保持不变
+
+// 2. metacopy（元数据分离）
+//    -o metacopy=on
+//    修改文件的元数据（mtime、chmod）只复制元数据
+//    数据继续从 lower 读
+
+// 触发条件：只修改元数据，不修改内容
+//    chmod 755 /merged/bin/somebinary
+//    upper/somebinary (元数据，metadata only)
+//    lower/somebinary (实际数据)
+//    用户读 → 实际从 lower 读
+
+// 实现：
+// fs/overlayfs/copy_up.c
+// ovl_set_attr()  设置元数据
+// ovl_copy_up_meta_inode_data() 处理 metacopy
+
+// 检查：
+getfattr -d -m overlay /var/lib/docker/overlay2/.../diff/file
+// user.overlay.metacopy=...
+// user.overlay.redirect="lower path"
+</code></pre>
+
+  <p>安全考虑：</p>
+<pre><code>// redirect_dir 和 metacopy 有安全风险：
+//   - 攻击者可绕过某些检查
+//   - 跨 mount 的 redirect 可能导致信息泄漏
+// 因此需要明确的 mount 选项开启
+
+// 内核启动参数：
+//   ovl.redirect_dir=follow  (默认 - 跟随)
+//   ovl.redirect_dir=nofollow
+//   ovl.metacopy=on/off
+
+// Docker 的默认：
+//   redirect_dir=on
+//   metacopy=on
+//   (现代内核默认开启)
+</code></pre>
+</section>
+
+<section id="whiteout" class="toc-link">
+  <h2><span class="num">06</span> whiteout 与不透明目录</h2>
+
+  <p>如何"删除" lower 层的文件？OverlayFS 用 <strong>whiteout</strong> 机制。</p>
+
+<pre><code>// 用户：rm /merged/somefile  (somefile 在 lower)
+
+// OverlayFS 创建 whiteout 标记在 upper
+//   upper/.wh.somefile  (字符设备 0/0)
+//   或 xattr：user.overlay.whiteout
+// 当 lookup 看到这个标记时，认为文件不存在
+
+// 验证：
+// 在 lower 创建 file1
+// 在 upper 创建 .wh.file1 (mknod c 0 0 .wh.file1)
+// → /merged/file1 看起来不存在
+
+// 实现细节：
+// fs/overlayfs/dir.c - ovl_lookup()
+//   if (ovl_is_whiteout(dentry))
+//       return -ENOENT;
+
+// 不透明目录 (opaque)
+// 标记一个目录为"完全替换"，看不到 lower 的同名目录内容
+
+// 用户：
+//   在 upper 创建一个目录 foo，希望完全替换 lower 的 foo
+//   setfattr -n trusted.overlay.opaque -v y upper/foo
+// 或：
+//   mknod upper/foo/.wh..wh..opq c 0 0
+
+// 此时：
+//   lower/foo/* 不可见
+//   upper/foo/* 可见
+</code></pre>
+
+  <p>Linux 5.11+ 的改进：</p>
+<pre><code>// 旧方式：mknod .wh.* 字符设备
+//   问题：依赖 mknod，部分文件系统不支持
+
+// 新方式：xattr
+//   user.overlay.whiteout (whiteout)
+//   user.overlay.opaque   (opaque dir)
+//   user.overlay.redirect (redirect)
+//   user.overlay.origin   (origin tracking)
+//   user.overlay.metacopy
+
+// Docker 的实现使用 xattr 方式（更兼容）
+</code></pre>
+</section>
+
+<section id="inodes" class="toc-link">
+  <h2><span class="num">07</span> inode 与硬链接</h2>
+
+  <p>OverlayFS 的 inode 处理有微妙之处：</p>
+
+<pre><code>// 每个文件实际上有两套 inode：
+//   - 底层文件系统的 inode（ext4/xfs/...）
+//   - overlayfs 虚拟 inode（合成）
+
+// 用户看到的 inode 是虚拟的
+// 同一文件在不同视图下 inode 不同
+
+// 1. stat 命令
+$ stat /merged/file
+#   Inode: 12345 (虚拟)
+$ stat /upper/file
+#   Inode: 67890 (实际 ext4 inode)
+
+// 2. 硬链接问题
+// 在 lower 层有 hard link：lower/a ↔ lower/b (same inode)
+// 用户修改 /merged/a → copy-up → /upper/a (新 inode)
+// 此时 /merged/b 还指向 lower/b (旧 inode)
+// 链接断开！
+
+// 修复：ovl_revert
+//   内核会尝试同步（ovl_check_dentry_link）
+//   但不是所有情况都能完美处理
+
+// 3. 链接创建
+//    ln /merged/a /merged/b
+//    若 a 在 lower → a copy-up
+//    upper 创建链接
+//    lower/a 仍然存在
+
+// 4. index=on 解决链接问题
+// mount -o index=on
+//   - 维护一个索引：upper inode ↔ lower origin
+//   - 链接保持
+//   - 但性能略差
+</code></pre>
+
+  <p>导出 (export)：</p>
+<pre><code>// OverlayFS 默认不支持 NFS export
+// -o nfs_export=on  (5.x+)
+//   支持但需要 index=on
+//   性能损失明显
+
+// 用例：
+//   /var/lib/docker 用 NFS 后端 + overlayfs 不推荐
+//   通常 docker data 用本地文件系统
+</code></pre>
+</section>
+
+<section id="docker" class="toc-link">
+  <h2><span class="num">08</span> Docker 的使用</h2>
+
+  <p>Docker 的 overlay2 存储驱动（基于 OverlayFS）：</p>
+
+<pre><code># 查看存储驱动
+$ docker info | grep "Storage Driver"
+ Storage Driver: overlay2
+
+# Docker 目录结构
+$ ls /var/lib/docker/overlay2/
+abc123...          # layer 1 (image)
+def456...          # layer 2
+ghi789...          # layer 3 (top)
+jkl012...-init     # 容器 init 层（设置 hostname 等）
+mno345...          # 容器读写层
+
+# 每层目录：
+$ ls /var/lib/docker/overlay2/abc123.../
+diff/              # 该层文件内容
+link               # 短名称（避免路径过长）
+lower              # 父层（短名列表）
+committed          # 提交标记
+work/              # overlayfs work dir
+
+# 容器运行时：
+# LowerDir = 所有 image layer + init layer
+# UpperDir = 容器实例的 diff
+# MergedDir = 容器看到的 rootfs
+# WorkDir   = overlayfs 内部使用
+
+# 启动新容器：
+docker run -it ubuntu bash
+# 内部相当于：
+mount -t overlay overlay \
+  -o lowerdir=L1:L2:L3,upperdir=U,workdir=W \
+  /var/lib/docker/overlay2/.../merged
+
+# 之后 pivot_root 到 merged 目录
+</code></pre>
+
+  <p>overlay2 vs overlay vs aufs vs btrfs vs devicemapper：</p>
+  <table>
+    <tr><th>驱动</th><th>实现</th><th>特点</th></tr>
+    <tr><td><code>overlay2</code></td><td>内核 OverlayFS</td><td>现代默认，最快</td></tr>
+    <tr><td><code>overlay</code></td><td>旧 OverlayFS</td><td>已废弃</td></tr>
+    <tr><td><code>aufs</code></td><td>第三方模块</td><td>已废弃</td></tr>
+    <tr><td><code>btrfs</code></td><td>原生 subvolume</td><td>btrfs 文件系统</td></tr>
+    <tr><td><code>devicemapper</td><td>thin provisioning</td><td>已废弃</td></tr>
+    <tr><td><code>zfs</code></td><td>原生 snapshot</td><td>zfs 文件系统</td></tr>
+    <tr><td><code>vfs</code></td><td>无</td><td>完全 copy，无 union</td></tr>
+  </table>
+
+  <p>OverlayFS 文件系统挂载：</p>
+<pre><code># 手动挂载 overlayfs（理解原理）
+mkdir lower upper work merged
+
+# 创建 lower 内容
+echo "lower" > lower/file
+
+# 挂载
+mount -t overlay overlay \
+  -o lowerdir=lower,upperdir=upper,workdir=work \
+  merged
+
+# 测试
+cat merged/file    # lower
+echo "upper" > merged/file   # copy-up
+cat merged/file    # upper
+ls upper/          # 显示 file
+ls lower/          # 显示 file (不变)
+
+# 删除
+rm merged/file
+ls upper/.wh.*     # 看到 whiteout
+</code></pre>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">09</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">fs/overlayfs/super.c</span>          <span class="cmt">mount、ovl_fill_super</span>
+├── <span class="file">fs/overlayfs/inode.c</span>          <span class="cmt">inode 操作、attr 合并</span>
+├── <span class="file">fs/overlayfs/dir.c</span>            <span class="cmt">目录操作、whiteout、opaque</span>
+├── <span class="file">fs/overlayfs/file.c</span>           <span class="cmt">文件操作、读写拦截</span>
+├── <span class="file">fs/overlayfs/copy_up.c</span>        <span class="cmt">copy-up 逻辑</span>
+├── <span class="file">fs/overlayfs/namei.c</span>          <span class="cmt">路径查找、层选择</span>
+├── <span class="file">fs/overlayfs/readdir.c</span>        <span class="cmt">目录合并</span>
+├── <span class="file">fs/overlayfs/util.c</span>           <span class="cmt">辅助函数</span>
+├── <span class="file">fs/overlayfs/xattrs.c</span>         <span class="cmt">xattr 处理</span>
+├── <span class="file">fs/overlayfs/export.c</span>         <span class="cmt">NFS export 支持</span>
+├── <span class="file">fs/overlayfs/ovl_entry.h</span>      <span class="cmt">ovl_fs、ovl_entry 数据结构</span>
+├── <span class="file">Documentation/filesystems/overlayfs.rst</span> <span class="cmt">官方文档</span>
+└── <span class="file">include/uapi/linux/overlayfs.h</span> <span class="cmt">OVL_* 常量</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>Documentation/filesystems/overlayfs.rst</code> 官方文档（必读，1000+ 行详尽说明）。<br>
+    <code>fs/overlayfs/super.c</code> 看 mount 流程。<br>
+    <code>fs/overlayfs/copy_up.c</code> 核心 copy-up 算法。<br>
+    <code>fs/overlayfs/dir.c</code> whiteout、opaque 实现。<br>
+    <code>fs/overlayfs/namei.c</code> 多层查找逻辑。<br>
+    Docker 源码：moby/daemon/graphdriver/overlay2/。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

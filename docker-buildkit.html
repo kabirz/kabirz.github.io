@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BuildKit 与 Dockerfile 构建深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>BuildKit 与 Dockerfile 构建深度解析</h1>
+  <p class="subtitle">并行构建、DAG 调度、缓存复用 — 现代镜像构建引擎</p>
+  <span class="version">BuildKit 0.13 · moby/buildkit</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#architecture">架构总览</a></li>
+    <li><a href="#dockerfile">Dockerfile 解析</a></li>
+    <li><a href="#llb">LLB DAG</a></li>
+    <li><a href="#schedule">并行调度</a></li>
+    <li><a href="#cache">缓存系统</a></li>
+    <li><a href="#worker">Worker & Frontend</a></li>
+    <li><a href="#syntax">高级语法</a></li>
+    <li><a href="#export">导出与多平台</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>BuildKit 是 Docker 推出的<strong>下一代镜像构建引擎</strong>，从 Docker 18.09 开始作为默认 builder。替代了原 Docker 内置的 builder（"legacy builder"）。</p>
+
+  <p>核心改进：</p>
+  <table>
+    <tr><th>特性</th><th>Legacy Builder</th><th>BuildKit</th></tr>
+    <tr><td>构建顺序</td><td>严格串行</td><td>并行（依赖分析）</td></tr>
+    <tr><td>缓存</td><td>本地</td><td>本地 + 远程（registry/OCI）</td></tr>
+    <tr><td>中间镜像</td><td>每步产生</td><td>仅最终</td></tr>
+    <tr><td>--mount=type</td><td>不支持</td><td>支持（cache/secret/ssh）</td></tr>
+    <tr><td>多平台</td><td>需多次</td><td>一次 build</td></tr>
+    <tr><td>Frontend</td><td>固定 Dockerfile</td><td>可插拔（frontend image）</td></tr>
+    <tr><td>输出</td><td>image</td><td>image/local/oci/tar</td></tr>
+    <tr><td>secret</td><td>明文 ARG/ENV</td><td>secure mount</td></tr>
+  </table>
+
+  <p>启动方式：</p>
+<pre><code># 1. dockerd 内置（默认）
+# dockerd 配置：features: { buildkit: true }
+# 或 daemon.json:
+{
+  "features": {"buildkit": true}
+}
+
+# 2. 独立 daemon（standalone）
+docker run -d --name buildkit \
+  --privileged \
+  -v /var/lib/buildkit:/var/lib/buildkit \
+  moby/buildkit
+
+# 3. buildctl CLI（独立模式）
+buildctl build \
+  --frontend dockerfile.v0 \
+  --local context=. \
+  --local dockerfile=. \
+  --output type=image,name=myimage
+
+# 4. Kubernetes 部署（BuildKitd as Deployment）
+# 配合 BuildCluster 做分布式构建
+</code></pre>
+</section>
+
+<section id="architecture" class="toc-link">
+  <h2><span class="num">02</span> 架构总览</h2>
+
+<pre><code>┌─────────────────────────────────────────┐
+│   buildctl / docker CLI                 │
+│   - 用户输入                              │
+│   - 进度显示                              │
+└────────────────┬────────────────────────┘
+                 │ gRPC
+┌────────────────▼────────────────────────┐
+│   buildkitd (Controller)                │
+│   ┌──────────────────────────────────┐  │
+│   │   Frontends (Dockerfile, ...)    │  │
+│   └──────────────────────────────────┘  │
+│   ┌──────────────────────────────────┐  │
+│   │   Solver (LLB DAG)               │  │
+│   │   - 依赖图分析                    │  │
+│   │   - 并行调度                      │  │
+│   │   - 缓存复用                      │  │
+│   └──────────────────────────────────┘  │
+│   ┌──────────────────────────────────┐  │
+│   │   Cache Manager                  │  │
+│   │   - 本地缓存                      │  │
+│   │   - 远程缓存（registry）           │  │
+│   │   - 内容寻址                      │  │
+│   └──────────────────────────────────┘  │
+│   ┌──────────────────────────────────┐  │
+│   │   Workers                        │  │
+│   │   - runc (oci)                    │  │
+│   │   - containerd                    │  │
+│   └──────────────────────────────────┘  │
+└─────────────────────────────────────────┘
+</code></pre>
+
+  <p>核心 Go 包：</p>
+<pre><code>// buildkit/main.go
+// buildkitd daemon 启动
+
+// 1. Frontend 接口
+// buildkit/frontend/
+type Frontend interface {
+    Solve(ctx, llb.FrontendOpt) (*Result, error)
+    Inputs(ctx, opt) ([]llb.Output, error)  // 输入声明
+}
+
+// 2. Solver 接口
+// buildkit/solver/
+type Solver interface {
+    Solve(ctx, id, g *ops, opt SolveOpt) (*Result, error)
+    Status(ctx, ref, ch chan *SolveStatus) error
+}
+
+// 3. WorkerManager
+// buildkit/worker/
+type WorkerController interface {
+    Get(id string) (Worker, error)
+    List() []Worker
+    Add(w Worker) error
+}
+</code></pre>
+</section>
+
+<section id="dockerfile" class="toc-link">
+  <h2><span class="num">03</span> Dockerfile 解析</h2>
+
+<pre><code>// 经典 Dockerfile:
+FROM debian:12 AS base
+RUN apt-get update &amp;&amp; apt-get install -y nginx
+COPY nginx.conf /etc/nginx/nginx.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+
+// BuildKit 解析步骤：
+// 1. frontend/dockerfile/builder/build.go - Build()
+// 2. dockerfile2llb.Convert() — Dockerfile → LLB
+// 3. 每个 Dockerfile 指令 → 1 个或多个 LLB Op
+
+// 关键指令映射：
+//   FROM          → SourceOp (拉取 image)
+//   RUN           → ExecOp (在容器内运行)
+//   COPY          → FileOp (从上下文复制)
+//   ADD           → FileOp (同 COPY + 解压)
+//   ENV/LABEL/EXPOSE/USER/WORKDIR → 修改 metadata
+//   VOLUME        → metadata (不实际创建)
+//   CMD/ENTRYPOINT → metadata
+//   ARG           → 编译时变量
+
+// Dockerfile 解析器：
+// frontend/dockerfile/parser/parser.go
+type Node struct {
+    Value      string
+    Original   string
+    Children   []*Node
+    Next       *Node
+    Attributes map[string]bool
+    Flags      []string
+    StartLine  int
+    EndLine    int
+}
+
+// 解析支持：
+//   - 转义字符（\ 续行）
+//   - 注释（#）
+//   - Parser directives（# syntax=...）
+//   - HEREDOC（Dockerfile 1.4+）
+//   - multi-line JSON
+</code></pre>
+
+  <p>Dockerfile 语法版本（parser directives）：</p>
+<pre><code># syntax=docker/dockerfile:1.7
+# 顶部第一行声明语法版本
+# 这是 frontend image
+
+FROM debian:12
+...
+
+// 默认 builtin frontend:
+//   dockerfile.v0
+// 用户可指定任意 frontend:
+//   # syntax=example.com/my-frontend:latest
+</code></pre>
+</section>
+
+<section id="llb" class="toc-link">
+  <h2><span class="num">04</span> LLB DAG</h2>
+
+  <p>LLB (Low-Level Builder) 是 BuildKit 内部的<strong>有向无环图 (DAG) 表示</strong>，是并行调度的核心。</p>
+
+<pre><code>// buildkit/client/llb/llb.go
+
+type State struct {
+    output Output
+}
+
+// 创建 LLB DAG 示例：
+src1 := llb.Image("debian:12")
+src2 := llb.Image("alpine:3.18")
+copy1 := src1.Dir("/app").Run(llb.Shlex("apt-get update"))
+copy2 := copy1.Run(llb.Shlex("apt-get install -y nginx"))
+
+// 用户不直接写 LLB Go 代码
+// BuildKit 把 Dockerfile 转换为 LLB
+
+// LLB Op 类型（protobuf）：
+// frontend/dockerfile/dockerfile2llb/image/.../pb/ops.proto
+message Op {
+    OpIdentifier    inputs = 1;
+    oneof op {
+        SourceOp   source = 2;
+        ExecOp     exec = 3;
+        FileOp     file = 4;
+        BuildOp    build = 5;
+        MergeOp    merge = 6;
+        DiffOp     diff = 7;
+    }
+    WorkerConstraints worker = 9;
+}
+
+// SourceOp - 输入（FROM）
+message SourceOp {
+    string identifier = 1;  // docker.io/library/debian:12
+    map<string, string> attrs = 2;
+}
+
+// ExecOp - 执行（RUN）
+message ExecOp {
+    MetaExec meta = 1;
+    repeated Mount mounts = 2;
+    NetMode network = 3;
+    SecurityMode security = 4;
+    repeated SecretMount secrets = 5;
+    repeated SSHMount ssh = 6;
+}
+
+// FileOp - 文件操作（COPY）
+message FileOp {
+    repeated FileAction actions = 1;
+}
+
+message FileAction {
+    FileActionCopy copy = 1;
+    FileActionMkFile mkfile = 2;
+    FileActionMkdir mkdir = 3;
+    FileActionRm rm = 4;
+}
+</code></pre>
+
+  <p>示例：Dockerfile 转 LLB：</p>
+<pre><code>// Dockerfile:
+// FROM debian:12 AS builder
+// RUN apt-get update
+// RUN apt-get install -y nginx
+// FROM debian:12
+// COPY --from=builder /usr/sbin/nginx /usr/sbin/
+
+// LLB DAG:
+//         ┌─ Source(debian:12) ────┐
+//         │                         │
+//         ▼                         ▼
+//   Exec(apt-get update)      Source(debian:12)
+//         │                         │
+//         ▼                         │
+//   Exec(apt-get install)           │
+//         │                         │
+//         ▼                         │
+//   (snapshot 1)                    │
+//         │                         │
+//         └─────────────┬───────────┘
+//                       ▼
+//                  File(COPY)
+//                       │
+//                       ▼
+//                  (snapshot 2)
+//                       │
+//                       ▼
+//                  Final Image
+
+// 并行机会：
+//   - 两个 Source 可以并行
+//   - builder 系列依赖链可以并行
+//   - COPY 依赖两个 input，最后执行
+</code></pre>
+</section>
+
+<section id="schedule" class="toc-link">
+  <h2><span class="num">05</span> 并行调度</h2>
+
+<pre><code>// buildkit/solver/solver.go
+type Solver struct {
+    actx       context.Context
+    s         *edge
+    jobs      *jobs
+    opts      SolverOpt
+    recorder  *progress.MultiRecorder
+    mp        * MapProgress
+    targetSet map[string]struct{}
+}
+
+// Solve 入口
+func (s *Solver) Solve(ctx, id, g, opt SolveOpt) (*Result, error) {
+    // 1. 解析 LLB
+    // 2. 构建依赖图
+    // 3. 找到所有可并行的节点
+    // 4. 提交给 scheduler
+}
+
+// scheduler 维护 ready 队列
+// 每次 ready 后 dispatch 给 worker
+// 等待结果，触发后续节点 ready
+
+// buildkit/solver/edge.go
+type edge struct {
+    dependsOn   []*state // 入边
+    state       EdgeState
+    cache       CacheKey
+    scheduler   *scheduler
+    keys        []*CacheKey
+    ops         []*op
+    vertex      Vertex
+}
+
+// Scheduler 在 buildkit/solver/scheduler.go
+type Scheduler struct {
+    active   map[*edge]struct{}
+    polling  bool
+    rebuildCount int
+}
+
+// 关键算法：
+// 1. 拓扑排序所有 Op
+// 2. 无依赖的 Op 立即就绪
+// 3. 一个 Op 完成 → 检查所有依赖它的 Op 是否所有依赖完成
+// 4. 都完成 → 入 ready 队列
+// 5. Worker 从队列取 → 执行
+
+// 并行度控制：
+// - Worker 数量限制
+// - 同 Op 多次执行（如多平台）共享缓存
+// - 死锁检测
+</code></pre>
+</section>
+
+<section id="cache" class="toc-link">
+  <h2><span class="num">06</span> 缓存系统</h2>
+
+  <p>BuildKit 缓存是<strong>内容寻址</strong>的：相同输入 → 相同缓存。</p>
+
+<pre><code>// 缓存键计算：
+// buildkit/solver/llbsolver/vertex.go
+type CacheKey struct {
+    digest.Digest
+    Inputs []*CacheKey
+    Output Index
+}
+
+// 1. SourceOp 缓存键 = digest(image_name + platform)
+// 2. ExecOp 缓存键 = digest(inputs + cmd + env + cwd)
+// 3. FileOp 缓存键 = digest(inputs + src/dst + mode)
+
+// 缓存命中：
+//   - 计算当前 Op 的 cache key
+//   - 在 cache manifest 查找
+//   - 命中 → 跳过执行，复用 snapshot
+
+// 缓存存储：
+//   本地：/var/lib/buildkit/cache
+//   远程：push/pull from registry
+//         - layer digest + snapshot digest
+//         - 通过 content store
+
+// 远程缓存配置：
+docker build --cache-from=type=registry,ref=user/myimage:cache \
+             --cache-to=type=inline,mode=max \
+             -t myimage:latest .
+
+// 缓存类型：
+//   type=inline      - 元数据嵌在 image config
+//   type=registry    - 单独镜像，存 layer
+//   type=local       - 本地目录
+//   type=gha         - GitHub Actions cache
+//   type=s3, azblob  - 云存储
+</code></pre>
+
+  <p>缓存层（layer）的复用：</p>
+<pre><code>// Dockerfile:
+FROM ubuntu
+RUN apt update        # layer A
+RUN apt install nginx # layer B
+
+// 首次构建：
+//   pull ubuntu image
+//   exec RUN apt update   → snapshot A
+//   exec RUN apt install  → snapshot B
+
+// 第二次（修改 RUN apt install）：
+//   pull ubuntu image     → cache hit
+//   RUN apt update        → cache hit (input 不变)
+//   RUN apt install nginx → cache miss (input 变了)
+//                          → 重新执行
+</code></pre>
+
+  <div class="callout">
+    <strong>缓存最佳实践:</strong><br>
+    1. <strong>顺序</strong>：把不变层放前面（如系统包），频繁变化层放后面（如源码）<br>
+    2. <strong>合并</strong>：相关 RUN 合并一条（用 &amp;&amp;），减少中间层<br>
+    3. <strong>--mount=cache</strong>：包管理缓存（apt/dnpm/pip）跨 build 复用<br>
+    4. <strong>BUILDKIT_INLINE_CACHE=1</strong>：push 时附带缓存元数据<br>
+    5. <strong>--cache-from</strong>：pull 缓存加速 CI<br>
+    6. <strong>.dockerignore</strong>：避免本地文件改动让缓存失效
+  </div>
+</section>
+
+<section id="worker" class="toc-link">
+  <h2><span class="num">07</span> Worker & Frontend</a></h2>
+
+  <p>Worker 是 BuildKit 的<strong>执行后端</strong>：</p>
+
+<pre><code// buildkit/worker/worker.go
+type Worker interface {
+    ID() string
+    Labels() map[string]string
+    LoadRef(ctx context.Context, id string, hidden bool) (ref, error)
+    Exec(ctx context.Context, meta Meta, rootID string, stdin io.ReadCloser, ...) error
+    Cache() manager.Manager
+    Contents() *ContentStore
+    ImageSource(context.Context, ...images.Provider) error
+    Prune(ctx context.Context, ch chan client.UsageInfo, ...PruneInfo) error
+    Platforms() []ocispec.Platform
+    DiskUsage(ctx, ...) ([]*UsageInfo, error)
+    Exporter(name string, opt map[string]interface{}) (exporter.Exporter, error)
+}
+
+// 两种 Worker：
+// 1. OCI Worker（默认）
+//    buildkit/worker/oci/
+//    - 使用 runc
+//    - 适合大多数场景
+
+// 2. Containerd Worker
+//    buildkit/worker/containerd/
+//    - 使用 containerd
+//    - 适合 K8s 部署的 BuildKit
+</pre></code>
+
+  <p>Frontend 是<strong>用户输入解析器</strong>：</p>
+<pre><code>// buildkit/frontend/
+type Frontend interface {
+    Solve(ctx context.Context, llb FrontendOpt) (*Result, error)
+    Inputs() ([]Input, error)
+}
+
+// 内置 frontend：
+// 1. dockerfile.v0 (Builtin Dockerfile frontend)
+//    frontend/dockerfile/
+//    - 解析标准 Dockerfile
+//    - 支持 syntax directive 加载外部 frontend
+
+// 2. gateway.v0
+//    frontend/gateway/
+//    - 在容器中运行任意 frontend
+//    - 用于编写自定义 frontend
+
+// 自定义 Frontend（用 gateway）：
+// frontend 容器接收请求
+// 输出 LLB
+// BuildKit 调度执行
+// 例：buildpacks.io, bazel frontend, etc.
+</code></pre>
+</section>
+
+<section id="syntax" class="toc-link">
+  <h2><span class="num">08</span> 高级语法</h2>
+
+  <p>BuildKit 独有的 Dockerfile 扩展（需要 <code># syntax=docker/dockerfile:1.4+</code>）：</p>
+
+<pre><code># 1. Build secrets（安全密钥）
+# syntax=docker/dockerfile:1.4
+FROM alpine
+RUN --mount=type=secret,id=netrc,target=/root/.netrc \
+    cat /root/.netrc &amp;&amp; \
+    do_stuff_with_credentials
+
+# 构建：
+docker build --secret id=netrc,src=$HOME/.netrc .
+
+// 优点：secret 不出现在 image layer
+// legacy：通过 ARG/ENV，会留在 layer 中
+//       需要额外 squash 才能清除
+
+# 2. SSH agent forwarding
+RUN --mount=type=ssh ssh -T git@github.com
+
+# 3. Cache mount（缓存目录）
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt update &amp;&amp; apt install -y curl
+
+// 优势：
+//   - 多次 build 复用 apt cache
+//   - 多个 build 共享 cache（同一台机器）
+//   - 显著加速构建
+
+# 4. HEREDOC（Dockerfile 1.4+）
+RUN &lt;&lt;EOF
+apt update
+apt install -y nginx
+EOF
+
+COPY &lt;&lt;EOF /etc/nginx/nginx.conf
+server {
+    listen 80;
+}
+EOF
+
+# 5. 多平台（一次 build，多平台镜像）
+FROM --platform=$BUILDPLATFORM golang:1.21 AS builder
+ARG TARGETOS TARGETARCH
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go build ...
+
+# 构建：
+docker buildx build --platform=linux/amd64,linux/arm64 .
+
+# 6. --link（新 layer 链接）
+COPY --link file dest
+// 优化：不会触发前一层 copy-up
+// 仅产生新 layer 引用前一层
+
+# 7. --parents（保留目录结构）
+COPY --parents src/foo src/bar dest/
+// dest/foo dest/bar 而不是 dest/* 混合
+</code></pre>
+
+  <p>Frontend frontend build (BUILDKIT_MULTI_PLATFORM)：</p>
+<pre><code# 一个 Dockerfile 构建多平台镜像
+# syntax=docker/dockerfile:1.4
+FROM --platform=$BUILDPLATFORM golang:1.21 AS builder
+ARG TARGETOS TARGETARCH TARGETVARIANT
+
+WORKDIR /src
+COPY . .
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    GOARM=${TARGETVARIANT#v} \
+    CGO_ENABLED=0 \
+    go build -o app .
+
+FROM alpine:3.18
+COPY --from=builder /src/app /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/app"]
+
+# 构建所有平台：
+docker buildx build \
+  --platform=linux/amd64,linux/arm64,linux/arm/v7,darwin/amd64 \
+  -t myapp:latest \
+  --push .
+
+# 自动变量：
+#   BUILDPLATFORM - host 平台
+#   TARGETOS / TARGETARCH / TARGETPLATFORM - target
+#   TARGETVARIANT - v7 等
+</pre></code>
+</section>
+
+<section id="export" class="toc-link">
+  <h2><span class="num">09</span> 导出与多平台</a></h2>
+
+<pre><code>// Exporter 类型：
+// buildkit/exporter/
+
+// 1. image exporter
+docker build -o type=image,name=myapp:latest .
+//   push 到 registry 或本地 daemon
+
+// 2. oci exporter
+docker build -o type=oci,dest=image.tar .
+//   导出为 OCI tarball
+//   标准 OCI 镜像 layout
+
+// 3. docker exporter
+docker build -o type=docker,dest=image.tar .
+//   导出为 Docker v2 image tarball
+
+// 4. local exporter
+docker build -o type=local,dest=./out .
+//   导出 filesystem 到本地目录
+//   适合：提取构建产物
+
+// 5. tar exporter
+docker build -o type=tar,dest=fs.tar .
+//   仅导出 filesystem tarball
+
+// 6. cache exporter
+docker build -o type=registry,ref=mycache .
+
+// 多平台输出：
+docker buildx build \
+  --platform=linux/amd64,linux/arm64 \
+  -t myapp:latest \
+  --push .
+
+// 输出策略：
+//   - --push：直接 push 到 registry
+//   - --load：加载到本地 dockerd（仅单平台）
+//   - --output：导出到文件
+//   - --cache-to：缓存导出
+</code></pre>
+
+  <p>BUILDKIT 内置 daemonless 模式：</p>
+<pre><code# 不需要 buildkitd
+buildctl-daemonless.sh build \
+  --frontend dockerfile.v0 \
+  --local context=. \
+  --local dockerfile=.
+
+# 等价于：
+# 1. 启动 buildkitd（子进程）
+# 2. 发送构建请求
+# 3. 完成
+# 4. 退出 buildkitd
+</code></pre>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">10</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+moby/buildkit (github.com/moby/buildkit)
+├── <span class="file">cmd/buildctl/</span>                     <span class="cmt">buildctl CLI</span>
+├── <span class="file">cmd/buildkitd/</span>                    <span class="cmt">buildkitd daemon</span>
+├── <span class="file">api/</span>                                <span class="cmt">gRPC API</span>
+│   ├── <span class="file">services/mobs/</span>                  <span class="cmt"> mobs Build 服务</span>
+│   └── <span class="file">types/</span>                            <span class="cmt">通用类型</span>
+├── <span class="file">client/</span>                            <span class="cmt">Go SDK</span>
+│   ├── <span class="file">build.go</span>                         <span class="cmt">client.Build 入口</span>
+│   ├── <span class="file">solve.go</span>                         <span class="cmt">Solve 调用</span>
+│   ├── <span class="file">prune.go</span>                          <span class="cmt">缓存清理</span>
+│   ├── <span class="file">llb/</span>                              <span class="cmt">LLB Go API</span>
+│   │   ├── <span class="file">exec.go</span>                         <span class="cmt">ExecOp 定义</span>
+│   │   ├── <span class="file">fileop.go</span>                       <span class="cmt">FileOp</span>
+│   │   ├── <span class="file">marshal.go</span>                      <span class="cmt">序列化</span>
+│   │   ├── <span class="file">meta.go</span>                          <span class="cmt">环境/工作目录</span>
+│   │   ├── <span class="file">resolver.go</span>                     <span class="cmt">镜像 resolver</span>
+│   │   ├── <span class="file">source.go</span>                       <span class="cmt">SourceOp (FROM)</span>
+│   │   ├── <span class="file">state.go</span>                          <span class="cmt">State 链式 API</span>
+│   │   └── <span class="file">definition.go</span>                    <span class="cmt">Definition 序列化</span>
+│   └── <span class="file">workers/</span>                          <span class="cmt">Worker 类型</span>
+├── <span class="file">frontend/</span>                          <span class="cmt">Frontend 实现</span>
+│   ├── <span class="file">dockerfile/</span>                      <span class="cmt">Dockerfile frontend</span>
+│   │   ├── <span class="file">builder/</span>                        <span class="cmt">Build 入口</span>
+│   │   ├── <span class="file">cmd/</span>                            <span class="cmt">独立 frontend binary</span>
+│   │   ├── <span class="file">dockerfile2llb/</span>                 <span class="cmt">Dockerfile → LLB 转换</span>
+│   │   ├── <span class="file">dockerignore/</span>                   <span class="cmt">.dockerignore 解析</span>
+│   │   ├── <span class="file">instructions/</span>                   <span class="cmt">指令解析</span>
+│   │   ├── <span class="file">parser/</span>                         <span class="cmt">Dockerfile 语法</span>
+│   │   ├── <span class="file">shell/</span>                            <span class="cmt">shell 解析</span>
+│   │   └── <span class="file">docs/</span>                            <span class="cmt">文档</span>
+│   ├── <span class="file">gateway/</span>                          <span class="cmt">通用 gateway frontend</span>
+│   └── <span class="file">dockerui/</span>                          <span class="cmt">共享 UI helpers</span>
+├── <span class="file">solver/</span>                                <span class="cmt">Solver 核心（最重要）</span>
+│   ├── <span class="file">llbsolver/</span>                       <span class="cmt">LLB 特定 solver</span>
+│   │   ├── <span class="file">ops/</span>                            <span class="cmt">各类 Op 实现</span>
+│   │   │   ├── <span class="file">fileoptypes/</span>                  <span class="cmt">FileOp 类型</span>
+│   │   │   ├── <span class="file">build/</span>                          <span class="cmt">BuildOp</span>
+│   │   │   ├── <span class="file">exec/</span>                          <span class="cmt">ExecOp</span>
+│   │   │   ├── file/                  <span class="cmt">FileOp</span>
+│   │   │   ├── source/                <span class="cmt">SourceOp</span>
+│   │   │   └── merge/                 <span class="cmt">MergeOp, DiffOp</span>
+│   │   ├── <span class="file">bridge/</span>                         <span class="cmt">frontend bridge</span>
+│   │   ├── <span class="file">errdefs/</span>                        <span class="cmt">错误定义</span>
+│   │   ├── <span class="file">filemanager/</span>                    <span class="cmt">文件管理</span>
+│   │   ├── <span class="file">llbbridge/</span>                      <span class="cmt">bridge helpers</span>
+│   │   ├── <span class="file">vertex/</span>                          <span class="cmt">vertex + cache key</span>
+│   │   ├── <span class="file">solve.go</span>                         <span class="cmt">主 solve 逻辑</span>
+│   │   └── <span class="file">jobs/</span>                            <span class="cmt">job 管理</span>
+│   ├── <span class="file">pb/</span>                                <span class="cmt">protobuf 定义（Ops）</span>
+│   ├── <span class="file">scheduler/</span>                        <span class="cmt">调度器</span>
+│   ├── <span class="file">cache/</span>                            <span class="cmt">缓存管理</span>
+│   │   ├── <span class="file">contentstages/</span>                  <span class="cmt">内容寻址</span>
+│   │   ├── <span class="file">inocache/</span>                       <span class="cmt">in-memory cache</span>
+│   │   ├── <span class="file">remotecache/</span>                    <span class="cmt">远程缓存</span>
+│   │   │   ├── <span class="file">inline/</span>                       <span class="cmt">inline cache</span>
+│   │   │   ├── <span class="file">registry/</span>                     <span class="cmt">registry cache</span>
+│   │   │   ├── <span class="file">gha/</span>                           <span class="cmt">GitHub Actions cache</span>
+│   │   │   ├── <span class="file">local/</span>                         <span class="cmt">local cache</span>
+│   │   │   └── <span class="file">s3/, azblob/, gcs/</span>            <span class="cmt">云存储 cache</span>
+│   │   └── <span class="file">refs/</span>                            <span class="cmt">reference 管理</span>
+│   └── <span class="file">result/</span>                          <span class="cmt">result 处理</span>
+├── <span class="file">worker/</span>                            <span class="cmt">Worker 实现</span>
+│   ├── <span class="file">containerd/</span>                      <span class="cmt">containerd worker</span>
+│   ├── <span class="file">oci/</span>                              <span class="cmt">OCI worker (runc)</span>
+│   └── <span class="file">base/</span>                             <span class="cmt">共享 worker 基类</span>
+├── <span class="file">source/</span>                            <span class="cmt">image source 实现</span>
+├── <span class="file">exporter/</span>                           <span class="cmt">exporter 实现</span>
+│   ├── <span class="file">oci/</span>
+│   ├── <span class="file">docker/</span>
+│   ├── <span class="file">local/</span>
+│   ├── <span class="file">tar/</span>
+│   ├── <span class="file">moby/</span>                              <span class="cmt">image exporter for moby</span>
+│   ├── <span class="file">containerimage/</span>                   <span class="cmt">container image exporter</span>
+│   └── <span class="file">cache/</span>
+├── <span class="file">session/</span>                            <span class="cmt">客户端 session</span>
+│   ├── <span class="file">filesync/</span>                        <span class="cmt">文件同步</span>
+│   ├── <span class="file">secrets/</span>                          <span class="cmt">secret 传递</span>
+│   ├── <span class="file">sshforward/</span>                      <span class="cmt">SSH forwarding</span>
+│   └── <span class="file">sockets/</span>                          <span class="cmt">socket proxy</span>
+├── <span class="file">snapshot/</span>                           <span class="cmt">snapshot 适配</span>
+├── <span class="file">util/</span>                                <span class="cmt">辅助</span>
+│   ├── <span class="file">appcontext/</span>                       <span class="cmt">context helpers</span>
+│   ├── <span class="file">archutil/</span>                         <span class="cmt">架构工具</span>
+│   ├── <span class="file">bklog/</span>                            <span class="cmt">日志</span>
+│   ├── <span class="file">build/</span>                            <span class="cmt">build helpers</span>
+│   ├── <span class="file">imageutil/</span>                       <span class="cmt">image 操作</span>
+│   ├── <span class="file">lease/</span>                            <span class="cmt">lease</span>
+│   ├── <span class="file">network/</span>                          <span class="cmt">网络</span>
+│   ├── <span class="file">progress/</span>                         <span class="cmt">进度显示</span>
+│   ├── <span class="file">resolver/</span>                        <span class="cmt">registry resolver</span>
+│   ├── <span class="file">ssh/</span>                              <span class="cmt">SSH helpers</span>
+│   ├── <span class="file">strutil/</span>                          <span class="cmt">字符串辅助</span>
+│   ├── <span class="file">system/</span>                           <span class="cmt">系统 helpers</span>
+│   └── <span class="file">testutil/</span>                         <span class="cmt">测试 helpers</span>
+├── <span class="file">examples/</span>                           <span class="cmt">示例</span>
+├── <span class="file">test/</span>                                <span class="cmt">集成测试</span>
+└── <span class="file">docs/</span>                                <span class="cmt">文档（at github.com/moby/buildkit/docs）</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>cmd/buildkitd/main.go</code> daemon 入口。<br>
+    <code>solver/scheduler/</code> 并行调度算法。<br>
+    <code>frontend/dockerfile/dockerfile2llb/</code> Dockerfile → LLB 转换（核心）。<br>
+    <code>solver/llbsolver/ops/exec/</code> ExecOp 实现。<br>
+    <code>solver/cache/remotecache/</code> 远程缓存。<br>
+    <code>worker/oci/</code> OCI worker (基于 runc)。<br>
+    <code>session/</code> 客户端-服务端通信（secret/ssh/filesync）。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

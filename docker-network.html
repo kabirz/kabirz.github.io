@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker 网络模型深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Docker 网络模型深度解析</h1>
+  <p class="subtitle">bridge / host / overlay / macvlan — 容器网络全模式</p>
+  <span class="version">Docker 26.x · libnetwork</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#bridge">bridge 网络</a></li>
+    <li><a href="#host">host 网络</a></li>
+    <li><a href="#none">none 网络</a></li>
+    <li><a href="#overlay">overlay 网络</a></li>
+    <li><a href="#macvlan">macvlan / ipvlan</a></li>
+    <li><a href="#port">端口映射</a></li>
+    <li><a href="#dns">嵌入式 DNS</a></li>
+    <li><a href="#plugins">网络插件</a></li>
+    <li><a href="#files">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Docker 通过 libnetwork（现已被 libnetwork + containerd CRI plugin 取代）提供<strong>多种网络驱动</strong>：</p>
+
+  <table>
+    <tr><th>驱动</th><th>适用场景</th><th>隔离级别</th></tr>
+    <tr><td><strong>bridge</strong></td><td>默认，单机</td><td>每容器独立 netns，通过 veth + bridge 互联</td></tr>
+    <tr><td><strong>host</strong></td><td>无隔离，高性能</td><td>共享宿主 netns</td></tr>
+    <tr><td><strong>none</strong></td><td>完全隔离</td><td>无任何网络配置</td></tr>
+    <tr><td><strong>overlay</strong></td><td>多机集群</td><td>VXLAN 隧道跨主机</td></tr>
+    <tr><td><strong>macvlan</strong></td><td>桥接到物理网络</td><td>容器独占 MAC 地址</td></tr>
+    <tr><td><strong>ipvlan</strong></td><td>同 macvlan，无 MAC</td><td>共享 MAC，L2/L3 模式</td></tr>
+    <tr><td><strong>custom plugin</strong></td><td>第三方（Calico、Cilium）</td><td>由插件定义</td></tr>
+  </table>
+
+  <p>基本概念：</p>
+  <ul>
+    <li><strong>Network</strong>：一个网络实例（如 docker0、自定义 mynet）</li>
+    <li><strong>Endpoint</strong>：容器在某个网络中的接入点</li>
+    <li><strong>Container</strong>：通过 endpoint 加入网络</li>
+    <li><strong>Sandbox</strong>：容器的 network namespace</li>
+  </ul>
+
+  <p>列出当前网络：</p>
+<pre><code>$ docker network ls
+NETWORK ID     NAME      DRIVER    SCOPE
+a1b2c3d4...    bridge    bridge    local
+e5f6g7h8...    host      host      local
+i9j0k1l2...    none      null      local
+
+$ docker network inspect bridge
+[
+  {
+    "Name": "bridge",
+    "Driver": "bridge",
+    "IPAM": {
+      "Config": [{"Subnet": "172.17.0.0/16", "Gateway": "172.17.0.1"}]
+    },
+    "Containers": {
+      "&lt;id&gt;": {"Name": "web", "IPv4Address": "172.17.0.2/16"}
+    }
+  }
+]
+</code></pre>
+</section>
+
+<section id="bridge" class="toc-link">
+  <h2><span class="num">02</span> bridge 网络</h2>
+
+  <p>bridge 是 Docker 默认网络模型。通过 Linux bridge (docker0) + veth pair + iptables 实现容器互联和外部访问。</p>
+
+  <p>架构：</p>
+<pre><code>┌────────────────────────────────────────────────┐
+│                   Host                         │
+│                                                │
+│  ┌──────────────────────────────────────────┐  │
+│  │         eth0 (物理网卡)                  │  │
+│  │         192.168.1.100                    │  │
+│  └──────────────────────────────────────────┘  │
+│                                                │
+│  ┌──────────────────────────────────────────┐  │
+│  │ docker0 (Linux bridge)                   │  │
+│  │ 172.17.0.1/16                            │  │
+│  │  ↓                                       │  │
+│  │  ├─ veth0a (host side)                   │  │
+│  │  ├─ veth1a                               │  │
+│  │  └─ veth2a                               │  │
+│  └──────────────────────────────────────────┘  │
+│       │           │           │                 │
+│   ┌───▼──┐    ┌───▼──┐    ┌───▼──┐             │
+│   │ c1   │    │  c2  │    │  c3  │             │
+│   │ net  │    │ net  │    │ net  │             │
+│   │ ns   │    │ ns   │    │ ns   │             │
+│   │eth0  │    │eth0  │    │eth0  │             │
+│   │.2    │    │.3    │    │.4    │             │
+│   └──────┘    └──────┘    └──────┘             │
+│                                                │
+│  iptables NAT:                                 │
+│   -A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE
+│   -A DOCKER -i docker0 -j RETURN               │
+└────────────────────────────────────────────────┘
+</code></pre>
+
+  <p>关键元素：</p>
+<pre><code># 1. Linux Bridge
+$ ip link show type bridge
+3: docker0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 ...
+    link/ether 02:42:ac:11:00:01 brd ff:ff:ff:ff:ff:ff
+    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0
+
+# 2. veth pair (一端在 host，一端在容器)
+$ ip link show type veth
+5: veth0a@if2: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; ...
+6: veth1a@if3: ...
+
+# 3. iptables NAT
+$ iptables -t nat -L -n -v
+Chain POSTROUTING (policy ACCEPT)
+  MASQUERADE  all  --  172.17.0.0/16  0.0.0.0/0
+
+Chain DOCKER (1 references)
+  RETURN      all  --  0.0.0.0/0  0.0.0.0/0
+
+# 4. IP 转发
+$ sysctl net.ipv4.ip_forward
+net.ipv4.ip_forward = 1
+</code></pre>
+
+  <p>创建自定义 bridge：</p>
+<pre><code># 创建
+docker network create \
+  --driver=bridge \
+  --subnet=10.10.0.0/24 \
+  --gateway=10.10.0.1 \
+  --ip-range=10.10.0.0/25 \
+  -o "com.docker.network.bridge.name=br10" \
+  mynet
+
+# 启动容器加入
+docker run --network=mynet -d nginx
+
+# 容器间 DNS 自动解析（自定义 bridge）
+docker run --network=mynet --name web nginx
+docker run --network=mynet alpine ping web
+# 容器名 → IP（嵌入式 DNS）
+
+# 注意：默认 bridge（docker0）不支持 DNS
+# 自定义 bridge 才支持
+</code></pre>
+
+  <p>bridge 的限制：</p>
+  <ul>
+    <li>每容器通过 NAT 出网，性能略损</li>
+    <li>同机容器可互通，跨机需要 overlay 或其他</li>
+    <li>端口冲突（host:container）</li>
+  </ul>
+</section>
+
+<section id="host" class="toc-link">
+  <h2><span class="num">03</span> host 网络</h2>
+
+  <p>host 模式下容器<strong>不创建 network namespace</strong>，直接使用宿主网络栈：</p>
+
+<pre><code># 使用
+docker run --network=host nginx
+
+# 容器内：
+$ docker exec -it &lt;c&gt; ip addr
+# 1: lo
+# 2: eth0  ← 宿主的网卡
+# 3: wlan0 ← 宿主的 WiFi
+# 全部可见
+
+$ docker exec -it &lt;c&gt; ss -tlnp
+# nginx 监听在 80 端口（宿主的 80）
+
+# 特点：
+# - 性能最佳（无 NAT、无 veth）
+# - 端口直接占用宿主
+# - 多容器无法监听同一端口
+# - 没有网络隔离
+</code></pre>
+
+  <p>典型用途：</p>
+  <ul>
+    <li>性能敏感应用（如 packet capture、网络设备）</li>
+    <li>需要访问宿主特定网络栈的应用</li>
+    <li>简化部署（避免端口映射）</li>
+  </ul>
+
+  <p>安全注意：</p>
+  <div class="callout">
+    <strong>host 网络的安全风险:</strong><br>
+    容器进程可<strong>直接看到所有宿主网络流量</strong>。<br>
+    能监听宿主所有端口，包括其他容器。<br>
+    能绑定 0.0.0.0，对公网暴露。<br>
+    实际上等同于非容器应用 — 丧失容器隔离价值。<br>
+    建议：仅用于可信、必需的场景。
+  </div>
+</section>
+
+<section id="none" class="toc-link">
+  <h2><span class="num">04</span> none 网络</h2>
+
+  <p>none 模式给容器<strong>独立的 net namespace 但不配置任何网络</strong>：</p>
+
+<pre><code>docker run --network=none alpine ip addr
+# 1: lo  ← 仅 loopback
+# 没有任何其他接口
+
+# 用途：
+# - 高度隔离的批处理任务
+# - 仅本地 IPC 通信
+# - 测试/调试
+# - 自定义网络栈（手动配置）
+
+# 手动配置示例：
+docker run --network=none -it alpine sh
+# 进入容器后：
+ip link add eth0 type dummy
+ip addr add 10.0.0.1/24 dev eth0
+ip link set eth0 up
+</code></pre>
+</section>
+
+<section id="overlay" class="toc-link">
+  <h2><span class="num">05</span> overlay 网络</h2>
+
+  <p>overlay 网络通过<strong>VXLAN 隧道</strong>跨主机互联容器，是 Docker Swarm / Kubernetes（部分场景）的核心。</p>
+
+<pre><code>┌──────────────────────────────────────────┐
+│              Host 1                       │
+│  ┌────────────────────────────────────┐  │
+│  │ eth0  192.168.1.10                 │  │
+│  │   ↑                                │  │
+│  │   │ VXLAN 封装                       │  │
+│  │   │                                │  │
+│  │ ┌─▼──────────┐                    │  │
+│  │ │ vxlan0     │ overlay 网络       │  │
+│  │ │ 10.0.0.1/24│                    │  │
+│  │ └─┬──────────┘                    │  │
+│  │   ├─ veth (c1: 10.0.0.2)           │  │
+│  │   └─ veth (c2: 10.0.0.3)           │  │
+│  └────────────────────────────────────┘  │
+└──────────────────────────────────────────┘
+                  │
+                  │ 物理网络（UDP 4789 VXLAN）
+                  │
+┌──────────────────────────────────────────┐
+│              Host 2                       │
+│  ┌────────────────────────────────────┐  │
+│  │ eth0  192.168.1.11                 │  │
+│  │ ┌───────────┐                      │  │
+│  │ │ vxlan0    │ overlay 网络         │  │
+│  │ │ 10.0.0.1/24│                     │  │
+│  │ └──┬────────┘                      │  │
+│  │    ├─ veth (c3: 10.0.0.4)           │  │
+│  │    └─ veth (c4: 10.0.0.5)           │  │
+│  └────────────────────────────────────┘  │
+└──────────────────────────────────────────┘
+
+// 容器 c1 ↔ c3：通过 vxlan 隧道
+// 物理网络只看到 UDP 封装包
+</code></pre>
+
+  <p>VXLAN 封装：</p>
+<pre><code>// VXLAN (Virtual eXtensible LAN):
+//   - 在 UDP 包中封装 L2 帧
+//   - 端口 4789
+//   - VXLAN ID (VNI) 24 bit
+//   - 在三层网络上构建二层网络
+
+// 包结构：
+// [ 外层 ETH | 外层 IP | UDP | VXLAN | 内层 ETH | 内层 IP | payload ]
+//   192.168.1.10 → 192.168.1.11
+
+// 创建 overlay（需要 swarm mode）：
+docker swarm init
+docker network create -d overlay myoverlay
+
+# 自定义子网：
+docker network create \
+  -d overlay \
+  --subnet=10.5.0.0/16 \
+  --gateway=10.5.0.1 \
+  mynet
+</code></pre>
+
+  <p>overlay 的关键组件：</p>
+<pre><code>// 1. 控制平面（control plane）
+//    - Docker Swarm gossip 协议
+//    - 容器 ↔ IP/MAC 映射分发
+//    - 通过 7946/TCP+UDP（serf）
+
+// 2. 数据平面（data plane）
+//    - VXLAN 隧道
+//    - 4789/UDP
+
+// 3. DNS（嵌入式）
+//    - swarm mode 内置 DNS
+//    - 服务发现
+
+// 4. 加密（可选）
+//    docker network create -d overlay --opt encrypted mynet
+//    IPSec（节点间）加密
+//    性能损失 10-15%
+
+// K8s 的对应：
+//    K8s 用 Calico / Flannel / Cilium 等
+//    K8s 自己不直接用 overlay（CNI 负责网络）
+</code></pre>
+</section>
+
+<section id="macvlan" class="toc-link">
+  <h2><span class="num">06</span> macvlan / ipvlan</h2>
+
+  <p>macvlan 让容器<strong>直接出现在物理网络中</strong>，每个容器有独立 MAC 地址：</p>
+
+<pre><code># 创建 macvlan 网络
+docker network create -d macvlan \
+  --subnet=192.168.1.0/24 \
+  --gateway=192.168.1.1 \
+  -o parent=eth0 \
+  macvlan_net
+
+# 启动容器
+docker run --network=macvlan_net -d nginx
+
+# 特点：
+# - 容器有独立 MAC（路由器看到的）
+# - 容器直接从 DHCP 获取 IP（如配置）
+# - 没有 NAT、性能高
+# - 不能与宿主直接通信（promiscuous mode 限制）
+
+# host vs bridge vs macvlan：
+#   host      - 共享宿主网卡，无独立 MAC
+#   bridge    - 通过 docker0 桥接，NAT
+#   macvlan   - 独立 MAC + IP，直接出现在 L2 网络
+</code></pre>
+
+  <p>ipvlan（共享 MAC）：</p>
+<pre><code># ipvlan 有两种模式：
+# L2 (默认): 容器共享父接口 MAC，独立 IP
+# L3: 容器独立 IP，路由在内核中
+
+docker network create -d ipvlan \
+  --subnet=192.168.1.0/24 \
+  -o parent=eth0 \
+  -o ipvlan_mode=l2 \
+  ipvlan_net
+
+# macvlan vs ipvlan：
+#   macvlan:
+#     - 每容器独立 MAC
+#     - 需要交换机允许多 MAC
+#     - 性能最好
+#   
+#   ipvlan:
+#     - 共享 MAC（所有容器看起来是同一个设备）
+#     - 适合 MAC 限制严格的网络
+#     - 需要路由器路由（L3 模式）
+</code></pre>
+
+  <div class="callout">
+    <strong>macvlan 的常见场景:</strong><br>
+    家庭网络（直接获取 LAN IP）。<br>
+    物联网设备（每容器独立身份）。<br>
+    性能敏感应用（避免 NAT）。<br>
+    传统应用（需要广播、组播）。<br>
+    限制：大多数 WiFi 不支持 macvlan（promiscuous mode 禁用）；不能与宿主互通。
+  </div>
+</section>
+
+<section id="port" class="toc-link">
+  <h2><span class="num">07</span> 端口映射</h2>
+
+  <p>bridge 网络中，外部访问容器需要<strong>端口映射</strong>：</p>
+
+<pre><code># 1. 指定 host:container
+docker run -p 8080:80 nginx
+# 宿主 8080 → 容器 80
+
+# 2. 仅 container（host 随机）
+docker run -p 80 nginx
+
+# 3. 指定 IP
+docker run -p 127.0.0.1:8080:80 nginx
+
+# 4. 指定协议
+docker run -p 53:53/udp dns
+
+# 5. 范围
+docker run -p 8000-8100:8000-8100 app
+
+# 6. 全部暴露（EXPOSE）
+docker run -P nginx
+# -P 大写：映射所有 EXPOSE 的端口到随机 host 端口
+</code></pre>
+
+  <p>实现机制（两种）：</p>
+<pre><code>// 方式 1: iptables DNAT（默认，性能好）
+iptables -t nat -A DOCKER \
+  -p tcp --dport 8080 \
+  -j DNAT --to-destination 172.17.0.2:80
+iptables -t nat -A POSTROUTING \
+  -s 172.17.0.2 -j MASQUERADE
+
+// 数据流：
+//   外部 → host:8080 → DNAT → 172.17.0.2:80 → 容器
+//   容器 → 172.17.0.2:80 → 回包 → MASQUERADE → host:8080 → 外部
+
+// 方式 2: userland-proxy（docker-proxy）
+//   启动一个 Go 进程，监听 host:8080
+//   数据流经 proxy，再转发到容器
+//   特点：兼容性更好（无 iptables 也能工作）
+//         但性能差
+//
+// /etc/docker/daemon.json:
+//   "userland-proxy": false   ← 推荐（默认 false）
+
+// 容器内监听 0.0.0.0
+// 否则端口映射无效
+// nginx.conf:
+//   listen 0.0.0.0:80;
+</code></pre>
+</section>
+
+<section id="dns" class="toc-link">
+  <h2><span class="num">08</span> 嵌入式 DNS</h2>
+
+  <p>Docker 为每个容器配置<strong>嵌入式 DNS 服务器</strong>，让容器间通过名字访问。</p>
+
+<pre><code>// 1. 嵌入式 DNS 地址：127.0.0.11
+$ docker exec container cat /etc/resolv.conf
+nameserver 127.0.0.11
+options ndots:0
+
+// 2. 仅自定义 bridge / overlay 支持
+//    默认 bridge（docker0）不支持 DNS
+
+// 3. 域名规则：
+//    容器名 → 容器 IP
+//    服务名（swarm）→ VIP / 容器 IP 列表
+//    网络别名 → 容器 IP
+
+// 容器间通信：
+$ docker run --network=mynet --name=web nginx
+$ docker run --network=mynet --network-alias=foo alpine
+$ docker run --network=mynet alpine ping web
+PING web (10.10.0.2): 56 data bytes
+
+$ docker run --network=mynet alpine ping foo
+PING foo (10.10.0.3): 56 data bytes
+
+// 4. 外部域名解析
+//    先查 Docker DNS（容器名）
+//    未命中 → 转发到宿主的 /etc/resolv.conf
+</code></pre>
+
+  <p>DNS 实现细节：</p>
+<pre><code>// dockerd 内置 DNS server
+// 监听 127.0.0.11:53（在容器内通过 iptables 重定向）
+
+// 简化流程：
+//   容器内 nslookup web
+//   → /etc/resolv.conf 指向 127.0.0.11
+//   → DNS query 到 dockerd
+//   → dockerd 查询容器表
+//   → 返回 172.17.0.2
+
+// iptables 规则（容器内）：
+//   -A OUTPUT -d 127.0.0.11 -p udp --dport 53 -j ACCEPT
+//   -A OUTPUT ! -d 127.0.0.0/8 -p udp --dport 53 -j DNAT --to 127.0.0.11:53
+</code></pre>
+</section>
+
+<section id="plugins" class="toc-link">
+  <h2><span class="num">09</span> 网络插件</h2>
+
+  <p>Docker 通过 libnetwork plugin 支持第三方网络驱动：</p>
+
+<pre><code>// 网络驱动插件接口（CNM - Container Network Model）：
+type Driver interface {
+    // 创建网络
+    CreateNetwork(req NetworkRequest) error
+    DeleteNetwork(networkID string) error
+    // Endpoint
+    CreateEndpoint(ep EndpointRequest) error
+    DeleteEndpoint(epID string) error
+    // Sandbox（容器 netns）
+    CreateSandbox(sb SandboxRequest) error
+    DeleteSandbox(sandboxID string) error
+    // 容器 join
+    Join(j JoinRequest) (*JoinResponse, error)
+    Leave(j LeaveRequest) error
+    Type() string
+}
+
+// 插件类型：
+// 1. Remote plugin (HTTP)
+//    二进制独立运行，通过 socket 通信
+//    Docker daemon 通过 HTTP API 调用
+
+// 2. 内置 plugin
+//    bridge, host, macvlan, ipvlan, overlay, none
+
+// 常见第三方网络方案：
+//  - Calico (BGP 路由)
+//  - Cilium (eBPF + Identity)
+//  - Weave (VXLAN + 加密)
+//  - Flannel (多种后端)
+//  - Contiv/VPP
+</code></pre>
+
+  <p>CNI vs CNM：</p>
+  <table>
+    <tr><th></th><th>CNM (Docker)</th><th>CNI (K8s)</th></tr>
+    <tr><td>设计者</td><td>Docker</td><td>CoreOS / CNCF</td></tr>
+    <tr><td>接口</td><td>RPC (HTTP)</td><td>Binary exec</td></tr>
+    <tr><td>复杂度</td><td>高（多个接口）</td><td>低（ADD/DEL/CHECK）</td></tr>
+    <tr><td>适用</td><td>Docker Swarm</td><td>Kubernetes</td></tr>
+  </table>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">10</span> 源码索引</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+moby/moby (github.com/moby/moby)
+├── <span class="file">daemon/server/router/network/</span>        <span class="cmt">网络 HTTP API</span>
+├── <span class="file">daemon/network/</span>                       <span class="cmt">网络管理</span>
+└── <span class="file">libnetwork/</span>                           <span class="cmt">网络库（已迁移）</span>
+
+docker/docker/libnetwork (github.com/moby/libnetwork)
+├── <span class="file">networkdb/</span>                            <span class="cmt">gossip 协议（overlay）</span>
+├── <span class="file">driverapi/</span>                            <span class="cmt">driver 接口</span>
+├── <span class="file">drivers/</span>                               <span class="cmt">driver 实现</span>
+│   ├── <span class="file">bridge/</span>                            <span class="cmt">bridge driver</span>
+│   ├── <span class="file">overlay/</span>                           <span class="cmt">overlay driver</span>
+│   ├── <span class="file">macvlan/</span>                           <span class="cmt">macvlan driver</span>
+│   ├── <span class="file">ipvlan/</span>                            <span class="cmt">ipvlan driver</span>
+│   ├── <span class="file">host/</span>                              <span class="cmt">host driver</span>
+│   ├── <span class="file">null/</span>                              <span class="cmt">null driver</span>
+│   ├── <span class="file">windows/</span>                           <span class="cmt">Windows driver</span>
+│   └── <span class="file">remote/</span>                            <span class="cmt">remote driver (plugin)</span>
+├── <span class="file">ipam/</span>                                  <span class="cmt">IP 地址管理</span>
+│   ├── <span class="file">default/</span>                            <span class="cmt">默认 IPAM</span>
+│   ├── <span class="file">remote/</span>                             <span class="cmt">远程 IPAM</span>
+│   └── <span class="file">null/</span>                              <span class="cmt">无 IPAM</span>
+├── <span class="file">iptables/</span>                              <span class="cmt">iptables 操作</span>
+├── <span class="file">ipfs/</span>                                  <span class="cmt">IP 转发</span>
+├── <span class="file">resolvconf/</span>                            <span class="cmt">DNS 配置</span>
+├── <span class="file">osl/</span>                                   <span class="cmt">OS 层抽象</span>
+├── <span class="file">portmapper/</span>                            <span class="cmt">端口映射</span>
+├── <span class="file">types/</span>                                 <span class="cmt">类型定义</span>
+├── <span class="file">config/</span>                                <span class="cmt">配置</span>
+├── <span class="file">cluster/</span>                               <span class="cmt">集群（swarm）</span>
+├── <span class="file">controller.go</span>                          <span class="cmt">主 controller</span>
+├── <span class="file">endpoint.go</span>                            <span class="cmt">Endpoint 类型</span>
+├── <span class="file">network.go</span>                             <span class="cmt">Network 类型</span>
+├── <span class="file">sandbox.go</span>                             <span class="cmt">Sandbox 类型</span>
+└── <span class="file">store.go</span>                               <span class="cmt">持久化存储</span>
+
+containerd/containerd
+├── <span class="file">pkg/cri/server/</span>                        <span class="cmt">CRI server</span>
+│   └── <span class="file">pod_sandbox.go</span>                     <span class="cmt">网络通过 CNI 配置</span>
+├── <span class="file">pkg/cri/server/cni/</span>                    <span class="cmt">CNI 集成</span>
+└── <span class="file">pkg/cri/server/bandwidth/</span>             <span class="cmt">流量整形</span>
+
+CNI (containernetworking/cni)
+├── <span class="file">pkg/types/types.go</span>                      <span class="cmt">CNI 接口类型</span>
+├── <span class="file">pkg/invoke/</span>                            <span class="cmt">CNI 调用</span>
+├── <span class="file">libcni/libcni.go</span>                       <span class="cmt">Go 库</span>
+├── <span class="file">plugins/</span>                               <span class="cmt">官方 plugins</span>
+│   ├── <span class="file">main/bridge/</span>                       <span class="cmt">bridge CNI</span>
+│   ├── <span class="file">main/ptp/</span>                           <span class="cmt">point-to-point</span>
+│   ├── <span class="file">main/ipvlan/</span>                       <span class="cmt">ipvlan</span>
+│   ├── <span class="file">main/macvlan/</span>                       <span class="cmt">macvlan</span>
+│   ├── <span class="file">main/host-local/</span>                   <span class="cmt">IPAM</span>
+│   ├── <span class="file">main/dhcp/</span>                          <span class="cmt">DHCP IPAM</span>
+│   └── <span class="file">meta/flannel/</span>                       <span class="cmt">Flannel 集成</span>
+└── <span class="file">Documentation/</span>                          <span class="cmt">规范文档</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>moby/libnetwork/drivers/bridge/</code> 默认 bridge driver。<br>
+    <code>moby/libnetwork/drivers/overlay/</code> overlay + VXLAN 实现。<br>
+    <code>moby/libnetwork/networkdb/</code> gossip 协议。<br>
+    <code>containernetworking/cni/pkg/types/</code> CNI 标准。<br>
+    <code>containerd/pkg/cni/</code> K8s 视角的 CNI 集成。<br>
+    实战：Calico/Cilium 的源码 — eBPF 网络 + BGP 路由。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

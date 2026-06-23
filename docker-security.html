@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker 容器安全深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%232496ed'/><stop offset='100%25' stop-color='%230db7ed'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Docker 容器安全深度解析</h1>
+  <p class="subtitle">从镜像到运行时 — 多层防御策略</p>
+  <span class="version">Docker 26.x · CIS Benchmarks · NIST SP 800-190</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#layers">防御层次</a></li>
+    <li><a href="#daemon">守护进程安全</a></li>
+    <li><a href="#image">镜像安全</a></li>
+    <li><a href="#secrets">密钥管理</a></li>
+    <li><a href="#runtime">运行时隔离</a></li>
+    <li><a href="#network">网络安全</a></li>
+    <li><a href="#monitor">监控与检测</a></li>
+    <li><a href="#cis">CIS Benchmark</a></li>
+    <li><a href="#files">参考资源</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>容器安全不是单一技术，而是一组<strong>纵深防御</strong>（Defense in Depth）策略。Docker 容器隔离弱于虚拟机，需要多层加固。</p>
+
+  <p>容器与虚拟机对比：</p>
+  <table>
+    <tr><th></th><th>容器</th><th>虚拟机</th></tr>
+    <tr><td>共享内核</td><td>是</td><td>否</td></tr>
+    <tr><td>隔离机制</td><td>namespace + cgroup</td><td>hypervisor + 硬件辅助</td></tr>
+    <tr><td>启动开销</td><td>&lt; 1s</td><td>10s+ (KVM)，1ms (Firecracker)</td></tr>
+    <tr><td>逃逸难度</td><td>中等</td><td>高（需要 hypervisor 漏洞）</td></tr>
+    <tr><td>资源密度</td><td>高</td><td>低</td></tr>
+  </table>
+
+  <p>威胁模型：</p>
+  <ul>
+    <li><strong>容器逃逸</strong>：攻击者从容器获得宿主权限</li>
+    <li><strong>横向移动</strong>：攻击者从一容器攻击另一容器</li>
+    <li><strong>供应链攻击</strong>：恶意镜像、被篡改的依赖</li>
+    <li><strong>权限提升</strong>：低权限进程获取高权限</li>
+    <li><strong>拒绝服务</strong>：容器耗尽宿主资源</li>
+  </ul>
+</section>
+
+<section id="layers" class="toc-link">
+  <h2><span class="num">02</span> 防御层次</h2>
+
+<pre><code>┌─────────────────────────────────────────┐
+│   1. 守护进程安全                        │
+│   - dockerd 配置                         │
+│   - TLS 加密                             │
+│   - 用户隔离（rootless）                  │
+└─────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│   2. 镜像安全                            │
+│   - 来源验证（签名）                      │
+│   - 漏洞扫描                             │
+│   - 最小化基础镜像                       │
+└─────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│   3. 密钥管理                            │
+│   - 不在 image / ENV 存敏感              │
+│   - secrets / Vault / KMS                │
+└─────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│   4. 运行时隔离                          │
+│   - capabilities 最小化                  │
+│   - seccomp / AppArmor / SELinux        │
+│   - user namespace                       │
+│   - read-only rootfs                     │
+└─────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│   5. 网络隔离                            │
+│   - 网络分段                             │
+│   - 防火墙                               │
+│   - mTLS（服务间认证）                    │
+└─────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│   6. 监控与审计                          │
+│   - 容器行为分析                         │
+│   - 异常检测                             │
+│   - 日志聚合                             │
+└─────────────────────────────────────────┘
+</code></pre>
+</section>
+
+<section id="daemon" class="toc-link">
+  <h2><span class="num">03</span> 守护进程安全</h2>
+
+<pre><code>// 1. /var/run/docker.sock 风险
+//    任何能访问此 socket 的用户 = root 权限
+//    常见错误：把 socket 暴露给容器
+
+docker run -v /var/run/docker.sock:/var/run/docker.sock ...
+//   ⚠️ 等同于把 root 给了容器
+//   容器可启动任意其他容器
+//   可挂载宿主 / 
+
+// 防御：
+//   1. 不要将 socket 给容器
+//   2. 如必须，限制能用的命令（用 docker.sock proxy）
+//   3. 用 rootless 模式
+
+// 2. TLS 远程访问
+//    dockerd -H tcp://0.0.0.0:2376 \
+//            --tlsverify \
+//            --tlscacert=ca.pem \
+//            --tlscert=server-cert.pem \
+//            --tlskey=server-key.pem
+//    
+//    客户端：
+//    docker --tlsverify --tlscacert=ca.pem \
+//           --tlscert=cert.pem --tlskey=key.pem \
+//           -H tcp://host:2376 ...
+
+// 3. Rootless Docker（最安全）
+//    普通用户运行 dockerd-rootless.sh
+//    dockerd 通过 user namespace 运行
+//    容器 root 映射到普通用户
+//    即使逃逸，也只是普通用户权限
+//
+//    限制：
+//      不能用 privileged
+//      不能绑定 &lt; 1024 端口
+//      cgroup v2 才完全支持
+
+// 4. daemon.json 加固
+{
+  "icc": false,                  // 禁止容器间通信（需 publish）
+  "userland-proxy": false,        // 禁用 userland-proxy（性能+安全）
+  "no-new-privileges": true,      // 禁止 setuid
+  "live-restore": true,           // daemon 重启不影响容器
+  "userns-remap": "default",      // 启用 user namespace 重映射
+  "seccomp-profile": "...",       // 自定义 seccomp
+  "default-shm-size": "64M",      // 限制 /dev/shm
+  "disable-legacy-registry": true,
+  "metrics-addr": "127.0.0.1:9323" // 内部 metrics
+}
+</code></pre>
+</section>
+
+<section id="image" class="toc-link">
+  <h2><span class="num">04</span> 镜像安全</h2>
+
+<pre><code>// 1. 镜像来源
+//    - 仅信任官方或可信来源
+//    - docker pull docker.io/library/nginx:latest
+//      ↑ 官方镜像，有 docker 官方签名
+//    - 不要从 random 个人仓库拉镜像
+
+// 2. 镜像签名（Docker Content Trust）
+//    启用：export DOCKER_CONTENT_TRUST=1
+//    之后所有 pull/push 都验证签名
+//    
+//    签名：docker trust sign myrepo/myimage:latest
+//    密钥：~/.docker/trust/
+//    
+//    内部：Notary v2 / cosign（更现代）
+
+// 3. 漏洞扫描
+//    - docker scout（Docker 2023+ 内置）
+//    - trivy（开源）
+//    - clair（Harbor 集成）
+//    - snyk（商业）
+//    - grype（开源）
+
+//    例：
+//    docker scout cves myimage
+//    trivy image myimage:latest
+
+// 4. 最小化基础镜像
+//    避免：ubuntu, debian（多包多漏洞）
+//    推荐：
+//      - alpine（5MB）
+//      - distroless（无 shell，最安全）
+//      - scratch（空镜像，自带 binary）
+
+// 5. 多阶段构建（减少攻击面）
+//    FROM golang:1.21 AS builder
+//    COPY . .
+//    RUN go build -o app
+//    
+//    FROM gcr.io/distroless/static
+//    COPY --from=builder /app /app
+//    ENTRYPOINT ["/app"]
+//    
+//    最终镜像不含编译器、shell、源码
+
+// 6. 不在 image 存敏感
+//    ❌ COPY .env /app/.env
+//    ❌ ENV DB_PASSWORD=secret
+//    ✅ 运行时通过 secret 注入
+
+// 7. Image 标签策略
+//    避免 :latest（不可重现）
+//    用 :v1.2.3（版本固定）
+//    或用 @sha256:abc...（digest 固定）
+
+// 8. Build-time secret
+//    ❌ ARG password=secret  // 留在 history，可见
+//    ✅ --mount=type=secret
+//       RUN --mount=type=secret,id=npm,target=/root/.npmrc npm install
+</code></pre>
+</section>
+
+<section id="secrets" class="toc-link">
+  <h2><span class="num">05</span> 密钥管理</h2>
+
+<pre><code>// 1. Docker Secrets（Swarm 模式）
+echo "mysecret" | docker secret create db_password -
+docker service create --secret db_password mysql
+// 容器内：/run/secrets/db_password
+
+// 2. Compose secrets（v2+）
+services:
+  web:
+    secrets:
+      - db_password
+
+secrets:
+  db_password:
+    file: ./secrets/db.txt
+//   容器内 /run/secrets/db_password（tmpfs）
+
+// 3. 外部 secret manager
+//    - HashiCorp Vault
+//    - AWS Secrets Manager / Parameter Store
+//    - Azure Key Vault
+//    - GCP Secret Manager
+//    
+//    集成：通过 init container 拉取 secret
+//    或通过 CSI driver
+
+// 4. Build-time secret（BuildKit）
+docker build --secret id=npm,src=$HOME/.npmrc .
+// Dockerfile:
+// RUN --mount=type=secret,id=npm,target=/root/.npmrc \
+//     npm install
+// 优点：
+//   - secret 不出现在 image layer
+//   - 不在 build cache
+//   - 不在 build history
+
+// 5. SSH forwarding（BuildKit）
+docker build --ssh default=$SSH_AUTH_SOCK .
+// Dockerfile:
+// RUN --mount=type=ssh \
+//     git clone git@github.com:org/private-repo.git
+</code></pre>
+</section>
+
+<section id="runtime" class="toc-link">
+  <h2><span class="num">06</span> 运行时隔离</h2>
+
+<pre><code>// 1. 最小化能力
+docker run --cap-drop=ALL --cap-add=NET_BIND_SERVICE ...
+// 仅添加必需能力
+// 详见 docker-capabilities 文档
+
+// 2. seccomp profile
+//    默认 seccomp profile 禁用 60+ 危险 syscall
+//    docker run --security-opt seccomp=/path/to/profile.json
+//    
+//    自定义 profile（精简）：
+{
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "syscalls": [
+    {
+      "names": ["accept", "bind", "read", "write", ...],
+      "action": "SCMP_ACT_ALLOW"
+    }
+  ]
+}
+
+// 3. AppArmor profile
+//    docker run --security-opt apparmor=docker-default
+//    或自定义：/etc/apparmor.d/docker-&lt;name&gt;
+//    
+//    profile 限制：
+//      文件访问
+//      capabilities
+//      network
+//      mount
+
+// 4. SELinux label
+//    docker run --security-opt label=type:container_t
+//    RHEL/CentOS/Fedora 默认启用
+
+// 5. user namespace
+//    /etc/docker/daemon.json:
+//      {"userns-remap": "default"}
+//    
+//    容器 root → 宿主 UID 100000+
+//    即使逃逸也只是普通用户
+
+// 6. read-only rootfs
+//    docker run --read-only ...
+//    配合 tmpfs：
+//    docker run --read-only --tmpfs /tmp --tmpfs /run ...
+
+// 7. no-new-privileges
+//    docker run --security-opt no-new-privileges
+//    禁止 setuid / setgid 提升
+
+// 8. cgroup 限制（防 DoS）
+docker run \
+  --memory=512m \
+  --memory-swap=512m \
+  --cpus=1 \
+  --pids-limit=100 \
+  --ulimit nofile=1024 \
+  ...
+</code></pre>
+
+  <p>完整加固命令：</p>
+<pre><code>docker run -d \
+  --name app \
+  --cap-drop=ALL \
+  --cap-add=NET_BIND_SERVICE \
+  --security-opt no-new-privileges \
+  --security-opt seccomp=seccomp-profile.json \
+  --security-opt apparmor=docker-default \
+  --read-only \
+  --tmpfs /tmp \
+  --tmpfs /run \
+  --memory=512m \
+  --cpus=1 \
+  --pids-limit=100 \
+  --user 1000:1000 \
+  --network=internal \
+  myimage:latest
+</code></pre>
+</section>
+
+<section id="network" class="toc-link">
+  <h2><span class="num">07</span> 网络安全</h2>
+
+<pre><code>// 1. 网络分段
+//    创建独立网络，限制容器间通信
+docker network create --internal db_net   # --internal = 不能访问外网
+docker network create app_net
+
+docker run -d --network=db_net db
+docker run -d --network=app_net \
+            --network=db_net app
+
+// 2. iptables / ufw
+//    Docker 会修改 iptables
+//    可用 ufw-docker 工具管理
+//    
+//    限制容器出站：
+//    iptables -I DOCKER-USER -d 169.254.169.254 -j DROP  # 阻止访问云元数据
+
+// 3. TLS（容器间）
+//    - 服务网格（Istio, Linkerd）
+//    - 自动 mTLS
+
+// 4. 网络策略（K8s）
+//    NetworkPolicy 资源
+//    spec:
+//      podSelector:
+//        matchLabels:
+//          app: db
+//      ingress:
+//        - from:
+//            - podSelector:
+//                matchLabels:
+//                  app: api
+
+// 5. eBPF 安全（Cilium / Calico）
+//    - 基于 identity 而非 IP
+//    - L7 policy（HTTP method 限制）
+//    - 可观测性（流量监控）
+
+// 6. 端口暴露最小化
+//    ❌ docker run -p 0.0.0.0:5432:5432 ...  # 全网暴露
+//    ✅ docker run -p 127.0.0.1:5432:5432 ...  # 仅本地
+//    ✅ 仅容器间通过 expose
+</code></pre>
+</section>
+
+<section id="monitor" class="toc-link">
+  <h2><span class="num">08</span> 监控与检测</h2>
+
+<pre><code>// 1. 容器行为分析（CBA）
+//    工具：
+//      - Falco（CNCF，开源）
+//      - Aqua Security（商业）
+//      - Sysdig Secure（商业）
+//      - Tetragon（eBPF based）
+
+//    Falco 示例规则：
+//    - rule: Terminal shell in container
+//      desc: A shell was opened in a container
+//      condition: container.id != host and proc.name in (bash, sh)
+//      output: "Shell in container"
+//      priority: WARNING
+
+// 2. Audit log
+//    Linux auditd 容器规则：
+//    auditctl -w /var/run/docker.sock -p wa
+//    记录所有 docker.sock 访问
+
+// 3. 容器扫描
+//    持续扫描运行中的容器
+//    检测：新 CVE、配置漂移、可疑进程
+
+// 4. Network flow log
+//    Cilium + Hubble 可视化容器网络流量
+//    发现异常连接
+
+// 5. Prometheus + Grafana
+//    监控指标：
+//      container_cpu_usage
+//      container_memory_usage
+//      container_oom_events
+//      network_packets_per_sec
+//    告警规则
+
+// 6. ELK / Loki 日志
+//    容器 stdout/stderr → 集中
+//    异常检测（如出现 "Permission denied" 频繁）
+</code></pre>
+</section>
+
+<section id="cis" class="toc-link">
+  <h2><span class="num">09</span> CIS Benchmark</h2>
+
+  <p>CIS (Center for Internet Security) Docker Benchmark 是<strong>事实标准</strong>的容器安全配置规范：</p>
+
+<pre><code>// 主要检查项（部分）：
+
+// 1. 守护进程
+//    - 1.x 确保守护进程以最低权限运行
+//    - 确保禁用 legacy registry (v1)
+//    - 确保 TLS 启用（远程访问）
+//    - 确保默认 ulimit 配置
+
+// 2. daemon.json 配置
+//    - userns-remap 启用
+//    - live-restore 启用
+//    - cgroup parent 设置
+//    - 默认 seccomp profile
+//    - 默认 ulimit
+
+// 3. 镜像构建
+//    - 创建非 root 用户
+//    - 设定 proper 权限
+//    - 最小化镜像
+
+// 4. 容器运行时
+//    - privileged=false
+//    - --cap-drop=ALL（白名单）
+//    - read-only rootfs
+//    - set no-new-privileges
+//    - limit memory / cpu / pids
+//    - 不挂载 docker.sock
+
+// 5. 镜像注册
+//    - content trust
+//    - 漏洞扫描
+//    - RBAC
+
+// 6. 网络
+//    - 不暴露 2375/2376 公网
+//    - 网络分段
+
+// 自动化检查工具：
+//    - docker-bench-security（Docker 官方）
+//    - kube-bench（K8s 版本）
+//    - trivy config
+//    - Clair / Quay
+
+// 运行：
+docker run --rm --net host --pid host --userns host --cap-add audit_control \
+  -e DOCKER_CONTENT_TRUST=$DOCKER_CONTENT_TRUST \
+  -v /var/lib:/var/lib:ro \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -v /usr/lib/systemd:/usr/lib/systemd:ro \
+  -v /etc:/etc:ro \
+  --label docker_bench_security \
+  docker/docker-bench-security
+</code></pre>
+</section>
+
+<section id="files" class="toc-link">
+  <h2><span class="num">10</span> 参考资源</h2>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+标准与指南
+├── <span class="file">NIST SP 800-190</span>                <span class="cmt">Application Container Security Guide</span>
+├── <span class="file">CIS Docker Benchmark</span>           <span class="cmt">CIS Docker 安全基线</span>
+├── <span class="file">OWASP Docker Top 10</span>            <span class="cmt">OWASP 容器安全风险</span>
+├── <span class="file">CNCF Security Whitepaper</span>      <span class="cmt">云原生安全白皮书</span>
+└── <span class="file">NSA/CISA Kubernetes Hardening Guide</span>
+
+开源工具
+├── <span class="file">docker-bench-security</span>          <span class="cmt">CIS 检查工具</span>
+│   └── github.com/docker/docker-bench-security
+├── <span class="file">trivy</span>                            <span class="cmt">漏洞扫描</span>
+│   └── github.com/aquasecurity/trivy
+├── <span class="file">grype</span>                            <span class="cmt">漏洞扫描（轻量）</span>
+│   └── github.com/anchore/grype
+├── <span class="file">clair</span>                            <span class="cmt">漏洞扫描（Harbor 用）</span>
+│   └── github.com/quay/clair
+├── <span class="file">falco</span>                            <span class="cmt">运行时安全监控</span>
+│   └── github.com/falcosecurity/falco
+├── <span class="file">tetragon</span>                         <span class="cmt">eBPF 安全观测与执行</span>
+│   └── github.com/cilium/tetragon
+├── <span class="file">kube-bench</span>                       <span class="cmt">K8s CIS 检查</span>
+│   └── github.com/aquasecurity/kube-bench
+├── <span class="file">kube-hunter</span>                      <span class="cmt">K8s 渗透测试</span>
+│   └── github.com/aquasecurity/kube-hunter
+├── <span class="file">notary</span>                            <span class="cmt">镜像签名 (老 v1)</span>
+│   └── github.com/theupdateframework/notary
+├── <span class="file">cosign</span>                            <span class="cmt">镜像签名（新）</span>
+│   └── github.com/sigstore/cosign
+├── <span class="file">gvisor</span>                            <span class="cmt">用户态内核 sandbox</span>
+│   └── gvisor.dev
+├── <span class="file">kata-containers</span>                  <span class="cmt">VM 级别容器</span>
+│   └── katacontainers.io
+└── <span class="file">docker-slim</span>                       <span class="cmt">镜像瘦身</span>
+    └── github.com/docker-slim/docker-slim
+
+商业方案
+├── <span class="file">Aqua Security</span>                    <span class="cmt">全栈容器安全</span>
+├── <span class="file">Sysdig Secure</span>                    <span class="cmt">运行时安全</span>
+├── <span class="file">Prisma Cloud (Palo Alto)</span>        <span class="cmt">云原生安全平台</span>
+├── <span class="file">Snyk Container</span>                   <span class="cmt">容器漏洞扫描</span>
+├── <span class="file">Datadog CSPM</span>                     <span class="cmt">云安全态势管理</span>
+└── <span class="file">Twistlock (Palo Alto)</span>            <span class="cmt">（已合并入 Prisma）</span>
+
+镜像最小化基础镜像
+├── <span class="file">scratch</span>                           <span class="cmt">空镜像（最严格）</span>
+├── <span class="file">distroless</span>                        <span class="cmt">Google，无 shell</span>
+│   └── gcr.io/distroless/...
+├── <span class="file">alpine</span>                            <span class="cmt">5MB，但 musl libc</span>
+├── <span class="file">chainguard</span>                        <span class="cmt">Chainguard 商业最小化镜像</span>
+└── <span class="file">wolfi</span>                             <span class="cmt">Chainguard OS base</span>
+  </pre></div>
+
+  <div class="callout">
+    <strong>容器安全检查清单:</strong><br>
+    1. 是否启用 user namespace（userns-remap）？<br>
+    2. 容器是否以非 root 用户运行？<br>
+    3. 是否 cap-drop=ALL + 必要的 cap-add？<br>
+    4. 是否启用 seccomp / AppArmor / SELinux？<br>
+    5. 镜像是否有签名验证（content trust）？<br>
+    6. 镜像是否经过漏洞扫描？<br>
+    7. secret 是否通过 mount 而非 ENV 注入？<br>
+    8. 是否限制了 memory / cpu / pids？<br>
+    9. 是否用最小化基础镜像？<br>
+    10. 是否避免使用 privileged 模式？<br>
+    11. 是否启用了 no-new-privileges？<br>
+    12. docker.sock 是否被妥善保护？<br>
+    如果以上有 3+ 答"否"，需要重新评估容器安全策略。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>
