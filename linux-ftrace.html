@@ -3,30 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Linux 内核 ftrace 深度解析</title>
+<title>Linux ftrace 深度解析</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
 <link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
 
 <div class="hero">
-  <h1>Linux 内核 ftrace 深度解析</h1>
-  <p class="subtitle">函数跟踪与事件追踪框架 — 内核可观测性的基石</p>
-  <span class="version">Linux 7.0.12 · kernel/trace/</span>
+  <h1>Linux ftrace 深度解析</h1>
+  <p class="subtitle">函数跟踪 — 动态追踪内核函数调用</p>
+  <span class="version">Linux 7.0.12 · kernel/trace/ftrace.c (9400 行)</span>
 </div>
 
 <nav class="toc">
   <ul>
     <li><a href="#overview">概述</a></li>
-    <li><a href="#arch">三层架构</a></li>
-    <li><a href="#dynamic">动态 ftrace</a></li>
-    <li><a href="#ops">ftrace_ops 与回调机制</a></li>
-    <li><a href="#events">Trace Event 系统</a></li>
-    <li><a href="#ring">Ring Buffer</a></li>
-    <li><a href="#tracefs">tracefs 接口</a></li>
-    <li><a href="#probes">kprobe/uprobe 集成</a></li>
-    <li><a href="#files">源码索引</a></li>
+    <li><a href="#features">核心功能</a></li>
+    <li><a href="#usecases">使用方式</a></li>
+    <li><a href="#source">源码索引</a></li>
   </ul>
 </nav>
 
@@ -34,412 +33,87 @@
 
 <section id="overview" class="toc-link">
   <h2><span class="num">01</span> 概述</h2>
-  <p>ftrace 是 Linux 内核最强大的跟踪框架，从 2008 年 (Linux 2.6.27) 开始合入，现已发展成覆盖函数跟踪、静态事件、动态探针的完整可观测性基础设施。</p>
-
-  <div class="grid-2">
-    <div class="card">
-      <div class="card-title">ftrace 能做什么</div>
-      <ul>
-        <li>跟踪任意内核函数的进入/返回</li>
-        <li>通过静态 trace event 监控关键子系统</li>
-        <li>动态插入 kprobe/uprobe 探针</li>
-        <li>记录 IRQ/调度/内存等核心事件</li>
-        <li>硬件延时分析（irqsoff、wakeup）</li>
-        <li>函数调用图（function_graph）</li>
-      </ul>
-    </div>
-    <div class="card">
-      <div class="card-title">关键特性</div>
-      <table>
-        <tr><th>特性</th><th>说明</th></tr>
-        <tr><td>零开销 (disabled)</td><td>mcount 被 nop 填充，无性能影响</td></tr>
-        <tr><td>安全动态开启</td><td>运行时即时修改函数入口</td></tr>
-        <tr><td>分层设计</td><td>events / function / kprobe 三层可叠加</td></tr>
-        <tr><td>lockless ring buffer</td><td>per-CPU 无锁缓冲，写入<50ns</td></tr>
-      </table>
-    </div>
-  </div>
-
-  <p>用户接口：<code>/sys/kernel/tracing/</code>（tracefs），通过 <code>echo</code> 命令即可操作，不依赖任何用户态工具。</p>
+  <p>ftrace（Function Tracer）是 Linux 内核的<strong>动态函数跟踪框架</strong>。它可以在运行时跟踪内核函数调用、中断处理、软中断、调度器事件等。ftrace 是 trace-cmd、perf ftrace、函数图跟踪等工具的底层基础。</p>
 </section>
 
-<section id="arch" class="toc-link">
-  <h2><span class="num">02</span> 三层架构</h2>
-
-<pre><code>┌─────────────────────────────────────────────────────────┐
-│                     tracefs (/sys/kernel/tracing/)       │
-│  current_tracer  set_event  trace  trace_pipe  ...       │
-└──────────────────────────┬──────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────┐
-│              Ring Buffer (kernel/trace/ring_buffer.c)    │
-│        per-CPU pages, commit counter, reader lock        │
-└──────┬─────────────────────┬──────────────────┬─────────┘
-       │                     │                  │
-┌──────▼──────┐   ┌──────────▼──────┐   ┌──────▼──────────┐
-│ Trace Event │   │ Function Tracer │   │ Dynamic Probes  │
-│ (static)    │   │ (dynamic)       │   │ (kprobe/uprobe) │
-│             │   │                 │   │                 │
-│ DEFINE_EVENT│   │ ftrace_ops      │   │ register_kprobe │
-│ trace_foo() │   │ mcount→nop       │   │ kprobe_ftrace   │
-└─────────────┘   └─────────────────┘   └─────────────────┘
-       │                     │                  │
-       └─────────────────────┴──────────────────┘
-                             │
-                      ┌──────▼──────┐
-                      │ 内核函数体   │
-                      │ (任意地址)   │
-                      └─────────────┘
-</code></pre>
-
-  <p>三层跟踪机制叠加在同一 ring buffer 上，可以同时开启任意组合：</p>
-
+<section id="features" class="toc-link">
+  <h2><span class="num">02</span> 核心功能</h2>
   <table>
-    <tr><th>层次</th><th>插入方式</th><th>开销 (active)</th><th>精度</th></tr>
-    <tr><td>Trace Event</td><td>源代码静态插入</td><td>~100ns / event</td><td>精确位置</td></tr>
-    <tr><td>Function Tracer</td><td>运行时改 mcount</td><td>~200ns / call</td><td>函数级</td></tr>
-    <tr><td>kprobe</td><td>动态断点指令</td><td>~500ns / hit</td><td>指令级</td></tr>
+    <tr><th>功能</th><th>跟踪器</th><th>说明</th></tr>
+    <tr><td>函数跟踪</td><td><code>function</code></td><td>记录所有函数调用</td></tr>
+    <tr><td>函数图跟踪</td><td><code>function_graph</code></td><td>记录函数调用和返回时间</td></tr>
+    <tr><td>中断跟踪</td><td><code>irqsoff</code></td><td>跟踪中断禁用时间</td></tr>
+    <tr><td>调度延迟</td><td><code>wakeup</code></td><td>跟踪进程唤醒延迟</td></tr>
+    <tr><td>栈跟踪</td><td><code>stacktrace</code></td><td>记录内核栈</td></tr>
+    <tr><td>事件跟踪</td><td><code>tracepoint</code></td><td>静态跟踪点</td></tr>
   </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">ftrace 工作原理：</span>
+
+  启用函数跟踪时：
+  内核在每个被跟踪函数入口插入 <span style="color:#1a7f37">mcount/fentry</span> 调用
+  → mcount 调用 ftrace 的回调函数
+  → 回调函数记录函数名、时间、参数
+
+  关闭时：
+  恢复为 <span style="color:#1a7f37">NOP 指令</span> → 零开销
+</pre></div>
 </section>
 
-<section id="dynamic" class="toc-link">
-  <h2><span class="num">03</span> 动态 ftrace</h2>
+<section id="usecases" class="toc-link">
+  <h2><span class="num">03</span> 使用方式</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 函数跟踪</span>
+$ echo function > /sys/kernel/debug/tracing/current_tracer
+$ echo 1 > /sys/kernel/debug/tracing/tracing_on
+$ cat /sys/kernel/debug/tracing/trace_pipe
+  <span class="cm"># 实时输出函数调用</span>
 
-  <p>编译时，每个函数开头插入 5 字节的 <code>mcount</code> 调用（或 <code>__fentry__</code>）：</p>
+<span class="cm"># 只跟踪特定函数</span>
+$ echo tcp_sendmsg > /sys/kernel/debug/tracing/set_ftrace_filter
+$ echo 1 > /sys/kernel/debug/tracing/tracing_on
 
-<pre><code>// gcc -pg 选项在每个函数开头插入：
-__fentry__:
-    ret    // 默认：直接返回（无操作）
+<span class="cm"># 函数图跟踪（带返回值和时间）</span>
+$ echo function_graph > /sys/kernel/debug/tracing/current_tracer
+$ echo tcp_sendmsg > /sys/kernel/debug/tracing/set_graph_function
+$ echo 1 > /sys/kernel/debug/tracing/tracing_on
 
-// ftrace 启用后，改为：
-__fentry__:
-    jmp ftrace_caller  // 跳转到 ftrace 处理函数
-    // 后续指令：保存寄存器、调用回调、恢复寄存器
-</code></pre>
+<span class="cm"># trace-cmd — 更友好的 ftrace 前端</span>
+$ trace-cmd record -p function_graph -g tcp_sendmsg sleep 5
+$ trace-cmd report
 
-  <p>运行时修改由 <code>kernel/trace/ftrace.c</code> 中的 <strong>DYNAMIC_FTRACE</strong> 机制完成：</p>
-
-<pre><code>// 关键数据结构
-struct dyn_ftrace {
-    unsigned long           ip;      // 函数入口地址
-    unsigned long           flags;
-    struct dyn_arch_ftrace  arch;
-};
-
-// 所有 mcount 调用点记录在 ftrace_pages 链表中
-// 修改流程：
-// 1. 找到目标函数对应的 dyn_ftrace record
-// 2. stop_machine() 停止所有 CPU
-// 3. 将 nop 替换为 jmp ftrace_caller
-// 4. 恢复 CPU 运行
-// 整个过程对运行中的系统完全透明
-
-// arch/x86/kernel/ftrace.c
-int ftrace_make_nop(struct module *mod,
-                    struct dyn_ftrace *rec,
-                    unsigned long addr)
-{
-    // 将 call mcount/fentry 替换为 5 字节 nop
-    // (0xE8 call → 0x0F 0x1F nop)
-}
-
-int ftrace_make_call(struct dyn_ftrace *rec,
-                     unsigned long addr)
-{
-    // 将 nop 替换为 call/jmp ftrace_caller
-}
-</code></pre>
-
-  <div class="callout">
-    <strong>安全性:</strong><br>
-    ftrace 使用 stop_machine() 进行代码修改<br>
-    确保修改时没有 CPU 正在执行被修改的指令<br>
-    每次修改都是原子的（单条 jmp 指令）
+<span class="cm"># kprobe — 动态跟踪点</span>
+$ echo 'p:myprobe tcp_sendmsg len=%x2' > /sys/kernel/debug/tracing/kprobe_events
+$ echo 1 > /sys/kernel/debug/tracing/events/kprobes/myprobe/enable</code></pre>
   </div>
 </section>
 
-<section id="ops" class="toc-link">
-  <h2><span class="num">04</span> ftrace_ops 与回调机制</h2>
-
-<pre><code>// include/linux/ftrace.h
-struct ftrace_ops {
-    ftrace_func_t       func;            // 回调函数
-    struct ftrace_ops   *next;           // 链表
-    unsigned long       flags;           // TRACE_OPS_FL_*
-    int                 priority;        // 优先级
-    void                *private;
-
-    // 过滤函数集合
-    struct ftrace_hash  *notrace_hash;   // 黑名单
-    struct ftrace_hash  *filter_hash;    // 白名单
-};
-
-// 回调函数签名
-typedef void (*ftrace_func_t)(unsigned long ip,       // 函数地址
-                              unsigned long parent_ip, // 调用者地址
-                              struct ftrace_ops *op,   // ops 指针
-                              struct ftrace_regs *fregs);
-
-// 注册/注销 API
-int register_ftrace_function(struct ftrace_ops *ops);
-int unregister_ftrace_function(struct ftrace_ops *ops);
-</code></pre>
-
-  <p>ftrace_ops 的链式调用机制：</p>
-
-<pre><code>// ftrace_caller (汇编入口)
-// 1. 保存 regs
-// 2. 进入 ftrace_call (C 函数)
-
-void ftrace_call(unsigned long ip, unsigned long parent_ip)
-{
-    struct ftrace_ops *op;
-
-    // 遍历 ops 链表，按 priority 从高到低
-    // 每个 ops 检查自己的 filter_hash/notrace_hash
-    // 匹配则调用 op->func()
-    do_for_each_ftrace_op(op) {
-        if (ftrace_ops_test(op, ip))
-            op->func(ip, parent_ip, op, NULL);
-    } while_for_each_ftrace_op(op);
-}
-
-// 多个 tracer 共存示例：
-// function tracer: 每个函数都记录
-// function_graph: 同时记录函数嵌套关系
-// stack tracer: 记录调用栈
-// 它们可以同时注册，按优先级依次调用
-</code></pre>
-
-  <table>
-    <tr><th>标志</th><th>含义</th></tr>
-    <tr><td><code>TRACE_OPS_FL_GLOBAL</code></td><td>全局追踪所有函数</td></tr>
-    <tr><td><code>TRACE_OPS_FL_DYNAMIC</code></td><td>仅追踪 filter_hash 中的函数</td></tr>
-    <tr><td><code>TRACE_OPS_FL_RCU</code></td><td>回调在 RCU 读锁内执行</td></tr>
-    <tr><td><code>TRACE_OPS_FL_PERMANENT</code></td><td>不允许注销</td></tr>
-    <tr><td><code>TRACE_OPS_FL_IPMODIFY</code></td><td>回调可能修改 IP（如 livepatch）</td></tr>
-  </table>
-</section>
-
-<section id="events" class="toc-link">
-  <h2><span class="num">05</span> Trace Event 系统</h2>
-
-  <p>Trace Event 是内核源码中静态插入的跟踪点，使用宏来声明和定义：</p>
-
-<pre><code>// 1. 创建事件类 (DECLARE_EVENT_CLASS)
-//    定义事件的共同结构
-DECLARE_EVENT_CLASS(sched_wakeup_template,
-    TP_PROTO(struct task_struct *p),
-    TP_ARGS(p),
-    TP_STRUCT__entry(
-        __field(pid_t, pid)
-        __field(int, prio)
-    ),
-    TP_fast_assign(
-        __entry->pid = p->pid;
-        __entry->prio = p->prio;
-    ),
-    TP_printk("pid=%d prio=%d", __entry->pid, __entry->prio)
-);
-
-// 2. 定义具体事件 (DEFINE_EVENT)
-DEFINE_EVENT(sched_wakeup_template,
-             sched_wakeup_new,
-             TP_PROTO(struct task_struct *p),
-             TP_ARGS(p));
-
-// 3. 在代码中触发
-trace_sched_wakeup_new(p);
-// 展开为：
-// if (static_key_false(&tracepoint.__key))
-//     tracepoint_sched_wakeup_new(p);
-</code></pre>
-
-  <p>编译器优化：</p>
-  <ul>
-    <li>使用 <strong>static branch</strong>（<code>static_key_false</code>）：未启用时是单条 nop，零开销</li>
-    <li>启用后改为 jmp，跳转到事件处理函数</li>
-    <li>每个事件进入 ring buffer 前会检查 filter</li>
-  </ul>
-
-  <p>主要事件簇位置：</p>
-  <table>
-    <tr><th>分类</th><th>文件</th><th>内容</th></tr>
-    <tr><td>sched</td><td><code>include/trace/events/sched.h</code></td><td>调度：wakeup/migrate/switch</td></tr>
-    <tr><td>irq</td><td><code>include/trace/events/irq.h</code></td><td>中断：entry/exit/softirq</td></tr>
-    <tr><td>kmem</td><td><code>include/trace/events/kmem.h</code></td><td>内存：alloc/free/mm_page</td></tr>
-    <tr><td>block</td><td><code>include/trace/events/block.h</code></td><td>块层：bio/rq/plug</td></tr>
-    <tr><td>net</td><td><code>include/trace/events/net.h</code></td><td>网络：napi/softirq</td></tr>
-    <tr><td>syscalls</td><td><code>include/trace/events/syscalls.h</code></td><td>系统调用 enter/exit</td></tr>
-  </table>
-</section>
-
-<section id="ring" class="toc-link">
-  <h2><span class="num">06</span> Ring Buffer</h2>
-
-  <p>ftrace 使用自己实现的 lockless ring buffer（<code>kernel/trace/ring_buffer.c</code>），核心设计：</p>
-
-<pre><code>// 核心数据结构
-struct ring_buffer {
-    struct ring_buffer_per_cpu **buffers;  // 每个 CPU 一个
-    unsigned             pages;
-    unsigned             flags;
-};
-
-struct ring_buffer_per_cpu {
-    struct buffer_page    *reader_page;      // 读取页
-    struct buffer_page    *head_page;        // 最旧数据页
-    struct buffer_page    *tail_page;        // 最新数据页
-    struct buffer_page    *commit_page;      // 已提交页
-    unsigned long         nr_pages;
-    local_t               commit_overrun;    // 覆盖计数
-};
-
-struct buffer_page {
-    struct list_head      list;              // 环形链表
-    local_t               write;             // 写入偏移
-    unsigned long         real_end;          // 实际结束位置
-    struct page           *page;             // 真实物理页
-    local_t               entries;           // 条目数
-};
-</code></pre>
-
-  <p>写入流程：</p>
-<pre><code>// 写入者（在任意上下文均可）
-// 1. 从当前 CPU 的 tail_page 中预留空间
-// 2. 拷贝事件数据到预留位置
-// 3. 更新 commit_page（通过 smp_store_release）
-// 4. 如果 tail_page 写满，切换到下一个 buffer_page
-
-// 读取者
-// 1. 交换 reader_page 和 head_page
-// 2. 在 reader_page 上读取数据
-// 3. 将 reader_page 放回链表尾部
-
-// 关键特性：
-// - 写入者和读取者无需锁
-// - 写入者之间通过 local_t（本地原子操作）互斥
-// - 通过 smp_store_release + smp_load_acquire 实现无锁读取
-// - 写入者可以被抢占，但不影响一致性
-</code></pre>
-
-  <div class="callout">
-    <strong>性能数据:</strong><br>
-    单次写入 ring buffer：~30-50ns（无事件时）<br>
-    加上 trace event 的 TP_fast_assign：~80-150ns<br>
-    远低于 printk 的 ~1-10μs
-  </div>
-</section>
-
-<section id="tracefs" class="toc-link">
-  <h2><span class="num">07</span> tracefs 接口</h2>
-
-  <p>所有用户态操作通过 <code>/sys/kernel/tracing/</code> 下的文件完成：</p>
-
-  <table>
-    <tr><th>文件</th><th>用途</th></tr>
-    <tr><td><code>available_tracers</code></td><td>列出可用 tracer：function、function_graph、irqsoff、wakeup…</td></tr>
-    <tr><td><code>current_tracer</code></td><td>选择当前 tracer：<code>echo function > current_tracer</code></td></tr>
-    <tr><td><code>available_events</code></td><td>列出所有可用事件（数千个）</td></tr>
-    <tr><td><code>set_event</code></td><td>启用事件：<code>echo sched:* > set_event</code></td></tr>
-    <tr><td><code>trace</code></td><td>读取跟踪结果</td></tr>
-    <tr><td><code>trace_pipe</code></td><td>流式读取（blocking）</td></tr>
-    <tr><td><code>buffer_size_kb</code></td><td>设置 per-CPU 缓冲大小</td></tr>
-    <tr><td><code>ftrace_filter</code></td><td>函数过滤器（白名单）</td></tr>
-    <tr><td><code>ftrace_notrace</code></td><td>函数过滤器（黑名单）</td></tr>
-    <tr><td><code>kprobe_events</code></td><td>动态 kprobe 定义</td></tr>
-    <tr><td><code>uprobe_events</code></td><td>动态 uprobe 定义</td></tr>
-    <tr><td><code>events/</code></td><td>事件分类目录（sched/irq/kmem/…）</td></tr>
-  </table>
-
-<pre><code>// 典型使用流程
-# 挂载 tracefs
-mount -t tracefs none /sys/kernel/tracing
-
-# 查看可用 tracer
-cat available_tracers
-# function function_graph irqsoff wakeup ...
-
-# 启用函数跟踪
-echo function > current_tracer
-
-# 只跟踪特定函数
-echo 'schedule' > set_ftrace_filter
-echo '__do_fault' >> set_ftrace_filter
-
-# 查看结果
-cat trace
-# &lt;...>-1139  [001] ...1.  123.456: schedule &lt;= do_nanosleep
-</code></pre>
-</section>
-
-<section id="probes" class="toc-link">
-  <h2><span class="num">08</span> kprobe/uprobe 集成</h2>
-
-  <p>ftrace 与 kprobe 深度集成，使得 kprobe 事件也可以通过 trace event 接口管理：</p>
-
-<pre><code>// kprobe 事件定义（通过 tracefs 动态添加）
-# 在函数入口处插入 kprobe
-echo 'p:my_probe do_sys_open file=%di:u32 flags=%si:u32' \
-     > kprobe_events
-
-# 在函数返回处插入 kretprobe
-echo 'r:my_ret do_sys_open ret=$retval:s32' \
-     > kprobe_events
-
-# 启用
-echo 1 > events/kprobes/my_probe/enable
-
-# 底层实现：
-// kernel/trace/trace_kprobe.c
-// kprobe 注册到 ftrace（如果目标函数已被 ftrace 跟踪）
-// → 利用 ftrace 的 mcount 框架，避免单独插入 breakpoint
-// → 性能远优于传统 kprobe（~500ns vs ~1μs）
-
-// uprobe 事件定义
-echo 'p:my_uprobe /bin/bash:0x12345' > uprobe_events
-// 在 bash 的 0x12345 偏移处插入用户态探针
-// 通过 UPROBE_EVENT 送往 trace event 系统
-</code></pre>
-
-  <p>三种方式可以同时使用，统一输出到 ring buffer：</p>
-
-<pre><code># 同时启用三种跟踪
-echo function > current_tracer
-echo 1 > events/sched/sched_switch/enable
-echo 'p:my_kprobe schedule' > kprobe_events
-
-# 结果混合在 trace 中
-cat trace
-# 函数跟踪  ...
-# sched_switch 事件 ...
-# kprobe 事件 ...
-</code></pre>
-</section>
-
-<section id="files" class="toc-link">
-  <h2><span class="num">09</span> 源码索引</h2>
-
+<section id="source" class="toc-link">
+  <h2><span class="num">04</span> 源码索引</h2>
   <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
-├── <span class="file">kernel/trace/ftrace.c</span>            <span class="cmt">动态 ftrace：mcount 管理、record 跟踪、ops 注册</span>
-├── <span class="file">kernel/trace/trace.c</span>            <span class="cmt">主框架：tracer 注册、tracefs 接口、日志输出</span>
-├── <span class="file">kernel/trace/ring_buffer.c</span>      <span class="cmt">lockless ring buffer 实现</span>
-├── <span class="file">kernel/trace/trace_events.c</span>     <span class="cmt">trace event 子系统：event 注册/过滤/触发</span>
-├── <span class="file">kernel/trace/trace_kprobe.c</span>     <span class="cmt">kprobe/ftrace 集成</span>
-├── <span class="file">kernel/trace/trace_uprobe.c</span>     <span class="cmt">uprobe/ftrace 集成</span>
-├── <span class="file">kernel/trace/trace_functions.c</span>  <span class="cmt">function tracer 实现</span>
-├── <span class="file">kernel/trace/trace_functions_graph.c</span> <span class="cmt">function_graph tracer</span>
-├── <span class="file">kernel/trace/trace_irqsoff.c</span>    <span class="cmt">irqsoff/wakeup 延迟 tracer</span>
-├── <span class="file">include/linux/ftrace.h</span>           <span class="cmt">ftrace_ops、ftrace_func_t、注册 API</span>
-├── <span class="file">include/trace/events/*.h</span>        <span class="cmt">所有静态 trace event 定义</span>
-├── <span class="file">include/trace/trace_events.h</span>     <span class="cmt">DECLARE_EVENT_CLASS / DEFINE_EVENT 宏</span>
-├── <span class="file">arch/x86/kernel/ftrace.c</span>        <span class="cmt">x86 架构相关：nop 替换、ftrace_caller 汇编</span>
-└── <span class="file">arch/x86/kernel/ftrace_64.S</span>     <span class="cmt">ftrace_caller / return_to_handler 汇编实现</span>
+<span class="dir">kernel/trace/</span>
+├── <span class="file">ftrace.c</span>         <span class="cmt">ftrace 核心 (9400 行)</span>
+│     └── ftrace_enable_ftrace_ops() <span class="cmt">启用跟踪</span>
+│     └── ftrace_modify_all_code()   <span class="cmt">修改函数入口</span>
+├── <span class="file">trace.c</span>         <span class="cmt">trace 框架核心</span>
+├── <span class="file">trace_functions_graph.c</span> <span class="cmt">函数图跟踪</span>
+├── <span class="file">trace_kprobe.c</span>  <span class="cmt">kprobe 动态跟踪</span>
+└── <span class="file">trace_events.c</span>  <span class="cmt">tracepoint 管理</span>
   </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/trace/ftrace.c</code> — ftrace 核心，理解函数入口修改机制。<br>
+    <code>kernel/trace/trace.c</code> — trace 框架核心。<br>
+    <code>kernel/trace/trace_kprobe.c</code> — kprobe 动态跟踪，运行时插入探针。
+  </div>
 </section>
 
-</div><!-- .container -->
+</div>
 
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/trace/ftrace.c · 生成于 2026-06-12</footer>
 <script src="common.js"></script>
 </body>
 </html>

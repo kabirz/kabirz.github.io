@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核调试 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核调试 深度解析</h1>
+  <p class="subtitle">调试工具全景 — 从 printk 到 KASAN</p>
+  <span class="version">Linux 7.0.12 · kernel/printk/ · debug/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#tools">调试工具</a></li>
+    <li><a href="#flow">调试流程</a></li>
+    <li><a href="#usecases">场景选择</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 内核提供了丰富的调试工具，从最简单的 printk 到复杂的 KASAN/KCSAN。选择正确的调试工具是高效排查内核问题的关键。</p>
+</section>
+
+<section id="tools" class="toc-link">
+  <h2><span class="num">02</span> 调试工具</h2>
+  <table>
+    <tr><th>工具</th><th>用途</th><th>开销</th></tr>
+    <tr><td><strong>printk</strong></td><td>内核日志输出</td><td>低</td></tr>
+    <tr><td><strong>pr_debug</strong></td><td>条件编译调试</td><td>零（编译时关闭）</td></tr>
+    <tr><td><strong>dynamic_debug</strong></td><td>运行时动态调试</td><td>低</td></tr>
+    <tr><td><strong>ftrace</strong></td><td>函数跟踪</td><td>中</td></tr>
+    <tr><td><strong>tracepoints</strong></td><td>静态跟踪点</td><td>低（未启用时零开销）</td></tr>
+    <tr><td><strong>perf</strong></td><td>性能分析</td><td>低</td></tr>
+    <tr><td><strong>KASAN</strong></td><td>内存错误检测</td><td>高</td></tr>
+    <tr><td><strong>KCSAN</strong></td><td>数据竞争检测</td><td>高</td></tr>
+    <tr><td><strong>lockdep</strong></td><td>死锁检测</td><td>中</td></tr>
+    <tr><td><strong>KGDB</strong></td><td>内核调试器</td><td>高</td></tr>
+    <tr><td><strong>crash</strong></td><td>转储分析</td><td>离线</td></tr>
+  </table>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 调试流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">内核调试决策树：</span>
+
+  问题类型？
+  │
+  ├── 内存错误（use-after-free/overflow）→ <span style="color:#cf222e">KASAN</span>
+  ├── 数据竞争 → <span style="color:#cf222e">KCSAN</span>
+  ├── 死锁 → <span style="color:#cf222e">lockdep</span>
+  ├── 性能瓶颈 → <span style="color:#1a7f37">perf + ftrace</span>
+  ├── 函数调用追踪 → <span style="color:#1a7f37">ftrace</span>
+  ├── 事件追踪 → <span style="color:#1a7f37">tracepoints + perf</span>
+  ├── 内核崩溃 → <span style="color:#8250df">Kdump + crash</span>
+  ├── 驱动调试 → <span style="color:#8250df">debugfs + printk</span>
+  └── 安全审计 → <span style="color:#8250df">audit + auditd</span>
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 场景选择</h2>
+  <div class="card">
+    <pre><code><span class="cm"># printk — 最基本的调试</span>
+$ dmesg -T              <span class="cm"># 查看内核日志（带时间戳）</span>
+$ dmesg -w              <span class="cm"># 实时监控</span>
+$ journalctl -k         <span class="cm"># systemd 查看内核日志</span>
+
+<span class="cm"># dynamic_debug — 运行时调试</span>
+$ echo 'file drivers/net/veth.c +p' > /sys/kernel/debug/dynamic_debug/control
+$ dmesg | tail -20      <span class="cm"># 查看调试输出</span>
+
+<span class="cm"># KASAN — 内存错误</span>
+$ echo 1 > /sys/kernel/debug/kasan/enable
+
+<span class="cm"># lockdep — 死锁检测</span>
+$ echo 1 > /sys/kernel/debug/lockdep/lock_stat
+
+<span class="cm"># ftrace — 函数跟踪</span>
+$ echo function > /sys/kernel/debug/tracing/current_tracer
+$ echo 1 > /sys/kernel/debug/tracing/tracing_on</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/printk/</span>
+└── <span class="file">printk.c</span>         <span class="cmt">printk 核心</span>
+
+<span class="dir">lib/dynamic_debug.c</span>
+└── <span class="file">dynamic_debug.c</span>  <span class="cmt">dynamic_debug 核心</span>
+
+<span class="dir">lib/locking/lockdep.c</span>
+└── <span class="file">lockdep.c</span>        <span class="cmt">lockdep 死锁检测</span>
+
+<span class="dir">kernel/trace/</span>
+└── <span class="file">ftrace.c</span>         <span class="cmt">ftrace 核心</span>
+
+<span class="dir">mm/kasan/</span>
+└── <span class="file">generic.c</span>        <span class="cmt">KASAN 内存检测</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>Documentation/dev-tools/</code> — 内核开发者工具目录。<br>
+    <code>kernel/printk/printk.c</code> — printk 实现。<br>
+    <code>lib/dynamic_debug.c</code> — dynamic_debug 运行时调试。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/printk/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

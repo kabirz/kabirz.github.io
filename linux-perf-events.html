@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux perf events 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux perf events 深度解析</h1>
+  <p class="subtitle">性能事件 — CPU 计数器与采样分析</p>
+  <span class="version">Linux 7.0.12 · tools/perf/ · kernel/events/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#features">核心功能</a></li>
+    <li><a href="#usecases">使用方式</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>perf events 是 Linux 内核的<strong>性能分析框架</strong>，基于硬件性能计数器（PMU）提供 CPU 性能监控。它支持 CPU 周期计数、缓存命中率、分支预测、PMU 事件采样、软件事件计数等，是 Linux 性能分析的基石。</p>
+</section>
+
+<section id="features" class="toc-link">
+  <h2><span class="num">02</span> 核心功能</h2>
+  <table>
+    <tr><th>功能</th><th>命令</th><th>说明</th></tr>
+    <tr><td>CPU 性能分析</td><td><code>perf top</code></td><td>实时显示 CPU 热点函数</td></tr>
+    <tr><td>采样分析</td><td><code>perf record</code></td><td>采样记录 → perf report 分析</td></tr>
+    <tr><td>统计计数</td><td><code>perf stat</code></td><td>CPU 周期、指令数、缓存命中</td></tr>
+    <tr><td>火焰图</td><td><code>perf script</code></td><td>生成火焰图数据</td></tr>
+    <tr><td>硬件断点</td><td><code>perf probe</code></td><td>硬件断点监控</td></tr>
+    <tr><td>跟踪点</td><td><code>perf trace</code></td><td>系统调用跟踪</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">perf record 采样原理：</span>
+
+  ┌──────────────────────────────────────────────┐
+  │                  CPU PMU                     │
+  │                                              │
+  │  硬件计数器：每 N 个 CPU 周期产生一次中断      │
+  │  采样频率：99Hz / 999Hz / 任意频率            │
+  │                                              │
+  │  中断 → 记录当前 PC（程序计数器）              │
+  │  → 记录到 ring buffer                        │
+  │  → perf record 读取 ring buffer              │
+  │  → 生成 perf.data 分析文件                   │
+  └──────────────────────────────────────────────┘
+
+  结果：统计每个函数被采样到的次数
+  频率最高的函数 = CPU 热点（优化目标）
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">03</span> 使用方式</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 性能统计</span>
+$ perf stat -p <span class="num">1234</span> sleep <span class="num">10</span>
+Performance counter stats for 'sleep 10':
+  <span class="num">23456789</span>  cycles
+  <span class="num">12345678</span>  instructions    <span class="cm"># 0.53 insn per cycle</span>
+  <span class="num">2345678</span>   cache-misses
+  <span class="num">12345678</span>  cache-references
+
+<span class="cm"># 采样分析</span>
+$ perf record -g -p <span class="num">1234</span> -- sleep <span class="num">30</span>
+$ perf report
+<span class="cm"># 查看热点函数</span>
+
+<span class="cm"># 实时监控</span>
+$ sudo perf top
+<span class="cm"># 实时显示 CPU 热点</span>
+
+<span class="cm"># 生成火焰图</span>
+$ perf script | stackcollapse-perf.pl | flamegraph.pl > flame.svg
+
+<span class="cm"># 系统调用跟踪</span>
+$ perf trace -p <span class="num">1234</span> -s
+<span class="cm"># 类似 strace 但开销更低</span></code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">04</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">tools/perf/</span>          <span class="cmt">perf 用户态工具</span>
+├── <span class="file">perf.c</span>           <span class="cmt">perf 命令入口</span>
+├── <span class="file">builtin-record.c</span> <span class="cmt">perf record 实现</span>
+├── <span class="file">builtin-top.c</span>    <span class="cmt">perf top 实现</span>
+├── <span class="file">builtin-stat.c</span>   <span class="cmt">perf stat 实现</span>
+└── <span class="file">util/</span>
+    ├── <span class="file">parse-events.c</span> <span class="cmt">事件解析 (2926 行)</span>
+    └── <span class="file">perf_event.c</span>   <span class="cmt">perf_event 接口</span>
+
+<span class="dir">kernel/events/</span>
+├── <span class="file">core.c</span>           <span class="cmt">perf_event 核心</span>
+├── <span class="file">cpuc.c</span>           <span class="cmt">CPU PMU 管理</span>
+└── <span class="file">ring_buffer.c</span>    <span class="cmt">环形缓冲区</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>tools/perf/util/parse-events.c</code> — 理解 perf 事件如何解析。<br>
+    <code>kernel/events/core.c</code> — perf_event 核心框架，理解采样和计数机制。<br>
+    <code>tools/perf/Documentation/</code> — perf 文档目录。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · tools/perf/ · kernel/events/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
