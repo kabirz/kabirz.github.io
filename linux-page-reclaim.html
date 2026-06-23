@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 页面回收 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 页面回收 深度解析</h1>
+  <p class="subtitle">内存回收 — kswapd、直接回收、LRU 管理</p>
+  <span class="version">Linux 7.0.12 · mm/vmscan.c (7910 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#lru">LRU 链表</a></li>
+    <li><a href="#flow">回收流程</a></li>
+    <li><a href="#kswapd">kswapd 守护进程</a></li>
+    <li><a href="#tuning">配置与调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>页面回收（Page Reclaim）是 Linux 内核的<strong>内存回收机制</strong>。当物理内存不足时，内核将不活跃的页面从内存中回收：匿名页面换出到 swap，文件页面丢弃（因为可以从磁盘重新读取）。它是 overcommit 和 OOM 之间的缓冲机制。</p>
+</section>
+
+<section id="lru" class="toc-link">
+  <h2><span class="num">02</span> LRU 链表</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Linux 页面 LRU 管理：</span>
+
+  每个 Zone 维护 5 条 LRU 链表：
+
+  ┌──────────────────────────────────────────┐
+  │ Zone Normal                               │
+  │                                           │
+  │  LRU_INACTIVE_ANON  ← 匿名页面（不可见）  │
+  │  LRU_ACTIVE_ANON    ← 匿名页面（活跃）    │
+  │  LRU_INACTIVE_FILE  ← 文件页面（不可见）  │
+  │  LRU_ACTIVE_FILE    ← 文件页面（活跃）    │
+  │  LRU_UNEVICTABLE    ← 不可驱逐（锁定）   │
+  └──────────────────────────────────────────┘
+
+  页面状态转换：
+  新页面 → ACTIVE_ANON/FILE（活跃）
+           │ 定期降级
+           ↓
+         INACTIVE_ANON/FILE（不可见）
+           │ 回收候选
+           ↓
+         被回收（换出/丢弃）
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 回收流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">kswapd 后台回收（异步）：</span>
+
+  内存空闲量低于 low 水位线
+        │
+        ↓
+  唤醒 kswapd 守护进程
+        │
+        ↓
+  <span style="color:#8250df">kswapd()</span> → shrink_node()
+        │
+        ├── 1. 扫描 LRU 链表（inactive 优先）
+        │       遍历 inactive list，找到可回收页面
+        │
+        ├── 2. 检查页面状态
+        │       ├── clean 文件页面 → 直接丢弃
+        │       ├── dirty 文件页面 → 回写到磁盘
+        │       └── 匿名页面 → 换出到 swap
+        │
+        ├── 3. 回收页面
+        │       shrink_folio_list() → 逐个回收
+        │
+        ├── 4. 检查回收量
+        │       空闲量 ≥ high 水位线 → 停止
+        │       空闲量 < high → 继续回收
+        │
+        └── 5. 释放回收的页面
+            交给伙伴系统
+
+<span style="color:#1a7f37">直接回收（同步）：</span>
+
+  分配页面失败 + kswapd 未在运行
+        │
+        ↓
+  当前进程直接调用 shrink_node()
+  （阻塞进程，影响延迟）
+</pre></div>
+</section>
+
+<section id="kswapd" class="toc-link">
+  <h2><span class="num">04</span> kswapd 守护进程</h2>
+  <table>
+    <tr><th>水位线</th><th>说明</th></tr>
+    <tr><td><strong>min</strong></td><td>最低保留（紧急分配用）</td></tr>
+    <tr><td><strong>low</strong></td><td>低水位线：触发 kswapd 回收</td></tr>
+    <tr><td><strong>high</strong></td><td>高水位线：kswapd 停止回收</td></tr>
+    <tr><td><strong>zone_balanced</strong></td><td>平衡水位线</td></tr>
+  </table>
+
+  <div class="ascii-diagram"><pre>
+  水位线关系：
+
+  高水位（high） ──── kswapd 停止
+        │
+        │  kswapd 回收区域
+        │
+  低水位（low）  ──── kswapd 开始回收
+        │
+        │  紧急分配区域
+        │
+  最低水位（min） ──── 紧急保留（预留不可动）
+</pre></div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">05</span> 配置与调优</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看内存水位线</span>
+$ cat /proc/zoneinfo | grep min\|low\|high
+        min    <span class="num">1024</span>
+        low    <span class="num">3584</span>
+        high   <span class="num">6144</span>
+
+<span class="cm"># 查看回收统计</span>
+$ cat /proc/vmstat | grep -E "pgpgin|pgpgout|pswpin|pswpout|pgsteal|pgscan"
+pswpin     <span class="num">12345</span>    <span class="cm"># 从 swap 读入的页数</span>
+pswpout    <span class="num">67890</span>    <span class="cm"># 写入 swap 的页数</span>
+pgsteal_kswapd <span class="num">123456</span> <span class="cm"># kswapd 回收的页数</span>
+
+<span class="cm"># 调整 min_free_kbytes</span>
+$ sysctl -w vm.min_free_kbytes=<span class="num">65536</span>  <span class="cm"># 64MB 保留</span>
+
+<span class="cm"># 调整 watermark_boost_factor</span>
+$ sysctl -w vm.watermark_boost_factor=<span class="num">15000</span></code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">vmscan.c</span>         <span class="cmt">页面回收核心 (7910 行)</span>
+│     └── kswapd()         <span class="cmt">kswapd 主函数</span>
+│     └── shrink_node()    <span class="cmt">节点回收</span>
+│     └── shrink_folio_list() <span class="cmt">页面列表回收</span>
+│     └── shrink_lruvec()  <span class="cmt">LRU 向量回收</span>
+├── <span class="file">swap_state.c</span>     <span class="cmt">Swap 管理</span>
+├── <span class="file">page-writeback.c</span> <span class="cmt">脏页回写</span>
+└── <span class="file">swap.c</span>           <span class="cmt">Swap 管理</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/vmscan.c</code> — 从 <code>kswapd()</code> 理解后台回收，<code>shrink_node()</code> 理解节点级回收。<br>
+    <code>mm/swap_state.c</code> — 匿名页面的 swap 换出机制。<br>
+    <code>mm/page-writeback.c</code> — 文件页面的脏页回写机制。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/vmscan.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

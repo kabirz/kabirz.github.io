@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux TTY 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux TTY 深度解析</h1>
+  <p class="subtitle">终端子系统 — 串口控制台、伪终端、终端 I/O</p>
+  <span class="version">Linux 7.0.12 · drivers/tty/tty_io.c (3649 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">TTY 类型</a></li>
+    <li><a href="#arch">架构层次</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>TTY（Teletypewriter）是 Linux 的<strong>终端子系统</strong>，提供字符设备接口用于终端 I/O。它支持物理串口（/dev/ttyS0）、虚拟终端（/dev/tty1）、伪终端（/dev/pts/0）等多种终端类型。SSH、Docker exec、screen/tmux 都依赖 TTY。</p>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> TTY 类型</h2>
+  <table>
+    <tr><th>类型</th><th>设备</th><th>说明</th></tr>
+    <tr><td><strong>控制台</strong></td><td>/dev/console</td><td>内核消息输出</td></tr>
+    <tr><td><strong>虚拟终端</strong></td><td>/dev/tty1 ~ /dev/tty63</td><td>Ctrl+Alt+F1 切换</td></tr>
+    <tr><td><strong>串口终端</strong></td><td>/dev/ttyS0, /dev/ttyAMA0</td><td>物理串口连接</td></tr>
+    <tr><td><strong>伪终端（PTY）</strong></td><td>/dev/pts/0, /dev/pts/1</td><td>SSH、screen、tmux</td></tr>
+    <tr><td><strong>当前终端</strong></td><td>/dev/tty</td><td>当前进程的控制终端</td></tr>
+    <tr><td><strong>当前控制终端</strong></td><td>/dev/ctty</td><td>会话的控制终端</td></tr>
+  </table>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">03</span> 架构层次</h2>
+  <div class="ascii-diagram"><pre>
+TTY 子系统架构（三层模型）：
+
+  用户空间
+  ┌────────────────────────────────────────┐
+  │  cat /dev/pts/0                        │
+  │  ssh root@server                       │
+  │  docker exec -it container bash        │
+  └───────────────────┬────────────────────┘
+                      │  read()/write()
+                      ↓
+  ┌────────────────────────────────────────┐
+  │  TTY 层（tty_io.c / tty_ldisc.c）     │
+  │  终端线路规程（行编辑、信号处理）       │
+  │  /dev/ttyX, /dev/pts/X                 │
+  └───────────────────┬────────────────────┘
+                      │  tty_operations
+                      ↓
+  ┌────────────────────────────────────────┐
+  │  驱动层（serial_core.c / pty.c）       │
+  │  UART 驱动 / 伪终端驱动               │
+  │  tty_driver → uart_ops                 │
+  └───────────────────┬────────────────────┘
+                      │
+                      ↓
+  ┌────────────────────────────────────────┐
+  │  硬件                                  │
+  │  UART 寄存器 / 网络 socket（PTY）      │
+  └────────────────────────────────────────┘
+</pre></div>
+
+  <h3>PTY（伪终端）工作原理</h3>
+  <div class="ascii-diagram"><pre>
+  伪终端是 SSH、screen 的核心机制：
+
+  SSH 客户端              SSH 服务器
+  │                        │
+  ├── ssh user@host        │
+  │   → 打开 /dev/ptmx    │
+  │   → 分配 /dev/pts/0    │
+  │                        │
+  ├── read(pty_master)     ├── fork()
+  │   ← SSH 服务器输出     │   → 子进程 exec bash
+  │                        │   → bash 使用 /dev/pts/0
+  ├── write(pty_master)    │
+  │   → SSH 客户端输入     │   ← bash 读取 /dev/pts/0
+  │                        │
+  pty_master ←──→ pty_slave
+  （SSH 客户端）  （bash 进程）
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 应用场景</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看当前 TTY</span>
+$ tty
+/dev/pts/0
+
+<span class="cm"># 查看所有终端</span>
+$ ls /dev/tty*
+$ ls /dev/pts/
+
+<span class="cm"># 查看串口设备</span>
+$ ls /dev/ttyS*
+$ ls /dev/ttyUSB*    <span class="cm"># USB 串口转换器</span>
+$ ls /dev/ttyACM*    <span class="cm"># USB CDC ACM 设备</span>
+
+<span class="cm"># 修改终端属性</span>
+$ stty -a            <span class="cm"># 查看终端设置</span>
+$ stty speed 115200  <span class="cm"># 设置波特率</span>
+
+<span class="cm"># screen/tmux 使用 PTY</span>
+$ screen /dev/ttyS0   <span class="cm"># 连接串口</span>
+$ tmux new -s work    <span class="cm"># 创建伪终端会话</span></code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/tty/</span>
+├── <span class="file">tty_io.c</span>         <span class="cmt">TTY 核心 (3649 行)</span>
+│     └── tty_read()         <span class="cmt">终端读取</span>
+│     └── tty_write()        <span class="cmt">终端写入</span>
+│     └── tty_open()         <span class="cmt">终端打开</span>
+├── <span class="file">tty_ldisc.c</span>      <span class="cmt">线路规程（行编辑）</span>
+├── <span class="file">n_tty.c</span>          <span class="cmt">标准线路规程</span>
+├── <span class="file">pty.c</span>            <span class="cmt">伪终端（PTY）</span>
+├── <span class="file">tty_ioctl.c</span>      <span class="cmt">终端 ioctl</span>
+└── <span class="file">tty_buffer.c</span>     <span class="cmt">终端缓冲区</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>drivers/tty/tty_io.c</code> — TTY 核心，从 <code>tty_open()</code> 和 <code>tty_read()</code> 理解终端 I/O。<br>
+    <code>drivers/tty/pty.c</code> — 伪终端实现，理解 SSH/screen 的底层机制。<br>
+    <code>drivers/tty/n_tty.c</code> — 标准线路规程，理解行编辑和信号处理。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · drivers/tty/tty_io.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

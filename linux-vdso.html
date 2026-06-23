@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux VDSO 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux VDSO 深度解析</h1>
+  <p class="subtitle">虚拟动态共享对象 — 零系统调用的时间获取</p>
+  <span class="version">Linux 7.0.12 · arch/x86/entry/vdso/ · kernel/time/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">架构</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>VDSO（Virtual Dynamic Shared Object）是内核映射到每个进程地址空间的一小段<strong>共享库代码</strong>。它允许用户态程序直接读取内核维护的时间和时钟信息，<strong>无需系统调用</strong>。gettimeofday()、clock_gettime()、time() 等高频调用都通过 VDSO 实现，性能提升 10-100 倍。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">传统 gettimeofday（系统调用）：</span>
+
+  应用 → gettimeofday()
+         → int 0x80 / syscall 指令
+         → 进入内核态
+         → 读取时间
+         → 返回用户态
+  开销：~200ns（上下文切换 + 内核处理）
+
+<span style="color:#1a7f37">VDSO gettimeofday（零系统调用）：</span>
+
+  应用 → gettimeofday()
+         → 直接读取 VDSO 共享内存中的时间值
+         → 无需进入内核态
+  开销：~20ns（仅内存读取）
+
+<span style="color:#8250df">VDSO 实现原理：</span>
+
+  内核启动时：
+  1. 编译一段共享库代码（vdso.so）
+  2. 映射到每个进程的地址空间（固定地址）
+  3. 共享库直接读取内核维护的时钟数据
+
+  时钟数据更新：
+  - 定时器中断更新 VDSO 映射区域中的时间值
+  - 应用读取时直接获取最新值
+  - 无需系统调用
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">03</span> 应用场景</h2>
+  <table>
+    <tr><th>系统调用</th><th>VDSO 替代</th><th>性能提升</th></tr>
+    <tr><td>gettimeofday()</td><td>直接读 VDSO</td><td>~10x</td></tr>
+    <tr><td>clock_gettime()</td><td>直接读 VDSO</td><td>~10x</td></tr>
+    <tr><td>time()</td><td>直接读 VDSO</td><td>~10x</td></tr>
+    <tr><td>clock_getres()</td><td>直接读 VDSO</td><td>~10x</td></tr>
+    <tr><td>getcpu()</td><td>直接读 VDSO</td><td>~5x</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="cm"># 查看进程的 VDSO 映射</span>
+$ cat /proc/self/maps | grep vdso
+7f8b8c1fe000-7f8b8c200000 r-xp <span class="num">00000000</span> <span class="num">00:00</span> <span class="num">0</span> [vdso]
+
+<span class="cm"># 查看 VDSO 内容（x86_64）</span>
+$ objdump -d /proc/self/exe 2>/dev/null | grep gettimeofday</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">04</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">arch/x86/entry/vdso/</span>
+├── <span class="file">vma.c</span>            <span class="cmt">VDSO VMA 管理 (281 行)</span>
+├── <span class="file">vdso.c</span>           <span class="cmt">VDSO 初始化</span>
+├── <span class="file">vdso32.c</span>         <span class="cmt">32 位 VDSO</span>
+└── <span class="file">Makefile</span>         <span class="cmt">VDSO 编译</span>
+
+<span class="dir">arch/x86/entry/vdso/</span>
+├── <span class="file">clock_gettime.c</span>  <span class="cmt">clock_gettime VDSO 实现</span>
+├── <span class="file">gettimeofday.c</span>  <span class="cmt">gettimeofday VDSO 实现</span>
+└── <span class="file">note.c</span>           <span class="cmt">VDSO 注释</span>
+
+<span class="dir">kernel/time/</span>
+├── <span class="file">vdso.c</span>           <span class="cmt">VDSO 通用框架</span>
+└── <span class="file">vdso_update.c</span>    <span class="cmt">VDSO 数据更新</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>arch/x86/entry/vdso/clock_gettime.c</code> — VDSO 中 clock_gettime 的用户态实现。<br>
+    <code>arch/x86/entry/vdso/vma.c</code> — VDSO 如何映射到进程地址空间。<br>
+    <code>kernel/time/vdso.c</span> — VDSO 数据更新机制。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · arch/x86/entry/vdso/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
