@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内存压缩 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内存压缩 深度解析</h1>
+  <p class="subtitle">内存碎片整理 — 为大页和高阶分配创造连续内存</p>
+  <span class="version">Linux 7.0.12 · mm/compaction.c (3334 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#flow">压缩流程</a></li>
+    <li><a href="#trigger">触发时机</a></li>
+    <li><a href="#tuning">配置与调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>内存压缩（Compaction）是 Linux 的<strong>内存碎片整理机制</strong>。当系统运行一段时间后，空闲页面变得碎片化，无法找到连续的高阶页面（如 2MB 大页）。Compaction 通过移动已分配的页面，将碎片化的空闲页面合并为连续区域。</p>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">02</span> 压缩流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">内存压缩流程：</span>
+
+  碎片化前：
+  页面: [已用][空闲][已用][空闲][已用][空闲][已用]
+  无法分配连续 4 个空闲页面
+
+  <span style="color:#8250df">Compaction 执行：</span>
+
+  1. 扫描页面，找到可迁移页面（movable）
+  │   匿名页面、Page Cache 页面
+  │
+  2. 找到空闲页面的目标位置
+  │   在可迁移页面之后寻找空闲位置
+  │
+  3. 迁移页面
+  │   旧位置：标记为空闲
+  │   新位置：复制数据，更新页表
+  │
+  4. 重复直到满足需求
+
+  碎片化后：
+  页面: [空闲][空闲][空闲][空闲][已用][已用][已用]
+  可以分配连续 4 个空闲页面
+
+<span style="color:#1a7f37">两种模式：</span>
+
+  同步压缩（Synchronous）：
+  - 在内存分配失败时触发
+  - 当前进程阻塞等待压缩完成
+  - 及时但影响延迟
+
+  异步压缩（Asynchronous）：
+  - kcompactd 守护进程后台运行
+  - 主动整理内存碎片
+  - 不影响进程延迟
+</pre></div>
+</section>
+
+<section id="trigger" class="toc-link">
+  <h2><span class="num">03</span> 触发时机</h2>
+  <table>
+    <tr><th>触发条件</th><th>类型</th><th>说明</th></tr>
+    <tr><td>高阶分配失败</td><td>同步</td><td>__alloc_pages 失败时触发</td></tr>
+    <tr><td>kcompactd 定时器</td><td>异步</td><td>定期检查并压缩</td></tr>
+    <tr><td>内存压力</td><td>异步</td><td>空闲内存低于水位线</td></tr>
+    <tr><td>透明大页合并</td><td>异步</td><td>khugepaged 需要连续内存</td></tr>
+    <tr><td>内存热插拔</td><td>同步</td><td>新内存加入时整理</td></tr>
+  </table>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">04</span> 配置与调优</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看碎片状态</span>
+$ cat /proc/buddyinfo
+Node 0, zone   Normal  3762  2049  1042   512   256   128    64     32     16      8      4      2      1
+
+<span class="cm"># 查看压缩统计</span>
+$ cat /proc/vmstat | grep compact
+compact_stall       <span class="num">12</span>       <span class="cm"># 同步压缩触发次数</span>
+compact_fail        <span class="num">3</span>        <span class="cm"># 压缩失败次数</span>
+compact_success     <span class="num">9</span>        <span class="cm"># 压缩成功次数</span>
+
+<span class="cm"># 启动 kcompactd</span>
+$ echo <span class="num">1</span> > /proc/sys/vm/compact_memory  <span class="cm"># 手动触发压缩</span>
+
+<span class="cm"># 调整压缩行为</span>
+$ sysctl -w vm.compact_unevictable_allowed=<span class="num">1</span>  <span class="cm"># 允许压缩不可驱逐页面</span></code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">compaction.c</span>     <span class="cmt">内存压缩核心 (3334 行)</span>
+│     └── compact_zone()     <span class="cmt">压缩单个 zone</span>
+│     └── try_to_compact_pages() <span class="cmt">尝试压缩页面</span>
+│     └── compact_zone_order() <span class="cmt">压缩指定阶的页面</span>
+├── <span class="file">vmscan.c</span>         <span class="cmt">页面回收（kswapd）</span>
+└── <span class="file">kcompactd.c</span>      <span class="cmt">异步压缩守护进程</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/compaction.c</code> — 从 <code>compact_zone()</code> 理解压缩核心逻辑。<br>
+    <code>mm/kcompactd.c</code> — 异步压缩守护进程，理解后台压缩机制。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/compaction.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

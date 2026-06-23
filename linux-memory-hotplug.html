@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内存热插拔 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内存热插拔 深度解析</h1>
+  <p class="subtitle">运行时内存管理 — 动态添加/移除内存</p>
+  <span class="version">Linux 7.0.12 · mm/memory_hotplug.c (2437 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#flow">热添加流程</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#tuning">配置与使用</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>内存热插拔（Memory Hotplug）允许在系统运行时<strong>动态添加或移除内存</strong>，无需重启。它用于云服务器按需分配内存（如 KVM 热迁移）、虚拟机内存热添加、以及内存故障隔离。</p>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">02</span> 热添加流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">内存热添加流程：</span>
+
+  物理内存插入（或虚拟机增加内存）
+        │
+        ↓
+  固件/驱动通知内核新内存可用
+        │
+        ↓
+  <span style="color:#8250df">memory_block_probe()</span> — mm/memory_hotplug.c
+        │
+        ├── 1. 创建 memory_block 结构
+        │       每个 memory_block = 128MB（默认）
+        │
+        ├── 2. 初始化 Zone
+        │       将新内存添加到对应 NUMA 节点的 Zone
+        │
+        ├── 3. 注册页面到伙伴系统
+        │       __add_pages() → 添加页面到 free_area
+        │
+        ├── 4. 通知子系统
+        │       通知 PCI、ACPI 等子系统新内存可用
+        │
+        └── 5. 完成
+            新内存可用于分配
+
+<span style="color:#1a7f37">内存热移除流程：</span>
+
+  $ echo offline > /sys/devices/system/memory/memory90/state
+        │
+        ├── 1. 将 memory_block 标记为 offline
+        │       offline_pages()
+        │
+        ├── 2. 迁移页面到其他内存
+        │       migrate_pages() → 移动所有页面
+        │
+        ├── 3. 从伙伴系统移除页面
+        │       __remove_pages()
+        │
+        └── 4. 通知子系统
+            新内存不再可用
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">03</span> 应用场景</h2>
+  <table>
+    <tr><th>场景</th><th>说明</th></tr>
+    <tr><td>云服务器</td><td>按需增加 VM 内存（KVM 热迁移）</td></tr>
+    <tr><td>内存故障</td><td>检测到坏内存 → 迁移页面 → 热移除</td></tr>
+    <tr><td>弹性伸缩</td><td>负载增加时热添加内存</td></tr>
+    <tr><td>内存压缩</td><td>热移除前先压缩页面</td></tr>
+  </table>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">04</span> 配置与使用</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看内存块状态</span>
+$ ls /sys/devices/system/memory/
+memory0  memory1  memory2  ...  memory127
+
+$ cat /sys/devices/system/memory/memory0/state
+online
+
+<span class="cm"># 热移除内存块</span>
+$ echo offline > /sys/devices/system/memory/memory90/state
+$ cat /sys/devices/system/memory/memory90/state
+offline
+
+<span class="cm"># 热添加内存（需要硬件/固件支持）</span>
+$ echo online > /sys/devices/system/memory/memory128/state
+
+<span class="cm"># 查看内存热插拔统计</span>
+$ cat /proc/vmstat | grep hotplug
+$ dmesg | grep -i "memory\|hotplug"
+
+<span class="cm"># 内核配置</span>
+CONFIG_MEMORY_HOTPLUG=y        <span class="cm"># 启用内存热插拔</span>
+CONFIG_MEMORY_HOTREMOVE=y      <span class="cm"># 启用内存热移除</span>
+CONFIG_ACPI_HOTPLUG_MEMORY=y   <span class="cm"># ACPI 内存热插拔</span></code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">memory_hotplug.c</span> <span class="cmt">内存热插拔核心 (2437 行)</span>
+│     └── memory_block_probe() <span class="cmt">热添加入口</span>
+│     └── offline_pages()       <span class="cmt">热移除</span>
+│     └── online_pages()        <span class="cmt">热添加</span>
+├── <span class="file">page_alloc.c</span>    <span class="cmt">伙伴系统（页面管理）</span>
+└── <span class="file">compaction.c</span>    <span class="cmt">内存压缩（热移除前）</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/memory_hotplug.c</code> — 从 <code>online_pages()</code> 和 <code>offline_pages()</code> 理解热插拔流程。<br>
+    <code>mm/compaction.c</code> — 热移除前需要压缩页面，理解 compaction 机制。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/memory_hotplug.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

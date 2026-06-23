@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Swap 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Swap 深度解析</h1>
+  <p class="subtitle">交换空间 — 内存不足时的后备存储</p>
+  <span class="version">Linux 7.0.12 · mm/swap_state.c (982 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">Swap 类型</a></li>
+    <li><a href="#flow">换入换出流程</a></li>
+    <li><a href="#tuning">配置与调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Swap（交换空间）是 Linux 的<strong>虚拟内存后备存储</strong>。当物理内存不足时，内核将不活跃的内存页面写入 swap 分区或 swap 文件，释放物理内存给活跃进程。Swap 是 overcommit 和 OOM 机制的重要补充。</p>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> Swap 类型</h2>
+  <table>
+    <tr><th>类型</th><th>实现</th><th>性能</th><th>适用场景</th></tr>
+    <tr><td><strong>Swap 分区</strong></td><td>专用磁盘分区</td><td>较高</td><td>服务器、生产环境</td></tr>
+    <tr><td><strong>Swap 文件</strong></td><td>普通文件</td><td>中等</td><td>桌面、开发环境</td></tr>
+    <tr><td><strong>zswap</strong></td><td>内存中的压缩缓存</td><td>高</td><td>减少磁盘 I/O</td></tr>
+    <tr><td><strong>zram</strong></td><td>内存中的压缩块设备</td><td>高</td><td>嵌入式、无磁盘系统</td></tr>
+    <tr><td><strong>swap over NFS</strong></td><td>网络交换</td><td>低</td><td>无盘工作站</td></tr>
+  </table>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 换入换出流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Swap Out（换出）流程：</span>
+
+  内存压力增大
+        │
+        ↓
+  kswapd / direct reclaim 检查 LRU 链表
+        │
+        ├── 找到不活跃页面（inactive list）
+        │
+        ├── 检查页面是否可换出
+        │   - 匿名页面（heap、stack、mmap）
+        │   - 非脏页面（clean page cache）
+        │
+        ├── 分配 swap slot
+        │   swap_info_struct → 找到空闲 swap 槽位
+        │
+        ├── 写入 swap 设备
+        │   swap_writepage() → 提交 I/O
+        │
+        └── 更新页表
+            PTE 标记为 swapped out
+            记录 swap slot 信息
+
+<span style="color:#1a7f37">Swap In（换入）流程：</span>
+
+  进程访问被换出的页面
+        │
+        ↓
+  缺页异常 → PTE 标记为 swapped out
+        │
+        ↓
+  do_swap_page()
+        │
+        ├── 查找 swap slot
+        │
+        ├── 分配物理页面
+        │
+        ├── 读取 swap 设备
+        │   swap_readpage() → 提交 I/O
+        │
+        ├── 更新页表
+        │   PTE 指向新分配的物理页面
+        │
+        └── 数据恢复到物理内存
+</pre></div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">04</span> 配置与调优</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看 swap 状态</span>
+$ free -h
+$ swapon --show
+$ cat /proc/swaps
+
+<span class="cm"># 创建 swap 文件</span>
+$ sudo fallocate -l 4G /swapfile
+$ sudo chmod 600 /swapfile
+$ sudo mkswap /swapfile
+$ sudo swapon /swapfile
+
+<span class="cm"># 永久启用</span>
+$ echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+<span class="cm"># 调整 swappiness（0-100）</span>
+$ sysctl -w vm.swappiness=<span class="num">10</span>   <span class="cm"># 低值：尽量不使用 swap</span>
+$ sysctl -w vm.swappiness=<span class="num">60</span>   <span class="cm"># 默认值</span>
+$ sysctl -w vm.swappiness=<span class="num">100</span>  <span class="cm"># 高值：积极换出</span>
+
+<span class="cm"># 查看 swap 使用情况</span>
+$ cat /proc/vmstat | grep pswpin/pswpout  <span class="cm"># 换入/换出次数</span>
+$ vmstat -s | grep swap</code></pre>
+  </div>
+
+  <h3>Swappiness 指导</h3>
+  <table>
+    <tr><th>场景</th><th>推荐 swappiness</th><th>说明</th></tr>
+    <tr><td>数据库服务器</td><td>1~10</td><td>尽量避免 swap，保持 Page Cache</td></tr>
+    <tr><td>桌面系统</td><td>60（默认）</td><td>平衡内存和缓存</td></tr>
+    <tr><td>内存压力大</td><td>80~100</td><td>积极换出不活跃页面</td></tr>
+    <tr><td>Redis</td><td>1</td><td>与 vm.overcommit_memory=1 配合</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">swap_state.c</span>     <span class="cmt">Swap 状态管理 (982 行)</span>
+│     └── swap_readpage()   <span class="cmt">换入</span>
+│     └── get_swap_page()   <span class="cmt">分配 swap slot</span>
+├── <span class="file">swapfile.c</span>       <span class="cmt">Swap 文件/分区管理</span>
+├── <span class="file">page_io.c</span>        <span class="cmt">Swap I/O 操作</span>
+├── <span class="file">vmscan.c</span>         <span class="cmt">页面回收（触发换出）</span>
+└── <span class="file">zswap.c</span>          <span class="cmt">zswap 压缩缓存</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/swap_state.c</code> — swap 核心管理，理解换入换出机制。<br>
+    <code>mm/swapfile.c</code> — swap 文件/分区管理。<br>
+    <code>mm/page_io.c</code> — swap I/O 操作，理解磁盘读写路径。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/swap_state.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
