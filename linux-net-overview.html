@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 网络栈全景 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 网络栈全景 深度解析</h1>
+  <p class="subtitle">网络栈总览 — 从应用层到网卡的完整路径</p>
+  <span class="version">Linux 7.0.12 · net/ · include/linux/netdevice.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#layers">协议栈层次</a></li>
+    <li><a href="#rx">收包路径</a></li>
+    <li><a href="#tx">发包路径</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 网络栈是内核中最复杂的子系统之一。本文全景梳理从应用层到网卡的完整数据路径，串联已有的网络专题文章。</p>
+</section>
+
+<section id="layers" class="toc-link">
+  <h2><span class="num">02</span> 协议栈层次</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Linux 网络栈完整层次：</span>
+
+  ┌──────────────────────────────────────────────────────┐
+  │                   应用层                              │
+  │  send() / recv() / sendto() / recvfrom()            │
+  └─────────────────────┬────────────────────────────────┘
+                        │
+  ┌─────────────────────┴────────────────────────────────┐
+  │                   Socket 层                           │
+  │  struct socket / struct sock / struct proto           │
+  │  ← linux-socket.html                                 │
+  └─────────────────────┬────────────────────────────────┘
+                        │
+  ┌─────────────────────┴────────────────────────────────┐
+  │                   传输层                              │
+  │  TCP ← linux-tcp.html    UDP ← linux-udp.html       │
+  │  struct tcp_sock / struct udp_sock                   │
+  └─────────────────────┬────────────────────────────────┘
+                        │
+  ┌─────────────────────┴────────────────────────────────┐
+  │                   IP 层                              │
+  │  路由 ← linux-routing.html   Netfilter ← linux-netfilter.html │
+  │  iptables / nftables / NAT                              │
+  └─────────────────────┬────────────────────────────────┘
+                        │
+  ┌─────────────────────┴────────────────────────────────┐
+  │                   设备层                              │
+  │  net_device ← linux-net-device.html                   │
+  │  TC ← linux-tc.html   Bridge ← linux-bridge.html    │
+  │  VLAN ← linux-vlan.html   VXLAN ← linux-vxlan.html  │
+  └─────────────────────┬────────────────────────────────┘
+                        │
+  ┌─────────────────────┴────────────────────────────────┐
+  │                   驱动层                              │
+  │  NAPI ← linux-napi.html   XDP ← linux-xdp-ebpf.html │
+  │  net_device_ops → ndo_start_xmit                     │
+  └─────────────────────┬────────────────────────────────┘
+                        │
+  ┌─────────────────────┴────────────────────────────────┐
+  │                   物理层                              │
+  │  NIC → DMA → 网线                                    │
+  └──────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="rx" class="toc-link">
+  <h2><span class="num">03</span> 收包路径</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">收包完整路径：</span>
+
+  NIC → DMA → sk_buff 分配
+    ↓
+  NAPI poll（已有专题：linux-napi.html）
+    ↓
+  GRO 聚合（合并小包）
+    ↓
+  __netif_receive_skb_core()
+    ├── AF_PACKET（tcpdump 抓包点）
+    ├── rx_handler（bridge 会注册）
+    └── 协议栈分发
+        ↓
+  IP 层 → 路由 → Netfilter
+    ↓
+  TCP/UDP 层
+    ↓
+  Socket → 应用层 recv()
+
+  关键数据结构：sk_buff ← linux-skbuff.html
+</pre></div>
+</section>
+
+<section id="tx" class="toc-link">
+  <h2><span class="num">04</span> 发包路径</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#1a7f37">发包完整路径：</span>
+
+  应用层 send()
+    ↓
+  Socket → TCP/UDP
+    ↓
+  IP 层 → 路由 → Netfilter
+    ↓
+  dev_queue_xmit()
+    ├── TC 流量控制（已有专题：linux-tc.html）
+    ├── AF_PACKET（tcpdump 抓包点）
+    └── ndo_start_xmit()
+        ↓
+  NIC → DMA → 网线
+
+  关键数据结构：sk_buff ← linux-skbuff.html
+</pre></div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">net/</span>
+├── <span class="file">core/dev.c</span>       <span class="cmt">设备层核心 (13344 行)</span>
+├── <span class="file">socket.c</span>        <span class="cmt">Socket 层</span>
+├── <span class="file">af_inet.c</span>       <span class="cmt">AF_INET 协议族</span>
+├── <span class="file">ipv4/</span>           <span class="cmt">IPv4 协议栈</span>
+├── <span class="file">netfilter/</span>      <span class="cmt">Netfilter 框架</span>
+├── <span class="file">sched/</span>          <span class="cmt">TC 流量控制</span>
+└── <span class="file">bridge/</span>         <span class="cmt">网桥实现</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    本文是已有网络专题文章的全景导览：<br>
+    <code>linux-network.html</code> — 网络核心<br>
+    <code>linux-sk_buff.html</code> — sk_buff 数据结构<br>
+    <code>linux-rx-packet.html</code> — 收包流程<br>
+    <code>linux-tx-packet.html</code> — 发包流程<br>
+    <code>linux-socket.html</code> — Socket 层<br>
+    <code>linux-tcp.html</code> — TCP 协议栈<br>
+    <code>linux-udp.html</code> — UDP 协议栈<br>
+    <code>linux-net-device.html</code> — 网络设备<br>
+    <code>linux-netfilter.html</code> — Netfilter/iptables<br>
+    <code>linux-routing.html</code> — 路由<br>
+    <code>linux-tc.html</code> — Traffic Control<br>
+    <code>linux-napi.html</code> — NAPI 收包
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · net/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

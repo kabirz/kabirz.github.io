@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核锁定机制全景 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核锁定机制全景 深度解析</h1>
+  <p class="subtitle">从 spinlock 到 RCU — 所有锁定机制的关系图</p>
+  <span class="version">Linux 7.0.12 · kernel/locking/ (18330 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#taxonomy">机制分类</a></li>
+    <li><a href="#decision">选择指南</a></li>
+    <li><a href="#performance">性能对比</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 内核提供了丰富的锁定机制来处理并发访问。选择正确的锁定机制对性能和正确性至关重要。本文全景梳理所有锁定机制的关系、适用场景和性能特征。</p>
+</section>
+
+<section id="taxonomy" class="toc-link">
+  <h2><span class="num">02</span> 机制分类</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Linux 锁定机制全景图：</span>
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  自旋锁（Spinlock）— 忙等待，不睡眠                      │
+  │  ├── raw_spinlock_t  — 真正自旋（PREEMPT_RT 也不让步）    │
+  │  ├── spinlock_t      — 普通自旋（RT 下变 rt_mutex）      │
+  │  └── bit_spinlock    — 单比特锁，节省内存                │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  互斥锁（Mutex）— 可睡眠，有等待队列                      │
+  │  ├── struct mutex     — 排他锁（默认优先级继承）          │
+  │  ├── struct rt_mutex  — RT 互斥锁（优先级继承）           │
+  │  └── struct ww_mutex  — 避免死锁的互斥锁（GPU/DRM）      │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  读写锁 — 读多写少场景                                   │
+  │  ├── rwlock_t         — 自旋读写锁（内核态）             │
+  │  ├── rw_semaphore     — 睡眠读写锁（内核态）             │
+  │  └── percpu-rwsem     — 每 CPU 读写锁（读路径无锁）      │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  RCU（Read-Copy-Update）— 读无锁，写时复制                │
+  │  ├── rcu_read_lock()  — 读端：零开销                      │
+  │  ├── rcu_synchronize  — 写端：等待宽限期                   │
+  │  └── SLAB_TYPESAFE_BY_RCU — slab 安全回收                 │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  原子操作 — 无锁的单变量操作                               │
+  │  ├── atomic_t / atomic64_t — 整数原子操作                  │
+  │  ├── refcount_t           — 引用计数（安全版）             │
+  │  └── cmpxchg              — CAS（比较并交换）             │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  其他机制                                                │
+  │  ├── completion       — 一次性同步通知                    │
+  │  ├── wait_queue       — 条件等待                          │
+  │  ├── per-CPU          — 每 CPU 变量（无锁）               │
+  │  └── Local Lock       — per-CPU + 禁用抢占               │
+  └─────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="decision" class="toc-link">
+  <h2><span class="num">03</span> 选择指南</h2>
+  <table>
+    <tr><th>场景</th><th>推荐机制</th><th>原因</th></tr>
+    <tr><td>短临界区 + 不睡眠</td><td>spinlock</td><td>最快，忙等待</td></tr>
+    <tr><td>长临界区 / 可能睡眠</td><td>mutex</td><td>睡眠等待，不浪费 CPU</td></tr>
+    <tr><td>读多写少</td><td>rwsem</td><td>读操作并发</td></tr>
+    <tr><td>读远多于写</td><td>RCU</td><td>读零开销</td></tr>
+    <tr><td>单变量原子操作</td><td>atomic_t / cmpxchg</td><td>无锁</td></tr>
+    <tr><td>引用计数</td><td>refcount_t</td><td>防止 use-after-free</td></tr>
+    <tr><td>一次性通知</td><td>completion</td><td>简单高效</td></tr>
+    <tr><td>条件等待</td><td>wait_queue</td><td>灵活的等待机制</td></tr>
+    <tr><td>per-CPU 数据</td><td>per-CPU 变量 + local_lock</td><td>无锁，无竞争</td></tr>
+    <tr><td>避免死锁（DRM）</td><td>ww_mutex</td><td>加权等待避免死锁</td></tr>
+  </table>
+</section>
+
+<section id="performance" class="toc-link">
+  <h2><span class="num">04</span> 性能对比</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">锁定机制性能特征：</span>
+
+  原子操作/CAS      ████████████████████  ~5ns     无锁
+  RCU 读端          ████████████████████  ~0ns     零开销
+  per-CPU           ████████████████████  ~5ns     无锁
+  spinlock          ██████████████        ~100ns   忙等待
+  mutex（无竞争）   ████████████          ~200ns   睡眠
+  mutex（有竞争）   ████                  ~10μs    上下文切换
+  rwsem（读）       ██████████████        ~100ns   读并发
+  rwsem（写）       ████████              ~500ms   排他
+  RCU（写端）       ██████                ~10ms    宽限期等待
+</pre></div>
+
+  <div class="callout tip">
+    <strong>选择原则</strong><br>
+    ① 能用 per-CPU 就不用锁<br>
+    ② 能用 RCU 就不用 rwsem<br>
+    ③ 能用 spinlock 就不用 mutex<br>
+    ④ 能用 atomic 就不用 spinlock<br>
+    ⑤ 优先考虑数据结构设计而非锁定
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/locking/</span>       <span class="cmt">总计 18330 行</span>
+├── <span class="file">spinlock.c</span>       <span class="cmt">自旋锁</span>
+├── <span class="file">mutex.c</span>          <span class="cmt">互斥锁</span>
+├── <span class="file">rtmutex.c</span>        <span class="cmt">RT 互斥锁</span>
+├── <span class="file">rwsem.c</span>          <span class="cmt">读写信号量</span>
+├── <span class="file">percpu-rwsem.c</span>   <span class="cmt">每 CPU 读写锁</span>
+├── <span class="file">semaphore.c</span>      <span class="cmt">信号量</span>
+├── <span class="file">lockdep.c</span>        <span class="cmt">死锁检测</span>
+├── <span class="file">osq_lock.c</span>       <span class="cmt">乐观自旋队列锁</span>
+├── <span class="file">qspinlock.c</span>      <span class="cmt">队列自旋锁</span>
+├── <span class="file">qrwlock.c</span>        <span class="cmt">队列读写锁</span>
+├── <span class="file">ww_mutex.c</span>       <span class="cmt">加权等待互斥锁</span>
+└── <span class="file">locktorture.c</span>    <span class="cmt">锁定压力测试</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    本文是已有锁定机制专题文章的全景导览：<br>
+    <code>linux-atomic.html</code> — 原子操作与 CAS<br>
+    <code>linux-spinlock.html</code> — 自旋锁<br>
+    <code>linux-mutex.html</code> — 互斥锁<br>
+    <code>linux-semaphore.html</code> — 信号量<br>
+    <code>linux-rwlock.html</code> — 读写锁<br>
+    <code>linux-rcu.html</code> — RCU 机制<br>
+    <code>kernel/locking/lockdep.c</code> — 死锁检测框架
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/locking/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

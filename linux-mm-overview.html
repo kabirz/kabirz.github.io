@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内存管理全景 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内存管理全景 深度解析</h1>
+  <p class="subtitle">内存管理总览 — 从虚拟地址到物理页面的完整路径</p>
+  <span class="version">Linux 7.0.12 · mm/ (202902 行总计)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#taxonomy">子系统分类</a></li>
+    <li><a href="#flow">内存分配流程</a></li>
+    <li><a href="#performance">性能特征</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 内存管理是内核中最复杂的子系统之一（超过 20 万行代码）。本文全景梳理所有内存管理组件的关系，从虚拟地址空间到物理页面分配，从页面回收到 Swap。</p>
+</section>
+
+<section id="taxonomy" class="toc-link">
+  <h2><span class="num">02</span> 子系统分类</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Linux 内存管理全景图：</span>
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  虚拟地址空间管理                                        │
+  │  ├── MMU / 页表        — 虚拟→物理地址翻译               │
+  │  ├── VMA（vm_area_struct）— 进程内存区域                 │
+  │  ├── mmap             — 文件/匿名内存映射               │
+  │  └── brk              — 堆扩展                          │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  物理页面管理                                            │
+  │  ├── Buddy System     — 页面分配（order 0~10）           │
+  │  ├── SLUB             — 小对象分配                       │
+  │  ├── Page Cache       — 文件内容缓存                     │
+  │  └── 帧缓冲           — 直接 DMA 映射                   │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  页面生命周期                                            │
+  │  ├── 缺页异常         — 按需分配 / COW / swap 换入       │
+  │  ├── 页面回收         — kswapd / direct reclaim          │
+  │  ├── 页面回写         — 脏页写入磁盘                     │
+  │  ├── 页面压缩         — 碎片整理                         │
+  │  └── 页面迁移         — NUMA 迁移 / 热移除               │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  高级特性                                                │
+  │  ├── Huge Pages      — 2MB/1GB 大页                      │
+  │  ├── THP             — 透明大页（自动合并）               │
+  │  ├── KSM             — 内核同页合并                       │
+  │  ├── Overcommit      — 内存超分配                        │
+  │  ├── OOM Killer      — 内存不足时杀进程                   │
+  │  ├── Swap            — 交换空间                          │
+  │  ├── NUMA            — 非统一内存访问                     │
+  │  └── Memory Hotplug  — 运行时内存热插拔                   │
+  └─────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 内存分配流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">内核内存分配路径：</span>
+
+  kmalloc(size) — 小对象
+        │
+        ├── size < 8KB → SLUB 分配器
+        │       kmem_cache_alloc()
+        │       → 从 slab 缓存取对象
+        │
+        └── size ≥ 8KB → Buddy System
+                __alloc_pages()
+                → 从 free_area 取页面
+
+  vmalloc(size) — 大块虚拟连续内存
+        │
+        └── 分散的物理页面 + 虚拟地址映射
+
+  alloc_pages() — 直接页面分配
+        │
+        └── Buddy System → __alloc_pages()
+                            → 从 free_area 取连续页面
+
+<span style="color:#1a7f37">用户态内存分配路径：</span>
+
+  malloc(size)
+        │
+        ├── size < 128KB → brk() 扩展堆
+        │       mm/mmap.c → do_brk_flags()
+        │
+        └── size ≥ 128KB → mmap()
+                mm/mmap.c → do_mmap()
+                → 创建 VMA，延迟分配（缺页时分配物理页面）
+</pre></div>
+</section>
+
+<section id="performance" class="toc-link">
+  <h2><span class="num">04</span> 性能特征</h2>
+  <table>
+    <tr><th>分配器</th><th>对象大小</th><th>延迟</th><th>适用场景</th></tr>
+    <tr><td><strong>kmalloc</strong></td><td>< 8KB</td><td>~100ns</td><td>内核小对象</td></tr>
+    <tr><td><strong>vmalloc</strong></td><td>任意</td><td>~1μs</td><td>大块虚拟连续内存</td></tr>
+    <tr><td><strong>alloc_pages</strong></td><td>≥ 4KB</td><td>~200ns</td><td>页面级分配</td></tr>
+    <tr><td><strong>malloc</strong></td><td>任意</td><td>~1μs</td><td>用户态分配</td></tr>
+    <tr><td><strong>mmap</strong></td><td>任意</td><td>~100ns</td><td>大文件/共享内存</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>                      <span class="cmt">总计 202902 行</span>
+├── <span class="file">mmu.c</span>              <span class="cmt">页表管理</span>
+├── <span class="file">mmap.c</span>             <span class="cmt">VMA / mmap（已有专题）</span>
+├── <span class="file">memory.c</span>           <span class="cmt">缺页异常（已有专题）</span>
+├── <span class="file">page_alloc.c</span>       <span class="cmt">Buddy System（已有专题）</span>
+├── <span class="file">slub.c</span>             <span class="cmt">SLUB 分配器</span>
+├── <span class="file">filemap.c</span>          <span class="cmt">Page Cache（已有专题）</span>
+├── <span class="file">vmscan.c</span>           <span class="cmt">页面回收（已有专题）</span>
+├── <span class="file">swap_state.c</span>      <span class="cmt">Swap（已有专题）</span>
+├── <span class="file">compaction.c</span>      <span class="cmt">内存压缩（已有专题）</span>
+├── <span class="file">huge_memory.c</span>     <span class="cmt">大页（已有专题）</span>
+├── <span class="file">ksm.c</span>             <span class="cmt">同页合并（已有专题）</span>
+├── <span class="file">oom_kill.c</span>        <span class="cmt">OOM Killer</span>
+├── <span class="file">page-writeback.c</span>  <span class="cmt">回写（已有专题）</span>
+└── <span class="file">memory_hotplug.c</span>  <span class="cmt">热插拔（已有专题）</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    本文是已有内存管理专题文章的全景导览：<br>
+    <code>linux-mmu.html</code> — MMU 与页表<br>
+    <code>linux-mm.html</code> — 内存管理核心<br>
+    <code>linux-mmap.html</code> — 内存映射<br>
+    <code>linux-buddy.html</code> — 伙伴系统<br>
+    <code>linux-page-cache.html</code> — Page Cache<br>
+    <code>linux-page-reclaim.html</code> — 页面回收<br>
+    <code>linux-swap.html</code> — Swap<br>
+    <code>linux-compaction.html</code> — 内存压缩<br>
+    <code>linux-hugepages.html</code> — 大页<br>
+    <code>linux-ksm.html</code> — 同页合并<br>
+    <code>linux-overcommit.html</code> — 超分配与 OOM
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
