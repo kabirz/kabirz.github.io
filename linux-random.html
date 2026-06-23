@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 随机数生成 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 随机数生成 深度解析</h1>
+  <p class="subtitle">密码学安全随机数 — /dev/urandom、getrandom()、CSPRNG</p>
+  <span class="version">Linux 7.0.12 · drivers/char/random.c (1716 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">随机数接口</a></li>
+    <li><a href="#entropy">熵源</a></li>
+    <li><a href="#flow">生成流程</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 内核提供密码学安全的伪随机数生成器（CSPRNG），是 SSL/TLS、SSH、密钥生成等安全机制的基础。内核从多种硬件熵源（CPU RDRAND、中断时间、磁盘 I/O 延迟）收集熵，通过 CRNG（ChaCha20）算法生成高质量随机数。</p>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 随机数接口</h2>
+  <table>
+    <tr><th>接口</th><th>行为</th><th>阻塞</th><th>适用场景</th></tr>
+    <tr><td><code>/dev/random</code></td><td>仅在熵足够时返回数据</td><td>是（旧版）</td><td>密钥生成</td></tr>
+    <tr><td><code>/dev/urandom</code></td><td>始终返回（CSPRNG）</td><td>否</td><td>通用随机数</td></tr>
+    <tr><td><code>getrandom()</code></td><td>根据 flags 选择阻塞模式</td><td>可选</td><td>推荐使用</td></tr>
+    <tr><td><code>get_random_bytes()</code></td><td>内核态 API</td><td>否（启动后）</td><td>内核模块</td></tr>
+    <tr><td><code>get_random_u32()</code></td><td>快速无锁随机数</td><td>否</td><td>快速随机数</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>/dev/random vs /dev/urandom</strong><br>
+    Linux 5.6+ 中，<code>/dev/random</code> 和 <code>/dev/urandom</code> 使用<strong>相同的 CSPRNG</strong>（ChaCha20），区别仅在于初始化阶段（系统启动初期熵不足时 /dev/random 会阻塞）。启动完成后两者<strong>完全等价</strong>。
+  </div>
+</section>
+
+<section id="entropy" class="toc-link">
+  <h2><span class="num">03</span> 熵源</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">内核随机数熵源：</span>
+
+  ┌──────────────────────────────────────────┐
+  │              熵源池                       │
+  ├──────────────────────────────────────────┤
+  │  CPU 熵源                                 │
+  │  ├── RDRAND/RDSEED（Intel/AMD）          │
+  │  ├── ARM V8.5 RNDR（ARM64）             │
+  │  └── 硬件随机数生成器（TRNG）             │
+  │                                          │
+  │  设备熵源                                 │
+  │  ├── 中断时间间隔（IRQ timing）           │
+  │  ├── 磁盘 I/O 延时                       │
+  │  ├── 网络包到达时间                       │
+  │  ├── 键盘/鼠标事件时间                    │
+  │  └── 音频输入噪声                        │
+  │                                          │
+  │  混合器（Fast Key Erasable CSPRNG）       │
+  │  ├── 输入：各熵源                         │
+  │  ├── 算法：ChaCha20                      │
+  │  └── 输出：密码学安全随机数              │
+  └──────────────────────────────────────────┘
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm"># 查看系统熵状态</span>
+$ cat /proc/sys/kernel/random/entropy_avail
+<span class="num">256</span>  <span class="cm"># 可用熵位数</span>
+
+<span class="cm"># 熵池大小</span>
+$ cat /proc/sys/kernel/random/poolsize
+<span class="num">256</span>  <span class="cm"># 熵池大小（位）</span>
+
+<span class="cm"># 推荐：使用 getrandom() 而非 /dev/urandom</span>
+<span class="cm"># getrandom 在系统启动初期会等待熵池初始化完成</span></code></pre>
+  </div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 生成流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">getrandom() 系统调用流程：</span>
+
+  getrandom(buf, len, flags)
+        │
+        ├── flags 包含 GRND_RANDOM？
+        │   是 → 使用 /dev/random 语义（熵不足时等待）
+        │   否 → 使用 /dev/urandom 语义（始终返回）
+        │
+        ↓
+  <span style="color:#8250df">crng_reseed()</span> — 检查 CSPRNG 状态
+        │
+        ├── 未初始化 → 等待熵池就绪（启动早期）
+        │
+        └── 已初始化 → <span style="color:#1a7f37">立即返回</span>
+                │
+                ↓
+        ChaCha20 加密生成随机字节
+        → 复制到用户态 buffer
+</pre></div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">drivers/char/</span>
+└── <span class="file">random.c</span>         <span class="cmt">随机数核心 (1716 行)</span>
+      └── get_random_bytes()  <span class="cmt">内核态随机数</span>
+      └── get_random_u32()    <span class="cmt">快速随机数</span>
+      └── crng_reseed()       <span class="cmt">CSPRNG 重种子</span>
+
+<span class="dir">drivers/char/</span>
+├── <span class="file">urandom.c</span>       <span class="cmt">/dev/urandom 实现</span>
+└── <span class="file">random.c</span>         <span class="cmt">/dev/random 实现</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">random.h</span>         <span class="cmt">随机数内核 API</span>
+└── <span class="file">rng.h</span>            <span class="cmt">随机数生成器框架</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>drivers/char/random.c</code> — 随机数核心，理解 CSPRNG 和熵源混合。<br>
+    <code>include/linux/random.h</code> — 随机数内核 API 定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · drivers/char/random.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

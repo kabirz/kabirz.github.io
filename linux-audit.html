@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Audit 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Audit 深度解析</h1>
+  <p class="subtitle">安全审计框架 — 系统调用级别的行为追踪</p>
+  <span class="version">Linux 7.0.12 · kernel/audit.c (2843 行) · kernel/auditsc.c (2983 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#events">审计事件类型</a></li>
+    <li><a href="#flow">审计流程</a></li>
+    <li><a href="#api">使用方式</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux Audit 是内核提供的<strong>安全审计框架</strong>，记录系统调用、文件访问、用户认证等安全相关事件。它是 Linux 安全合规（CIS、PCI-DSS、HIPAA）的基础工具，也是 SELinux、AppArmor 的审计后端。</p>
+</section>
+
+<section id="events" class="toc-link">
+  <h2><span class="num">02</span> 审计事件类型</h2>
+  <table>
+    <tr><th>类型</th><th>系统调用类别</th><th>示例</th></tr>
+    <tr><td><strong>SYSCALL</strong></td><td>系统调用</td><td>open, execve, connect, kill</td></tr>
+    <tr><td><strong>PATH</strong></td><td>文件路径</td><td>文件访问的完整路径</td></tr>
+    <tr><td><strong>EXECVE</strong></td><td>程序执行</td><td>execve 的参数和环境变量</td></tr>
+    <tr><td><strong>CWD</strong></td><td>当前工作目录</td><td>进程的 cwd</td></tr>
+    <tr><td><strong>SOCKADDR</strong></td><td>网络地址</td><td>connect/sendto 的目标地址</td></tr>
+    <tr><td><strong>CRED</strong></td><td>凭证</td><td>UID/GID/SEUID/SEGID</td></tr>
+    <tr><td><strong>USER_LOGIN</strong></td><td>用户登录</td><td>登录/登出事件</td></tr>
+    <tr><td><strong>CONFIG_CHANGE</strong></td><td>配置变更</td><td>规则添加/删除</td></tr>
+  </table>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 审计流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">审计事件产生流程：</span>
+
+  进程执行系统调用（如 open）
+        │
+        ↓
+  内核检查是否有匹配的审计规则
+        │
+        ├── 无规则 → 正常执行，不记录
+        │
+        └── 有规则 → <span style="color:#8250df">audit_syscall_entry()</span>
+                │
+                ├── 1. 构造审计上下文
+                │       audit_context：syscall号、参数、返回值
+                │
+                ├── 2. 记录相关信息
+                │       PATH（文件路径）
+                │       CWD（当前目录）
+                │       SOCKADDR（网络地址）
+                │
+                ├── 3. 系统调用执行完毕
+                │
+                ├── 4. audit_syscall_exit()
+                │       记录返回值和错误码
+                │
+                └── 5. 发送审计记录
+                        → auditd 守护进程
+                        → 写入 /var/log/audit/audit.log
+</pre></div>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">04</span> 使用方式</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 启动审计守护进程</span>
+$ sudo systemctl start auditd
+
+<span class="cm"># 添加审计规则</span>
+<span class="cm"># 监控 /etc/passwd 的所有访问</span>
+$ sudo auditctl -w /etc/passwd -p rwa -k passwd_access
+
+<span class="cm"># 监控所有 execve 系统调用</span>
+$ sudo auditctl -a always,exit -F arch=b64 -S execve -k exec_log
+
+<span class="cm"># 监控特定用户的所有系统调用</span>
+$ sudo auditctl -a always,exit -F uid=<span class="num">1000</span> -F arch=b64 -S all -k user_action
+
+<span class="cm"># 查询审计日志</span>
+$ ausearch -k passwd_access -ts recent
+$ ausearch -ua <span class="num">1000</span> -ts today
+
+<span class="cm"># 生成审计报告</span>
+$ aureport --auth          <span class="cm"># 认证报告</span>
+$ aureport --login         <span class="cm"># 登录报告</span>
+$ aureport --failed        <span class="cm"># 失败操作报告</span>
+
+<span class="cm"># 删除审计规则</span>
+$ sudo auditctl -d -w /etc/passwd -p rwa -k passwd_access
+
+<span class="cm"># 查看当前规则</span>
+$ sudo auditctl -l</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+├── <span class="file">audit.c</span>           <span class="cmt">审计核心 (2843 行)</span>
+│     └── audit_syscall_entry() <span class="cmt">系统调用审计入口</span>
+│     └── audit_log()          <span class="cmt">审计日志输出</span>
+├── <span class="file">auditsc.c</span>        <span class="cmt">系统调用审计 (2983 行)</span>
+├── <span class="file">auditfilter.c</span>    <span class="cmt">审计规则过滤器</span>
+├── <span class="file">audit_watch.c</span>    <span class="cmt">文件监控审计</span>
+└── <span class="file">audit_tree.c</span>     <span class="cmt">目录树审计</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/audit.c</code> — 审计核心框架，理解事件产生和传递。<br>
+    <code>kernel/auditsc.c</code> — 系统调用审计，理解 syscall entry/exit。<br>
+    <code>kernel/auditfilter.c</code> — 审计规则匹配逻辑。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/audit.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

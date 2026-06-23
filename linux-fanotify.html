@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux fanotify 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux fanotify 深度解析</h1>
+  <p class="subtitle">文件系统通知 — 杀毒软件和 DLP 的内核接口</p>
+  <span class="version">Linux 7.0.12 · fs/notify/fanotify/fanotify_user.c (2216 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#vs">fanotify vs inotify</a></li>
+    <li><a href="#api">API 与使用</a></li>
+    <li><a href="#events">事件类型</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>fanotify（File Access Notify）是 Linux 内核提供的<strong>高级文件系统事件通知机制</strong>。与 inotify 不同，fanotify 可以监控整个挂载点、过滤特定进程、并且支持<strong>事件响应</strong>（如杀毒软件在文件打开前扫描）。它是 ClamAV、CrowdStrike 等安全产品的内核接口。</p>
+</section>
+
+<section id="vs" class="toc-link">
+  <h2><span class="num">02</span> fanotify vs inotify</h2>
+  <table>
+    <tr><th>特性</th><th>inotify</th><th>fanotify</th></tr>
+    <tr><td>监控粒度</td><td>单个文件/目录</td><td><strong>整个挂载点</strong></td></tr>
+    <tr><td>权限</td><td>需要读权限</td><td>CAP_SYS_ADMIN</td></tr>
+    <tr><td>事件响应</td><td>仅通知</td><td><strong>FAN_ALLOW/FAN_DENY</strong></td></tr>
+    <tr><td>PID 过滤</td><td>不支持</td><td><strong>支持</strong>（仅监控特定进程）</td></tr>
+    <tr><td>文件信息</td><td>文件名</td><td><strong>fid + file handle</strong></td></tr>
+    <tr><td>性能</td><td>快</td><td>略慢</td></tr>
+    <tr><td>典型用途</td><td>IDE 文件监视</td><td>杀毒/DLP/完整性检查</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> API 与使用</h2>
+  <div class="card">
+    <pre><code><span class="cm">// fanotify API</span>
+<span class="kw">#include</span> <span class="st">&lt;sys/fanotify.h&gt;</span>
+
+<span class="cm">// 1. 创建 fanotify 实例</span>
+<span class="ty">int</span> fd = <span class="fn">fanotify_init</span>(
+    FAN_CLASS_CONTENT | FAN_NONBLOCK, <span class="cm">// 标志</span>
+    O_RDONLY);                         <span class="cm">// 操作权限</span>
+
+<span class="cm">// 2. 添加监控（监控整个 /home 目录）</span>
+<span class="kw">struct</span> <span class="ty">fanotify_mark_data</span> mark = {
+    .fd = AT_FDCWD,
+    .mask = FAN_OPEN | FAN_ACCESS | FAN_MODIFY,
+    .ignore_mask = 0,
+    .path = <span class="st">"/home"</span>,
+};
+<span class="fn">fanotify_mark</span>(fd, FAN_MARK_ADD | FAN_MARK_MOUNT, ...);
+
+<span class="cm">// 3. 读取事件</span>
+<span class="kw">struct</span> <span class="ty">fanotify_event_metadata</span> event;
+<span class="fn">read</span>(fd, &amp;event, <span class="kw">sizeof</span>(event));
+<span class="cm">// event.mask = 事件类型（FAN_OPEN 等）</span>
+<span class="cm">// event.pid = 触发进程的 PID</span>
+<span class="cm">// event.fd = 文件描述符（可读取文件内容）</span>
+
+<span class="cm">// 4. 响应事件（权限模式）</span>
+<span class="kw">struct</span> <span class="ty">fanotify_response</span> resp = {
+    .fd = event.fd,
+    .response = FAN_ALLOW, <span class="cm">// 或 FAN_DENY</span>
+};
+<span class="fn">write</span>(fd, &amp;resp, <span class="kw">sizeof</span>(resp));</code></pre>
+  </div>
+</section>
+
+<section id="events" class="toc-link">
+  <h2><span class="num">04</span> 事件类型</h2>
+  <table>
+    <tr><th>事件</th><th>说明</th></tr>
+    <tr><td><code>FAN_OPEN</code></td><td>文件被打开</td></tr>
+    <tr><td><code>FAN_CLOSE_WRITE</code></td><td>可写文件被关闭</td></tr>
+    <tr><td><code>FAN_CLOSE_NOWRITE</code></td><td>只读文件被关闭</td></tr>
+    <tr><td><code>FAN_ACCESS</code></td><td>文件被访问</td></tr>
+    <tr><td><code>FAN_MODIFY</code></td><td>文件被修改</td></tr>
+    <tr><td><code>FAN_CREATE</code></td><td>文件被创建</td></tr>
+    <tr><td><code>FAN_DELETE</code></td><td>文件被删除</td></tr>
+    <tr><td><code>FAN_MOVED_FROM</code></td><td>文件被移出</td></tr>
+    <tr><td><code>FAN_MOVED_TO</code></td><td>文件被移入</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">fs/notify/fanotify/</span>
+├── <span class="file">fanotify_user.c</span>   <span class="cmt">fanotify 核心 (2216 行)</span>
+│     └── fanotify_init()    <span class="cmt">创建实例</span>
+│     └── fanotify_mark()    <span class="cmt">添加/删除监控</span>
+│     └── fanotify_read_event() <span class="cmt">读取事件</span>
+└── <span class="file">fanotify.c</span>        <span class="cmt">fanotify 内核实现</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>fs/notify/fanotify/fanotify_user.c</code> — fanotify 核心，理解 init/mark/read。<br>
+    <code>fs/notify/inotify/inotify_user.c</code> — inotify 实现，对比学习。<br>
+    <code>include/uapi/linux/fanotify.h</code> — FAN_* 常量定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · fs/notify/fanotify/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
