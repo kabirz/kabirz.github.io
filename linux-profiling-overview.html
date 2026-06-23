@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核性能分析全景 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核性能分析全景 深度解析</h1>
+  <p class="subtitle">性能分析工具总览 — perf/ftrace/tracepoint/BPF</p>
+  <span class="version">Linux 7.0.12 · tools/perf/ · kernel/events/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#taxonomy">工具分类</a></li>
+    <li><a href="#flow">分析流程</a></li>
+    <li><a href="#usecases">场景选择</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 内核提供了完整的性能分析工具链。本文全景梳理所有性能分析工具的关系和使用场景，帮助开发者快速定位性能问题。</p>
+</section>
+
+<section id="taxonomy" class="toc-link">
+  <h2><span class="num">02</span> 工具分类</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Linux 性能分析工具分类：</span>
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    CPU 性能分析                          │
+  │  perf top     ──  实时热点函数                           │
+  │  perf record  ──  采样分析 → perf report                │
+  │  perf stat    ──  CPU 计数器统计                         │
+  │  火焰图       ──  可视化调用栈                           │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    内核函数追踪                           │
+  │  ftrace       ──  函数级跟踪（已有专题）                 │
+  │  tracepoint   ──  静态跟踪点（已有专题）                 │
+  │  kprobe       ──  动态探针（已有专题）                   │
+  │  perf trace   ──  系统调用跟踪                          │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    可编程分析                             │
+  │  BPF          ──  可编程内核沙箱                         │
+  │  bpftrace     ──  高级 BPF 追踪语言                     │
+  │  bcc          ──  BPF 编译器集合                        │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    系统级分析                             │
+  │  vmstat       ──  系统活动统计                           │
+  │  iostat       ──  I/O 统计                              │
+  │  mpstat       ──  多处理器统计                           │
+  │  sar          ──  历史数据收集                           │
+  └─────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 分析流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">性能分析决策树：</span>
+
+  性能问题类型？
+  │
+  ├── CPU 热点 → <span style="color:#cf222e">perf top / perf record</span>
+  ├── CPU 利用率高 → <span style="color:#cf222e">perf stat</span>
+  ├── I/O 瓶颈 → <span style="color:#1a7f37">iostat / blktrace</span>
+  ├── 内存问题 → <span style="color:#1a7f37">slabtop / vmstat</span>
+  ├── 锁竞争 → <span style="color:#8250df">lockstat / perf lock</span>
+  ├── 调度延迟 → <span style="color:#8250df">perf sched</span>
+  ├── 网络延迟 → <span style="color:#8250df">perf network / bpftrace</span>
+  └── 延迟分析 → <span style="color:#8250df">ftrace + function_graph</span>
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 场景选择</h2>
+  <table>
+    <tr><th>需求</th><th>推荐工具</th><th>命令示例</th></tr>
+    <tr><td>CPU 热点定位</td><td>perf top</td><td><code>perf top -g</code></td></tr>
+    <tr><td>CPU 采样分析</td><td>perf record</td><td><code>perf record -g -- sleep 30</code></td></tr>
+    <tr><td>CPU 指令统计</td><td>perf stat</td><td><code>perf stat -p PID sleep 10</code></td></tr>
+    <tr><td>函数调用追踪</td><td>ftrace</td><td><code>echo function > current_tracer</code></td></tr>
+    <tr><td>系统调用追踪</td><td>perf trace</td><td><code>perf trace -p PID</code></td></tr>
+    <tr><td>I/O 分析</td><td>iostat</td><td><code>iostat -xz 1</code></td></tr>
+    <tr><td>内存分析</td><td>slabtop</td><td><code>slabtop -o -s c</code></td></tr>
+    <tr><td>火焰图</td><td>perf script</td><td><code>perf script | flamegraph.pl > out.svg</code></td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">tools/perf/</span>          <span class="cmt">perf 用户态工具</span>
+├── <span class="file">perf.c</span>           <span class="cmt">perf 命令入口</span>
+├── <span class="file">builtin-top.c</span>    <span class="cmt">perf top</span>
+├── <span class="file">builtin-record.c</span> <span class="cmt">perf record</span>
+├── <span class="file">builtin-stat.c</span>   <span class="cmt">perf stat</span>
+├── <span class="file">builtin-report.c</span> <span class="cmt">perf report</span>
+├── <span class="file">builtin-trace.c</span>  <span class="cmt">perf trace</span>
+└── <span class="file">builtin-sched.c</span>  <span class="cmt">perf sched</span>
+
+<span class="dir">kernel/events/</span>
+├── <span class="file">core.c</span>           <span class="cmt">perf_event 核心</span>
+├── <span class="file">cpuc.c</span>           <span class="cmt">CPU PMU 管理</span>
+└── <span class="file">ring_buffer.c</span>    <span class="cmt">环形缓冲区</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>tools/perf/Documentation/</code> — perf 完整文档。<br>
+    <code>kernel/events/core.c</code> — perf_event 核心框架。<br>
+    本文是已有专题文章的全景导览：<code>linux-perf-events.html</code>、<code>linux-ftrace.html</code>、<code>linux-tracepoints.html</code>、<code>linux-kprobe.html</code>、<code>linux-bpf-maps.html</code>。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · tools/perf/ · kernel/events/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

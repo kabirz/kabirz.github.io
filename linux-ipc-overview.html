@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 进程间通信全景 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 进程间通信全景 深度解析</h1>
+  <p class="subtitle">IPC 机制总览 — 从管道到共享内存</p>
+  <span class="version">Linux 7.0.12 · ipc/ · net/unix/ · fs/pipe.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#taxonomy">机制分类</a></li>
+    <li><a href="#decision">选择指南</a></li>
+    <li><a href="#performance">性能对比</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 提供了丰富的进程间通信（IPC）机制。本文全景梳理所有 IPC 机制的关系、适用场景和性能特征。</p>
+</section>
+
+<section id="taxonomy" class="toc-link">
+  <h2><span class="num">02</span> 机制分类</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Linux IPC 机制全景图：</span>
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  管道（Pipe）— 字节流，单向                              │
+  │  ├── pipe()           — 匿名管道（父子进程）             │
+  │  └── FIFO (mkfifo)   — 命名管道（任意进程）             │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  UNIX Domain Socket — 字节流/数据报，双向               │
+  │  ├── SOCK_STREAM     — 类似 TCP（可靠有序）             │
+  │  ├── SOCK_DGRAM      — 类似 UDP（无连接）               │
+  │  └── SCM_RIGHTS      — 文件描述符传递                   │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  共享内存 — 最快的 IPC，需同步                           │
+  │  ├── mmap + MAP_SHARED — 文件/匿名共享内存              │
+  │  ├── POSIX shm         — /dev/shm 共享内存              │
+  │  └── SysV shm          — 传统共享内存                    │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  消息传递 — 有边界的消息                                 │
+  │  ├── POSIX 消息队列   — 标准接口                         │
+  │  └── SysV 消息队列    — 传统接口                         │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  同步机制 — 配合 IPC 使用                                │
+  │  ├── Signal           — 异步通知                         │
+  │  ├── Semaphore        — 计数信号量                       │
+  │  └── Futex            — 快速用户空间互斥锁               │
+  └─────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="decision" class="toc-link">
+  <h2><span class="num">03</span> 选择指南</h2>
+  <table>
+    <tr><th>场景</th><th>推荐 IPC</th><th>原因</th></tr>
+    <tr><td>Shell 管道</td><td>pipe / FIFO</td><td>简单，标准</td></tr>
+    <tr><td>父子进程通信</td><td>pipe</td><td>最简单</td></tr>
+    <tr><td>任意进程通信</td><td>UNIX Domain Socket</td><td>灵活，支持 fd 传递</td></tr>
+    <tr><td>高性能数据共享</td><td>共享内存 + 同步</td><td>零拷贝</td></tr>
+    <tr><td>异步事件通知</td><td>Signal</td><td>简单通知</td></tr>
+    <tr><td>生产者-消费者</td><td>消息队列</td><td>有消息边界</td></tr>
+    <tr><td>数据库</td><td>共享内存 + futex</td><td>最高性能</td></tr>
+  </table>
+</section>
+
+<section id="performance" class="toc-link">
+  <h2><span class="num">04</span> 性能对比</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">IPC 机制性能特征：</span>
+
+  共享内存         ████████████████████  ~10ns    最快（需同步）
+  UNIX Socket      ████████████████████  ~50ns    快（双向）
+  Pipe             ████████████████████  ~50ns    快（单向）
+  消息队列         ████████████████      ~100ns   中
+  Socket (TCP)     ██████████████        ~200ns   中（跨主机）
+  Signal           ████████████          ~500ns   慢（异步通知）
+</pre></div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">fs/</span>
+├── <span class="file">pipe.c</span>            <span class="cmt">管道实现 (1552 行)</span>
+├── <span class="file">fifo.c</span>            <span class="cmt">FIFO 实现</span>
+
+<span class="dir">net/unix/</span>
+└── <span class="file">af_unix.c</span>         <span class="cmt">UNIX Domain Socket (3970 行)</span>
+
+<span class="dir">ipc/</span>
+├── <span class="file">shm.c</span>             <span class="cmt">SysV 共享内存</span>
+├── <span class="file">msg.c</span>             <span class="cmt">SysV 消息队列</span>
+└── <span class="file">mqueue.c</span>          <span class="cmt">POSIX 消息队列</span>
+
+<span class="dir">mm/</span>
+├── <span class="file">shmem.c</span>           <span class="cmt">shmem/tmpfs (6022 行)</span>
+└── <span class="file">mmap.c</span>            <span class="cmt">mmap (1922 行)</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    本文是已有 IPC 专题文章的全景导览：<br>
+    <code>linux-pipe.html</code> — 匿名管道<br>
+    <code>linux-fifo.html</code> — 命名管道<br>
+    <code>linux-unix-socket.html</code> — UNIX Domain Socket<br>
+    <code>linux-shared-memory.html</code> — 共享内存<br>
+    <code>linux-message-queue.html</code> — 消息队列<br>
+    <code>linux-signal.html</code> — 信号<br>
+    <code>linux-futex.html</code> — Futex<br>
+    <code>linux-mmap.html</code> — mmap
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · ipc/ · net/unix/ · fs/pipe.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

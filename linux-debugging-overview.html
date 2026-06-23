@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核调试技术全景 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核调试技术全景 深度解析</h1>
+  <p class="subtitle">调试技术总览 — 从 printk 到 Kdump</p>
+  <span class="version">Linux 7.0.12 · kernel/printk/ · lib/kasan/ · kernel/debug/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#taxonomy">技术分类</a></li>
+    <li><a href="#flow">调试流程</a></li>
+    <li><a href="#usecases">场景选择</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 内核提供了丰富的调试技术来定位问题。本文全景梳理所有调试技术的关系和使用场景，帮助开发者快速定位和修复内核问题。</p>
+</section>
+
+<section id="taxonomy" class="toc-link">
+  <h2><span class="num">02</span> 技术分类</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Linux 内核调试技术分类：</span>
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    内存错误检测                          │
+  │  KASAN        ──  use-after-free / buffer overflow     │
+  │  KCSAN        ──  数据竞争检测                          │
+  │  KMSAN        ──  未初始化内存检测                       │
+  │  UBSAN        ──  未定义行为检测                         │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    死锁检测                              │
+  │  lockdep      ──  运行时死锁检测                        │
+  │  lockstat     ──  锁使用统计                            │
+  │  W/W mutex    ──  避免死锁的互斥锁                      │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    日志与追踪                            │
+  │  printk       ──  内核日志输出                          │
+  │  dynamic_debug ──  运行时动态调试                       │
+  │  ftrace       ──  函数跟踪（已有专题）                   │
+  │  tracepoint   ──  静态跟踪点（已有专题）                 │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    崩溃分析                              │
+  │  Oops/Panic   ──  内核崩溃处理（已有专题）               │
+  │  Kdump        ──  崩溃转储                              │
+  │  crash        ──  转储分析工具                          │
+  │  KGDB         ──  内核调试器                            │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    动态调试                              │
+  │  Kprobe       ──  内核函数探针（已有专题）               │
+  │  Uprobe       ──  用户态函数探针（已有专题）             │
+  │  BPF          ──  可编程调试（已有专题）                 │
+  │  eBPF         ──  内核可编程（已有专题）                 │
+  └─────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 调试流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">调试决策树：</span>
+
+  问题类型？
+  │
+  ├── 内存错误 → <span style="color:#cf222e">KASAN / KCSAN / UBSAN</span>
+  ├── 死锁 → <span style="color:#cf222e">lockdep</span>
+  ├── 性能问题 → <span style="color:#1a7f37">perf / ftrace / BPF</span>
+  ├── 函数追踪 → <span style="color:#1a7f37">ftrace / kprobe</span>
+  ├── 内核崩溃 → <span style="color:#8250df">Kdump / crash</span>
+  ├── 驱动问题 → <span style="color:#8250df">debugfs / printk / dynamic_debug</span>
+  └── 安全问题 → <span style="color:#8250df">audit / seccomp / BPF</span>
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 场景选择</h2>
+  <table>
+    <tr><th>问题类型</th><th>推荐技术</th><th>开销</th></tr>
+    <tr><td>use-after-free</td><td>KASAN</td><td>~3x 减速</td></tr>
+    <tr><td>数据竞争</td><td>KCSAN</td><td>~2x 减速</td></tr>
+    <tr><td>死锁</td><td>lockdep</td><td>~5% 减速</td></tr>
+    <tr><td>性能瓶颈</td><td>perf + ftrace</td><td>~1-5% 减速</td></tr>
+    <tr><td>内核崩溃</td><td>Kdump + crash</td><td>离线分析</td></tr>
+    <tr><td>驱动调试</td><td>debugfs + printk</td><td>低</td></tr>
+    <tr><td>安全审计</td><td>audit + seccomp</td><td>低</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/kasan/</span>          <span class="cmt">KASAN 内存错误检测 (7236 行)</span>
+├── <span class="file">generic.c</span>        <span class="cmt">Generic KASAN</span>
+├── <span class="file">shadow.c</span>         <span class="cmt">影子内存</span>
+└── <span class="file">report.c</span>         <span class="cmt">错误报告</span>
+
+<span class="dir">kernel/locking/</span>
+└── <span class="file">lockdep.c</span>        <span class="cmt">死锁检测 (6880 行)</span>
+
+<span class="dir">kernel/printk/</span>
+└── <span class="file">printk.c</span>         <span class="cmt">printk 核心</span>
+
+<span class="dir">lib/dynamic_debug.c</span>
+└── <span class="file">dynamic_debug.c</span>  <span class="cmt">动态调试</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    本文是已有调试技术专题文章的全景导览：<br>
+    <code>linux-kasan.html</code> — KASAN 内存错误检测<br>
+    <code>linux-panic.html</code> — Oops/Panic 处理<br>
+    <code>linux-debugfs.html</code> — debugfs 调试文件系统<br>
+    <code>linux-ptrace.html</code> — 进程跟踪<br>
+    <code>linux-coredump.html</code> — 进程崩溃转储<br>
+    <code>linux-debugging.html</code> — 调试工具概览
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/printk/ · lib/kasan/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
