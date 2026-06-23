@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux FIFO 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux FIFO 深度解析</h1>
+  <p class="subtitle">命名管道 — 跨进程字节流通信</p>
+  <span class="version">Linux 7.0.12 · fs/pipe.c (1552 行) + fs/fifo.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#flow">创建与通信流程</a></li>
+    <li><a href="#vs">FIFO vs Pipe</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>FIFO（命名管道）是 Pipe 的文件系统版本。它在文件系统中创建一个特殊文件（类型为 <code>p</code>），任意进程（无需亲缘关系）通过 open 该文件即可建立通信。FIFO 的内核实现复用了 Pipe 的 <code>pipe_inode_info</code>，只是多了一层文件系统接口。</p>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">02</span> 创建与通信流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">FIFO 通信流程：</span>
+
+  进程 A（写端）                         进程 B（读端）
+  │                                      │
+  ├── mkfifo("/tmp/myfifo", 0644)        │  <span style="color:#656d76">// 创建 FIFO 文件</span>
+  │   → 在文件系统中创建特殊节点          │
+  │   → inode 类型 = S_IFIFO             │
+  │                                      │
+  ├── fd = open("/tmp/myfifo", O_WRONLY) │
+  │   → 阻塞直到有读端打开               │
+  │                                      │ fd = open("/tmp/myfifo", O_RDONLY)
+  │   → <span style="color:#1a7f37">连接建立！</span>                        │
+  │                                      │
+  ├── write(fd, data, len)               │  <span style="color:#656d76">// 写入数据</span>
+  │   → 数据进入内核 pipe buffer          │
+  │                                      │ read(fd, buf, len)  <span style="color:#656d76">// 读取数据</span>
+  │                                      │
+  ├── close(fd)                          │ close(fd)
+  │                                      │
+  └── unlink("/tmp/myfifo")              │  <span style="color:#656d76">// 删除 FIFO 文件</span>
+</pre></div>
+</section>
+
+<section id="vs" class="toc-link">
+  <h2><span class="num">03</span> FIFO vs Pipe</h2>
+  <table>
+    <tr><th>特性</th><th>Pipe (pipe())</th><th>FIFO (mkfifo)</th></tr>
+    <tr><td>文件系统</td><td>不可见</td><td>可见（ls -l 显示 p 类型）</td></tr>
+    <tr><td>进程关系</td><td>必须 fork 继承 fd</td><td>任意进程（通过路径 open）</td></tr>
+    <tr><td>持久性</td><td>进程退出即销毁</td><td>需手动 unlink</td></tr>
+    <tr><td>阻塞</td><td>默认阻塞</td><td>默认阻塞（O_NONBLOCK 可改变）</td></tr>
+    <tr><td>内核实现</td><td>pipe_inode_info</td><td>pipe_inode_info（复用）</td></tr>
+  </table>
+  <div class="callout tip">
+    <strong>关键点</strong>：FIFO 底层完全复用了 Pipe 的实现（<code>pipe_inode_info</code>），只是在文件系统层添加了 open/close 路径。打开 FIFO 时，内核创建一个 pipe 实例并关联到 inode。
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">04</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">fs/</span>
+├── <span class="file">pipe.c</span>             <span class="cmt">Pipe/FIFO 核心 (1552 行)</span>
+├── <span class="file">fifo.c</span>             <span class="cmt">FIFO 文件系统操作</span>
+└── <span class="file">namei.c</span>            <span class="cmt">路径解析（创建特殊文件）</span>
+  </pre></div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · fs/pipe.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

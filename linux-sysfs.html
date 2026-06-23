@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux sysfs 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux sysfs 深度解析</h1>
+  <p class="subtitle">/sys 文件系统 — 内核对象属性的用户态接口</p>
+  <span class="version">Linux 7.0.12 · fs/sysfs/ (1617 行) · drivers/base/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">目录结构</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">属性读写流程</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>sysfs 是 Linux 内核提供的<strong>虚拟文件系统</strong>，挂载在 <code>/sys</code>。它将内核设备模型（kobject、kset）以文件和目录的形式暴露给用户态，允许通过 <code>cat</code>/<code>echo</code> 读写内核参数。sysfs 是 udev 设备管理的基础，也是驱动开发调试的核心工具。</p>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">sysfs 核心功能</div>
+      <ul>
+        <li><strong>设备属性</strong>：/sys/class/、/sys/devices/</li>
+        <li><strong>驱动绑定</strong>：bind/unbind 控制</li>
+        <li><strong>电源管理</strong>：/sys/power/、runtime PM</li>
+        <li><strong>模块参数</strong>：/sys/module/</li>
+        <li><strong>内核配置</strong>：/sys/kernel/</li>
+        <li><strong>虚拟设备</strong>：/sys/devices/virtual/</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">sysfs vs procfs</div>
+      <table>
+        <tr><th>特性</th><th>sysfs</th><th>procfs</th></tr>
+        <tr><td>挂载点</td><td>/sys</td><td>/proc</td></tr>
+        <tr><td>内容</td><td>设备模型</td><td>进程+内核运行时</td></tr>
+        <tr><td>组织</td><td>kobject 树</td><td>扁平文件</td></tr>
+        <tr><td>规范性</td><td>结构化</td><td>较随意</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 目录结构</h2>
+  <div class="ascii-diagram"><pre>
+/sys/
+├── block/           <span style="color:#656d76">块设备（如 sda, vda）</span>
+├── bus/             <span style="color:#656d76">总线类型（pci, usb, i2c, spi...）</span>
+│   ├── pci/
+│   │   ├── devices/   <span style="color:#656d76">PCI 设备 → 符号链接</span>
+│   │   ├── drivers/   <span style="color:#656d76">PCI 驱动</span>
+│   │   └── drivers_autoprobe
+│   └── usb/
+├── class/           <span style="color:#656d76">设备类（net, block, tty...）</span>
+│   ├── net/
+│   │   └── eth0/
+│   │       ├── address        <span style="color:#656d76">MAC 地址</span>
+│   │       ├── mtu            <span class="color:#cf222e">MTU 值（可 echo 修改）</span>
+│   │       ├── operstate      <span style="color:#656d76">链路状态</span>
+│   │       ├── statistics/    <span style="color:#656d76">收发统计</span>
+│   │       └── ...
+│   ├── block/
+│   └── tty/
+├── devices/         <span style="color:#656d76">所有设备（拓扑树）</span>
+│   └── system/
+│       ├── cpu/
+│       └── memory/
+├── firmware/        <span style="color:#656d76">固件接口（ACPI/EFI）</span>
+├── module/          <span style="color:#656d76">已加载模块参数</span>
+├── kernel/          <span style="color:#656d76">内核参数</span>
+│   ├── tracing/     <span style="color:#656d76">ftrace 控制</span>
+│   └── slab/        <span style="color:#656d76">SLUB 统计</span>
+└── power/           <span style="color:#656d76">电源管理</span>
+</pre></div>
+</section>
+
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+  <div class="card">
+    <pre><code><span class="cm">// kobject + 属性 = sysfs 的基础</span>
+
+<span class="kw">struct</span> <span class="ty">kobject</span> {          <span class="cm">// 内核对象基类</span>
+    <span class="kw">const char</span>      *name;     <span class="cm">// 对象名称（成为目录名）</span>
+    <span class="kw">struct</span> <span class="ty">kset</span>      *kset;     <span class="cm">// 所属 kset</span>
+    <span class="kw">struct</span> <span class="ty">kobject</span>   *parent;   <span class="cm">// 父对象（成为父目录）</span>
+    <span class="kw">struct</span> <span class="ty">kobj_type</span> *ktype;    <span class="cm">// 对象类型</span>
+    <span class="kw">struct</span> <span class="ty">sysfs_dirent</span> *sd;  <span class="cm">// sysfs 条目</span>
+};
+
+<span class="kw">struct</span> <span class="ty">attribute</span> {        <span class="cm">// sysfs 属性（成为文件）</span>
+    <span class="kw">const char</span>     *name;     <span class="cm">// 文件名（如 "mtu"）</span>
+    <span class="ty">umode_t</span>         mode;     <span class="cm">// 文件权限</span>
+};
+
+<span class="cm">// 设备属性 — 每个属性对应一个 show/store 函数</span>
+<span class="kw">struct</span> <span class="ty">device_attribute</span> {
+    <span class="kw">struct</span> <span class="ty">attribute</span> attr;
+    <span class="ty">ssize_t</span> (*show)(<span class="kw">struct</span> <span class="ty">device</span> *, <span class="kw">struct</span> <span class="ty">device_attribute</span> *, <span class="ty">char</span> *);
+    <span class="ty">ssize_t</span> (*store)(<span class="kw">struct</span> <span class="ty">device</span> *, <span class="kw">struct</span> <span class="ty">device_attribute</span> *,
+                     <span class="kw">const char</span> *, <span class="ty">size_t</span>);
+};
+
+<span class="cm">// 宏简化属性定义</span>
+<span class="kw">#define</span> DEVICE_ATTR(_name, _mode, _show, _store) \
+    <span class="kw">struct</span> device_attribute dev_attr_##_name = \
+        __ATTR(_name, _mode, _show, _store)
+<span class="cm">// 用法：DEVICE_ATTR(mtu, 0644, show_mtu, store_mtu);</span></code></pre>
+  </div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 属性读写流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">用户态读取属性（cat /sys/class/net/eth0/mtu）：</span>
+
+  cat /sys/class/net/eth0/mtu
+        │
+        ↓
+  VFS → sysfs 文件操作
+        │
+        ↓
+  sysfs_kf_seq_show()
+        │
+        ↓
+  调用 device_attribute.show 回调
+        │
+        ├── 网络设备：netdev_show()
+        │       → dev->mtu
+        │       → 格式化为字符串 "1500"
+        │
+        └── 返回给用户态
+
+<span style="color:#1a7f37">用户态写入属性（echo 9000 > /sys/class/net/eth0/mtu）：</span>
+
+  echo 9000 > /sys/class/net/eth0/mtu
+        │
+        ↓
+  VFS → sysfs 文件操作
+        │
+        ↓
+  sysfs_kf_write()
+        │
+        ↓
+  调用 device_attribute.store 回调
+        │
+        ├── 网络设备：netdev_store()
+        │       → 解析 "9000"
+        │       → dev_set_mtu(dev, 9000)
+        │       → 调用ndo_change_mtu
+        │
+        └── 生效
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">05</span> 应用场景</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 网络设备调试</span>
+$ cat /sys/class/net/eth0/mtu              <span class="cm"># 查看 MTU</span>
+$ echo 9000 > /sys/class/net/eth0/mtu     <span class="cm"># 设置 Jumbo Frame</span>
+$ cat /sys/class/net/eth0/statistics/rx_packets  <span class="cm"># 收包计数</span>
+
+<span class="cm"># CPU 频率调节</span>
+$ cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+$ echo performance > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+
+<span class="cm"># 电源管理</span>
+$ cat /sys/power/state          <span class="cm"># 查看支持的休眠状态</span>
+$ echo mem > /sys/power/state   <span class="cm"># 挂起到内存</span>
+
+<span class="cm"># 内核模块参数</span>
+$ cat /sys/module/usbcore/parameters/authorized_default
+
+<span class="cm"># 块设备队列</span>
+$ cat /sys/block/sda/queue/scheduler        <span class="cm"># I/O 调度器</span>
+$ cat /sys/block/sda/queue/nr_requests      <span class="cm"># 队列深度</span>
+
+<span class="cm"># 驱动绑定/解绑</span>
+$ echo "0000:00:1f.2" > /sys/bus/pci/drivers/ahci/unbind
+$ echo "0000:00:1f.2" > /sys/bus/pci/drivers/ahci/bind</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">fs/sysfs/</span>                <span class="cmt">总计 1617 行</span>
+├── <span class="file">file.c</span>            <span class="cmt">属性文件操作 (818 行)</span>
+├── <span class="file">dir.c</span>             <span class="cmt">目录操作 (161 行)</span>
+├── <span class="file">group.c</span>           <span class="cmt">属性组管理 (638 行)</span>
+├── <span class="file">bin_attr.c</span>        <span class="cmt">二进制属性</span>
+└── <span class="file">symlink.c</span>         <span class="cmt">符号链接</span>
+
+<span class="dir">drivers/base/</span>
+├── <span class="file">core.c</span>            <span class="cmt">设备模型核心</span>
+├── <span class="file">bus.c</span>             <span class="cmt">总线管理</span>
+├── <span class="file">class.c</span>           <span class="cmt">设备类管理</span>
+├── <span class="file">driver.c</span>          <span class="cmt">驱动管理</span>
+└── <span class="file">sysfs.c</span>           <span class="cmt">sysfs 集成</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">kobject.h</span>         <span class="cmt">struct kobject</span>
+├── <span class="file">kobject_ut</span>        <span class="cmt">kobject 测试</span>
+├── <span class="file">device.h</span>          <span class="cmt">struct device / device_attribute</span>
+└── <span class="file">kobj_type.h</span>       <span class="cmt">kobj_type 定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>fs/sysfs/file.c</code> — 属性文件的 show/store 回调机制。<br>
+    <code>drivers/base/core.c</code> — 设备模型核心，kobject 如何关联到 sysfs。<br>
+    <code>include/linux/device.h</code> — <code>struct device_attribute</code> 和 DEVICE_ATTR 宏定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · fs/sysfs/ · drivers/base/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux ext4 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux ext4 深度解析</h1>
+  <p class="subtitle">最常用的文件系统 — 日志、extent、延迟分配</p>
+  <span class="version">Linux 7.0.12 · fs/ext4/ (数万行) · super.c (7598 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#arch">磁盘布局</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#journal">日志（Journal）</a></li>
+    <li><a href="#extent">Extent 树</a></li>
+    <li><a href="#features">关键特性</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>ext4（Fourth Extended Filesystem）是 Linux 最广泛使用的文件系统，也是大多数发行版的默认选择。它在 ext3 基础上增加了 extent、延迟分配、在线碎片整理、纳秒时间戳等特性。ext4 代码分布在 <code>fs/ext4/</code> 目录下，仅 <code>super.c</code> 就有 7598 行。</p>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 磁盘布局</h2>
+  <div class="ascii-diagram"><pre>
+ext4 磁盘布局：
+
+┌──────────┬──────────┬──────────┬──────────┬──────────┐
+│ Boot     │ Block    │ Block    │ Block    │  Data    │
+│ Block    │ Group 0  │ Group 1  │ Group 2  │  Blocks  │
+│ (1KB)    │          │          │          │  ...     │
+└──────────┴──────────┴──────────┴──────────┴──────────┘
+
+每个 Block Group 包含：
+┌──────────┬──────────┬──────────┬──────────┬──────────┐
+│ Super    │ Group    │ Block    │ Inode    │  Data    │
+│ Block    │ Desc     │ Bitmap   │ Bitmap   │  Blocks  │
+│ (副本)   │ Table    │          │          │          │
+└──────────┴──────────┴──────────┴──────────┴──────────┘
+
+  Super Block：文件系统元数据（块大小、inode 数量、状态）
+  Group Descriptor：块组描述符
+  Block Bitmap：哪些块已使用
+  Inode Bitmap：哪些 inode 已使用
+  Inode Table：inode 结构数组
+  Data Blocks：实际文件数据
+</pre></div>
+</section>
+
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+  <div class="card">
+    <pre><code><span class="cm">// 磁盘上的 inode 结构（128 字节）</span>
+<span class="kw">struct</span> <span class="ty">ext4_inode</span> {
+    <span class="ty">__le16</span>   i_mode;       <span class="cm">// 文件类型 + 权限</span>
+    <span class="ty">__le16</span>   i_uid;        <span class="cm">// 所有者 UID</span>
+    <span class="ty">__le32</span>   i_size_lo;    <span class="cm">// 文件大小（低 32 位）</span>
+    <span class="ty">__le32</span>   i_atime;      <span class="cm">// 访问时间</span>
+    <span class="ty">__le32</span>   i_ctime;      <span class="cm">// 变更时间</span>
+    <span class="ty">__le32</span>   i_mtime;      <span class="cm">// 修改时间</span>
+    <span class="ty">__le32</span>   i_dtime;      <span class="cm">// 删除时间</span>
+    <span class="ty">__le16</span>   i_gid;        <span class="cm">// 组 ID</span>
+    <span class="ty">__le16</span>   i_links_count; <span class="cm">// 硬链接计数</span>
+    <span class="ty">__le32</span>   i_blocks_lo;  <span class="cm">// 占用块数</span>
+    <span class="ty">__le32</span>   i_flags;      <span class="cm">// 文件标志</span>
+    <span class="ty">__le32</span>   i_block[<span class="num">60</span>/<span class="num">4</span>]; <span class="cm">// ★ 块指针（15 个）或 Extent 树</span>
+    <span class="ty">__le32</span>   i_generation; <span class="cm">// 文件版本（NFS 用）</span>
+    <span class="ty">__le32</span>   i_size_high;  <span class="cm">// 文件大小高 32 位</span>
+};
+
+<span class="cm">// 内核中的 ext4 inode</span>
+<span class="kw">struct</span> <span class="ty">ext4_inode_info</span> {
+    <span class="kw">struct</span> <span class="ty">inode</span>      vfs_inode;    <span class="cm">// 继承自 VFS inode</span>
+    <span class="ty">__le32</span>            i_data[<span class="num">15</span>];  <span class="cm">// 原始块指针</span>
+    <span class="kw">struct</span> <span class="ty">ext4_extent</span> *i_block;   <span class="cm">// Extent 树（大文件）</span>
+    <span class="ty">unsigned int</span>      i_state;     <span class="cm">// 状态标志</span>
+    <span class="kw">struct</span> <span class="ty">ext4_journal_inode</span> *jinode; <span class="cm">// 日志 inode</span>
+};</code></pre>
+  </div>
+</section>
+
+<section id="journal" class="toc-link">
+  <h2><span class="num">04</span> 日志（Journal）</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">ext4 日志机制（保证崩溃一致性）：</span>
+
+  传统写入（无日志）：
+  修改 inode → 修改 bitmap → 修改数据 → 写超级块
+  崩溃时任何步骤中断 → 文件系统不一致 → 需要 fsck
+
+  <span style="color:#1a7f37">日志模式（Journaling）：</span>
+  1. 将所有修改写入日志区（顺序写入，高性能）
+  2. fsync() / 定期提交 → 日志标记为 committed
+  3. 将日志中的修改应用到实际位置
+  4. 崩溃恢复：重放已 committed 的日志 → 一致性保证
+
+  ┌──────────────────────────────────────────┐
+  │            ext4 日志模式                  │
+  ├──────────────────────────────────────────┤
+  │  data=writeback  │ 只记录元数据           │
+  │  data=ordered    │ 先写数据，再写元数据（默认）│
+  │  data=journal    │ 元数据和数据都记录（最安全）│
+  └──────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="extent" class="toc-link">
+  <h2><span class="num">05</span> Extent 树</h2>
+  <div class="ascii-diagram"><pre>
+ext4 用 Extent 替代了传统的间接块指针：
+
+传统（ext2/ext3）：
+  inode.i_block[0..11]  → 直接块指针（12 个）
+  inode.i_block[12]     → 一级间接
+  inode.i_block[13]     → 二级间接
+  inode.i_block[14]     → 三级间接
+  大文件需要多级索引，效率低
+
+<span style="color:#1a7f37">ext4 Extent 树：</span>
+  inode.i_block[0] 存储根 Extent 树
+  每个 Extent 记录一段连续块的范围：
+  ┌─────────┬─────────┬──────────┐
+  │ ee_block│ ee_len  │ ee_start │
+  │ 逻辑起始│ 块数量  │ 物理起始  │
+  └─────────┴─────────┴──────────┘
+
+  小文件：一个 Extent 就够（1 个 extent 描述 128MB）
+  大文件：树形 Extent（类似 B-tree）
+  碎片减少：连续分配效率高
+</pre></div>
+</section>
+
+<section id="features" class="toc-link">
+  <h2><span class="num">06</span> 关键特性</h2>
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>Extent</td><td>连续块范围，减少间接块开销</td></tr>
+    <tr><td>延迟分配</td><td>写入时暂不分配块，flush 时才分配，减少碎片</td></tr>
+    <tr><td>多块分配</td><td>一次分配多个连续块</td></tr>
+    <tr><td>日志</td><td>崩溃后快速恢复（无需全盘 fsck）</td></tr>
+    <tr><td>在线碎片整理</td><td>e4defrag 在线整理</td></tr>
+    <tr><td>大文件支持</td><td>最大 16TB 文件</td></tr>
+    <tr><td>纳秒时间戳</td><td>比 ext3 的秒级精度高</td></tr>
+    <tr><td>barrier</td><td>确保日志写入磁盘（数据安全）</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">07</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">fs/ext4/</span>                    <span class="cmt">ext4 核心实现</span>
+├── <span class="file">super.c</span>           <span class="cmt">超级块管理 (7598 行)</span>
+├── <span class="file">inode.c</span>           <span class="cmt">inode 操作 (6734 行)</span>
+├── <span class="file">file.c</span>            <span class="cmt">文件操作 (991 行)</span>
+├── <span class="file">extent.c</span>          <span class="cmt">Extent 树</span>
+├── <span class="file"> extents_status.c</span> <span class="cmt">Extent 缓存</span>
+├── <span class="file">mballoc.c</span>         <span class="cmt">多块分配器</span>
+├── <span class="file">data.c</span>            <span class="cmt">数据读写</span>
+├── <span class="file">journal.c</span>         <span class="cmt">日志管理</span>
+├── <span class="file">truncate.c</span>        <span class="cmt">截断操作</span>
+├── <span class="file">namei.c</span>           <span class="cmt">目录操作</span>
+├── <span class="file">xattr.c</span>           <span class="cmt">扩展属性</span>
+└── <span class="file">ioctl.c</span>           <span class="cmt">ioctl 接口</span>
+
+<span class="dir">fs/jbd2/</span>
+├── <span class="file">commit.c</span>          <span class="cmt">日志提交</span>
+├── <span class="file">transaction.c</span>     <span class="cmt">事务管理</span>
+└── <span class="file">journal.c</span>         <span class="cmt">日志核心</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>fs/ext4/super.c</code> — 超级块操作，从 <code>ext4_fill_super()</code> 开始。<br>
+    <code>fs/ext4/extent.c</code> — Extent 树实现，理解大文件如何高效存储。<br>
+    <code>fs/ext4/mballoc.c</code> — 多块分配器，理解延迟分配机制。<br>
+    <code>fs/jbd2/</code> — 日志层实现，理解崩溃一致性保证。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · fs/ext4/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
