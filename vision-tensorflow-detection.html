@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TensorFlow 目标检测实战</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ff6f00'/><stop offset='100%25' stop-color='%23ffab00'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>D</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>TensorFlow 目标检测实战</h1>
+  <p class="subtitle">TF Object Detection API - SSD - Faster R-CNN</p>
+  <span class="version">TensorFlow 2.x - TF Object Detection API</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">TF Object Detection API 概述</a></li>
+    <li><a href="#setup">环境安装与配置</a></li>
+    <li><a href="#models">模型选择</a></li>
+    <li><a href="#pipeline">pipeline.config 详解</a></li>
+    <li><a href="#coco">COCO 数据集训练</a></li>
+    <li><a href="#finetune">迁移学习</a></li>
+    <li><a href="#eval">模型评估</a></li>
+    <li><a href="#export">模型导出与部署</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> TF Object Detection API 概述</h2>
+
+  <p>TensorFlow Object Detection API 是 Google 开源的目标检测框架，基于 TensorFlow 2.x 构建。它提供了完整的训练、评估和部署流水线，支持 SSD、Faster R-CNN、EfficientDet 等多种检测架构。</p>
+
+  <h3>整体架构</h3>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+├── <span class="file">research/object_detection/</span>
+│   ├── <span class="file">model_main_tf2.py</span>         <span class="cmt">主训练/评估入口</span>
+│   ├── <span class="file">exporter_main_v2.py</span>       <span class="cmt">模型导出</span>
+│   ├── <span class="file">configs/tf2/</span>              <span class="cmt">pipeline 配置文件</span>
+│   ├── <span class="file">models/</span>                   <span class="cmt">检测模型实现</span>
+│   │   ├── <span class="file">ssd/</span>                  <span class="cmt">SSD 系列</span>
+│   │   ├── <span class="file">faster_rcnn/</span>          <span class="cmt">Faster R-CNN 系列</span>
+│   │   ├── <span class="file">efficientdet/</span>        <span class="cmt">EfficientDet 系列</span>
+│   │   └── <span class="file">center_net/</span>           <span class="cmt">CenterNet 系列</span>
+│   ├── <span class="file">datalab/</span>                 <span class="cmt">数据标注工具</span>
+│   ├── <span class="file">inference/</span>               <span class="cmt">推理工具</span>
+│   └── <span class="file">utils/</span>                   <span class="cmt">工具函数</span>
+  </pre></div>
+
+  <h3>关键概念</h3>
+
+  <p>TF Object Detection API 将目标检测任务分解为以下组件：</p>
+
+  <ul>
+    <li><strong>特征提取器</strong> — 通常为预训练图像分类网络（ResNet、MobileNet、EfficientNet）</li>
+    <li><strong>检测头</strong> — 在特征图上预测边界框和类别概率</li>
+    <li><strong>锚框生成器</strong> — 生成预定义的参考框</li>
+    <li><strong>后处理</strong> — NMS、得分过滤、类别映射</li>
+    <li><strong>损失函数</strong> — 定位损失（Smooth L1）+ 分类损失（Softmax/Focal Loss）</li>
+  </ul>
+
+  <div class="callout tip">
+    <strong>工作流程:</strong><br>
+    配置 pipeline.config 准备 TFRecord 数据 model_main_tf2.py 训练 exporter_main_v2.py 导出 TensorFlow Serving / TF Lite 部署。
+  </div>
+</section>
+
+<section id="setup" class="toc-link">
+  <h2><span class="num">02</span> 环境安装与配置</h2>
+
+  <p>TF Object Detection API 的安装需要从源码编译 protobuf 文件和安装依赖包。推荐使用虚拟环境进行隔离。</p>
+
+<pre><code># 1. 创建虚拟环境
+python3 -m venv tfod_env
+source tfod_env/bin/activate
+
+# 2. 安装 TensorFlow
+pip install tensorflow
+
+# 3. 克隆 Model Garden
+git clone https://github.com/tensorflow/models.git
+cd models
+
+# 4. 安装 protobuf 编译器
+sudo apt-get install protobuf-compiler
+
+# 5. 编译 protobuf 文件
+cd research
+protoc object_detection/protos/*.proto --python_out=.
+
+# 6. 安装 Object Detection API
+cp object_detection/packages/tf2/setup.py .
+pip install .
+
+# 7. 验证安装
+python object_detection/builders/model_builder_tf2_test.py
+</code></pre>
+
+  <div class="callout warn">
+    <strong>常见问题:</strong><br>
+    protobuf 版本冲突：使用 <code>pip install protobuf==3.20.3</code>。<br>
+    COCO API 安装：<code>pip install pycocotools</code>。<br>
+    确保 <code>PYTHONPATH</code> 包含 <code>research</code> 和 <code>research/slim</code> 目录。
+  </div>
+
+<pre><code># 设置 PYTHONPATH
+export PYTHONPATH=$PYTHONPATH:$(pwd)/research:$(pwd)/research/slim
+
+# 测试 GPU 可用性
+python -c "import tensorflow as tf; \
+  print(tf.config.list_physical_devices('GPU'))"
+</code></pre>
+</section>
+
+<section id="models" class="toc-link">
+  <h2><span class="num">03</span> 模型选择</h2>
+
+  <p>TF Object Detection API 提供多种预训练模型，在精度（mAP）和速度（FPS）之间提供不同权衡方案。</p>
+
+  <h3>模型系列对比</h3>
+
+<pre><code># SSD MobileNet -- 轻量级，适合移动端
+#   ssd_mobilenet_v2_fpnlite_320x320    22 mAP
+#   ssd_mobilenet_v2_fpnlite_640x640    28 mAP
+
+# SSD ResNet -- 精度与速度平衡
+#   ssd_resnet50_v1_fpn_640x640         34 mAP
+#   ssd_resnet101_v1_fpn_640x640        36 mAP
+
+# EfficientDet -- 高效多尺度特征融合
+#   efficientdet_d0_coco17_tpu-32       34 mAP
+#   efficientdet_d1_coco17_tpu-32       37 mAP
+#   efficientdet_d4_coco17_tpu-32       44 mAP
+#   efficientdet_d7_coco17_tpu-32       52 mAP
+
+# Faster R-CNN -- 高精度，速度较慢
+#   faster_rcnn_resnet50_v1_640x640     37 mAP
+#   faster_rcnn_resnet101_v1_640x640    39 mAP
+#   faster_rcnn_inception_resnet_v2     43 mAP
+
+# CenterNet -- 无锚框检测
+#   centernet_hourglass_512x512         41 mAP
+#   centernet_resnet50_v1_fpn_512x512   31 mAP
+</code></pre>
+
+  <h3>模型选择指南</h3>
+
+  <p>选择标准取决于部署环境和精度要求。部署环境决定速度需求，目标特征决定模型复杂度。</p>
+
+<pre><code># 选择标准：
+# 1. 部署环境：移动端 SSD MobileNet
+#              Web/边缘 EfficientDet-D0~D2
+#              服务器 Faster R-CNN / EfficientDet-D4+
+
+# 2. 精度要求：高精度 Faster R-CNN / EfficientDet-D7
+#              中等 SSD ResNet / EfficientDet-D2
+
+# 3. 输入分辨率：
+#   320x320 快速但对小目标不友好
+#   640x640 较好的综合平衡
+#   1024x1024 高精度但计算量大
+
+# 4. 下载预训练模型
+wget http://download.tensorflow.org/models/object_detection/\
+tf2/ssd_mobilenet_v2_fpnlite_320x320_coco17_tpu-8.tar.gz
+tar -xzf ssd_mobilenet_v2_fpnlite_320x320_coco17_tpu-8.tar.gz
+</code></pre>
+
+  <div class="callout tip">
+    <strong>推荐搭配:</strong><br>
+    快速原型：SSD MobileNet V2 FPNLite 320x320。<br>
+    生产部署：EfficientDet-D2 640x640。<br>
+    学术竞赛：Faster R-CNN ResNet-152 + 多尺度测试。<br>
+    移动端：SSD MobileNet V2 FPNLite 320x320 + TF Lite 量化。
+  </div>
+</section>
+
+<section id="pipeline" class="toc-link">
+  <h2><span class="num">04</span> pipeline.config 详解</h2>
+
+  <p>pipeline.config 是 TF Object Detection API 的核心配置文件，采用 protobuf 文本格式定义整个训练和评估流程。所有训练参数、数据路径、模型架构和后处理设置都在此文件集中管理。</p>
+
+  <h3>模型配置</h3>
+
+<pre><code>model {
+  ssd {
+    feature_extractor {
+      type: "ssd_mobilenet_v2_fpn_keras"
+      depth_multiplier: 1.0
+      min_depth: 16
+      conv_hyperparams {
+        regularizer { l2_regularizer { weight: 4e-5 }}
+        initializer { random_normal_initializer { stddev: 0.01 }}
+        activation: RELU_6
+        batch_norm { decay: 0.997, center: true, scale: true }
+      }
+      use_depthwise: true
+    }
+
+    anchor_generator {
+      ssd_anchor_generator {
+        num_layers: 6
+        min_scale: 0.2
+        max_scale: 0.95
+        aspect_ratios: [1.0, 2.0, 0.5, 3.0, 0.33]
+      }
+    }
+
+    box_predictor {
+      convolutional_box_predictor {
+        conv_hyperparams { ... }
+        use_dropout: false
+        kernel_size: 3
+      }
+    }
+
+    loss {
+      localization_loss { weighted_smooth_l1 { delta: 1.0 }}
+      classification_loss { weighted_softmax {} }
+      hard_example_miner {
+        num_hard_examples: 64
+        iou_threshold: 0.99
+        loss_type: BOTH
+        max_negatives_per_positive: 3
+        min_negatives_per_image: 0
+      }
+      classification_weight: 1.0
+      localization_weight: 1.0
+    }
+
+    post_processing {
+      batch_non_max_suppression {
+        score_threshold: 1e-8
+        iou_threshold: 0.6
+        max_detections_per_class: 100
+        max_total_detections: 100
+      }
+      score_converter: SOFTMAX
+    }
+  }
+}
+</code></pre>
+
+  <h3>训练配置</h3>
+
+<pre><code>train_config {
+  optimizer {
+    momentum_optimizer {
+      learning_rate {
+        cosine_decay_learning_rate {
+          learning_rate_base: 0.08
+          total_steps: 200000
+          warmup_learning_rate: 0.026666
+          warmup_steps: 2000
+        }
+      }
+      momentum_optimizer_value: 0.9
+    }
+    use_moving_average: false
+  }
+
+  batch_size: 32
+  num_steps: 200000
+
+  data_augmentation_options {
+    random_horizontal_flip { probability: 0.5 }
+  }
+  data_augmentation_options {
+    random_crop_image {
+      min_object_covered: 0.0
+      min_aspect_ratio: 0.75
+      max_aspect_ratio: 3.0
+      min_area: 0.16
+      max_area: 1.0
+    }
+  }
+
+  clip_gradients_by_norm: 10.0
+  l2_weight_decay: 4e-5
+
+  log_step_count_stub: 100
+  save_summary_steps: 100
+  save_checkpoints_steps: 1000
+  keep_checkpoint_max: 5
+
+  fine_tune_checkpoint: "pretrained/ckpt-0"
+  fine_tune_checkpoint_type: "detection"
+}
+</code></pre>
+
+  <h3>数据输入配置</h3>
+
+<pre><code>train_input_reader {
+  label_map_path: "data/label_map.pbtxt"
+  tf_record_input_reader {
+    input_path: "data/train.record"
+  }
+}
+
+eval_input_reader {
+  label_map_path: "data/label_map.pbtxt"
+  tf_record_input_reader {
+    input_path: "data/val.record"
+  }
+  shuffle: false
+  num_readers: 1
+}
+
+eval_config {
+  metrics_set: "coco_detection_metrics"
+  use_moving_averages: false
+  batch_size: 1
+  num_visualizations: 50
+  max_num_boxes_to_visualize: 20
+  min_score_threshold: 0.5
+}
+</code></pre>
+
+  <div class="callout warn">
+    <strong>关键参数说明:</strong><br>
+    <code>fine_tune_checkpoint_type</code> 需与预训练模型匹配（detection / classification）。<br>
+    <code>batch_size</code> 受 GPU 显存限制，A100 80G 可支持 64，V100 32G 建议 16-32。<br>
+    <code>num_steps</code> 建议 SSD 系列 100K-200K，Faster R-CNN 系列 200K-500K。
+  </div>
+</section>
+
+<section id="coco" class="toc-link">
+  <h2><span class="num">05</span> COCO 数据集训练</h2>
+
+  <p>COCO（Common Objects in Context）是目标检测的标准基准数据集，包含 80 个类别、约 118K 训练图像和 5K 验证图像。</p>
+
+  <h3>数据准备</h3>
+
+<pre><code># 下载 COCO 2017 数据集
+wget http://images.cocodataset.org/zips/train2017.zip
+wget http://images.cocodataset.org/zips/val2017.zip
+wget http://images.cocodataset.org/annotations/\
+annotations_trainval2017.zip
+
+unzip train2017.zip
+unzip val2017.zip
+unzip annotations_trainval2017.zip
+
+# 转换为 TFRecord
+python models/research/object_detection/dataset_tools/\
+create_coco_tf_record.py \
+  --logtostderr \
+  --train_image_dir=train2017 \
+  --val_image_dir=val2017 \
+  --train_annotations_file=annotations/instances_train2017.json \
+  --val_annotations_file=annotations/instances_val2017.json \
+  --output_dir=tfrecords \
+  --include_masks=false
+</code></pre>
+
+  <h3>Label Map 文件</h3>
+
+<pre><code># label_map.pbtxt
+item {
+  id: 1
+  name: "person"
+}
+item {
+  id: 2
+  name: "bicycle"
+}
+item {
+  id: 3
+  name: "car"
+}
+# ... 共 80 个类别
+</code></pre>
+
+  <h3>启动训练</h3>
+
+<pre><code># 单 GPU 训练
+python models/research/object_detection/model_main_tf2.py \
+  --pipeline_config_path=configs/ssd_mobilenet_v2.config \
+  --model_dir=training/ \
+  --num_train_steps=200000 \
+  --sample_1_of_n_eval_examples=1 \
+  --alsologtostderr
+
+# 分布式 TPU 训练
+python model_main_tf2.py \
+  --pipeline_config_path=configs/efficientdet_d4.config \
+  --model_dir=gs://bucket/training/ \
+  --use_tpu=true \
+  --tpu_name=$TPU_NAME
+
+# 监控训练
+tensorboard --logdir=training/
+</code></pre>
+
+  <h3>恢复训练</h3>
+
+<pre><code># 自动加载 model_dir 中的最新 checkpoint
+python models/research/object_detection/model_main_tf2.py \
+  --pipeline_config_path=configs/ssd_mobilenet_v2.config \
+  --model_dir=training/ \
+  --checkpoint_dir=training/ \
+  --num_train_steps=300000 \
+  --alsologtostderr
+</code></pre>
+
+  <div class="callout tip">
+    <strong>性能建议:</strong><br>
+    使用 <code>tf.data.AUTOTUNE</code> 自动优化数据加载。<br>
+    若 GPU 显存不足，降低 batch_size 并相应调整学习率。<br>
+    启用在 train_config 中的 <code>sync_replicas</code> 实现同步多卡训练。
+  </div>
+</section>
+
+<section id="finetune" class="toc-link">
+  <h2><span class="num">06</span> 迁移学习</h2>
+
+  <p>从 COCO 预训练模型微调到自定义数据集是目标检测中最常用的实践。微调可以显著减少训练时间并提高精度，尤其在数据量有限时。</p>
+
+  <h3>微调配置</h3>
+
+<pre><code># pipeline.config 关键修改：
+
+# 1. 修改类别数
+model {
+  ssd {
+    num_classes: 5   # 改为自定义数据集类别数
+  }
+}
+
+# 2. 设置预训练检查点
+train_config {
+  fine_tune_checkpoint: "ssd_mobilenet_v2_fpnlite_\
+    320x320_coco17_tpu-8/checkpoint/ckpt-0"
+  fine_tune_checkpoint_version: V2
+  fine_tune_checkpoint_type: "detection"
+}
+
+# 3. 调整学习率
+train_config {
+  optimizer {
+    momentum_optimizer {
+      learning_rate {
+        cosine_decay_learning_rate {
+          learning_rate_base: 0.01
+          warmup_learning_rate: 0.003
+          warmup_steps: 500
+          total_steps: 50000
+        }
+      }
+    }
+  }
+  num_steps: 50000
+}
+</code></pre>
+
+  <h3>微调策略</h3>
+
+<pre><code># 策略一：冻结特征提取器
+train_config {
+  freeze_variables: "FeatureExtractor"
+}
+
+# 策略二：全部微调（推荐）
+# 不设置 freeze_variables，用较低学习率训练所有权重
+
+# 策略三：分阶段微调
+# 阶段 1：只训练分类头
+# 阶段 2：解冻部分 backbone 层
+# 阶段 3：全部微调
+</code></pre>
+
+  <h3>自定义数据集 TFRecord 生成</h3>
+
+<pre><code># 使用脚本生成 TFRecord
+python generate_tfrecord.py \
+  --csv_input=data/train_labels.csv \
+  --output_path=data/train.record \
+  --image_dir=data/train_images/ \
+  --label_map=data/label_map.pbtxt
+
+# 生成 CSV 标签格式
+# filename, width, height, class, xmin, ymin, xmax, ymax
+# img001.jpg, 640, 480, person, 100, 50, 300, 400
+# img001.jpg, 640, 480, car, 350, 200, 550, 350
+</code></pre>
+
+  <div class="callout warn">
+    <strong>重要提醒:</strong><br>
+    微调时必须设置 <code>num_classes</code> 匹配自定义数据集。COCO 为 80 类，若自定义为 5 类，最后一个全连接层尺寸不匹配会自动跳过并给出警告。
+  </div>
+</section>
+
+<section id="eval" class="toc-link">
+  <h2><span class="num">07</span> 模型评估</h2>
+
+  <p>目标检测模型评估使用 COCO 标准指标，包括不同 IoU 阈值和物体尺寸下的平均精度（mAP）。</p>
+
+  <h3>运行评估</h3>
+
+<pre><code># 评估模式
+python models/research/object_detection/model_main_tf2.py \
+  --pipeline_config_path=configs/pipeline.config \
+  --model_dir=training/ \
+  --checkpoint_dir=training/ \
+  --eval_timeout=600 \
+  --alsologtostderr
+</code></pre>
+
+  <h3>COCO 评估指标详解</h3>
+
+<pre><code># 主要指标：
+#   Average Precision (AP) -- IoU=0.50:0.95 的均值
+#   AP_50 -- IoU=0.50 时的 AP
+#   AP_75 -- IoU=0.75 时的 AP（更严格）
+#
+# 按物体大小：
+#   AP_small -- 面积 &lt; 32^2 像素
+#   AP_medium -- 面积 32^2 ~ 96^2
+#   AP_large -- 面积 &gt; 96^2
+#
+# 召回率：
+#   AR_max=1 -- 每张图像最多 1 个检测时的召回率
+#   AR_max=10 -- 每张图像最多 10 个检测
+#   AR_max=100 -- 每张图像最多 100 个检测
+#
+# 典型 COCO mAP 参考：
+# SSD MobileNet V2 FPNLite 320: 22.3 mAP
+# SSD ResNet-50 FPN:           34.8 mAP
+# EfficientDet-D2:             37.0 mAP
+# EfficientDet-D7:             53.7 mAP
+# Faster R-CNN ResNet-101:     39.5 mAP
+</code></pre>
+
+  <h3>评估结果解读</h3>
+
+<pre><code># TensorBoard 指标
+# DetectionBoxes_Precision/mAP
+# DetectionBoxes_Precision/mAP@.50IOU
+# DetectionBoxes_Precision/mAP@.75IOU
+# DetectionBoxes_Precision/mAP (large/medium/small)
+# DetectionBoxes_Recall/AR@1/AR@10/AR@100
+# Loss/localization_loss
+# Loss/classification_loss
+# Loss/total_loss
+
+# 评估输出示例：
+# Average Precision (AP) @[IoU=0.50:0.95 | area=all  ] = 0.223
+# Average Precision (AP) @[IoU=0.50      | area=all  ] = 0.351
+# Average Precision (AP) @[IoU=0.75      | area=all  ] = 0.241
+# Average Precision (AP) @[IoU=0.50:0.95 | area=small] = 0.032
+# Average Precision (AP) @[IoU=0.50:0.95 | area=large] = 0.381
+</code></pre>
+
+  <h3>可视化评估结果</h3>
+
+<pre><code>import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+def visualize_detections(image, boxes, scores, classes,
+                         category_index, threshold=0.5):
+    fig, ax = plt.subplots(1, figsize=(10, 10))
+    ax.imshow(image)
+
+    for i in range(len(boxes)):
+        if scores[i] &lt; threshold:
+            continue
+        ymin, xmin, ymax, xmax = boxes[i]
+        h, w = image.shape[:2]
+        xmin, xmax = xmin * w, xmax * w
+        ymin, ymax = ymin * h, ymax * h
+
+        rect = patches.Rectangle(
+            (xmin, ymin), xmax - xmin, ymax - ymin,
+            linewidth=2, edgecolor="r", facecolor="none"
+        )
+        ax.add_patch(rect)
+        ax.text(xmin, ymin - 5,
+                f"{category_index[classes[i]]['name']}: "
+                f"{scores[i]:.2f}",
+                color="white", fontsize=12,
+                bbox=dict(facecolor="red", alpha=0.7))
+
+    plt.axis("off")
+    plt.show()
+</code></pre>
+</section>
+
+<section id="export" class="toc-link">
+  <h2><span class="num">08</span> 模型导出与部署</h2>
+
+  <p>训练完成后需要将模型导出为适合部署的格式。TF Object Detection API 支持导出为 SavedModel（Serving）、TFLite（移动端）和 TensorFlow.js（浏览器端）。</p>
+
+  <h3>导出 SavedModel</h3>
+
+<pre><code># 导出标准 SavedModel（用于 TensorFlow Serving）
+python models/research/object_detection/exporter_main_v2.py \
+  --input_type="image_tensor" \
+  --pipeline_config_path=configs/pipeline.config \
+  --trained_checkpoint_dir=training/ \
+  --output_directory=exported_model/
+
+# 导出目录结构
+# exported_model/
+# ├── saved_model/
+# │   ├── saved_model.pb
+# │   └── variables/
+# │       ├── variables.data-00000-of-00001
+# │       └── variables.index
+# └── checkpoint/
+</code></pre>
+
+  <h3>导出 TF Lite</h3>
+
+<pre><code># 导出 TFLite 图
+python models/research/object_detection/exporter_main_v2.py \
+  --input_type="image_tensor" \
+  --pipeline_config_path=configs/pipeline.config \
+  --trained_checkpoint_dir=training/ \
+  --output_directory=exported_model/ \
+  --use_quantized_graph=false
+
+# 转换到 TFLite
+import tensorflow as tf
+
+converter = tf.lite.TFLiteConverter.from_saved_model(
+    "exported_model/saved_model"
+)
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+converter.target_spec.supported_ops = [
+    tf.lite.OpsSet.TFLITE_BUILTINS,
+    tf.lite.OpsSet.SELECT_TF_OPS,
+]
+tflite_model = converter.convert()
+
+with open("detect.tflite", "wb") as f:
+    f.write(tflite_model)
+</code></pre>
+
+  <h3>TensorFlow Serving 部署</h3>
+
+<pre><code># 启动 Serving
+docker pull tensorflow/serving
+docker run -p 8501:8501 \
+  -v $(pwd)/exported_model/saved_model:/models/detector/1 \
+  -e MODEL_NAME=detector \
+  tensorflow/serving
+
+# REST API 调用
+curl -X POST \
+  http://localhost:8501/v1/models/detector:predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "signature_name": "serving_default",
+    "instances": [{"inputs": ...}]
+  }'
+
+# gRPC 客户端
+import grpc
+import tensorflow_serving.apis.prediction_service_pb2_grpc as ps
+import tensorflow_serving.apis.predict_pb2 as pb
+
+channel = grpc.insecure_channel("localhost:8500")
+stub = ps.PredictionServiceStub(channel)
+request = pb.PredictRequest()
+request.model_spec.name = "detector"
+request.model_spec.signature_name = "serving_default"
+# request.inputs[...].CopyFrom(...)
+# response = stub.Predict(request)
+</code></pre>
+
+  <h3>推理代码</h3>
+
+<pre><code>import numpy as np
+import tensorflow as tf
+
+class ObjectDetector:
+    def __init__(self, model_path):
+        self.model = tf.saved_model.load(model_path)
+        self.infer = self.model.signatures["serving_default"]
+
+    def detect(self, image_np):
+        input_tensor = tf.convert_to_tensor(
+            np.expand_dims(image_np, 0), dtype=tf.uint8
+        )
+        detections = self.infer(input_tensor)
+
+        return {
+            "boxes": detections["detection_boxes"][0].numpy(),
+            "scores": detections["detection_scores"][0].numpy(),
+            "classes": detections["detection_classes"][0].numpy()
+                       .astype(np.int32),
+            "num": int(
+                detections["num_detections"][0].numpy()
+            ),
+        }
+
+# 使用
+detector = ObjectDetector("exported_model/saved_model")
+result = detector.detect(cv2.imread("image.jpg"))
+print(f"Detected {result['num']} objects")
+</code></pre>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>tensorflow/models/research/object_detection/g3doc/</code> 官方文档。<br>
+    <code>configs/tf2/</code> 目录中查看完整的 pipeline 配置示例。<br>
+    COCO 数据集官方论文 "Microsoft COCO: Common Objects in Context"。<br>
+    TensorFlow Serving 部署最佳实践指南。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

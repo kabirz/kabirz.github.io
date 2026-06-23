@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenCV 特征检测与匹配</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%235a45ff'/><stop offset='100%25' stop-color='%233b82f6'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>V</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>OpenCV 特征检测与匹配</h1>
+  <p class="subtitle">Harris / SIFT / ORB 特征点与匹配</p>
+  <span class="version">OpenCV 4.x · features2d 模块</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#concept">特征点概念</a></li>
+    <li><a href="#harris">Harris 角点检测</a></li>
+    <li><a href="#sift">SIFT 尺度不变特征变换</a></li>
+    <li><a href="#orb">ORB 特征</a></li>
+    <li><a href="#matching">特征匹配</a></li>
+    <li><a href="#ransac">RANSAC 误匹配剔除</a></li>
+    <li><a href="#stitch">全景图像拼接</a></li>
+    <li><a href="#example">综合示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="concept" class="toc-link">
+  <h2><span class="num">01</span> 特征点概念</h2>
+
+  <p>图像特征点（Keypoint）是图像中具有独特性质的位置点，在不同视角、光照和尺度下仍能被稳定检测。特征点由两部分组成：</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title">关键点（Keypoint）</div>
+      <ul>
+        <li><strong>位置</strong>：(x, y) 坐标</li>
+        <li><strong>尺度</strong>：特征点所在的空间尺度</li>
+        <li><strong>方向</strong>：主方向，用于旋转不变性</li>
+        <li><strong>响应强度</strong>：特征显著程度</li>
+        <li><strong>区域大小</strong>：特征覆盖的圆形区域半径</li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-title">描述子（Descriptor）</div>
+      <ul>
+        <li>关键点周围区域的编码向量</li>
+        <li>浮点型：SIFT (128维)，SURF (64维)</li>
+        <li>二值型：ORB (32字节)，BRISK，AKAZE</li>
+        <li>通过特征向量距离衡量相似度</li>
+        <li>理想描述子具有旋转和尺度不变性</li>
+      </ul>
+    </div>
+  </div>
+
+  <p>一个好的特征检测器应满足以下要求：</p>
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>重复性</td><td>同一场景在不同视角下能检测到相同特征点</td></tr>
+    <tr><td>独特性</td><td>特征点的描述子应能与其他点区分</td></tr>
+    <tr><td>局部性</td><td>特征只取决于局部图像区域，不受全局变化影响</td></tr>
+    <tr><td>数量可控</td><td>可根据需求调整检测到的特征点数量</td></tr>
+    <tr><td>计算效率</td><td>在实时系统中具有可接受的计算开销</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>应用场景:</strong><br>
+    特征检测与匹配是计算机视觉的基石技术，广泛应用于图像拼接（全景图）、三维重建（SfM）、物体识别与跟踪、视觉里程计（VO/SLAM）、增强现实（AR）标记检测等方向。
+  </div>
+</section>
+
+<section id="harris" class="toc-link">
+  <h2><span class="num">02</span> Harris 角点检测</h2>
+
+  <h3>2.1 基本原理</h3>
+  <p>Harris 角点检测（Chris Harris 和 Mike Stephens, 1988）是最经典的角点检测方法。它基于一个直观的观察：角点是在所有方向上移动窗口时灰度都发生显著变化的位置。</p>
+
+  <p>数学上，Harris 通过自相关矩阵 M 和角点响应函数 R 来判断角点：</p>
+
+  <div class="card">
+    <p><strong>自相关矩阵 M:</strong></p>
+    <pre><code>M = Σ w(x,y) * [ Ix²   IxIy ]
+               [ IxIy  Iy²  ]
+
+其中 Ix, Iy 是 x/y 方向的梯度
+w(x,y) 是高斯加权窗口</code></pre>
+
+    <p><strong>角点响应 R:</strong></p>
+    <pre><code>R = det(M) - k * trace(M)²
+  = λ₁λ₂ - k * (λ₁ + λ₂)²
+
+λ₁, λ₂: M 的特征值
+k: 经验系数（通常 0.04–0.06）
+
+判定规则：
+|R| 小 → 平坦区域（λ₁, λ₂ 都小）
+R &lt; 0 → 边缘（λ₁ &gt;&gt; λ₂ 或反之）
+R &gt; 0 → 角点（λ₁, λ₂ 都大）</code></pre>
+  </div>
+
+  <h3>2.2 OpenCV 实现</h3>
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+img = cv2.imread(<span class="str">"building.jpg"</span>)
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+<span class="cm"># Harris 角点检测</span>
+<span class="cm"># 参数：(src, blockSize, ksize, k)</span>
+<span class="cm"># blockSize — 自相关矩阵的邻域大小</span>
+<span class="cm"># ksize     — Sobel 梯度核大小</span>
+<span class="cm"># k         — Harris 响应函数中的自由参数</span>
+dst = cv2.cornerHarris(gray, blockSize=2, ksize=3, k=0.04)
+
+<span class="cm"># 膨胀结果用于标记</span>
+dst_dilated = cv2.dilate(dst, None)
+
+<span class="cm"># 阈值筛选角点</span>
+threshold = 0.01 * dst_dilated.max()
+img_harris = img.copy()
+img_harris[dst_dilated &gt; threshold] = [0, 0, 255]
+
+<span class="cm"># 亚像素级精确定位</span>
+corners = cv2.goodFeaturesToTrack(
+    gray, maxCorners=100, qualityLevel=0.01,
+    minDistance=10, useHarrisDetector=True
+)
+corners = np.int0(corners)
+<span class="kw">for</span> corner <span class="kw">in</span> corners:
+    x, y = corner.ravel()
+    cv2.circle(img_harris, (x, y), 3, (0, 255, 0), -1)
+
+cv2.imshow(<span class="str">"Harris Corners"</span>, img_harris)</code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>Harris 的局限性:</strong><br>
+    Harris 角点检测不具备尺度不变性。当图像缩放时，同一角点可能在不同尺度下无法被检测。此外，Harris 对角点密集区域有响应重叠的问题。在 OpenCV 中，<code>goodFeaturesToTrack()</code> 是 Harris 的改进版本（Shi-Tomasi 角点），使用 R = min(λ₁, λ₂) 作为响应函数，在某些场景下效果更好。
+  </div>
+</section>
+
+<section id="sift" class="toc-link">
+  <h2><span class="num">03</span> SIFT 尺度不变特征变换</h2>
+
+  <h3>3.1 SIFT 概述</h3>
+  <p>SIFT（Scale-Invariant Feature Transform）由 David Lowe 在 1999 年提出，2004 年完善。它是计算机视觉史上最具影响力的特征检测算法之一，对图像缩放、旋转、光照变化和视角变化具有很好的不变性。</p>
+
+  <p>SIFT 算法包含四个主要步骤：</p>
+
+  <h3>3.2 尺度空间极值检测（DoG）</h3>
+  <p>SIFT 首先构建高斯金字塔，然后通过高斯差分（Difference of Gaussian, DoG）在不同尺度上检测极值点：</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 高斯金字塔与 DoG 构建</span>
+<span class="cm">// 每组 (Octave) 图像尺寸减半</span>
+<span class="cm">// 每层 (Layer) 使用不同高斯核 σ 平滑</span>
+
+Octave 1: [σ, kσ, k²σ, k³σ, k⁴σ, k⁵σ]  (原图尺寸)
+                   ↓ DoG
+          DoG: [kσ-σ, k²σ-kσ, ...]
+                   ↓ 下采样
+Octave 2: [2σ, 2kσ, 2k²σ, ...]         (1/2 尺寸)
+                   ↓ DoG
+          ...
+
+<span class="cm">// 极值检测：比较每个像素与同尺度的 8 邻域</span>
+<span class="cm">// 以及上下尺度的 9×2 邻域，共 26 个比较</span></code></pre>
+  </div>
+
+  <h3>3.3 关键点精确定位</h3>
+  <p>通过子像素插值（Taylor 展开）精确定位关键点位置和尺度，并去除低对比度和边缘响应点：</p>
+  <div class="card">
+    <pre><code><span class="cm">// 子像素插值（Taylor 展开到二次项）</span>
+<span class="cm">// D(x) = D + ∂Dᵀ/∂x · x + ½ · xᵀ · ∂²D/∂x² · x</span>
+<span class="cm">// 极值位置: x̂ = -∂²D⁻¹/∂x² · ∂D/∂x</span>
+
+<span class="cm">// 去除低对比度点</span>
+<span class="cm">// 如果 |D(x̂)| < 0.03，丢弃该点</span>
+
+<span class="cm">// 去除边缘响应（使用 Hessian 矩阵）</span>
+<span class="cm">// H = [ Dxx  Dxy ]</span>
+<span class="cm">//     [ Dxy  Dyy ]</span>
+<span class="cm">// Tr(H)² / Det(H) < (r+1)²/r, r=10</span></code></pre>
+  </div>
+
+  <h3>3.4 方向分配</h3>
+  <p>为每个关键点分配一个或多个主方向，实现旋转不变性：</p>
+  <div class="card">
+    <pre><code><span class="cm">// 梯度幅值和方向</span>
+m(x,y) = √((L(x+1,y)-L(x-1,y))² + (L(x,y+1)-L(x,y-1))²)
+θ(x,y) = atan2(L(x,y+1)-L(x,y-1), L(x+1,y)-L(x-1,y))
+
+<span class="cm">// 以关键点为中心，构建 36 柱的梯度方向直方图</span>
+<span class="cm">// 高斯加权（σ = 1.5 * 尺度）</span>
+<span class="cm">// 峰值对应的方向为主方向</span>
+<span class="cm">// 超过峰值 80% 的峰值为辅方向</span></code></pre>
+  </div>
+
+  <h3>3.5 描述子生成</h3>
+  <p>SIFT 描述子是一个 128 维向量（4x4 子区域 x 8 方向），具有光照和视角不变性：</p>
+  <div class="card">
+    <pre><code><span class="cm">// 描述子生成步骤：</span>
+<span class="cm">// 1. 将关键点周围 16x16 区域旋转到主方向</span>
+<span class="cm">// 2. 分为 4x4 个子区域（每个子区域 4x4 像素）</span>
+<span class="cm">// 3. 每个子区域统计 8 方向的梯度直方图</span>
+<span class="cm">// 4. 得到 4x4x8 = 128 维向量</span>
+<span class="cm">// 5. 归一化去除光照影响</span>
+<span class="cm">// 6. 截断大于 0.2 的值（抑制非线性光照）</span>
+<span class="cm">// 7. 重新归一化得到最终描述子</span></code></pre>
+  </div>
+
+  <h3>3.6 OpenCV 中的 SIFT</h3>
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+
+<span class="cm"># SIFT 在 opencv-contrib-python 中</span>
+<span class="cm"># pip install opencv-contrib-python</span>
+
+img1 = cv2.imread(<span class="str">"object.jpg"</span>)
+img2 = cv2.imread(<span class="str">"scene.jpg"</span>)
+
+<span class="cm"># 创建 SIFT 检测器</span>
+sift = cv2.SIFT_create(
+    nfeatures=5000,        <span class="cm">// 最多保留的特征点数</span>
+    nOctaveLayers=3,       <span class="cm">// 每组层数</span>
+    contrastThreshold=0.04, <span class="cm">// 对比度阈值</span>
+    edgeThreshold=10,       <span class="cm">// 边缘阈值</span>
+    sigma=1.6              <span class="cm">// 高斯金字塔初始 σ</span>
+)
+
+<span class="cm"># 检测关键点和描述子</span>
+kp1, des1 = sift.detectAndCompute(img1, None)
+kp2, des2 = sift.detectAndCompute(img2, None)
+
+<span class="cm"># 绘制关键点</span>
+img1_kp = cv2.drawKeypoints(
+    img1, kp1, None,
+    color=(0, 255, 0),
+    flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
+)
+
+print(<span class="str">f"图像1 特征点数: {len(kp1)}, 描述子形状: {des1.shape}"</span>)
+print(<span class="str">f"图像2 特征点数: {len(kp2)}, 描述子形状: {des2.shape}"</span>)
+<span class="cm"># 输出: 描述子形状 = (特征点数, 128)</span></code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>SIFT 专利说明:</strong><br>
+    SIFT 算法曾受美国专利保护（US 6,711,293），该专利已于 2020 年 3 月过期。从 OpenCV 4.5.1 开始，SIFT 已从 opencv_contrib 移到主仓库的 features2d 模块中，可以自由使用。但仍然需要注意，部分国家/地区可能有不同的专利有效期。
+  </div>
+</section>
+
+<section id="orb" class="toc-link">
+  <h2><span class="num">04</span> ORB 特征</h2>
+
+  <h3>4.1 ORB 概述</h3>
+  <p>ORB（Oriented FAST and Rotated BRIEF）由 Ethan Rublee 等人在 2011 年提出，是 SIFT 的高效替代方案。它将 FAST 角点检测器与 BRIEF 描述子结合，并添加了方向和尺度信息。ORB 完全免费，是移动端和实时系统中最常用的特征之一。</p>
+
+  <table>
+    <tr><th>特性</th><th>SIFT</th><th>SURF</th><th>ORB</th></tr>
+    <tr><td>检测方法</td><td>DoG 尺度空间</td><td>Hessian 矩阵</td><td>FAST 角点 + 金字塔</td></tr>
+    <tr><td>描述子类型</td><td>128 维浮点</td><td>64 维浮点</td><td>32 字节二值</td></tr>
+    <tr><td>尺度不变性</td><td>优秀</td><td>良好</td><td>有限（金字塔级）</td></tr>
+    <tr><td>旋转不变性</td><td>优秀</td><td>良好</td><td>良好</td></tr>
+    <tr><td>计算速度</td><td>慢</td><td>中等</td><td>极快</td></tr>
+    <tr><td>匹配速度</td><td>慢（L2 距离）</td><td>中等</td><td>极快（汉明距离）</td></tr>
+    <tr><td>许可</td><td>已过期专利</td><td>有专利</td><td>完全开源</td></tr>
+  </table>
+
+  <h3>4.2 FAST 角点检测</h3>
+  <p>FAST（Features from Accelerated Segment Test）是 ORB 使用的角点检测器。它的核心思想非常高效：一个像素如果是角点，那么它周围圆形邻域上应该有足够多的像素与其差异较大。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// FAST-12 检测（12 个连续点均超过阈值）</span>
+<span class="cm">// 以候选点 p 为中心，半径为 3 的 Bresenham 圆上</span>
+<span class="cm">// 有 16 个像素点（编号 1-16）</span>
+<span class="cm">// 如果编号 1, 5, 9, 13 中至少有 3 个满足阈值条件</span>
+<span class="cm">// 再检查所有 16 个点中是否有 12 个连续点满足</span>
+
+<span class="cm">// OpenCV 中的 FAST</span>
+fast = cv2.FastFeatureDetector_create(
+    threshold=30,           <span class="cm">// 强度差阈值</span>
+    nonmaxSuppression=True  <span class="cm">// 非极大值抑制</span>
+)
+keypoints = fast.detect(img, None)</code></pre>
+  </div>
+
+  <h3>4.3 BRIEF 描述子</h3>
+  <p>BRIEF（Binary Robust Independent Elementary Features）通过比较关键点周围随机选取的像素点对，生成二值描述子：</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// BRIEF 描述子生成</span>
+<span class="cm">// 1. 在关键点周围选取 512 个随机位置对 (x_i, y_i)</span>
+<span class="cm">// 2. 对每对像素 p(x_i), p(y_i) 进行比较</span>
+<span class="cm">//    τ(p; x, y) = 1  if p(x) < p(y), else 0</span>
+<span class="cm">// 3. 得到 512 位 (64 字节) 的二值描述子</span>
+<span class="cm">// 4. 使用汉明距离（XOR + 人口统计）快速匹配</span>
+
+<span class="cm">// ORB 改进了 BRIEF:</span>
+<span class="cm">// — 使用强度质心法计算方向，使 BRIEF 具有旋转不变性</span>
+<span class="cm">// — steered BRIEF: 将采样模式按方向旋转</span>
+<span class="cm">// — rBRIEF: 通过贪心选择低相关性的点对，提高判别力</span></code></pre>
+  </div>
+
+  <h3>4.4 OpenCV 中的 ORB</h3>
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+
+img = cv2.imread(<span class="str">"scene.jpg"</span>)
+
+<span class="cm"># 创建 ORB 检测器</span>
+orb = cv2.ORB_create(
+    nfeatures=1000,          <span class="cm">// 最多特征点</span>
+    scaleFactor=1.2,         <span class="cm">// 金字塔缩放因子</span>
+    nlevels=8,              <span class="cm">// 金字塔层数</span>
+    edgeThreshold=31,        <span class="cm">// 边缘阈值</span>
+    firstLevel=0,
+    WTA_K=2,                <span class="cm">// 每次比较的点对数（2=一对）</span>
+    scoreType=cv2.ORB_HARRIS_SCORE, <span class="cm">// 角点评分方法</span>
+    patchSize=31            <span class="cm">// 描述子计算的区域大小</span>
+)
+
+<span class="cm"># 检测和计算描述子</span>
+kp, des = orb.detectAndCompute(img, None)
+
+<span class="cm"># des 的 dtype 为 uint8，形状 (n, 32)</span>
+print(<span class="str">f"ORB 特征点数: {len(kp)}"</span>)
+print(<span class="str">f"描述子形状: {des.shape}, dtype: {des.dtype}"</span>)
+
+<span class="cm"># 绘制（不绘制方向）</span>
+img_orb = cv2.drawKeypoints(
+    img, kp, None, color=(255, 0, 0)
+)</code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>ORB vs SIFT 选型建议:</strong><br>
+    在移动设备、嵌入式系统和实时视频处理中，ORB 是首选（30-100x 快于 SIFT）。在需要更高精度和尺度不变性的场景（如三维重建、精确图像拼接）中，SIFT 仍是标杆。如果追求中间方案，AKAZE 是一个不错的折衷。
+  </div>
+</section>
+
+<section id="matching" class="toc-link">
+  <h2><span class="num">05</span> 特征匹配</h2>
+
+  <h3>5.1 暴力匹配 Brute-Force</h3>
+  <p>暴力匹配（BFMatcher）将每个查询描述子与所有训练描述子逐一计算距离，返回最匹配的那对。对于二值描述子（ORB）使用汉明距离，对于浮点描述子（SIFT）使用 L2 欧氏距离。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+
+<span class="cm"># 假设已经通过 SIFT 或 ORB 得到 kp1, des1, kp2, des2</span>
+
+<span class="cm">// 暴力匹配（SIFT 等浮点描述子用 L2）</span>
+bf_l2 = cv2.BFMatcher(cv2.NORM_L2, crossCheck=False)
+
+<span class="cm">// 暴力匹配（ORB 等二值描述子用 HAMMING）</span>
+bf_ham = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+
+<span class="cm">// crossCheck=True 时只返回双向一致匹配，精度更高但匹配数减少</span>
+bf_ham_cc = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
+<span class="cm">// 匹配</span>
+matches = bf_ham.knnMatch(des1, des2, k=2)
+
+<span class="cm">// Lowe 比率测试（最近邻与次近邻距离比）</span>
+good_matches = []
+<span class="kw">for</span> m, n <span class="kw">in</span> matches:
+    <span class="kw">if</span> m.distance &lt; 0.75 * n.distance:
+        good_matches.append(m)
+
+print(<span class="str">f"有效匹配数: {len(good_matches)}/{len(matches)}"</span>)
+
+<span class="cm">// 绘制匹配结果</span>
+result = cv2.drawMatches(
+    img1, kp1, img2, kp2,
+    good_matches, None,
+    flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+)</code></pre>
+  </div>
+
+  <h3>5.2 FLANN 近似最近邻匹配</h3>
+  <p>FLANN（Fast Library for Approximate Nearest Neighbors）适用于大规模特征点匹配。它使用 KD-Tree（浮点）或 LSH（二值）索引结构，比暴力匹配快得多，但返回的是近似结果。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+
+<span class="cm">// FLANN 匹配器参数设置</span>
+
+<span class="cm">// SIFT 使用 KD-Tree</span>
+flann_sift = cv2.FlannBasedMatcher(
+    dict(algorithm=1, trees=5),   <span class="cm">// algorithm=1 = KD-Tree</span>
+    dict(checks=50)               <span class="cm">// 回溯检查次数（越大越准）</span>
+)
+
+<span class="cm">// ORB 使用 LSH（Locality-Sensitive Hashing）</span>
+flann_orb = cv2.FlannBasedMatcher(
+    dict(
+        algorithm=6,               <span class="cm">// LSH</span>
+        table_number=12,           <span class="cm">// 哈希表数量</span>
+        key_size=20,               <span class="cm">// 哈希键大小</span>
+        multi_probe_level=2        <span class="cm">// 探测层级</span>
+    ),
+    dict(checks=50)
+)
+
+<span class="cm">// 匹配</span>
+matches = flann_sift.knnMatch(des1, des2, k=2)
+
+<span class="cm">// Lowe 比率筛选</span>
+good = [m <span class="kw">for</span> m, n <span class="kw">in</span> matches <span class="kw">if</span> m.distance &lt; 0.7 * n.distance]</code></pre>
+  </div>
+
+  <h3>5.3 匹配质量评估</h3>
+  <table>
+    <tr><th>指标</th><th>说明</th><th>良好值</th></tr>
+    <tr><td>Lowe 比率</td><td>最近邻距离 / 次近邻距离</td><td>&lt; 0.75</td></tr>
+    <tr><td>匹配点数量</td><td>筛选后的有效匹配对数</td><td>&gt; 30</td></tr>
+    <tr><td>内点比例</td><td>RANSAC 后的内点占比</td><td>&gt; 60%</td></tr>
+    <tr><td>重投影误差</td><td>变换后的像素距离误差</td><td>&lt; 3px</td></tr>
+  </table>
+</section>
+
+<section id="ransac" class="toc-link">
+  <h2><span class="num">06</span> RANSAC 误匹配剔除</h2>
+
+  <h3>6.1 RANSAC 原理</h3>
+  <p>RANSAC（Random Sample Consensus）是 Fisher 和 Bolles 在 1981 年提出的鲁棒参数估计算法。在特征匹配中，RANSAC 用于从包含大量误匹配（外点）的匹配集中估算出正确的几何变换（单应矩阵或基础矩阵）。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// RANSAC 算法步骤：</span>
+<span class="cm">// 1. 随机选取最小样本集（单应矩阵需要 4 对匹配点）</span>
+<span class="cm">// 2. 根据样本集计算变换矩阵 H</span>
+<span class="cm">// 3. 用 H 测试所有匹配点，统计内点（重投影误差 < 阈值）</span>
+<span class="cm">// 4. 重复步骤 1-3 共 N 次（N 自适应调整）</span>
+<span class="cm">// 5. 保留内点最多的那次结果</span>
+<span class="cm">// 6. 用所有内点重新估计 H（优化精度）</span>
+
+<span class="cm">// 迭代次数 N 自适应计算：</span>
+<span class="cm">// N = log(1-p) / log(1-w^k)</span>
+<span class="cm">// p: 期望成功率（通常 0.99）</span>
+<span class="cm">// w: 内点比例</span>
+<span class="cm">// k: 最小样本数（单应=4，基础矩阵=8）</span></code></pre>
+  </div>
+
+  <h3>6.2 OpenCV 实现</h3>
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+<span class="cm">// 将匹配点转换为坐标矩阵</span>
+src_pts = np.float32(
+    [kp1[m.queryIdx].pt <span class="kw">for</span> m <span class="kw">in</span> good_matches]
+).reshape(-1, 1, 2)
+dst_pts = np.float32(
+    [kp2[m.trainIdx].pt <span class="kw">for</span> m <span class="kw">in</span> good_matches]
+).reshape(-1, 1, 2)
+
+<span class="cm">// 使用 RANSAC 计算单应矩阵</span>
+H, mask = cv2.findHomography(
+    src_pts, dst_pts,
+    cv2.RANSAC,           <span class="cm">// 使用 RANSAC 方法</span>
+    ransacReprojThreshold=3.0  <span class="cm">// 重投影误差阈值（像素）</span>
+)
+
+<span class="cm">// 其他方法：</span>
+<span class="cm">// cv2.LMEDS — 最小中值法，无需阈值但速度慢</span>
+<span class="cm">// cv2.USAC_MAGSAC — 最新 MAGnSAC 算法，更鲁棒</span>
+
+<span class="cm">// mask 是 0/1 数组，1 表示内点</span>
+inliers = mask.ravel().tolist()
+inlier_count = sum(inliers)
+total = len(inliers)
+print(<span class="str">f"内点: {inlier_count}/{total} ({inlier_count/total*100:.1f}%)"</span>)
+
+<span class="cm">// 筛选出内点匹配</span>
+inlier_matches = [m <span class="kw">for</span> i, m <span class="kw">in</span> enumerate(good_matches) <span class="kw">if</span> inliers[i]]</code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>参数调优:</strong><br>
+    <code>ransacReprojThreshold</code> 是关键参数。阈值越大，RANSAC 越"宽容"（更多内点但可能包含误匹配）；阈值越小，结果越严格但可能丢失正确匹配。对于高分辨率图像建议 5-10px，低分辨率图像建议 1-3px。OpenCV 4.5+ 中的 USAC 系列方法 (cv2.USAC_DEFAULT) 在大部分场景下比经典 RANSAC 效果更好。
+  </div>
+</section>
+
+<section id="stitch" class="toc-link">
+  <h2><span class="num">07</span> 全景图像拼接</h2>
+
+  <h3>7.1 拼接流程</h3>
+  <p>图像拼接（Image Stitching）是将多张有重叠区域的图像合成一张宽视角全景图的过程。完整的拼接流水线包括：</p>
+
+  <ol>
+    <li><strong>特征提取</strong> — 检测每张图像的特征点和描述子（SIFT/ORB）</li>
+    <li><strong>特征匹配</strong> — 在相邻图像间匹配特征（BFMatcher/FLANN）</li>
+    <li><strong>变换估计</strong> — 使用 RANSAC 计算单应矩阵 H</li>
+    <li><strong>图像变形</strong> — 根据 H 将图像投影到同一平面（warpPerspective）</li>
+    <li><strong>混合拼接</strong> — 融合重叠区域，消除接缝（多频段融合）</li>
+  </ol>
+
+  <h3>7.2 单应矩阵与透视变换</h3>
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+<span class="cm">// 假设已经从匹配中计算出 H</span>
+h, w = img1.shape[:2]
+
+<span class="cm">// 确定目标画布的尺寸</span>
+<span class="cm">// 将 img1 的四个角通过 H 投影</span>
+corners_img1 = np.float32([
+    [0, 0], [0, h-1], [w-1, h-1], [w-1, 0]
+]).reshape(-1, 1, 2)
+corners_img2 = np.float32([
+    [0, 0], [0, h-1], [w-1, h-1], [w-1, 0]
+]).reshape(-1, 1, 2)
+
+<span class="cm">// 投影到 img2 坐标系</span>
+corners_img1_in2 = cv2.perspectiveTransform(corners_img1, H)
+
+<span class="cm">// 合并所有角点并计算边界</span>
+all_corners = np.vstack((corners_img2, corners_img1_in2))
+[x_min, y_min] = np.int32(all_corners.min(axis=0).ravel() - 0.5)
+[x_max, y_max] = np.int32(all_corners.max(axis=0).ravel() + 0.5)
+
+<span class="cm">// 平移变换使所有像素坐标为正</span>
+translation = np.array([
+    [1, 0, -x_min],
+    [0, 1, -y_min],
+    [0, 0, 1]
+], dtype=np.float64)
+
+<span class="cm">// 变形并拼接</span>
+panorama_w = x_max - x_min
+panorama_h = y_max - y_min
+
+warped_img2 = cv2.warpPerspective(
+    img2, translation, (panorama_w, panorama_h)
+)
+
+warped_img1 = cv2.warpPerspective(
+    img1, translation.dot(H), (panorama_w, panorama_h)
+)
+
+<span class="cm">// 简单拼接（直接覆盖）</span>
+panorama = np.where(warped_img1 &gt; 0, warped_img1, warped_img2)</code></pre>
+  </div>
+
+  <h3>7.3 使用 OpenCV 内置拼接器</h3>
+  <p>OpenCV 提供了封装好的拼接模块，可以自动处理完整的拼接流程：</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+
+<span class="cm">// 创建拼接器</span>
+stitcher = cv2.Stitcher.create(cv2.Stitcher_PANORAMA)
+
+<span class="cm">// 输入图像列表</span>
+images = [
+    cv2.imread(<span class="str">"left.jpg"</span>),
+    cv2.imread(<span class="str">"center.jpg"</span>),
+    cv2.imread(<span class="str">"right.jpg"</span>)
+]
+
+<span class="cm">// 执行拼接</span>
+status, panorama = stitcher.stitch(images)
+
+<span class="kw">if</span> status == cv2.Stitcher_OK:
+    cv2.imwrite(<span class="str">"panorama.jpg"</span>, panorama)
+    print(<span class="str">"拼接成功"</span>)
+<span class="kw">elif</span> status == cv2.Stitcher_ERR_NEED_MORE_IMGS:
+    print(<span class="str">"需要更多图像"</span>)
+<span class="kw">else</span>:
+    print(<span class="str">f"拼接失败，错误码: {status}"</span>)
+
+<span class="cm">// 调整拼接模式</span>
+stitcher.setPanoConfidenceThresh(0.5)  <span class="cm">// 降低置信度阈值</span>
+stitcher.setWaveCorrection(True)       <span class="cm">// 波形校正</span>
+stitcher.setSeamEstimationResol(0.5)   <span class="cm">// 接缝估计分辨率</span>
+stitcher.setBlendResol(0.5)            <span class="cm">// 融合分辨率</span></code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>拼接注意事项:</strong><br>
+    输入图像间需要有 20-40% 的重叠区域。图像之间建议没有大的视差（即相机围绕光心旋转而非平移）。光照条件应尽量一致，否则会出现明显的接缝。对于高质量拼接，建议使用 SIFT 特征（而不是 ORB），并开启波形校正（waveCorrection）。
+  </div>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">08</span> 综合示例</h2>
+
+  <p>以下是一个完整的物体识别示例集，展示从特征提取到匹配到定位的完整流程：</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+<span class="kw">class</span> <span class="ty">FeatureMatcher</span>:
+    <span class="cm">"""特征匹配器：检测、匹配、定位物体"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, detector=<span class="str">"sift"</span>):
+        <span class="kw">if</span> detector == <span class="str">"sift"</span>:
+            self.detector = cv2.SIFT_create()
+            self.norm = cv2.NORM_L2
+        <span class="kw">elif</span> detector == <span class="str">"orb"</span>:
+            self.detector = cv2.ORB_create()
+            self.norm = cv2.NORM_HAMMING
+        <span class="kw">else</span>:
+            <span class="kw">raise</span> ValueError(<span class="str">"Unsupported detector"</span>)
+        self.matcher = cv2.BFMatcher(self.norm)
+
+    <span class="kw">def</span> <span class="fn">detect</span>(self, img):
+        <span class="kw">return</span> self.detector.detectAndCompute(img, None)
+
+    <span class="kw">def</span> <span class="fn">match</span>(self, des1, des2, ratio=0.75):
+        raw_matches = self.matcher.knnMatch(des1, des2, k=2)
+        good = []
+        <span class="kw">for</span> m, n <span class="kw">in</span> raw_matches:
+            <span class="kw">if</span> m.distance &lt; ratio * n.distance:
+                good.append(m)
+        <span class="kw">return</span> good
+
+    <span class="kw">def</span> <span class="fn">find_homography</span>(self, kp1, kp2, matches,
+                          threshold=3.0):
+        <span class="kw">if</span> len(matches) &lt; 4:
+            <span class="kw">return</span> None, None
+        src = np.float32(
+            [kp1[m.queryIdx].pt <span class="kw">for</span> m <span class="kw">in</span> matches]
+        ).reshape(-1, 1, 2)
+        dst = np.float32(
+            [kp2[m.trainIdx].pt <span class="kw">for</span> m <span class="kw">in</span> matches]
+        ).reshape(-1, 1, 2)
+        H, mask = cv2.findHomography(
+            src, dst, cv2.RANSAC, threshold
+        )
+        <span class="kw">return</span> H, mask
+
+    <span class="kw">def</span> <span class="fn">draw_box</span>(self, img, H, template_shape):
+        <span class="cm">"""在场景中绘制检测到的物体边框"""</span>
+        h, w = template_shape[:2]
+        corners = np.float32([
+            [0, 0], [w, 0], [w, h], [0, h]
+        ]).reshape(-1, 1, 2)
+        <span class="kw">if</span> H <span class="kw">is not</span> None:
+            dst = cv2.perspectiveTransform(corners, H)
+            img = cv2.polylines(
+                img, [np.int32(dst)],
+                isClosed=True, color=(0, 255, 0), thickness=3
+            )
+        <span class="kw">return</span> img
+
+
+<span class="kw">def</span> <span class="fn">main</span>():
+    <span class="cm"># 加载模板图像和场景图像</span>
+    template = cv2.imread(<span class="str">"book_cover.jpg"</span>)
+    scene = cv2.imread(<span class="str">"bookshelf.jpg"</span>)
+
+    <span class="kw">if</span> template <span class="kw">is</span> <span class="kw">None</span> <span class="kw">or</span> scene <span class="kw">is</span> <span class="kw">None</span>:
+        print(<span class="str">"图像加载失败"</span>)
+        <span class="kw">return</span>
+
+    <span class="cm"># 初始化匹配器</span>
+    matcher = FeatureMatcher(detector=<span class="str">"sift"</span>)
+
+    <span class="cm"># 检测特征</span>
+    kp1, des1 = matcher.detect(template)
+    kp2, des2 = matcher.detect(scene)
+    print(<span class="str">f"模板特征: {len(kp1)}, 场景特征: {len(kp2)}"</span>)
+
+    <span class="cm"># 特征匹配</span>
+    matches = matcher.match(des1, des2, ratio=0.75)
+    print(<span class="str">f"有效匹配: {len(matches)}"</span>)
+
+    <span class="kw">if</span> len(matches) &gt;= 4:
+        <span class="cm"># 计算单应矩阵</span>
+        H, mask = matcher.find_homography(
+            kp1, kp2, matches, threshold=3.0
+        )
+        inliers = mask.sum()
+        print(<span class="str">f"RANSAC 内点: {inliers}/{len(matches)}"</span>)
+
+        <span class="cm"># 绘制检测框</span>
+        scene_boxed = matcher.draw_box(scene, H, template.shape)
+        cv2.imshow(<span class="str">"Detection"</span>, scene_boxed)
+    <span class="kw">else</span>:
+        print(<span class="str">"匹配数不足，无法定位物体"</span>)
+
+    <span class="cm"># 显示匹配结果</span>
+    result = cv2.drawMatches(
+        template, kp1, scene, kp2,
+        matches, None,
+        flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+    )
+    cv2.imshow(<span class="str">"Matches"</span>, result)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
+<span class="kw">if</span> __name__ == <span class="str">"__main__"</span>:
+    main()</code></pre>
+  </div>
+
+  <p>该综合示例展示了特征匹配的完整工作流程。实际项目中可以将其集成到实时视频流中，在每一帧上检测和定位目标物体。在 SLAM（同时定位与地图构建）系统中，特征匹配是实现相机位姿估计的核心环节。</p>
+
+  <div class="callout">
+    <strong>总结:</strong><br>
+    特征检测与匹配是计算机视觉的基石。Harris 提供了角点检测的基础理论；SIFT 在不变性方面做到了极致（但计算成本高）；ORB 在实时性和免费许可方面具有明显优势。实际选型时需要在精度、速度和许可之间权衡。RANSAC 是几乎所有特征匹配应用中的标配组件，用于剔除误匹配并估计可靠的几何变换。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

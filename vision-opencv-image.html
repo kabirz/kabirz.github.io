@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenCV 图像处理基础</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%235a45ff'/><stop offset='100%25' stop-color='%233b82f6'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>V</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>OpenCV 图像处理基础</h1>
+  <p class="subtitle">读写、变换、滤波、形态学</p>
+  <span class="version">OpenCV 4.x · imgproc 模块</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#io">图像读写与显示</a></li>
+    <li><a href="#color">色彩空间转换</a></li>
+    <li><a href="#geom">几何变换</a></li>
+    <li><a href="#filter">图像滤波</a></li>
+    <li><a href="#gradient">图像梯度</a></li>
+    <li><a href="#canny">边缘检测</a></li>
+    <li><a href="#morph">形态学操作</a></li>
+    <li><a href="#histogram">直方图</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="io" class="toc-link">
+  <h2><span class="num">01</span> 图像读写与显示</h2>
+
+  <h3>1.1 读取图像 imread</h3>
+  <p><code>cv2.imread()</code> 是 OpenCV 中最基本的图像读取函数。它返回一个 numpy ndarray，形状为 (height, width, channels)，通道顺序为 BGR（而非常见的 RGB）。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+
+<span class="cm"># 读取方式标志</span>
+<span class="cm"># cv2.IMREAD_COLOR      = 1  — 彩色模式（默认），忽略 alpha 通道</span>
+<span class="cm"># cv2.IMREAD_GRAYSCALE  = 0  — 灰度模式</span>
+<span class="cm"># cv2.IMREAD_UNCHANGED  = -1 — 原样读取（含 alpha 通道）</span>
+
+img_color  = cv2.imread(<span class="str">"photo.jpg"</span>, cv2.IMREAD_COLOR)
+img_gray   = cv2.imread(<span class="str">"photo.jpg"</span>, cv2.IMREAD_GRAYSCALE)
+img_alpha  = cv2.imread(<span class="str">"photo.png"</span>, cv2.IMREAD_UNCHANGED)
+
+<span class="cm"># 读取失败检查</span>
+<span class="kw">if</span> img_color <span class="kw">is</span> <span class="kw">None</span>:
+    print(<span class="str">"图像文件不存在或路径错误"</span>)
+
+<span class="cm"># 查看图像属性</span>
+print(img_color.shape)     <span class="cm"># (480, 640, 3)</span>
+print(img_color.dtype)     <span class="cm"># uint8</span>
+print(img_color.size)      <span class="cm"># 921600 = 480 * 640 * 3</span></code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>imread 注意事项:</strong><br>
+    OpenCV 默认使用 BGR 通道顺序，与常见的 RGB 相反。显示时如果使用 matplotlib，需要先用 <code>cv2.cvtColor(img, cv2.COLOR_BGR2RGB)</code> 转换。imread 不支持读取中文路径（在部分平台上），建议先使用 <code>np.fromfile()</code> 绕过此限制。
+  </div>
+
+  <h3>1.2 写入图像 imwrite</h3>
+  <p><code>cv2.imwrite()</code> 根据文件扩展名自动选择合适的编码格式：</p>
+  <div class="card">
+    <pre><code><span class="cm"># 基本写入</span>
+cv2.imwrite(<span class="str">"output.jpg"</span>, img_color)
+
+<span class="cm"># JPEG 质量参数（0–100，默认 95）</span>
+cv2.imwrite(<span class="str">"high_quality.jpg"</span>, img_color,
+            [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+<span class="cm"># PNG 压缩级别（0–9，默认 3）</span>
+cv2.imwrite(<span class="str">"lossless.png"</span>, img_color,
+            [cv2.IMWRITE_PNG_COMPRESSION, 0])
+
+<span class="cm"># WebP 质量参数（0–100）</span>
+cv2.imwrite(<span class="str">"output.webp"</span>, img_color,
+            [cv2.IMWRITE_WEBP_QUALITY, 80])</code></pre>
+  </div>
+
+  <h3>1.3 显示图像 imshow</h3>
+  <div class="card">
+    <pre><code><span class="cm"># 创建窗口并显示</span>
+cv2.imshow(<span class="str">"Window Title"</span>, img_color)
+
+<span class="cm"># 可调整大小的窗口</span>
+cv2.namedWindow(<span class="str">"Resizable"</span>, cv2.WINDOW_NORMAL)
+cv2.imshow(<span class="str">"Resizable"</span>, img_color)
+
+<span class="cm"># 等待按键（0 = 无限等待）</span>
+key = cv2.waitKey(0) &amp; 0xFF
+<span class="kw">if</span> key == ord(<span class="str">'q'</span>):
+    print(<span class="str">"用户按下 Q 键退出"</span>)
+
+<span class="cm"># 清理所有窗口</span>
+cv2.destroyAllWindows()</code></pre>
+  </div>
+
+  <h3>1.4 使用 matplotlib 显示</h3>
+  <div class="card">
+    <pre><code><span class="kw">import</span> matplotlib.pyplot <span class="kw">as</span> plt
+
+<span class="cm"># OpenCV 的 BGR → matplotlib 的 RGB</span>
+img_rgb = cv2.cvtColor(img_color, cv2.COLOR_BGR2RGB)
+
+plt.figure(figsize=(10, 4))
+plt.subplot(1, 2, 1)
+plt.imshow(img_rgb)
+plt.title(<span class="str">"RGB Image"</span>)
+plt.axis(<span class="str">"off"</span>)
+
+plt.subplot(1, 2, 2)
+plt.imshow(img_gray, cmap=<span class="str">"gray"</span>)
+plt.title(<span class="str">"Grayscale"</span>)
+plt.axis(<span class="str">"off"</span>)
+plt.show()</code></pre>
+  </div>
+</section>
+
+<section id="color" class="toc-link">
+  <h2><span class="num">02</span> 色彩空间转换</h2>
+
+  <p>色彩空间转换是图像处理中最基础也最重要的操作之一。<code>cv2.cvtColor()</code> 是 OpenCV 中用于色彩空间转换的函数，支持 150 种以上的转换方式。</p>
+
+  <h3>2.1 常用色彩空间</h3>
+  <table>
+    <tr><th>色彩空间</th><th>表示方式</th><th>典型用途</th></tr>
+    <tr><td><strong>BGR</strong></td><td>蓝、绿、红三通道（OpenCV 默认）</td><td>相机/图像文件原始输出</td></tr>
+    <tr><td><strong>GRAY</strong></td><td>单通道灰度（0–255）</td><td>边缘检测、特征提取、降低计算量</td></tr>
+    <tr><td><strong>HSV</strong></td><td>色相(H 0–180)、饱和度(S 0–255)、明度(V 0–255)</td><td>颜色分割、对象跟踪（对光照变化鲁棒）</td></tr>
+    <tr><td><strong>Lab</strong></td><td>亮度(L)、a(绿–红)、b(蓝–黄)</td><td>颜色差异度量、色彩校正</td></tr>
+    <tr><td><strong>YCrCb</strong></td><td>亮度(Y)、红色差(Cr)、蓝色差(Cb)</td><td>JPEG 压缩、肤色检测</td></tr>
+    <tr><td><strong>XYZ</strong></td><td>CIE 1931 标准三刺激值</td><td>颜色管理、跨设备色彩匹配</td></tr>
+  </table>
+
+  <h3>2.2 代码示例</h3>
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+img = cv2.imread(<span class="str">"photo.jpg"</span>)
+
+<span class="cm"># BGR → Gray</span>
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+<span class="cm"># BGR → HSV</span>
+hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+<span class="cm"># BGR → Lab</span>
+lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
+
+<span class="cm"># BGR → YCrCb</span>
+ycr = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
+
+<span class="cm"># BGR → RGB（用于 matplotlib 显示）</span>
+rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)</code></pre>
+  </div>
+
+  <h3>2.3 HSV 颜色范围与物体分割</h3>
+  <p>HSV 空间广泛用于基于颜色的对象分割。色相 H 在 OpenCV 中的范围是 0–180（而不是 0–360），饱和度 S 和明度 V 的范围是 0–255。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 在 HSV 空间中提取绿色物体</span>
+hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+<span class="cm"># 绿色的 HSV 范围（需根据具体光照微调）</span>
+lower_green = np.array([40, 40, 40])
+upper_green = np.array([80, 255, 255])
+
+<span class="cm"># 二值掩码</span>
+mask = cv2.inRange(hsv, lower_green, upper_green)
+
+<span class="cm"># 与原图进行按位与，提取绿色区域</span>
+result = cv2.bitwise_and(img, img, mask=mask)
+
+cv2.imshow(<span class="str">"Mask"</span>, mask)
+cv2.imshow(<span class="str">"Result"</span>, result)</code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>HSV 调参技巧:</strong><br>
+    使用 <code>cv2.createTrackbar()</code> 创建滑块，在实际图像上实时调节 H/S/V 上下限，是确定颜色范围最有效的方法。常见颜色的 H 基准：红色 (0/170)、黄色 (30)、绿色 (60)、青色 (90)、蓝色 (120)、紫色 (150)。
+  </div>
+</section>
+
+<section id="geom" class="toc-link">
+  <h2><span class="num">03</span> 几何变换</h2>
+
+  <h3>3.1 缩放 resize</h3>
+  <p><code>cv2.resize()</code> 是图像缩放的核心函数，支持多种插值方法以适应不同场景：</p>
+
+  <table>
+    <tr><th>插值方法</th><th>适用场景</th><th>计算速度</th></tr>
+    <tr><td><code>INTER_NEAREST</code></td><td>最近邻（像素放大、缩略图）</td><td>极快</td></tr>
+    <tr><td><code>INTER_LINEAR</code></td><td>双线性（默认，通用缩放）</td><td>快</td></tr>
+    <tr><td><code>INTER_CUBIC</code></td><td>双三次（放大图像，质量较好）</td><td>较慢</td></tr>
+    <tr><td><code>INTER_LANCZOS4</code></td><td>Lanczos（缩小图像，抗锯齿最优）</td><td>最慢</td></tr>
+    <tr><td><code>INTER_AREA</code></td><td>区域插值（缩小图像，避免摩尔纹）</td><td>中等</td></tr>
+  </table>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+
+img = cv2.imread(<span class="str">"photo.jpg"</span>)
+h, w = img.shape[:2]
+
+<span class="cm"># 指定尺寸</span>
+resized = cv2.resize(img, (224, 224), interpolation=cv2.INTER_LINEAR)
+
+<span class="cm"># 按比例缩放（宽度减半）</span>
+scale = 0.5
+resized_scale = cv2.resize(img, None, fx=scale, fy=scale,
+                            interpolation=cv2.INTER_AREA)
+
+<span class="cm"># 自适应长边缩放（保持宽高比）</span>
+max_size = 640
+<span class="kw">if</span> max(h, w) &gt; max_size:
+    scale = max_size / max(h, w)
+    new_w, new_h = int(w * scale), int(h * scale)
+    resized_aspect = cv2.resize(img, (new_w, new_h))</code></pre>
+  </div>
+
+  <h3>3.2 平移与仿射变换 warpAffine</h3>
+  <p>仿射变换是线性变换（旋转、缩放、剪切）加平移的组合，变换后直线仍然是直线，平行线仍然平行。使用 2x3 矩阵表示。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+img = cv2.imread(<span class="str">"photo.jpg"</span>)
+h, w = img.shape[:2]
+
+<span class="cm"># 平移（tx=100, ty=50）</span>
+M_trans = np.float32([[1, 0, 100],
+                       [0, 1,  50]])
+translated = cv2.warpAffine(img, M_trans, (w, h))
+
+<span class="cm"># 旋转（绕中心旋转 45 度，缩放 0.8）</span>
+center = (w // 2, h // 2)
+M_rot = cv2.getRotationMatrix2D(center, angle=45, scale=0.8)
+rotated = cv2.warpAffine(img, M_rot, (w, h))
+
+<span class="cm"># 仿射变换（三点确定）</span>
+pts_src = np.float32([[50, 50], [200, 50], [50, 200]])
+pts_dst = np.float32([[10, 100], [200, 50], [100, 250]])
+M_affine = cv2.getAffineTransform(pts_src, pts_dst)
+affined = cv2.warpAffine(img, M_affine, (w, h))</code></pre>
+  </div>
+
+  <h3>3.3 透视变换 warpPerspective</h3>
+  <p>透视变换（投影变换）使用 3x3 矩阵，可以将矩形投影为任意四边形。常用于文档矫正、视角调整。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 透视变换 — 四点确定</span>
+<span class="cm"># 假设图像中有个矩形区域需要矫正</span>
+pts_src = np.float32([[141, 131], [480, 159],
+                       [493, 630], [64, 601]])
+pts_dst = np.float32([[0, 0], [600, 0],
+                       [600, 800], [0, 800]])
+
+M_persp = cv2.getPerspectiveTransform(pts_src, pts_dst)
+warped = cv2.warpPerspective(img, M_persp, (600, 800))
+
+cv2.imshow(<span class="str">"Original"</span>, img)
+cv2.imshow(<span class="str">"Corrected"</span>, warped)</code></pre>
+  </div>
+
+  <h3>3.4 翻转与裁剪</h3>
+  <div class="card">
+    <pre><code><span class="cm"># 翻转</span>
+flip_h = cv2.flip(img, 1)     <span class="cm"># 水平翻转</span>
+flip_v = cv2.flip(img, 0)     <span class="cm"># 垂直翻转</span>
+flip_hv = cv2.flip(img, -1)   <span class="cm"># 同时翻转</span>
+
+<span class="cm"># 裁剪（numpy 切片）</span>
+crop = img[100:400, 200:500]  <span class="cm"># [y_start:y_end, x_start:x_end]</span>
+
+<span class="cm"># 旋转 90/180/270</span>
+r90  = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+r180 = cv2.rotate(img, cv2.ROTATE_180)
+r270 = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)</code></pre>
+  </div>
+</section>
+
+<section id="filter" class="toc-link">
+  <h2><span class="num">04</span> 图像滤波</h2>
+
+  <p>图像滤波是图像预处理的核心步骤，用于去噪、平滑和增强。OpenCV 提供多种滤波方法，分为线性滤波和非线性滤波两大类。</p>
+
+  <h3>4.1 均值滤波 blur</h3>
+  <p>均值滤波使用核内所有像素的平均值替换中心像素，是最简单的平滑滤波器。核越大，平滑效果越强，但也会丢失更多细节。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+img = cv2.imread(<span class="str">"noisy.jpg"</span>)
+
+<span class="cm"># 均值滤波，核大小 5x5</span>
+blur_3  = cv2.blur(img, (3, 3))
+blur_5  = cv2.blur(img, (5, 5))
+blur_15 = cv2.blur(img, (15, 15))</code></pre>
+  </div>
+
+  <h3>4.2 高斯滤波 GaussianBlur</h3>
+  <p>高斯滤波使用高斯分布的权重对邻域进行加权平均，核中心权重最大，边缘权重递减。它能更好地保留边缘信息，是实际项目中最常用的平滑方法。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 高斯滤波</span>
+<span class="cm"># 参数： (src, ksize, sigmaX, sigmaY=sigmaX)</span>
+gauss_3  = cv2.GaussianBlur(img, (3, 3),   sigmaX=1.0)
+gauss_5  = cv2.GaussianBlur(img, (5, 5),   sigmaX=1.5)
+gauss_9  = cv2.GaussianBlur(img, (9, 9),   sigmaX=3.0)
+
+<span class="cm"># sigma 自动计算（sigma = 0.3 * ((ksize-1)*0.5 - 1) + 0.8）</span>
+gauss_auto = cv2.GaussianBlur(img, (5, 5), sigmaX=0)</code></pre>
+  </div>
+
+  <h3>4.3 中值滤波 medianBlur</h3>
+  <p>中值滤波用核内所有像素的中位数替换中心像素，对椒盐噪声（salt-and-pepper noise）有极好的去除效果。核大小必须为奇数。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 中值滤波（核大小必须为奇数）</span>
+median_3  = cv2.medianBlur(img, 3)
+median_5  = cv2.medianBlur(img, 5)
+median_9  = cv2.medianBlur(img, 9)
+
+<span class="cm"># 中值滤波特别适合去除椒盐噪声</span>
+<span class="cm"># 与均值滤波对比：中值不会产生模糊的"鬼影"</span></code></pre>
+  </div>
+
+  <h3>4.4 双边滤波 bilateralFilter</h3>
+  <p>双边滤波在平滑的同时能够保留边缘，因为它结合了空间距离权重和像素值相似度权重。但计算量较大，不适合实时应用。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 双边滤波</span>
+<span class="cm"># 参数： (src, d, sigmaColor, sigmaSpace)</span>
+<span class="cm"># d      — 邻域直径</span>
+<span class="cm"># sigmaColor — 颜色空间的标准差（越大，越多的颜色被混合）</span>
+<span class="cm"># sigmaSpace — 坐标空间的标准差（越大，越远的像素被影响）</span>
+bilateral = cv2.bilateralFilter(
+    img, d=9, sigmaColor=75, sigmaSpace=75
+)
+
+<span class="cm"># 双边滤波的效果类似美颜滤镜</span></code></pre>
+  </div>
+
+  <h3>4.5 自定义卷积 filter2D</h3>
+  <p>OpenCV 允许通过 <code>filter2D()</code> 使用任意的卷积核进行滤波，适用于自定义的锐化、浮雕等效果。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 锐化核</span>
+kernel_sharpen = np.array([
+    [ 0, -1,  0],
+    [-1,  5, -1],
+    [ 0, -1,  0]
+], dtype=np.float32)
+
+<span class="cm"># 浮雕核</span>
+kernel_emboss = np.array([
+    [-2, -1,  0],
+    [-1,  1,  1],
+    [ 0,  1,  2]
+], dtype=np.float32)
+
+<span class="cm"># 应用自定义卷积</span>
+sharpened = cv2.filter2D(img, -1, kernel_sharpen)
+embossed  = cv2.filter2D(img, -1, kernel_emboss)
+
+<span class="cm"># 第三个参数 ddepth = -1 表示输出与输入相同的深度</span></code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>滤波选型指南:</strong><br>
+    去高斯噪声 → 高斯滤波；去椒盐噪声 → 中值滤波；需要美颜/保留边缘 → 双边滤波；最快的大面积模糊 → 均值滤波。在实时视频处理中，高斯滤波 + 降采样是最常用的组合。
+  </div>
+</section>
+
+<section id="gradient" class="toc-link">
+  <h2><span class="num">05</span> 图像梯度</h2>
+
+  <p>图像梯度测量像素值的变化率和变化方向，是边缘检测和特征提取的基础。OpenCV 提供 Sobel、Scharr 和 Laplacian 三种主要梯度算子。</p>
+
+  <h3>5.1 Sobel 算子</h3>
+  <p>Sobel 算子结合了高斯平滑和差分运算，对噪声有一定的抑制能力。它计算水平方向（x）和垂直方向（y）的梯度。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+img = cv2.imread(<span class="str">"photo.jpg"</span>, cv2.IMREAD_GRAYSCALE)
+
+<span class="cm"># Sobel 梯度（ddepth 使用 CV_64F 避免负值被截断）</span>
+sobel_x = cv2.Sobel(img, ddepth=cv2.CV_64F, dx=1, dy=0, ksize=3)
+sobel_y = cv2.Sobel(img, ddepth=cv2.CV_64F, dx=0, dy=1, ksize=3)
+
+<span class="cm"># 取绝对值并转换为 uint8</span>
+sobel_x_abs = cv2.convertScaleAbs(sobel_x)
+sobel_y_abs = cv2.convertScaleAbs(sobel_y)
+
+<span class="cm"># 梯度幅值（近似计算）</span>
+sobel_combined = cv2.addWeighted(sobel_x_abs, 0.5,
+                                  sobel_y_abs, 0.5, 0)</code></pre>
+  </div>
+
+  <h3>5.2 Scharr 算子</h3>
+  <p>Scharr 算子是 Sobel 在 ksize=3 时的优化版本，提供更高的梯度精度。当 Sobel 的 ksize=3 时，Scharr 给出的结果更准确。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># Scharr 算子（固定 3x3 核，精度比 Sobel 高）</span>
+scharr_x = cv2.Scharr(img, ddepth=cv2.CV_64F, dx=1, dy=0)
+scharr_y = cv2.Scharr(img, ddepth=cv2.CV_64F, dx=0, dy=1)
+
+scharr_x_abs = cv2.convertScaleAbs(scharr_x)
+scharr_y_abs = cv2.convertScaleAbs(scharr_y)
+scharr_combined = cv2.addWeighted(scharr_x_abs, 0.5,
+                                    scharr_y_abs, 0.5, 0)
+
+<span class="cm"># Scharr 核系数（x 方向）</span>
+<span class="cm"># [[ -3, 0,  3],</span>
+<span class="cm">#  [-10, 0, 10],</span>
+<span class="cm">#  [ -3, 0,  3]]</span></code></pre>
+  </div>
+
+  <h3>5.3 Laplacian 算子</h3>
+  <p>Laplacian 算子是二阶微分算子，对噪声非常敏感。它检测图像强度的二阶变化，在边缘处产生零交叉（zero-crossing）。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># Laplacian 算子（二阶梯度）</span>
+laplacian = cv2.Laplacian(img, ddepth=cv2.CV_64F, ksize=3)
+laplacian_abs = cv2.convertScaleAbs(laplacian)
+
+<span class="cm"># Laplacian 对噪声敏感，通常先做高斯平滑</span>
+blurred = cv2.GaussianBlur(img, (5, 5), 1.0)
+laplacian_blur = cv2.Laplacian(blurred, ddepth=cv2.CV_64F, ksize=3)
+laplacian_blur_abs = cv2.convertScaleAbs(laplacian_blur)</code></pre>
+  </div>
+
+  <h3>5.4 梯度计算对比</h3>
+  <table>
+    <tr><th>算子</th><th>阶数</th><th>对噪声敏感度</th><th>精度</th><th>适用场景</th></tr>
+    <tr><td>Sobel</td><td>一阶</td><td>中等</td><td>中等</td><td>通用梯度计算</td></tr>
+    <tr><td>Scharr</td><td>一阶</td><td>中等</td><td>较高</td><td>需要精确梯度方向</td></tr>
+    <tr><td>Laplacian</td><td>二阶</td><td>高</td><td>中等</td><td>边缘定位、零交叉</td></tr>
+  </table>
+</section>
+
+<section id="canny" class="toc-link">
+  <h2><span class="num">06</span> 边缘检测</h2>
+
+  <h3>6.1 Canny 算法原理</h3>
+  <p>Canny 边缘检测是业界最广泛使用的边缘检测算法，由 John F. Canny 在 1986 年提出。它包含五个步骤：</p>
+
+  <ol>
+    <li><strong>高斯滤波去噪</strong> — 减少噪声对梯度计算的影响</li>
+    <li><strong>计算梯度幅值和方向</strong> — 使用 Sobel 算子</li>
+    <li><strong>非极大值抑制（NMS）</strong> — 沿梯度方向只保留局部最大值，细化为单像素边缘</li>
+    <li><strong>双阈值检测</strong> — 高阈值确定强边缘，低阈值保留弱边缘</li>
+    <li><strong>滞后边缘跟踪</strong> — 弱边缘只有与强边缘相连时保留</li>
+  </ol>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+img = cv2.imread(<span class="str">"photo.jpg"</span>, cv2.IMREAD_GRAYSCALE)
+
+<span class="cm"># Canny 边缘检测</span>
+<span class="cm"># 参数： (src, threshold1=50, threshold2=150)</span>
+<span class="cm"># threshold1 — 低阈值（弱边缘）</span>
+<span class="cm"># threshold2 — 高阈值（强边缘）</span>
+
+edges_default = cv2.Canny(img, 50, 150)
+
+<span class="cm"># 先做高斯滤波再 Canny（糖葫芦策略）</span>
+blurred = cv2.GaussianBlur(img, (5, 5), 1.4)
+edges_better = cv2.Canny(blurred, 30, 100)
+
+<span class="cm"># 自适应阈值（基于中位数）</span>
+median_val = np.median(img)
+lower = int(max(0, 0.7 * median_val))
+upper = int(min(255, 1.3 * median_val))
+edges_adaptive = cv2.Canny(img, lower, upper)
+
+<span class="cm"># L2 梯度计算（更精确，默认 L1）</span>
+edges_l2 = cv2.Canny(img, 50, 150, L2gradient=True)</code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>双阈值设定经验:</strong><br>
+    高阈值：低阈值 ≈ 2:1 到 3:1。高阈值越高，检测到的边缘越少（只保留最强边缘）；低阈值越低，保留的细节越多（但也可能引入噪声）。推荐先使用 <code>cv2.Canny(img, 50, 150)</code> 作为起点，再根据结果微调。
+  </div>
+</section>
+
+<section id="morph" class="toc-link">
+  <h2><span class="num">07</span> 形态学操作</h2>
+
+  <p>形态学操作基于图像形状（形态）进行处理，常用于二值图像处理。操作的核心是一个称为结构元素（kernel/structuring element）的小矩阵。</p>
+
+  <h3>7.1 腐蚀 erode 与膨胀 dilate</h3>
+  <p>腐蚀使前景区域"收缩"，可以去除小的白色噪点；膨胀使前景区域"扩张"，可以填补物体内部的空洞。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+
+<span class="cm"># 创建二值图像（假设已经过阈值处理）</span>
+_, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+
+<span class="cm"># 创建结构元素</span>
+kernel = np.ones((5, 5), dtype=np.uint8)
+
+<span class="cm"># 腐蚀 — 前景缩小，去除小噪点</span>
+eroded = cv2.erode(binary, kernel, iterations=1)
+
+<span class="cm"># 膨胀 — 前景扩大，填补空洞</span>
+dilated = cv2.dilate(binary, kernel, iterations=1)</code></pre>
+  </div>
+
+  <h3>7.2 开运算与闭运算</h3>
+  <p>开运算 = 先腐蚀后膨胀，用于去除小噪点并保持物体大小不变。闭运算 = 先膨胀后腐蚀，用于填补小空洞并保持物体大小不变。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 开运算 — 去除小白点（噪点）</span>
+opening = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+
+<span class="cm"># 闭运算 — 填补小黑洞</span>
+closing = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+
+<span class="cm"># 可以用不同形状的结构元素</span>
+kernel_ellipse = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+kernel_cross  = cv2.getStructuringElement(cv2.MORPH_CROSS, (5, 5))
+
+opening_ellipse = cv2.morphologyEx(
+    binary, cv2.MORPH_OPEN, kernel_ellipse
+)</code></pre>
+  </div>
+
+  <h3>7.3 形态学梯度</h3>
+  <p>形态学梯度 = 膨胀 − 腐蚀，可以得到物体的轮廓：</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 形态学梯度 — 物体的外轮廓</span>
+gradient = cv2.morphologyEx(binary, cv2.MORPH_GRADIENT, kernel)
+
+<span class="cm"># 顶帽 = 原图 − 开运算（提取亮区域中的小亮点）</span>
+tophat = cv2.morphologyEx(binary, cv2.MORPH_TOPHAT, kernel)
+
+<span class="cm"># 黑帽 = 闭运算 − 原图（提取暗区域中的小暗点）</span>
+blackhat = cv2.morphologyEx(binary, cv2.MORPH_BLACKHAT, kernel)</code></pre>
+  </div>
+
+  <p>形态学操作在文档图像处理、车牌定位、细胞计数等领域有广泛应用：</p>
+  <div class="card">
+    <pre><code><span class="cm"># 实际案例 — 去除文字周围的噪点</span>
+<span class="cm"># 先开运算去噪，再闭运算连接断开的笔画</span>
+cleaned = cv2.morphologyEx(
+    binary, cv2.MORPH_OPEN,
+    cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+)
+cleaned = cv2.morphologyEx(
+    cleaned, cv2.MORPH_CLOSE,
+    cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+)</code></pre>
+  </div>
+</section>
+
+<section id="histogram" class="toc-link">
+  <h2><span class="num">08</span> 直方图</h2>
+
+  <h3>8.1 直方图计算 calcHist</h3>
+  <p>图像直方图统计每个像素值（0–255）出现的频次，是图像亮度分布的可视化表示。它在对比度调整、图像分割和特征提取中有重要用途。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> cv2
+<span class="kw">import</span> numpy <span class="kw">as</span> np
+<span class="kw">import</span> matplotlib.pyplot <span class="kw">as</span> plt
+
+img = cv2.imread(<span class="str">"photo.jpg"</span>)
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+<span class="cm"># 计算灰度直方图</span>
+<span class="cm"># 参数：(图像, 通道, 掩码, bins范围, 像素值范围)</span>
+hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+
+<span class="cm"># 绘制直方图</span>
+plt.figure(figsize=(10, 4))
+plt.plot(hist, color=<span class="str">'black'</span>, linewidth=1.5)
+plt.title(<span class="str">"Grayscale Histogram"</span>)
+plt.xlabel(<span class="str">"Pixel Value"</span>)
+plt.ylabel(<span class="str">"Frequency"</span>)
+plt.xlim([0, 255])
+plt.grid(alpha=0.3)
+plt.show()
+
+<span class="cm"># 彩色直方图（三通道）</span>
+colors = (<span class="str">'b'</span>, <span class="str">'g'</span>, <span class="str">'r'</span>)
+<span class="kw">for</span> i, color <span class="kw">in</span> enumerate(colors):
+    hist_color = cv2.calcHist([img], [i], None, [256], [0, 256])
+    plt.plot(hist_color, color=color, linewidth=1.5)
+
+plt.title(<span class="str">"Color Histogram (BGR)"</span>)
+plt.show()</code></pre>
+  </div>
+
+  <h3>8.2 直方图均衡化 equalizeHist</h3>
+  <p>直方图均衡化通过将像素值分布拉伸到全范围，自动提升图像对比度。尤其适用于过暗或过曝光图像的增强。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 灰度图直方图均衡化</span>
+equ = cv2.equalizeHist(gray)
+
+<span class="cm"># 对比显示</span>
+result = np.hstack([gray, equ])
+cv2.imshow(<span class="str">"Original vs Equalized"</span>, result)
+
+<span class="cm"># 彩色图像的 CLAHE 自适应均衡化</span>
+<span class="cm"># 对亮度通道做均衡，避免色彩失真</span>
+lab = cv2.cvtColor(img, cv2.COLOR_BGR2Lab)
+l, a, b = cv2.split(lab)
+
+<span class="cm"># CLAHE（对比度限制的自适应直方图均衡化）</span>
+<span class="cm"># clipLimit — 对比度限制（防止噪声放大）</span>
+<span class="cm"># tileGridSize — 分块大小</span>
+clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+l_eq = clahe.apply(l)
+
+<span class="cm"># 合并并转回 BGR</span>
+lab_eq = cv2.merge([l_eq, a, b])
+img_clahe = cv2.cvtColor(lab_eq, cv2.COLOR_Lab2BGR)</code></pre>
+  </div>
+
+  <h3>8.3 直方图比较</h3>
+  <p>OpenCV 提供了多种直方图相似度比较方法，用于图像检索和匹配：</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 计算直方图并归一化</span>
+hist1 = cv2.calcHist([gray1], [0], None, [256], [0, 256])
+hist2 = cv2.calcHist([gray2], [0], None, [256], [0, 256])
+
+cv2.normalize(hist1, hist1, 0, 1, cv2.NORM_MINMAX)
+cv2.normalize(hist2, hist2, 0, 1, cv2.NORM_MINMAX)
+
+<span class="cm"># 比较方法</span>
+compare_methods = [
+    (cv2.HISTCMP_CORREL,      <span class="str">"相关性 (1=最相似)"</span>),
+    (cv2.HISTCMP_CHISQR,      <span class="str">"卡方 (0=最相似)"</span>),
+    (cv2.HISTCMP_INTERSECT,   <span class="str">"交集 (高=相似)"</span>),
+    (cv2.HISTCMP_BHATTACHARYYA, <span class="str">"巴氏距离 (0=最相似)"</span>)
+]
+
+<span class="kw">for</span> method, name <span class="kw">in</span> compare_methods:
+    score = cv2.compareHist(hist1, hist2, method)
+    print(<span class="str">f"{name}: {score:.4f}"</span>)</code></pre>
+  </div>
+
+  <h3>8.4 反向投影与模板匹配</h3>
+  <p>直方图反向投影可用于在图像中定位特定颜色或纹理区域：</p>
+  <div class="card">
+    <pre><code><span class="cm"># 直方图反向投影</span>
+<span class="cm"># 在图像中寻找与目标直方图相似的颜色区域</span>
+roi = cv2.imread(<span class="str">"template.jpg"</span>)  <span class="cm"># 目标区域</span>
+hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+hsv_img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+<span class="cm"># 计算 ROI 直方图</span>
+roi_hist = cv2.calcHist([hsv_roi], [0, 1], None,
+                        [180, 256], [0, 180, 0, 256])
+cv2.normalize(roi_hist, roi_hist, 0, 255, cv2.NORM_MINMAX)
+
+<span class="cm"># 反向投影</span>
+mask = cv2.calcBackProject([hsv_img], [0, 1],
+                            roi_hist, [0, 180, 0, 256], 1)
+
+<span class="cm"># 使用圆盘核将分散的高亮区域连接</span>
+disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+cv2.filter2D(mask, -1, disc, mask)</code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>直方图应用总结:</strong><br>
+    直方图均衡化适合全局对比度偏低的图像；CLAHE 适合局部光照不均匀的图像；直方图比较适合图像检索和重复检测；反向投影适合颜色跟踪和肤色检测。在医学影像和遥感图像中，直方图处理是必备的预处理步骤。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

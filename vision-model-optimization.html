@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模型量化与优化技术</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233498db'/><stop offset='100%25' stop-color='%232982b9'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>M</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>模型量化与优化技术</h1>
+  <p class="subtitle">PTQ · QAT · INT8 · 剪枝 · 知识蒸馏</p>
+  <span class="version">PyTorch / TensorRT / ONNX</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#quant-basics">量化基础原理</a></li>
+    <li><a href="#ptq">训练后量化 PTQ</a></li>
+    <li><a href="#qat">量化感知训练 QAT</a></li>
+    <li><a href="#tensorrt-quant">TensorRT INT8 量化</a></li>
+    <li><a href="#pruning">模型剪枝</a></li>
+    <li><a href="#distill">知识蒸馏</a></li>
+    <li><a href="#graph-opt">图优化与推理加速</a></li>
+    <li><a href="#benchmark">Benchmark 对比</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="quant-basics" class="toc-link">
+  <h2><span class="num">01</span> 量化基础原理</h2>
+
+  <p>模型量化将 FP32（32 位浮点）权重和激活值映射到 INT8（8 位整数）或更低精度的表示,从而减少模型体积并加速推理。核心公式是将浮点值映射到定点整数范围。</p>
+
+  <h3>量化映射公式</h3>
+  <pre><code>// 对称量化 (Symmetric)
+scale  = max(abs(x_float)) / 127
+x_int8 = round(x_float / scale)
+x_float = x_int8 * scale
+
+// 非对称量化 (Asymmetric / Affine)
+scale  = (max(x_float) - min(x_float)) / 255
+zero_point = round(-min(x_float) / scale)
+x_uint8 = round(x_float / scale) + zero_point
+x_float = (x_uint8 - zero_point) * scale</code></pre>
+
+  <table>
+    <thead>
+      <tr><th>量化方式</th><th>表示范围</th><th>适用场景</th><th>精度损失</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>对称量化 (INT8)</td><td>[-127, 127]</td><td>权重（大致对称分布）</td><td>较小</td></tr>
+      <tr><td>非对称量化 (UINT8)</td><td>[0, 255]</td><td>激活值（通常非负）</td><td>比对称更小</td></tr>
+      <tr><td>对称量化 (INT4)</td><td>[-7, 7]</td><td>极限压缩</td><td>较大</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Calibration（校准）</h3>
+  <p>校准是为了确定量化参数 scale 和 zero_point 的过程。校准数据集通常是训练集的一个子集（几百到几千张图片）,前向传播过程中收集每层的激活值统计信息。</p>
+
+  <p>常见的校准方法包括：</p>
+  <ul>
+    <li><strong>MinMax:</strong> 使用观察到的实际最小/最大值,对异常值敏感</li>
+    <li><strong>Percentile:</strong> 丢弃极端百分位值（如 99.99%）,更鲁棒</li>
+    <li><strong>Entropy (KL 散度):</strong> 使量化前后分布之间的 KL 散度最小化,TensorRT 默认方法</li>
+    <li><strong>MSE:</strong> 最小化量化前后的均方误差</li>
+  </ul>
+
+  <pre><code># MinMax 校准示意
+def calibrate_minmax(tensor):
+    min_val = tensor.min().item()
+    max_val = tensor.max().item()
+    scale = (max_val - min_val) / 255.0
+    zero_point = int(round(-min_val / scale))
+    return scale, zero_point
+
+# KL 散度校准示意
+def calibrate_kl(tensor, num_bins=2048):
+    hist = torch.histc(tensor.abs(), bins=num_bins)
+    best_kl = float('inf')
+    best_threshold = 0
+    for i in range(1, num_bins):
+        truncated = hist[:i].clone()
+        quantized = quantize(truncated, num_bins, i)
+        kl = kl_divergence(truncated, quantized)
+        if kl < best_kl:
+            best_kl = kl
+            best_threshold = i
+    return best_threshold</code></pre>
+</section>
+
+<section id="ptq" class="toc-link">
+  <h2><span class="num">02</span> 训练后量化 PTQ</h2>
+
+  <p>训练后量化（Post-Training Quantization）是在模型训练完成后,直接对权重和激活值进行量化,无需重新训练。PTQ 是最简单、最常用的量化方式,但精度损失在低比特时更明显。</p>
+
+  <h3>动态量化 (Dynamic Quantization)</h3>
+  <p>权重离线量化为 INT8,激活值在推理时动态量化。适用于 LSTM、Transformer 等权重密集型模型。</p>
+
+  <pre><code>import torch
+import torch.quantization as quant
+
+model = torch.load("model.pth")
+model.eval()
+
+# 动态量化,仅量化权重,激活值运行时量化
+quantized_model = quant.quantize_dynamic(
+    model,
+    {torch.nn.Linear, torch.nn.LSTM, torch.nn.GRUCell},
+    dtype=torch.qint8
+)
+
+# 推理
+with torch.no_grad():
+    output = quantized_model(input_data)
+
+# 保存量化模型
+torch.save(quantized_model.state_dict(), "model_dynamic.pth")</code></pre>
+
+  <h3>静态量化 (Static Quantization)</h3>
+  <p>权重和激活值都预先确定量化参数。需要校准数据集来统计激活值的分布。</p>
+
+  <pre><code>import torch
+import torch.quantization as quant
+
+# 1. 准备模型,插入量化/反量化节点
+model.qconfig = quant.get_default_qconfig('fbgemm')
+model = quant.prepare(model, inplace=False)
+
+# 2. 使用校准数据集收集统计信息
+model.eval()
+with torch.no_grad():
+    for images in calibration_loader:
+        model(images)
+
+# 3. 转换为量化模型
+quantized_model = quant.convert(model, inplace=False)
+
+# 4. 保存
+torch.jit.save(torch.jit.script(quantized_model), "model_static.pt")
+
+# 推理
+with torch.no_grad():
+    output = quantized_model(input_fp32)</code></pre>
+
+  <h3>量化配置详解</h3>
+  <pre><code>from torch.quantization import (
+    default_qconfig,
+    default_per_channel_qconfig,
+    QConfig,
+    HistogramObserver,
+    PerChannelMinMaxObserver
+)
+
+# 逐层量化（默认）
+model.qconfig = default_qconfig
+# 逐通道量化（精度更好,硬件支持有限）
+model.qconfig = default_per_channel_qconfig
+# 自定义: 使用直方图观察者 + 移动平均 MinMax
+my_qconfig = QConfig(
+    activation=HistogramObserver.with_args(
+        dtype=torch.quint8, reduce_range=True),
+    weight=PerChannelMinMaxObserver.with_args(
+        dtype=torch.qint8, qscheme=torch.per_channel_symmetric)
+)
+model.qconfig = my_qconfig</code></pre>
+
+  <div class="callout">
+    <strong>PTQ 适用场景:</strong><br>
+    当模型精度余量充足（如 ImageNet Top-1 在 75% 以上）、部署周期紧、无法获得训练环境时,优先选择 PTQ。对于 3D 卷积、大核深度可分离卷积等结构,PTQ 量化可能退化严重,需要改用 QAT。
+  </div>
+</section>
+
+<section id="qat" class="toc-link">
+  <h2><span class="num">03</span> 量化感知训练 QAT</h2>
+
+  <p>量化感知训练在训练过程中模拟量化操作,让模型权重适应量化误差,从而获得比 PTQ 更高的精度。</p>
+
+  <h3>基本原理</h3>
+  <p>QAT 在前向传播中插入 FakeQuantize 模块,模拟量化-反量化（round + clamp）操作。反向传播时使用直通估计器（Straight-Through Estimator, STE）,量化操作的梯度近似为 1,使梯度可以穿过不可微的 round 函数。</p>
+
+  <pre><code># FakeQuantize 前向 (伪代码)
+def fake_quantize(x, scale, zero_point, qmin, qmax):
+    # 量化
+    x_int = torch.round(x / scale + zero_point)
+    # 截断
+    x_int = torch.clamp(x_int, qmin, qmax)
+    # 反量化
+    x_fq = (x_int - zero_point) * scale
+    return x_fq
+
+# 反向传播 (STE)
+# dL/dx = dL/dx_fq  即 round 的梯度视为 1</code></pre>
+
+  <h3>PyTorch QAT 实现</h3>
+  <pre><code>import torch
+import torch.quantization as quant
+
+# 1. 从预训练模型开始
+model = torch.load("pretrained.pth")
+
+# 2. 融合 BN 和 Conv 层,减少量化误差
+model = quant.fuse_modules(model, [
+    ['conv1', 'bn1', 'relu1'],
+    ['conv2', 'bn2', 'relu2'],
+])
+
+# 3. 设置 qconfig 并 prepare_qat
+model.qconfig = quant.get_default_qat_qconfig('fbgemm')
+model = quant.prepare_qat(model, inplace=False)
+
+# 4. 微调训练（通常 10-20% 的完整训练 epoch）
+model.train()
+for epoch in range(num_epochs):
+    for images, labels in train_loader:
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        if epoch > freeze_bn_epoch:
+            model.apply(quant.disable_observer)
+
+# 5. 转换为量化模型
+model.eval()
+model = quant.convert(model, inplace=False)
+
+# 6. 评估
+with torch.no_grad():
+    accuracy = evaluate(model, test_loader)</code></pre>
+
+  <h3>QAT 训练技巧</h3>
+  <table>
+    <thead>
+      <tr><th>技巧</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>逐步冻结 BN</td><td>训练初期融合 BN,后期冻结 observer,让批归一化稳定</td></tr>
+      <tr><td>学习率调整</td><td>QAT 使用较小学习率（预训练的 1/10 到 1/100）</td></tr>
+      <tr><td>校准数据多样性</td><td>确保校准数据集覆盖代表性分布,不偏类</td></tr>
+      <tr><td>逐通道量化权重</td><td>对卷积权重使用 per-channel,减少每层内通道方差带来的误差</td></tr>
+      <tr><td>余弦退火</td><td>使用余弦退火学习率调度器,逐步收敛量化参数</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>QAT vs PTQ:</strong><br>
+    QAT 通常比 PTQ 高 1-3 个百分点的 Top-1 精度,尤其在小模型（MobileNet、EfficientNet-Lite）上差异更明显。代价是需要额外的训练时间和数据。当部署目标为 INT4 或更低比特时,QAT 是唯一可行的选择。
+  </div>
+</section>
+
+<section id="tensorrt-quant" class="toc-link">
+  <h2><span class="num">04</span> TensorRT INT8 量化</h2>
+
+  <p>TensorRT 提供了从 ONNX 模型到 INT8 引擎的一站式量化方案。它使用校准器（Calibrator）收集激活值统计信息,自动生成量化参数。</p>
+
+  <h3>INT8 Calibrator 实现</h3>
+  <pre><code>import tensorrt as trt
+import pycuda.driver as cuda
+import numpy as np
+import os
+
+class EntropyCalibrator(trt.IInt8EntropyCalibrator2):
+    def __init__(self, data_loader, input_shape,
+                 batch_size=1, cache_file="calibration.cache"):
+        trt.IInt8EntropyCalibrator2.__init__(self)
+        self.data_loader = data_loader
+        self.batch_size = batch_size
+        self.cache_file = cache_file
+        self.input_shape = (batch_size,) + input_shape
+        self.batch_idx = 0
+
+        # 分配 GPU 内存
+        vol = trt.volume(input_shape)
+        self.d_input = cuda.mem_alloc(vol * batch_size * 4)
+
+    def get_batch(self, names):
+        if self.batch_idx >= len(self.data_loader):
+            return None
+        batch = self.data_loader[self.batch_idx]
+        self.batch_idx += 1
+        cuda.memcpy_htod(self.d_input, batch.astype(np.float32).ravel())
+        return [int(self.d_input)]
+
+    def get_batch_size(self):
+        return self.batch_size
+
+    def read_calibration_cache(self):
+        if os.path.exists(self.cache_file):
+            with open(self.cache_file, "rb") as f:
+                return f.read()
+        return None
+
+    def write_calibration_cache(self, cache):
+        with open(self.cache_file, "wb") as f:
+            f.write(cache)</code></pre>
+
+  <h3>构建 INT8 引擎</h3>
+  <pre><code>import tensorrt as trt
+
+TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+builder = trt.Builder(TRT_LOGGER)
+network = builder.create_network(
+    1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+parser = trt.OnnxParser(network, TRT_LOGGER)
+
+with open("model.onnx", "rb") as f:
+    parser.parse(f.read())
+
+config = builder.create_builder_config()
+config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 4 * (1 << 30))
+config.set_flag(trt.BuilderFlag.INT8)
+
+calibrator = EntropyCalibrator(
+    calibration_data, input_shape=(3, 224, 224),
+    batch_size=32, cache_file="calibration.cache")
+config.int8_calibrator = calibrator
+
+serialized_engine = builder.build_serialized_network(network, config)
+
+with open("model_int8.engine", "wb") as f:
+    f.write(serialized_engine)</code></pre>
+
+  <h3>校准方法对比</h3>
+  <table>
+    <thead>
+      <tr><th>校准器</th><th>方法</th><th>精度</th><th>速度</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>IInt8EntropyCalibrator2</td><td>KL 散度最小化</td><td>最高</td><td>中等</td></tr>
+      <tr><td>IInt8MinMaxCalibrator</td><td>MinMax 范围</td><td>最低</td><td>最快</td></tr>
+      <tr><td>IInt8LegacyCalibrator</td><td>百分比阈值</td><td>中等</td><td>中等</td></tr>
+      <tr><td>IInt8EntropyCalibrator</td><td>KL 散度（旧版）</td><td>高</td><td>中等</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>校准缓存:</strong><br>
+    TensorRT 校准缓存文件（.cache）保存了校准结果。当模型结构不变时,可以直接读取缓存跳过校准过程,极大加速引擎构建。但缓存与校准器类型和模型结构绑定,改变任何一项都需要重新校准。
+  </div>
+</section>
+
+<section id="pruning" class="toc-link">
+  <h2><span class="num">05</span> 模型剪枝</h2>
+
+  <p>模型剪枝通过移除对输出影响较小的权重或神经元,缩小模型规模。剪枝可以在不显著降低精度的情况下,减少计算量和模型体积。</p>
+
+  <h3>结构化剪枝 vs 非结构化剪枝</h3>
+  <table>
+    <thead>
+      <tr><th>类型</th><th>粒度</th><th>加速效果</th><th>硬件友好</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>非结构化</td><td>单个权重</td><td>需稀疏库支持</td><td>不友好</td></tr>
+      <tr><td>结构化（通道）</td><td>整个通道</td><td>明显</td><td>友好</td></tr>
+      <tr><td>结构化（滤波器）</td><td>整个卷积核</td><td>明显</td><td>友好</td></tr>
+      <tr><td>结构化（块）</td><td>规则块状</td><td>中等</td><td>中等</td></tr>
+    </tbody>
+  </table>
+
+  <h3>L1 范数剪枝</h3>
+  <pre><code>import torch
+import torch.nn.utils.prune as prune
+
+def l1_norm_prune_conv(conv_layer, pruning_ratio=0.3):
+    # 计算每个滤波器的 L1 范数
+    l1_norm = conv_layer.weight.data.abs().sum(dim=(1, 2, 3))
+    num_filters = l1_norm.shape[0]
+    num_keep = int(num_filters * (1 - pruning_ratio))
+    _, indices = torch.topk(l1_norm, num_keep)
+    return indices
+
+def prune_model(model, pruning_ratio=0.3):
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.Conv2d):
+            prune.l1_unstructured(
+                module, name='weight',
+                amount=pruning_ratio
+            )
+            prune.remove(module, 'weight')
+    return model
+
+# 全局剪枝
+parameters_to_prune = []
+for name, module in model.named_modules():
+    if isinstance(module, torch.nn.Conv2d):
+        parameters_to_prune.append((module, 'weight'))
+
+prune.global_unstructured(
+    parameters_to_prune,
+    pruning_method=prune.L1Unstructured,
+    amount=0.4
+)</code></pre>
+
+  <h3>通道剪枝完整流程</h3>
+  <pre><code># 1. 训练一个大的基座模型
+base_model = resnet50(pretrained=True)
+
+# 2. 通道级结构剪枝
+def channel_prune(model, input_example, prune_ratio=0.3):
+    model.eval()
+    bn_gammas = []
+    for module in model.modules():
+        if isinstance(module, torch.nn.BatchNorm2d):
+            bn_gammas.append(module.weight.data.abs())
+    all_gammas = torch.cat([g.view(-1) for g in bn_gammas])
+    threshold = torch.quantile(all_gammas, prune_ratio)
+    return model
+
+# 3. 剪枝后微调
+pruned_model = channel_prune(base_model, dummy_input, 0.3)
+finetune(pruned_model, train_loader, num_epochs=30)</code></pre>
+
+  <div class="callout">
+    <strong>剪枝后处理:</strong><br>
+    结构化剪枝后,模型的实际 FLOPs 确实减少,但 PyTorch 的计算图不会自动变窄。需要手动重构模型（如用 torch.nn.Conv2d(C_in_keep, C_out_keep, ...) 替换原层）,才能真正获得加速。推荐使用 Intel NNCF 或 NVIDIA TensorRT Model Optimizer 来自动化这一过程。
+  </div>
+</section>
+
+<section id="distill" class="toc-link">
+  <h2><span class="num">06</span> 知识蒸馏</h2>
+
+  <p>知识蒸馏用一个大的教师模型指导一个小学生模型的训练。学生模型学习教师模型的输出分布,从而获得接近大模型的性能,同时保持小模型的推理效率。</p>
+
+  <h3>蒸馏框架</h3>
+  <pre><code>import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+def distillation_loss(student_logits, teacher_logits,
+                      labels, temperature=4.0, alpha=0.7):
+    # 软标签损失 (KL 散度)
+    soft_targets = F.softmax(teacher_logits / temperature, dim=1)
+    soft_prob = F.log_softmax(student_logits / temperature, dim=1)
+    soft_loss = F.kl_div(soft_prob, soft_targets,
+                         reduction='batchmean')
+    soft_loss *= (temperature ** 2)
+
+    # 硬标签损失 (交叉熵)
+    hard_loss = F.cross_entropy(student_logits, labels)
+
+    # 组合损失
+    total_loss = alpha * soft_loss + (1 - alpha) * hard_loss
+    return total_loss
+
+# 训练循环
+teacher_model = load_model("resnet152.pth")
+student_model = MobileNetV3Small()
+teacher_model.eval()
+optimizer = torch.optim.Adam(student_model.parameters(), lr=1e-3)
+
+for images, labels in train_loader:
+    optimizer.zero_grad()
+    with torch.no_grad():
+        teacher_logits = teacher_model(images)
+    student_logits = student_model(images)
+    loss = distillation_loss(
+        student_logits, teacher_logits, labels,
+        temperature=4.0, alpha=0.7)
+    loss.backward()
+    optimizer.step()</code></pre>
+
+  <h3>温度参数的作用</h3>
+  <p>温度 T 控制软标签的平滑程度。T=1 时退化为原始 softmax。T 越大,概率分布越平滑,教师模型的暗知识（如类别间的相似度）越容易传递给学生。典型范围是 2-8。</p>
+
+  <pre><code># 温度对 softmax 的影响
+import numpy as np
+
+logits = np.array([2.0, 1.0, 0.1, 3.0, -1.0])
+
+for T in [1, 2, 4, 8]:
+    softmax = np.exp(logits / T) / np.sum(np.exp(logits / T))
+    print(f"T={T}: {softmax}")</code></pre>
+
+  <h3>蒸馏技巧</h3>
+  <ul>
+    <li><strong>中间层蒸馏:</strong> 不仅匹配输出 logits,还匹配中间特征图（如 FitNets 方法）</li>
+    <li><strong>注意力迁移:</strong> 让学生模型模仿教师模型的注意力图</li>
+    <li><strong>自蒸馏:</strong> 模型自己作为教师,将早期 epoch 的知识迁移给后期</li>
+    <li><strong>在线蒸馏:</strong> 教师和学生同时训练,教师从学生吸收新知识</li>
+  </ul>
+</section>
+
+<section id="graph-opt" class="toc-link">
+  <h2><span class="num">07</span> 图优化与推理加速</h2>
+
+  <p>图优化是在模型计算图层面进行的一系列变换,目的是减少计算量、提高缓存利用率和算子执行效率。</p>
+
+  <h3>算子融合</h3>
+  <p>算子融合将多个连续的小算子合并为一个 kernel,减少 kernel launch 开销和中间张量的读写。</p>
+
+  <pre><code>// 常见算子融合模式
+// 1. Conv + BN + ReLU 融合
+// 原始: x -> Conv -> BN -> ReLU -> y
+// 融合: x -> ConvBnReLU -> y
+
+// 2. 残差连接融合
+// 原始: x -> Conv -> + -> ReLU -> y
+//              -> Conv ->
+// 融合: x -> FusedConvAddReLU -> y
+
+// 3. LayerNorm + Softmax 融合
+// 原始: x -> LayerNorm -> Softmax -> y
+// 融合: x -> LayerNormSoftmax -> y</code></pre>
+
+  <h3>TensorRT 图优化示例</h3>
+  <p>TensorRT 在构建引擎时自动执行以下优化：</p>
+  <ul>
+    <li><strong>Layer Fusion:</strong> 融合连续卷积、BN、ReLU 层</li>
+    <li><strong>Constant Folding:</strong> 预计算静态已知的常量表达式</li>
+    <li><strong>Dead Layer Elimination:</strong> 移除输出不被使用的层</li>
+    <li><strong>Depth Override:</strong> 优化计算调度,最大化 GPU 占用率</li>
+    <li><strong>Precision Override:</strong> 将支持 FP16/INT8 的层降精度处理</li>
+  </ul>
+
+  <pre><code># ONNX Runtime 图优化级别
+import onnxruntime as ort
+
+options = ort.SessionOptions()
+# ORT_DISABLE_ALL - 不优化
+# ORT_ENABLE_BASIC - 基本优化 (融合等)
+# ORT_ENABLE_EXTENDED - 扩展优化 (额外常量折叠)
+# ORT_ENABLE_ALL - 全部优化 (含可能改变精度的优化)
+options.graph_optimization_level =     ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED</code></pre>
+
+  <h3>内存复用</h3>
+  <p>图优化阶段可以分析每个张量的生命周期,让生命周期不重叠的张量共享同一块内存,显著降低峰值内存占用。</p>
+
+  <pre><code># ONNX Runtime 内存优化
+options.enable_cpu_mem_arena = True
+# 启用内存池后,ONNX Runtime 会复用已分配的内存块
+# 减少 malloc/free 次数,提升性能
+
+# 设置内存优化模式
+options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+# 或 ORT_PARALLEL - 并行执行计算图子图</code></pre>
+
+  <div class="callout">
+    <strong>图优化注意事项:</strong><br>
+    EXTENDED 及以上级别可能改变模型的数值行为（如 BN 折叠）。对于精度敏感的场景（如分割任务）,建议在优化后验证精度是否满足要求。
+  </div>
+</section>
+
+<section id="benchmark" class="toc-link">
+  <h2><span class="num">08</span> Benchmark 对比</h2>
+
+  <p>以下是在 ResNet-50 模型上,不同优化技术组合的性能对比（Batch Size=1, 输入 3x224x224, GPU A100）。</p>
+
+  <h3>推理延迟对比 (ms)</h3>
+  <table>
+    <thead>
+      <tr><th>优化方案</th><th>FP32</th><th>FP16</th><th>INT8</th><th>模型体积</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>无优化 (PyTorch)</td><td>7.2</td><td>-</td><td>-</td><td>98 MB</td></tr>
+      <tr><td>ONNX Runtime CUDA</td><td>4.8</td><td>-</td><td>-</td><td>98 MB</td></tr>
+      <tr><td>ONNX Runtime + CUDA EP</td><td>3.9</td><td>-</td><td>-</td><td>98 MB</td></tr>
+      <tr><td>TensorRT</td><td>2.3</td><td>1.1</td><td>0.8</td><td>98 / 49 / 25 MB</td></tr>
+      <tr><td>TensorRT + 剪枝 30%</td><td>1.8</td><td>0.9</td><td>0.6</td><td>68 / 34 / 17 MB</td></tr>
+      <tr><td>TensorRT + 蒸馏(ResNet18)</td><td>1.1</td><td>0.5</td><td>0.4</td><td>44 / 22 / 11 MB</td></tr>
+    </tbody>
+  </table>
+
+  <h3>精度对比 (ImageNet Top-1)</h3>
+  <table>
+    <thead>
+      <tr><th>方案</th><th>Top-1 (%)</th><th>相对原始</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>ResNet-50 FP32 (原始)</td><td>76.15</td><td>-</td></tr>
+      <tr><td>TensorRT FP32</td><td>76.15</td><td>0.00</td></tr>
+      <tr><td>TensorRT FP16</td><td>76.05</td><td>-0.10</td></tr>
+      <tr><td>TensorRT INT8 (Entropy)</td><td>75.80</td><td>-0.35</td></tr>
+      <tr><td>TensorRT INT8 (MinMax)</td><td>74.90</td><td>-1.25</td></tr>
+      <tr><td>PTQ 静态量化 (PyTorch)</td><td>75.60</td><td>-0.55</td></tr>
+      <tr><td>QAT (PyTorch)</td><td>76.00</td><td>-0.15</td></tr>
+      <tr><td>剪枝 30% + 微调</td><td>75.50</td><td>-0.65</td></tr>
+      <tr><td>蒸馏 (ResNet152 -> ResNet18)</td><td>74.80</td><td>-1.35</td></tr>
+    </tbody>
+  </table>
+
+  <h3>选择指南</h3>
+  <ul>
+    <li><strong>追求极致精度:</strong> TensorRT FP32 或 QAT INT8</li>
+    <li><strong>追求低延迟:</strong> TensorRT FP16 + 剪枝</li>
+    <li><strong>追求小体积:</strong> INT8 + 剪枝 + 蒸馏联合使用</li>
+    <li><strong>部署周期短:</strong> ONNX Runtime CUDA EP + PTQ</li>
+    <li><strong>边缘设备:</strong> INT8 + 结构化剪枝 + 知识蒸馏</li>
+  </ul>
+
+  <div class="callout">
+    <strong>最佳实践:</strong><br>
+    不同优化技术可以叠加使用。推荐流程：基座训练 -> 知识蒸馏 -> 结构化剪枝 -> QAT 微调 -> TensorRT INT8 部署。这一流程通常可以保持原模型 98% 以上精度的同时,获得 5-10 倍推理加速。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

@@ -3,3 +3,5 @@
 .sisyphus/
 preview-*.png
 test-results/
+output*.png
+*.sh

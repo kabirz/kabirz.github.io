@@ -181,8 +181,23 @@
     { t:".NET MAUI 深度解析", f:"windows-maui.html", top:"windows" },
     { t:"Windows WebView2 深度解析", f:"windows-webview2.html", top:"windows" },
     { t:"Dioxus 深度解析", f:"rust-dioxus.html", top:"rust" },
+    { t:"OpenCV 入门与环境搭建", f:"vision-opencv-intro.html", top:"vision" },
+    { t:"OpenCV 图像处理基础", f:"vision-opencv-image.html", top:"vision" },
+    { t:"OpenCV 特征检测与匹配", f:"vision-opencv-features.html", top:"vision" },
+    { t:"YOLO 系列模型演进", f:"vision-yolo-evolution.html", top:"vision" },
+    { t:"YOLOv8 目标检测实战", f:"vision-yolo-practice.html", top:"vision" },
+    { t:"PyTorch 基础入门", f:"vision-pytorch-basics.html", top:"vision" },
+    { t:"PyTorch 图像分类实战", f:"vision-pytorch-classification.html", top:"vision" },
+    { t:"TensorFlow 基础入门", f:"vision-tensorflow-basics.html", top:"vision" },
+    { t:"TensorFlow 目标检测实战", f:"vision-tensorflow-detection.html", top:"vision" },
+    { t:"ONNX 模型格式与转换", f:"vision-onnx-intro.html", top:"vision" },
+    { t:"ONNX 模型部署实战", f:"vision-onnx-deployment.html", top:"vision" },
+    { t:"模型量化与优化技术", f:"vision-model-optimization.html", top:"vision" },
+    { t:"目标检测基础原理", f:"vision-object-detection.html", top:"vision" },
+    { t:"图像分割技术详解", f:"vision-segmentation.html", top:"vision" },
+    { t:"人脸检测与识别技术", f:"vision-face-detection.html", top:"vision" },
   ];
-  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", other:"硬件与平台" };
+  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", other:"硬件与平台" };
 
   // 主题切换
   var STORAGE_KEY = 'kernel-docs-theme';
@@ -249,6 +264,7 @@
       net: { emoji: "🌐", color: "#0969da" },
       fs: { emoji: "📁", color: "#1a7f37" },
       driver: { emoji: "🔌", color: "#8250df" },
+      vision: { emoji: "👁️", color: "#e74c3c" },
       other: { emoji: "📦", color: "#656d76" }
     };
 

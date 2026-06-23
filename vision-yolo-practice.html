@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YOLOv8 目标检测实战</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ff6b6b'/><stop offset='100%25' stop-color='%23ee5a24'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>V</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>YOLOv8 目标检测实战</h1>
+  <p class="subtitle">数据集制作、训练、评估、部署</p>
+  <span class="version">YOLOv8 · Ultralytics</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#env">环境安装</a></li>
+    <li><a href="#coco">COCO 数据集</a></li>
+    <li><a href="#dataset">自定义数据集制作</a></li>
+    <li><a href="#training">训练与参数详解</a></li>
+    <li><a href="#visualize">训练过程可视化</a></li>
+    <li><a href="#eval">模型评估</a></li>
+    <li><a href="#predict">预测与导出</a></li>
+    <li><a href="#end2end">完整端到端示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="env" class="toc-link">
+  <h2><span class="num">01</span> 环境安装</h2>
+
+  <h3>1.1 安装 Ultralytics</h3>
+  <p>YOLOv8 由 Ultralytics 团队维护，通过 pip 即可安装。推荐使用 Python 3.8-3.11 版本。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 基础安装（推荐）</span>
+pip install ultralytics
+
+<span class="cm"># 指定版本安装</span>
+pip install ultralytics==8.3.0
+
+<span class="cm"># 从源码安装（最新开发版）</span>
+pip install git+https://github.com/ultralytics/ultralytics.git
+
+<span class="cm"># 验证安装</span>
+python -c <span class="str">"import ultralytics; print(ultralytics.__version__)"</span>
+
+<span class="cm"># 输出示例: 8.3.0</span></code></pre>
+  </div>
+
+  <h3>1.2 依赖与环境</h3>
+  <p>Ultralytics 自动安装 PyTorch 和相关依赖。如果需要 CUDA 加速，建议提前安装 GPU 版本的 PyTorch：</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># 查看 PyTorch 版本和 CUDA 可用性</span>
+python -c <span class="str">"import torch; print(torch.__version__); print(torch.cuda.is_available())"</span>
+
+<span class="cm"># 如果需要手动安装 GPU 版 PyTorch（根据 CUDA 版本选择）</span>
+<span class="cm"># CUDA 12.1</span>
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+
+<span class="cm"># CUDA 11.8</span>
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118</code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>硬件建议:</strong><br>
+    训练 YOLOv8 至少需要 4GB 显存的 GPU。YOLOv8n/yolov8s 可以在 4-6GB 显存上训练（batch=16）；YOLOv8m 需要 8GB 以上；YOLOv8l/x 建议 16GB 以上。如果没有 GPU，可以使用 Google Colab 的免费 T4 GPU（约 15GB 显存），或使用 CPU 训练小模型（会慢 10-50 倍）。
+  </div>
+
+  <h3>1.3 快速验证</h3>
+  <div class="card">
+    <pre><code><span class="cm"># 下载预训练权重并快速推理</span>
+yolo predict model=yolov8n.pt source=<span class="str">"https://ultralytics.com/images/bus.jpg"</span>
+
+<span class="cm"># 使用 Python API</span>
+<span class="kw">from</span> ultralytics <span class="kw">import</span> YOLO
+
+<span class="cm"># 加载模型（自动下载权重）</span>
+model = YOLO(<span class="str">"yolov8n.pt"</span>)
+
+<span class="cm"># 推理</span>
+results = model(<span class="str">"https://ultralytics.com/images/bus.jpg"</span>)
+
+<span class="cm"># 显示结果</span>
+results[0].show()
+
+<span class="cm"># 保存结果</span>
+results[0].save(<span class="str">"result.jpg"</span>)</code></pre>
+  </div>
+</section>
+
+<section id="coco" class="toc-link">
+  <h2><span class="num">02</span> COCO 数据集</h2>
+
+  <h3>2.1 数据集概述</h3>
+  <p>COCO（Common Objects in Context）是目标检测领域最权威的数据集之一，由微软在 2014 年发布。YOLOv8 的预训练权重即基于 COCO 数据集训练。</p>
+
+  <table>
+    <tr><th>版本</th><th>训练集图像</th><th>验证集图像</th><th>类别数</th><th>标注类型</th></tr>
+    <tr><td>COCO 2014</td><td>82,783</td><td>40,504</td><td>80</td><td>检测 + 分割 + 关键点</td></tr>
+    <tr><td>COCO 2017</td><td>118,287</td><td>5,000</td><td>80</td><td>检测 + 分割 + 关键点</td></tr>
+    <tr><td>COCO 2017（测试集）</td><td>—</td><td>40,670</td><td>80</td><td>无公开标注</td></tr>
+  </table>
+
+  <p>COCO 的 80 个类别分为 12 个大类，包括：person、vehicle（bicycle、car、motorcycle 等）、animal（bird、cat、dog 等）、food（apple、orange、banana 等）等日常物体。</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># COCO 数据集标注格式（JSON）</span>
+{
+  <span class="str">"images"</span>: [
+    {
+      <span class="str">"id"</span>: 1,
+      <span class="str">"file_name"</span>: <span class="str">"000000000001.jpg"</span>,
+      <span class="str">"width"</span>: 640,
+      <span class="str">"height"</span>: 480
+    }
+  ],
+  <span class="str">"annotations"</span>: [
+    {
+      <span class="str">"id"</span>: 1,
+      <span class="str">"image_id"</span>: 1,
+      <span class="str">"category_id"</span>: 3,
+      <span class="str">"bbox"</span>: [100, 150, 200, 300],
+      <span class="str">"area"</span>: 60000,
+      <span class="str">"iscrowd"</span>: 0,
+      <span class="str">"segmentation"</span>: [...]
+    }
+  ],
+  <span class="str">"categories"</span>: [
+    {<span class="str">"id"</span>: 1, <span class="str">"name"</span>: <span class="str">"person"</span>},
+    {<span class="str">"id"</span>: 2, <span class="str">"name"</span>: <span class="str">"bicycle"</span>},
+    ...
+  ]
+}
+
+<span class="cm">// bbox: [x_top-left, y_top-left, width, height]</span></code></pre>
+  </div>
+
+  <h3>2.2 自动下载与使用</h3>
+  <div class="card">
+    <pre><code><span class="kw">from</span> ultralytics.utils <span class="kw">import</span> DATASETS_ROOT
+<span class="kw">import</span> yaml
+
+<span class="cm"># ultralytics 提供 COCO 配置文件的自动下载</span>
+<span class="cm"># 运行以下命令自动下载 COCO2017：</span>
+<span class="cm"># yolo train model=yolov8n.pt data=coco.yaml epochs=100</span>
+
+<span class="cm"># coco.yaml 的内容示例：</span>
+<span class="cm"># train: coco/train2017.txt</span>
+<span class="cm"># val: coco/val2017.txt</span>
+<span class="cm"># nc: 80</span>
+<span class="cm"># names: ['person', 'bicycle', 'car', ...]</span></code></pre>
+  </div>
+</section>
+
+<section id="dataset" class="toc-link">
+  <h2><span class="num">03</span> 自定义数据集制作</h2>
+
+  <h3>3.1 YOLO 数据集格式</h3>
+  <p>YOLOv8 使用简化的标签格式，每个标注为一个文本文件（与图像同名），每行表示一个目标：</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// labels/000001.txt（与 images/000001.jpg 对应）</span>
+<span class="cm">// 格式: class_id x_center y_center width height</span>
+<span class="cm">// 所有坐标值归一化到 0-1（除以图像宽/高）</span>
+
+0 0.500 0.400 0.200 0.315    <span class="cm">// person</span>
+2 0.750 0.600 0.100 0.150    <span class="cm">// car</span>
+5 0.300 0.800 0.050 0.120    <span class="cm">// dog</span>
+
+<span class="cm">// 文件目录结构：</span>
+dataset/
+├── images/
+│   ├── train/
+│   │   ├── 000001.jpg
+│   │   ├── 000002.jpg
+│   │   └── ...
+│   └── val/
+│       ├── 000100.jpg
+│       └── ...
+├── labels/
+│   ├── train/
+│   │   ├── 000001.txt
+│   │   ├── 000002.txt
+│   │   └── ...
+│   └── val/
+│       ├── 000100.txt
+│       └── ...
+└── dataset.yaml     <span class="cm">// 数据集配置文件</span></code></pre>
+  </div>
+
+  <h3>3.2 数据标注工具</h3>
+  <table>
+    <tr><th>工具</th><th>平台</th><th>标注格式</th><th>特点</th></tr>
+    <tr><td>LabelMe</td><td>Web/桌面</td><td>JSON（可转 YOLO）</td><td>经典开源，多边形标注</td></tr>
+    <tr><td>LabelImg</td><td>桌面（Qt）</td><td>Pascal VOC / YOLO</td><td>轻量级，直接导出 YOLO 格式</td></tr>
+    <tr><td>Roboflow</td><td>Web</td><td>多格式导出</td><td>在线协作，内置增强，一键导出</td></tr>
+    <tr><td>CVAT</td><td>Web</td><td>COCO / YOLO / TFRecord</td><td>企业级，支持自动标注</td></tr>
+    <tr><td>MakeSense.ai</td><td>Web</td><td>YOLO / COCO</td><td>免费在线，无需安装</td></tr>
+  </table>
+
+  <h3>3.3 LabelMe 转换为 YOLO 格式</h3>
+  <div class="card">
+    <pre><code><span class="kw">import</span> json
+<span class="kw">import</span> os
+
+<span class="kw">def</span> <span class="fn">labelme_to_yolo</span>(labelme_json, img_w, img_h, class_map):
+    <span class="cm">"""LabelMe JSON 转换为 YOLO 格式标注"""</span>
+    <span class="kw">with</span> open(labelme_json) <span class="kw">as</span> f:
+        data = json.load(f)
+
+    yolo_lines = []
+    <span class="kw">for</span> shape <span class="kw">in</span> data[<span class="str">"shapes"</span>]:
+        label = shape[<span class="str">"label"</span>]
+        <span class="kw">if</span> label <span class="kw">not in</span> class_map:
+            <span class="kw">continue</span>
+
+        <span class="cm"># Polygon → bbox</span>
+        points = shape[<span class="str">"points"</span>]
+        xs = [p[0] <span class="kw">for</span> p <span class="kw">in</span> points]
+        ys = [p[1] <span class="kw">for</span> p <span class="kw">in</span> points]
+        x1, y1 = min(xs), min(ys)
+        x2, y2 = max(xs), max(ys)
+
+        <span class="cm"># 归一化</span>
+        x_center = (x1 + x2) / 2.0 / img_w
+        y_center = (y1 + y2) / 2.0 / img_h
+        width    = (x2 - x1) / img_w
+        height   = (y2 - y1) / img_h
+
+        class_id = class_map[label]
+        yolo_lines.append(
+            <span class="str">f"{class_id} {x_center:.6f} {y_center:.6f} "</span>
+            <span class="str">f"{width:.6f} {height:.6f}"</span>
+        )
+
+    <span class="kw">return</span> yolo_lines</code></pre>
+  </div>
+
+  <h3>3.4 数据集配置文件</h3>
+  <div class="card">
+    <pre><code><span class="cm"># dataset.yaml</span>
+<span class="cm"># 数据集配置文件，YOLOv8 通过此文件定位数据</span>
+
+<span class="cm"># 数据路径（支持绝对路径和相对路径）</span>
+path: ./datasets/mydataset
+train: images/train
+val: images/val
+test: images/test    <span class="cm"># 可选</span>
+
+<span class="cm"># 类别信息</span>
+nc: 5                <span class="cm"># 类别数量</span>
+names: [
+  <span class="str">'person'</span>,
+  <span class="str">'helmet'</span>,
+  <span class="str">'vest'</span>,
+  <span class="str">'glove'</span>,
+  <span class="str">'boot'</span>
+]</code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>数据集制作建议:</strong><br>
+    每个类别至少 300 张标注图像。数据应覆盖不同光照、角度、尺度和背景。训练集:验证集:测试集比例建议 7:2:1 或 8:1:1。标注质量比数量更重要，边界框应紧密贴合物体。使用 Roboflow 可以自动完成数据分割、格式转换和增强。
+  </div>
+</section>
+
+<section id="training" class="toc-link">
+  <h2><span class="num">04</span> 训练与参数详解</h2>
+
+  <h3>4.1 训练命令</h3>
+  <p>YOLOv8 提供 CLI 和 Python API 两种训练方式：</p>
+
+  <div class="card">
+    <pre><code><span class="cm"># CLI 方式</span>
+yolo train model=yolov8n.pt data=dataset.yaml epochs=100 imgsz=640
+
+<span class="cm"># Python API 方式</span>
+<span class="kw">from</span> ultralytics <span class="kw">import</span> YOLO
+
+<span class="cm"># 加载预训练权重（推荐：迁移学习）</span>
+model = YOLO(<span class="str">"yolov8n.pt"</span>)
+
+<span class="cm"># 开始训练</span>
+results = model.train(
+    data=<span class="str">"dataset.yaml"</span>,
+    epochs=100,
+    imgsz=640,
+    batch=16,
+    device=<span class="str">"0"</span>,
+    workers=8,
+    project=<span class="str">"my_project"</span>,
+    name=<span class="str">"exp1"</span>,
+    exist_ok=True,
+    pretrained=True,
+    optimizer=<span class="str">"auto"</span>,
+    seed=42,
+    patience=20,
+    lr0=0.01,
+    lrf=0.01,
+    warmup_epochs=3,
+    cos_lr=True,
+    val=True,
+    amp=True,
+)</code></pre>
+  </div>
+
+  <h3>4.2 核心参数详解</h3>
+  <table>
+    <tr><th>参数</th><th>默认值</th><th>说明</th><th>建议</th></tr>
+    <tr><td><code>model</code></td><td>—</td><td>模型权重文件（.pt）或配置文件（.yaml）</td><td>从预训练开始，yolov8n/s/m/l/x</td></tr>
+    <tr><td><code>data</code></td><td>—</td><td>数据集配置文件路径</td><td>见上节 dataset.yaml</td></tr>
+    <tr><td><code>epochs</code></td><td>100</td><td>训练轮次</td><td>小数据集 100-300, 大数据集 300-600</td></tr>
+    <tr><td><code>imgsz</code></td><td>640</td><td>输入图像尺寸（像素）</td><td>320/416/640/1280, 大尺寸提高小物体检测</td></tr>
+    <tr><td><code>batch</code></td><td>16</td><td>批次大小</td><td>根据显存调整，越大越好（梯度更稳定）</td></tr>
+    <tr><td><code>lr0</code></td><td>0.01</td><td>初始学习率</td><td>小模型 0.01, 大模型 0.001</td></tr>
+    <tr><td><code>lrf</code></td><td>0.01</td><td>最终学习率（lr0 * lrf）</td><td>cos_lr=True 时有效</td></tr>
+    <tr><td><code>patience</code></td><td>50</td><td>早停耐心值（轮次）</td><td>验证集 mAP 持续不提升时停止</td></tr>
+    <tr><td><code>cos_lr</code></td><td>False</td><td>余弦退火学习率调度</td><td>推荐开启，收敛更平稳</td></tr>
+    <tr><td><code>amp</code></td><td>True</td><td>自动混合精度训练</td><td>显存减半，速度提升 1.5-2x</td></tr>
+    <tr><td><code>device</code></td><td>—</td><td>训练设备（0/1/cpu）</td><td>多卡: "0,1,2,3"</td></tr>
+    <tr><td><code>workers</code></td><td>8</td><td>数据加载线程数</td><td>根据 CPU 核数调整</td></tr>
+    <tr><td><code>warmup_epochs</code></td><td>3</td><td>线性预热轮次</td><td>前 3 轮从低 lr 升高到 lr0</td></tr>
+    <tr><td><code>patience</code></td><td>20</td><td>早停耐心值</td><td>验证 mAP 连续 20 轮不提升则停止</td></tr>
+    <tr><td><code>optimizer</code></td><td>auto</td><td>优化器（auto/SGD/Adam/AdamW）</td><td>auto 自动选择 AdamW</td></tr>
+  </table>
+
+  <h3>4.3 数据增强参数</h3>
+  <div class="card">
+    <pre><code><span class="cm"># 数据增强相关参数</span>
+model.train(
+    hsv_h=0.015,          <span class="cm">// 色调增强系数</span>
+    hsv_s=0.7,            <span class="cm">// 饱和度增强系数</span>
+    hsv_v=0.4,            <span class="cm">// 明度增强系数</span>
+    degrees=0.0,          <span class="cm">// 旋转增强角度</span>
+    translate=0.1,        <span class="cm">// 平移增强比例</span>
+    scale=0.5,            <span class="cm">// 缩放增强比例</span>
+    shear=0.0,            <span class="cm">// 剪切增强角度</span>
+    perspective=0.0,      <span class="cm">// 透视变换</span>
+    flipud=0.0,           <span class="cm">// 上下翻转概率</span>
+    fliplr=0.5,           <span class="cm">// 左右翻转概率</span>
+    mosaic=1.0,           <span class="cm">// Mosaic 增强概率</span>
+    mixup=0.0,            <span class="cm">// MixUp 增强概率</span>
+    copy_paste=0.0,       <span class="cm">// Copy-Paste 增强</span>
+)</code></pre>
+  </div>
+
+  <h3>4.4 迁移学习策略</h3>
+  <p>YOLOv8 的迁移学习（Transfer Learning）策略：</p>
+  <ul>
+    <li><strong>冻结骨干训练</strong>：在前 10-20 轮冻结 backbone 权重（设置 <code>freeze=10</code>），仅训练检测头，加速收敛</li>
+    <li><strong>分阶段学习率</strong>：head 层使用 lr0，backbone 层使用 lr0 × 0.1</li>
+    <li><strong>自动锚点计算</strong>：YOLOv8 会根据新数据集自动聚类锚点框尺寸</li>
+    <li><strong>标签平滑</strong>：设置 <code>label_smoothing=0.1</code> 减少过拟合</li>
+  </ul>
+
+  <div class="card">
+    <pre><code><span class="cm"># 冻结训练示例</span>
+<span class="kw">from</span> ultralytics <span class="kw">import</span> YOLO
+
+model = YOLO(<span class="str">"yolov8m.pt"</span>)
+
+<span class="cm"># 1. 第一阶段：只训练检测头（冻结 backbone）</span>
+model.train(
+    data=<span class="str">"dataset.yaml"</span>,
+    epochs=30,
+    freeze=10,          <span class="cm">// 冻结前 10 层（backbone）</span>
+    lr0=0.005,          <span class="cm">// 稍高的学习率</span>
+    imgsz=640,
+    batch=16,
+)
+
+<span class="cm"># 2. 第二阶段：解冻全体微调</span>
+model.train(
+    data=<span class="str">"dataset.yaml"</span>,
+    epochs=70,
+    freeze=0,           <span class="cm">// 不冻结</span>
+    lr0=0.001,          <span class="cm">// 较小的学习率</span>
+    imgsz=640,
+    batch=16,
+)</code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>训练实践建议:</strong><br>
+    从 COCO 预训练权重开始（迁移学习），在 100 个类别上，YOLOv8n 在单卡上约 8 小时收敛。小数据集（500 张以下）需加强数据增强，建议开启 Mosaic（0.75-1.0）和 MixUp（0.1-0.3）。注意 Mosaic 增强会在最后 10 个 epoch 自动关闭。
+  </div>
+</section>
+
+<section id="visualize" class="toc-link">
+  <h2><span class="num">05</span> 训练过程可视化</h2>
+
+  <h3>5.1 内置日志系统</h3>
+  <p>YOLOv8 训练时自动记录训练过程的各项指标。默认日志保存在 <code>runs/detect/train{exp}/</code> 目录下：</p>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+runs/detect/train/
+├── <span class="file">weights/</span>
+│   ├── <span class="file">best.pt</span>        <span class="cm">验证集 mAP 最高的模型权重</span>
+│   └── <span class="file">last.pt</span>        <span class="cm">最后一轮的模型权重</span>
+├── <span class="file">confusion_matrix.png</span>  <span class="cm">混淆矩阵</span>
+├── <span class="file">results.csv</span>            <span class="cm">训练指标 CSV 文件</span>
+├── <span class="file">results.png</span>            <span class="cm">训练曲线图</span>
+├── <span class="file">val_batch0_pred.jpg</span>   <span class="cm">验证集预测示例</span>
+├── <span class="file">labels.jpg</span>             <span class="cm">标签可视化</span>
+├── <span class="file">F1_curve.png</span>           <span class="cm">F1 曲线</span>
+├── <span class="file">P_curve.png</span>            <span class="cm">精确率曲线</span>
+├── <span class="file">R_curve.png</span>            <span class="cm">召回率曲线</span>
+└── <span class="file">PR_curve.png</span>           <span class="cm">PR 曲线</span>
+  </pre></div>
+
+  <h3>5.2 TensorBoard 可视化</h3>
+  <div class="card">
+    <pre><code><span class="kw">from</span> ultralytics <span class="kw">import</span> YOLO
+
+model = YOLO(<span class="str">"yolov8n.pt"</span>)
+
+<span class="cm"># 在训练参数中开启 TensorBoard</span>
+model.train(
+    data=<span class="str">"dataset.yaml"</span>,
+    epochs=100,
+    imgsz=640,
+    project=<span class="str">"my_project"</span>,
+    name=<span class="str">"tensorboard_demo"</span>,
+)
+
+<span class="cm"># 在另一个终端启动 TensorBoard</span>
+<span class="cm"># tensorboard --logdir my_project/tensorboard_demo</span></code></pre>
+  </div>
+
+  <h3>5.3 Comet ML 在线可视化</h3>
+  <p>Ultralytics 原生集成 Comet ML，提供在线实验跟踪：</p>
+  <div class="card">
+    <pre><code><span class="cm"># 设置 Comet ML API Key</span>
+<span class="kw">import</span> comet_ml
+comet_ml.init(api_key=<span class="str">"YOUR_API_KEY"</span>)
+
+<span class="cm"># 训练时自动记录到 Comet</span>
+model.train(
+    data=<span class="str">"dataset.yaml"</span>,
+    epochs=100,
+    project=<span class="str">"my_comet_project"</span>,
+)</code></pre>
+  </div>
+
+  <h3>5.4 训练曲线解读</h3>
+  <p>YOLOv8 自动生成的 <code>results.png</code> 包含以下曲线：</p>
+  <table>
+    <tr><th>曲线</th><th>说明</th><th>理想趋势</th></tr>
+    <tr><td>train/box_loss</td><td>边界框回归损失</td><td>不断下降并收敛</td></tr>
+    <tr><td>train/cls_loss</td><td>分类损失</td><td>不断下降并收敛</td></tr>
+    <tr><td>train/dfl_loss</td><td>分布聚焦损失</td><td>不断下降并收敛</td></tr>
+    <tr><td>metrics/precision</td><td>精确率（验证集）</td><td>趋向稳定值</td></tr>
+    <tr><td>metrics/recall</td><td>召回率（验证集）</td><td>趋向稳定值</td></tr>
+    <tr><td>metrics/mAP50</td><td>IoU=0.5 时的 mAP</td><td>趋向稳定值</td></tr>
+    <tr><td>metrics/mAP50-95</td><td>IoU 0.5-0.95 的 mAP</td><td>趋向稳定值</td></tr>
+    <tr><td>val/box_loss</td><td>验证集边界框损失</td><td>下降后不回升（回升=过拟合）</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>训练诊断:</strong><br>
+    如果训练损失下降但验证损失上升 → 过拟合，减少 epochs 或增加数据增强。如果训练和验证损失都不下降 → 学习率太低或模型容量太小。如果 mAP 波动剧烈 → 批次大小太小或学习率太高。建议用 <code>patience=20</code> 早停防止过拟合。
+  </div>
+</section>
+
+<section id="eval" class="toc-link">
+  <h2><span class="num">06</span> 模型评估</h2>
+
+  <h3>6.1 评估命令</h3>
+  <div class="card">
+    <pre><code><span class="cm"># CLI 方式</span>
+yolo val model=runs/detect/train/weights/best.pt data=dataset.yaml
+
+<span class="cm"># Python API 方式</span>
+<span class="kw">from</span> ultralytics <span class="kw">import</span> YOLO
+
+model = YOLO(<span class="str">"runs/detect/train/weights/best.pt"</span>)
+metrics = model.val(
+    data=<span class="str">"dataset.yaml"</span>,
+    split=<span class="str">"val"</span>,        <span class="cm">// "val", "test", "train"</span>
+    batch=16,
+    imgsz=640,
+    conf=0.001,           <span class="cm">// NMS 前的置信度阈值</span>
+    iou=0.6,              <span class="cm">// NMS 的 IoU 阈值</span>
+    max_det=300,          <span class="cm">// 每张图像最多检测目标数</span>
+    device=<span class="str">"0"</span>,
+    plots=True,           <span class="cm">// 生成混淆矩阵和曲线图</span>
+)
+
+<span class="cm"># 输出评估结果</span>
+print(metrics.box.map)        <span class="cm">// mAP@0.5:0.95</span>
+print(metrics.box.map50)      <span class="cm">// mAP@0.5</span>
+print(metrics.box.map75)      <span class="cm">// mAP@0.75</span>
+print(metrics.box.maps)       <span class="cm">// 每类的 AP 列表</span>
+print(metrics.box.p)          <span class="cm">// 精确率</span>
+print(metrics.box.r)          <span class="cm">// 召回率</span>
+print(metrics.box.f1)         <span class="cm">// F1 分数</span>
+print(metrics.box.ap_class_index)  <span class="cm">// 类别索引</span></code></pre>
+  </div>
+
+  <h3>6.2 混淆矩阵</h3>
+  <p>混淆矩阵是评估分类性能的核心工具。YOLOv8 自动生成归一化混淆矩阵（<code>confusion_matrix_normalized.png</code>），展示每个类别预测结果的分布：</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 混淆矩阵结构示意</span>
+<span class="cm">// 行 = 真实标签, 列 = 预测类别</span>
+<span class="cm">// 对角线 = 正确分类, 非对角线 = 混淆</span>
+<span class="cm">// 最后一列 = 背景误检 (FP)</span>
+<span class="cm">// 最后一行 = 漏检 (FN)</span>
+
+           Person  Car  Bike  BG
+Person      0.85  0.02  0.01  0.12
+Car         0.03  0.80  0.05  0.12
+Bike        0.02  0.04  0.78  0.16
+BG          0.01  0.02  0.01  0.96</code></pre>
+  </div>
+
+  <h3>6.3 PR 曲线与 F1 曲线</h3>
+  <p>PR 曲线（Precision-Recall Curve）展示了不同置信度阈值下精确率和召回率的变化。曲线下面积即为 AP（Average Precision）。F1 曲线展示不同阈值下 F1 分数的变化，用于选择最优置信度阈值。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> matplotlib.pyplot <span class="kw">as</span> plt
+<span class="kw">from</span> ultralytics <span class="kw">import</span> YOLO
+
+model = YOLO(<span class="str">"best.pt"</span>)
+metrics = model.val(plots=True)
+
+<span class="cm"># 查看每个类别的 AP</span>
+class_names = [<span class="str">"person"</span>, <span class="str">"helmet"</span>, <span class="str">"vest"</span>]
+<span class="kw">for</span> i, name <span class="kw">in</span> enumerate(class_names):
+    ap = metrics.box.maps[i]
+    print(<span class="str">f"类别 '{name}' AP: {ap:.3f}"</span>)
+
+<span class="cm"># 输出示例：</span>
+<span class="cm"># 类别 'person' AP: 0.892</span>
+<span class="cm"># 类别 'helmet' AP: 0.765</span>
+<span class="cm"># 类别 'vest' AP: 0.834</span>
+
+<span class="cm"># 总体指标</span>
+print(<span class="str">f"mAP@0.5: {metrics.box.map50:.3f}"</span>)
+print(<span class="str">f"mAP@0.5:0.95: {metrics.box.map:.3f}"</span>)
+print(<span class="str">f"Precision: {metrics.box.p:.3f}"</span>)
+print(<span class="str">f"Recall: {metrics.box.r:.3f}"</span>)</code></pre>
+  </div>
+
+  <h3>6.4 模型调优建议</h3>
+  <table>
+    <tr><th>问题</th><th>指标表现</th><th>解决方法</th></tr>
+    <tr><td>精确率低（误检多）</td><td>P 低, R 高</td><td>提高置信度阈值 conf, 增加负样本, 提高 IoU 阈值</td></tr>
+    <tr><td>召回率低（漏检多）</td><td>P 高, R 低</td><td>降低置信度阈值, 增加数据增强, 提高输入分辨率</td></tr>
+    <tr><td>小物体检测差</td><td>AP_s 远低于 AP_l</td><td>增大 imgsz, 使用更深的模型, 增加小物体数据</td></tr>
+    <tr><td>类别混淆</td><td>非对角线值高</td><td>检查标签是否正确, 增加类别间区分性数据</td></tr>
+    <tr><td>过拟合</td><td>训练 mAP 远高于验证</td><td>增加数据增强, 减少 epochs, 增大 dropout</td></tr>
+    <tr><td>欠拟合</td><td>训练和验证 mAP 都低</td><td>增加 epoch, 增加模型容量, 检查学习率</td></tr>
+  </table>
+</section>
+
+<section id="predict" class="toc-link">
+  <h2><span class="num">07</span> 预测与导出</h2>
+
+  <h3>7.1 图像预测</h3>
+  <div class="card">
+    <pre><code><span class="kw">from</span> ultralytics <span class="kw">import</span> YOLO
+
+<span class="cm"># 加载训练好的模型</span>
+model = YOLO(<span class="str">"runs/detect/train/weights/best.pt"</span>)
+
+<span class="cm"># 单张图像预测</span>
+results = model(<span class="str">"test.jpg"</span>)
+
+<span class="cm"># 图像列表</span>
+results = model([<span class="str">"img1.jpg"</span>, <span class="str">"img2.jpg"</span>])
+
+<span class="cm"># 文件夹中所有图像</span>
+results = model(<span class="str">"path/to/images/"</span>)
+
+<span class="cm"># URL 图像</span>
+results = model(<span class="str">"https://example.com/image.jpg"</span>)
+
+<span class="cm"># 解析结果</span>
+<span class="kw">for</span> i, result <span class="kw">in</span> enumerate(results):
+    boxes = result.boxes                   <span class="cm">// 边界框</span>
+    print(<span class="str">f"图像 {i}: {len(boxes)} 个目标"</span>)
+
+    <span class="kw">for</span> box <span class="kw">in</span> boxes:
+        cls_id = int(box.cls[0])           <span class="cm">// 类别 ID</span>
+        conf = float(box.conf[0])          <span class="cm">// 置信度</span>
+        xyxy = box.xyxy[0].tolist()        <span class="cm">// [x1, y1, x2, y2]</span>
+        xywh = box.xywh[0].tolist()        <span class="cm">// [x, y, w, h]</span>
+
+        print(<span class="str">f"  类别={cls_id}, 置信度={conf:.2f}, "</span>
+              <span class="str">f"框={xyxy}"</span>)
+
+    <span class="cm">// 可视化结果</span>
+    annotated = result.plot()              <span class="cm">// BGR numpy 数组</span>
+    result.save(<span class="str">f"result_{i}.jpg"</span>)      <span class="cm">// 保存标注后的图像</span></code></pre>
+  </div>
+
+  <h3>7.2 实时视频与摄像头</h3>
+  <div class="card">
+    <pre><code><span class="kw">from</span> ultralytics <span class="kw">import</span> YOLO
+
+model = YOLO(<span class="str">"best.pt"</span>)
+
+<span class="cm"># 视频文件</span>
+results = model(<span class="str">"video.mp4"</span>, stream=True)
+
+<span class="cm"># 摄像头实时检测</span>
+results = model(source=0, stream=True)    <span class="cm">// 0 = 第一个摄像头</span>
+
+<span class="cm"># 处理视频流</span>
+<span class="kw">for</span> result <span class="kw">in</span> results:
+    annotated = result.plot()
+    cv2.imshow(<span class="str">"YOLOv8 Detection"</span>, annotated)
+    <span class="kw">if</span> cv2.waitKey(1) &amp; 0xFF == 27:        <span class="cm">// ESC 退出</span>
+        <span class="kw">break</span></code></pre>
+  </div>
+
+  <h3>7.3 模型导出</h3>
+  <p>YOLOv8 支持导出为多种部署格式，适应不同的硬件平台：</p>
+
+  <div class="card">
+    <pre><code><span class="kw">from</span> ultralytics <span class="kw">import</span> YOLO
+
+model = YOLO(<span class="str">"best.pt"</span>)
+
+<span class="cm"># 导出为 ONNX (最通用)</span>
+model.export(format=<span class="str">"onnx"</span>, dynamic=True, simplify=True)
+<span class="cm"># 输出: best.onnx</span>
+
+<span class="cm"># 导出为 TensorRT (NVIDIA GPU 最优)</span>
+model.export(format=<span class="str">"engine"</span>, half=True, imgsz=640)
+<span class="cm"># 输出: best.engine (FP16 精度)</span>
+
+<span class="cm"># 导出为 OpenVINO (Intel CPU/VPU)</span>
+model.export(format=<span class="str">"openvino"</span>, half=False)
+<span class="cm"># 输出: best.xml + best.bin</span>
+
+<span class="cm"># 导出为 CoreML (Apple 设备)</span>
+model.export(format=<span class="str">"coreml"</span>)
+<span class="cm"># 输出: best.mlpackage</span>
+
+<span class="cm"># 导出为 TFLite (移动端/嵌入式)</span>
+model.export(format=<span class="str">"tflite"</span>, int8=True, data=<span class="str">"dataset.yaml"</span>)
+<span class="cm"># 输出: best_float32.tflite / best_int8.tflite</span>
+
+<span class="cm"># 导出为 PaddlePaddle</span>
+model.export(format=<span class="str">"paddle"</span>)
+<span class="cm"># 输出: model.pdmodel + model.pdiparams</span></code></pre>
+  </div>
+
+  <h3>7.4 导出格式对比</h3>
+  <table>
+    <tr><th>格式</th><th>设备</th><th>速度提升</th><th>精度损失</th><th>使用场景</th></tr>
+    <tr><td>PyTorch (.pt)</td><td>任何</td><td>1x</td><td>无</td><td>训练、验证、开发</td></tr>
+    <tr><td>ONNX</td><td>任何</td><td>1-2x</td><td>极小</td><td>跨平台部署、框架无关</td></tr>
+    <tr><td>TensorRT (FP16)</td><td>NVIDIA GPU</td><td>3-5x</td><td>极小</td><td>生产级 GPU 推理</td></tr>
+    <tr><td>TensorRT (INT8)</td><td>NVIDIA GPU</td><td>5-8x</td><td>1-2%</td><td>推理延迟要求极高</td></tr>
+    <tr><td>OpenVINO</td><td>Intel CPU/VPU</td><td>2-4x</td><td>极小</td><td>Intel 平台部署</td></tr>
+    <tr><td>TFLite (INT8)</td><td>ARM/Edge TPU</td><td>3-5x</td><td>2-5%</td><td>移动端、嵌入式</td></tr>
+    <tr><td>CoreML</td><td>Apple</td><td>2-4x</td><td>极小</td><td>iOS/macOS</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>导出注意事项:</strong><br>
+    ONNX 导出后可以用 ONNXRuntime 推理，获得稳定的生产级性能。TensorRT 导出需要 NVIDIA GPU 且耗时较长（INT8 量化需要校准数据集）。TFLite INT8 量化需要代表性数据集用于校准。对于边缘设备（Jetson），推荐 ONNX → TensorRT 路线；对于 Intel 服务器，推荐 OpenVINO 路线。
+  </div>
+</section>
+
+<section id="end2end" class="toc-link">
+  <h2><span class="num">08</span> 完整端到端示例</h2>
+
+  <p>以下是一个完整的 YOLOv8 工作流程脚本，从数据准备到模型部署全覆盖：</p>
+
+  <div class="card">
+    <pre><code><span class="cm">#!/usr/bin/env python3</span>
+<span class="cm">"""YOLOv8 端到端训练与部署流水线"""</span>
+
+<span class="kw">import</span> argparse
+<span class="kw">import</span> sys
+<span class="kw">from</span> pathlib <span class="kw">import</span> Path
+<span class="kw">from</span> ultralytics <span class="kw">import</span> YOLO
+
+
+<span class="kw">class</span> <span class="ty">YOLOPipeline</span>:
+    <span class="cm">"""YOLOv8 训练与部署流水线"""</span>
+
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, model_name=<span class="str">"yolov8m.pt"</span>):
+        self.model_name = model_name
+        self.model = <span class="kw">None</span>
+
+    <span class="kw">def</span> <span class="fn">train</span>(self, data_yaml, epochs=100, imgsz=640,
+                batch=16, device=<span class="str">"0"</span>):
+        <span class="cm">"""训练模型"""</span>
+        print(<span class="str">f"[INFO] 加载模型: {self.model_name}"</span>)
+        self.model = YOLO(self.model_name)
+
+        print(<span class="str">"[INFO] 开始训练..."</span>)
+        self.model.train(
+            data=data_yaml,
+            epochs=epochs,
+            imgsz=imgsz,
+            batch=batch,
+            device=device,
+            workers=8,
+            pretrained=True,
+            optimizer=<span class="str">"auto"</span>,
+            cos_lr=True,
+            amp=True,
+            patience=20,
+            save=True,
+            save_period=10,
+            val=True,
+            plots=True,
+        )
+        print(<span class="str">"[INFO] 训练完成"</span>)
+
+    <span class="kw">def</span> <span class="fn">evaluate</span>(self, weight_path, data_yaml, imgsz=640):
+        <span class="cm">"""评估模型"""</span>
+        self.model = YOLO(weight_path)
+        metrics = self.model.val(
+            data=data_yaml,
+            imgsz=imgsz,
+            batch=16,
+            plots=True,
+        )
+        print(<span class="str">f"[RESULT] mAP@0.5: {metrics.box.map50:.4f}"</span>)
+        print(<span class="str">f"[RESULT] mAP@0.5:0.95: {metrics.box.map:.4f}"</span>)
+        print(<span class="str">f"[RESULT] Precision: {metrics.box.p:.4f}"</span>)
+        print(<span class="str">f"[RESULT] Recall: {metrics.box.r:.4f}"</span>)
+        <span class="kw">return</span> metrics
+
+    <span class="kw">def</span> <span class="fn">export</span>(self, weight_path, format=<span class="str">"onnx"</span>,
+                half=True, imgsz=640):
+        <span class="cm">"""导出模型到指定格式"""</span>
+        self.model = YOLO(weight_path)
+        export_path = self.model.export(
+            format=format,
+            half=half,
+            imgsz=imgsz,
+            simplify=True,
+            dynamic=True,
+        )
+        print(<span class="str">f"[INFO] 导出成功: {export_path}"</span>)
+        <span class="kw">return</span> export_path
+
+    <span class="kw">def</span> <span class="fn">predict</span>(self, weight_path, source, conf=0.25, iou=0.45):
+        <span class="cm">"""运行推理"""</span>
+        self.model = YOLO(weight_path)
+        results = self.model(
+            source=source,
+            conf=conf,
+            iou=iou,
+            save=True,
+            save_txt=True,
+            save_conf=True,
+        )
+        print(<span class="str">f"[INFO] 处理了 {len(results)} 个结果"</span>)
+        <span class="kw">return</span> results
+
+
+<span class="kw">def</span> <span class="fn">main</span>():
+    parser = argparse.ArgumentParser(
+        description=<span class="str">"YOLOv8 Pipeline"</span>
+    )
+    parser.add_argument(<span class="str">"--mode"</span>, required=True,
+                        choices=[<span class="str">"train"</span>, <span class="str">"eval"</span>,
+                                 <span class="str">"export"</span>, <span class="str">"predict"</span>])
+    parser.add_argument(<span class="str">"--model"</span>, default=<span class="str">"yolov8m.pt"</span>)
+    parser.add_argument(<span class="str">"--data"</span>, default=<span class="str">"dataset.yaml"</span>)
+    parser.add_argument(<span class="str">"--weights"</span>, default=<span class="str">"best.pt"</span>)
+    parser.add_argument(<span class="str">"--source"</span>, default=<span class="str">"test.jpg"</span>)
+    parser.add_argument(<span class="str">"--epochs"</span>, type=int, default=100)
+    parser.add_argument(<span class="str">"--imgsz"</span>, type=int, default=640)
+    parser.add_argument(<span class="str">"--batch"</span>, type=int, default=16)
+    parser.add_argument(<span class="str">"--format"</span>, default=<span class="str">"onnx"</span>)
+    args = parser.parse_args()
+
+    pipeline = YOLOPipeline(model_name=args.model)
+
+    <span class="kw">if</span> args.mode == <span class="str">"train"</span>:
+        pipeline.train(args.data, args.epochs,
+                       args.imgsz, args.batch)
+    <span class="kw">elif</span> args.mode == <span class="str">"eval"</span>:
+        pipeline.evaluate(args.weights, args.data, args.imgsz)
+    <span class="kw">elif</span> args.mode == <span class="str">"export"</span>:
+        pipeline.export(args.weights, args.format)
+    <span class="kw">elif</span> args.mode == <span class="str">"predict"</span>:
+        pipeline.predict(args.weights, args.source)
+
+
+<span class="kw">if</span> __name__ == <span class="str">"__main__"</span>:
+    main()
+
+
+<span class="cm">"""</span>
+<span class="cm">使用示例：</span>
+<span class="cm"></span>
+<span class="cm"># 训练</span>
+<span class="cm">python pipeline.py --mode train --model yolov8s.pt --data mydata.yaml --epochs 200</span>
+<span class="cm"></span>
+<span class="cm"># 评估</span>
+<span class="cm">python pipeline.py --mode eval --weights runs/detect/train/weights/best.pt --data mydata.yaml</span>
+<span class="cm"></span>
+<span class="cm"># 导出 ONNX</span>
+<span class="cm">python pipeline.py --mode export --weights best.pt --format onnx</span>
+<span class="cm"></span>
+<span class="cm"># 推理</span>
+<span class="cm">python pipeline.py --mode predict --weights best.onnx --source test_images/</span>
+<span class="cm">"""</span></code></pre>
+  </div>
+
+  <div class="callout">
+    <strong>总结:</strong><br>
+    本文从环境搭建到最终部署，完整覆盖了 YOLOv8 目标检测的实际工作流程。核心要点：从预训练权重开始迁移学习（节省大量时间），使用 YOLO 格式标注数据并合理分割训练/验证集，开启 AMP + Cosine LR 加速收敛，用早停防止过拟合，通过混淆矩阵和 PR 曲线诊断模型问题，最后导出到 ONNX/TensorRT 实现高效部署。建议在实际项目中从 <code>yolov8s.pt</code> 开始尝试，根据精度和速度需求逐步调整。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

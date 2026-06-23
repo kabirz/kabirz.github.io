@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图像分割技术详解</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%239b59b6'/><stop offset='100%25' stop-color='%238e44ad'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>S</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>图像分割技术详解</h1>
+  <p class="subtitle">语义分割 · 实例分割 · 全景分割</p>
+  <span class="version">计算机视觉 · 分割综述</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#types">三种分割任务定义</a></li>
+    <li><a href="#fcn">FCN 全卷积网络</a></li>
+    <li><a href="#unet">U-Net 对称编码-解码架构</a></li>
+    <li><a href="#deeplab">DeepLabv3+ 与空洞卷积</a></li>
+    <li><a href="#maskrcnn">Mask R-CNN</a></li>
+    <li><a href="#panoptic">Panoptic FPN 全景分割</a></li>
+    <li><a href="#loss">分割损失函数</a></li>
+    <li><a href="#metrics">评估指标</a></li>
+    <li><a href="#real-time">实时分割模型</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="types" class="toc-link">
+  <h2><span class="num">01</span> 三种分割任务定义</h2>
+
+  <p>图像分割是计算机视觉中比目标检测更精细的任务——它不仅检测目标位置,还精确到每个像素的归属。</p>
+
+  <h3>语义分割 (Semantic Segmentation)</h3>
+  <p>为图像中的每一个像素分配一个语义类别标签。同类别的不同目标被视为一体,不做区分。"所有汽车属于'car'类,不管有多少辆"。</p>
+
+  <pre><code>// 语义分割输出
+// 输入: (H, W, 3) RGB 图像
+// 输出: (H, W)  每个像素的类别 ID
+//      或 (H, W, C) 每个像素的类别概率
+// C = 类别数 (如 COCO=80, VOC=21 含背景)
+
+// 示例: 一张有 3 人和 2 辆车的图片
+// 输出矩阵中:
+//   'person' 类的像素全部标记为 1
+//   'car' 类的像素全部标记为 2
+//   'background' 的像素标记为 0
+// 人员个体之间不区分</code></pre>
+
+  <h3>实例分割 (Instance Segmentation)</h3>
+  <p>在语义分割的基础上,进一步区分同一类别的不同个体。"这辆是 car_1,那辆是 car_2"。</p>
+
+  <pre><code>// 实例分割输出
+// 输入: (H, W, 3) RGB 图像
+// 输出: 每个实例单独生成一个二值 mask
+//       (N, H, W) 其中 N = 实例数量
+// 每个 mask 表示该实例的精确轮廓
+
+// 与目标检测的区别:
+// 目标检测: 输出边界框 (矩形,含无关背景)
+// 实例分割: 输出像素级 mask (精确轮廓)</code></pre>
+
+  <h3>全景分割 (Panoptic Segmentation)</h3>
+  <p>全景分割统一了语义分割和实例分割。它将场景中的"东西"（可数目标,车/人/动物）作为实例分割处理,将"材料"（不可数背景,天空/道路/草地）作为语义分割处理。最终输出一个全景标注图,每个像素既有语义类别,又有实例 ID。</p>
+
+  <table>
+    <thead>
+      <tr><th>任务</th><th>粒度</th><th>区分实例</th><th>覆盖像素</th><th>输出形式</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>语义分割</td><td>像素级分类</td><td>否</td><td>全部像素</td><td>(H, W) 类别映射</td></tr>
+      <tr><td>实例分割</td><td>像素级 + 实例级</td><td>是</td><td>仅前景目标</td><td>N x (H, W) masks</td></tr>
+      <tr><td>全景分割</td><td>语义 + 实例</td><td>是 (stuff + things)</td><td>全部像素</td><td>(H, W) 每个像素 (class_id, instance_id)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>Stuff vs Things:</strong><br>
+    Stuff 指语义上没有明确边界的材质（天空、道路、草地、墙面）,数量不固定,用语义分割处理。Things 指可计数的独立物体（人、车、动物）,用实例分割处理。全景分割把这两种输出统一到一张标注图中。
+  </div>
+</section>
+
+<section id="fcn" class="toc-link">
+  <h2><span class="num">02</span> FCN 全卷积网络</h2>
+
+  <p>FCN (Fully Convolutional Network) 是深度学习语义分割的开山之作。它将传统分类网络（如 VGG16）最后的全连接层替换为卷积层,使网络可以接受任意大小的输入,并输出像素级的分割图。</p>
+
+  <h3>核心创新</h3>
+  <pre><code>// 传统 CNN (分类)
+// 输入: HxWx3 -> Conv -> FC -> FC -> 输出: 1000 (类概率)
+// 缺点: FC 层固定了输入尺寸,丢失了空间信息
+
+// FCN (分割)
+// 输入: HxWx3 -> Conv -> Conv -> Conv -> 输出: HxWxC
+// 使用 1x1 卷积 + 转置卷积上采样
+// 保持空间维度的端到端学习
+
+// 关键: 将 VGG16 的最后 FC 层替换为卷积
+// FC6 (4096)  -> Conv7x7-4096
+// FC7 (4096)  -> Conv1x1-4096
+// FC8 (1000)  -> Conv1x1-1000 (或 N 类)</code></pre>
+
+  <h3>转置卷积 (Transposed Convolution)</h3>
+  <p>FCN 使用转置卷积将低分辨率的分割预测图上采样到原图尺寸。转置卷积也称为"反卷积"或"学习型上采样",其参数（卷积核权重）也是通过训练学习的。</p>
+
+  <pre><code>// 转置卷积原理
+// 普通卷积: 输入 4x4 -> 卷积 3x3 stride=1 -> 输出 2x2
+// 转置卷积: 输入 2x2 -> 转置卷积 3x3 stride=2 -> 输出 4x4
+
+// PyTorch 实现
+import torch.nn as nn
+
+# 转置卷积 (上采样 2x)
+deconv = nn.ConvTranspose2d(
+    in_channels=512, out_channels=256,
+    kernel_size=4, stride=2, padding=1
+)
+# 输入: (B, 512, 16, 16) -> 输出: (B, 256, 32, 32)
+
+# FCN-32s: 单步 32x 上采样 (效果最差)
+# FCN-16s: 融合 pool4 特征 + 16x 上采样
+# FCN-8s:  融合 pool4 + pool3 特征 + 8x 上采样 (效果最好)</code></pre>
+
+  <h3>跳跃连接 (Skip Connections)</h3>
+  <p>FCN 的跳跃连接将深层语义信息（高层特征图）与浅层细节信息（低层特征图）融合,显著提升了分割精度。</p>
+
+  <pre><code>// FCN-8s 跳跃连接结构
+
+// 输入图像 (H, W)
+//   |
+// VGG16 卷积层
+//   |
+// pool1 (H/2, W/2)     -> 用于最终融合
+// pool2 (H/4, W/4)     -> 用于最终融合
+// pool3 (H/8, W/8)     ----+
+// pool4 (H/16, W/16)   --+ |
+// pool5 (H/32, W/32)   | | |
+//   ↓                  | | |
+// Conv6-7 (H/32)       | | |
+//   ↓                  | | |
+// 2x 上采样 ------------→ | |
+//   + pool4 逐元素相加  ←---+ |
+//   ↓                    |   |
+// 2x 上采样 ----------------→ |
+//   + pool3 逐元素相加  ←-----+
+//   ↓
+// 8x 上采样到原图尺寸
+//   ↓
+// 像素级分类 (Softmax)
+//   ↓
+// 分割结果 (H, W, C)</code></pre>
+
+  <div class="callout">
+    <strong>FCN 的历史意义:</strong><br>
+    FCN 证明了 CNN 可以端到端地学习像素级预测任务。许多后续模型（U-Net、DeepLab、Mask R-CNN）在 FCN 的基础上引入了更精细的跳跃连接机制和更高效的卷积结构。
+  </div>
+</section>
+
+<section id="unet" class="toc-link">
+  <h2><span class="num">03</span> U-Net 对称编码-解码架构</h2>
+
+  <p>U-Net 因其对称的 U 形结构和高效的跳跃连接而闻名,尤其在医学图像分割领域是最广为使用的基线模型。</p>
+
+  <h3>U-Net 架构</h3>
+  <pre><code>// U-Net 结构 (以 572x572 输入为例)
+
+// 编码器 (下采样路径): 左半边
+// 每阶段: 2x Conv(3x3) + ReLU -> MaxPool(2x2)
+// 通道数: 64 -> 128 -> 256 -> 512 -> 1024
+
+// 瓶颈层: 最底层 32x32x1024
+
+// 解码器 (上采样路径): 右半边
+// 每阶段: UpConv(2x2) + 跳跃连接拼接 + 2x Conv(3x3) + ReLU
+// 通道数: 1024 -> 512 -> 256 -> 128 -> 64
+
+// 跳跃连接:
+// 编码器的每一层特征图通过"copy and crop"拼接到对应解码器层
+// 拼接 (concatenate) 而非相加,保留了更多空间信息
+
+// 输出: 1x1 Conv, 输出 N 类分割图</code></pre>
+
+  <h3>PyTorch 实现片段</h3>
+  <pre><code>import torch
+import torch.nn as nn
+
+class DoubleConv(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True)
+        )
+    def forward(self, x):
+        return self.conv(x)
+
+class Down(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super().__init__()
+        self.mpconv = nn.Sequential(
+            nn.MaxPool2d(2),
+            DoubleConv(in_ch, out_ch)
+        )
+    def forward(self, x):
+        return self.mpconv(x)
+
+class Up(nn.Module):
+    def __init__(self, in_ch, out_ch, bilinear=False):
+        super().__init__()
+        if bilinear:
+            self.up = nn.Upsample(scale_factor=2,
+                                  mode='bilinear',
+                                  align_corners=True)
+        else:
+            # 转置卷积上采样
+            self.up = nn.ConvTranspose2d(
+                in_ch, in_ch // 2, kernel_size=2, stride=2)
+
+        self.conv = DoubleConv(in_ch, out_ch)
+
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+        # 跳跃连接: 拼接
+        diffY = x2.size()[2] - x1.size()[2]
+        diffX = x2.size()[3] - x1.size()[3]
+        x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
+                        diffY // 2, diffY - diffY // 2])
+        x = torch.cat([x2, x1], dim=1)
+        return self.conv(x)
+
+class UNet(nn.Module):
+    def __init__(self, n_channels, n_classes):
+        super().__init__()
+        self.inc = DoubleConv(n_channels, 64)
+        self.down1 = Down(64, 128)
+        self.down2 = Down(128, 256)
+        self.down3 = Down(256, 512)
+        self.down4 = Down(512, 1024)
+        self.up1 = Up(1024, 512)
+        self.up2 = Up(512, 256)
+        self.up3 = Up(256, 128)
+        self.up4 = Up(128, 64)
+        self.outc = nn.Conv2d(64, n_classes, 1)
+
+    def forward(self, x):
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        x = self.up1(x5, x4)
+        x = self.up2(x, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+        return self.outc(x)</code></pre>
+
+  <h3>为什么 U-Net 在医学图像分割中表现出色?</h3>
+  <ul>
+    <li><strong>对称结构:</strong> 编码器和解码器的对称设计使网络能够学习从像素到语义再到像素的完整映射</li>
+    <li><strong>跳跃连接:</strong> 保留了编码器各层的细节信息,使解码器既能利用高层的语义信息,又能利用低层的边缘纹理信息</li>
+    <li><strong>数据高效:</strong> 在少量标注数据（通常只有几十到几百张）上即可训练出可用的分割模型</li>
+    <li><strong>模块化:</strong> 容易替换骨干网络或添加注意力模块,衍生出 Attention U-Net、Residual U-Net 等变体</li>
+  </ul>
+
+  <div class="callout">
+    <strong>U-Net 变体:</strong><br>
+    Attention U-Net 在跳跃连接中加入注意力门控,让网络自动关注重要的特征区域。nnU-Net 自动根据数据集调整预处理、网络结构和训练策略,在多个医学分割挑战赛中夺冠。
+  </div>
+</section>
+
+<section id="deeplab" class="toc-link">
+  <h2><span class="num">04</span> DeepLabv3+ 与空洞卷积</h2>
+
+  <p>DeepLab 系列是 Google 推出的语义分割模型,其核心创新是空洞卷积和空洞空间金字塔池化 (ASPP),在保持高分辨率特征图的同时扩大了感受野。</p>
+
+  <h3>空洞卷积 (Atrous/Dilated Convolution)</h3>
+  <pre><code>// 空洞卷积 = 标准卷积 + dilation rate (膨胀率)
+// dilation rate = 1: 标准卷积,相邻像素采样
+// dilation rate = 2: 每隔一个像素采样
+// dilation rate = 4: 每隔三个像素采样
+
+// 感受野计算公式:
+// RF = (kernel_size - 1) * dilation + 1
+// 标准 3x3 卷积: RF = 3
+// 3x3 空洞卷积 d=2: RF = 5
+// 3x3 空洞卷积 d=4: RF = 9
+
+// 优点: 在不增加参数量的情况下指数级扩大感受野
+// 同时保持特征图的分辨率 (不下采样)
+
+// 缺点: 网格效应 (gridding artifact)
+// 连续使用相同 dilation rate 时,部分像素从未被核覆盖
+// 解决方案: 使用不同 dilation rate 的组合</code></pre>
+
+  <h3>ASPP (Atrous Spatial Pyramid Pooling)</h3>
+  <p>ASPP 使用多个不同 dilation rate 的空洞卷积并行处理特征图,捕获多尺度上下文信息,对目标尺度变化有很强的鲁棒性。</p>
+
+  <pre><code>// DeepLabv3+ ASPP 结构
+// 输入: 特征图 (C4, stride=16)
+
+// ASPP 模块包含 5 个并行分支:
+//   1. 1x1 Conv (dilation=1)
+//   2. 3x3 Conv (dilation=6)   -> rate=6
+//   3. 3x3 Conv (dilation=12)  -> rate=12
+//   4. 3x3 Conv (dilation=18)  -> rate=18
+//   5. Image Pooling (全局平均池化 + 1x1 Conv)
+
+// 所有分支输出特征图大小相同
+// 拼接 (concatenate) 所有分支
+// 1x1 Conv 降维
+// 输出: 256 通道特征图</code></pre>
+
+  <h3>DeepLabv3+ 的编码-解码结构</h3>
+  <p>DeepLabv3+ 在 v3 的基础上加入了轻量级的解码器,恢复了目标的边缘细节。v3 使用 ASPP + 直接 4x/8x 上采样（粗略）,v3+ 将编码器深层特征与浅层特征融合后上采样（更精细）。</p>
+
+  <pre><code>// DeepLabv3+ 网络结构
+
+// 编码器 (Encoder):
+// 输入图像 -> 骨干网络 (Xception/ResNet)
+//   -> C4 特征 (stride=16)
+//   -> ASPP 模块 -> 256 通道编码特征
+
+// 解码器 (Decoder):
+// 编码特征 4x 上采样
+//    + (拼接) C2 特征 (stride=4, 经过 1x1 Conv 降维)
+// -> 3x3 Conv -> 4x 上采样 -> 分割输出
+
+// 优势:
+// 编码器: ASPP 多尺度上下文 + 大感受野
+// 解码器: 浅层特征恢复边缘细节
+// 参数高效: 解码器只有少量卷积层
+
+// mobilenetv2 作为骨干时的计算量:
+// DeepLabv3+ MobileNetV2: 约 20 GFLOPs
+// DeepLabv3+ Xception:    约 150 GFLOPs</code></pre>
+
+  <h3>深度可分离卷积 (Depthwise Separable Convolution)</h3>
+  <p>DeepLabv3+ 将标准卷积替换为深度可分离卷积,大幅减少了参数量和计算量。深度可分离卷积将标准卷积分解为 Depthwise Conv（逐通道卷积）和 Pointwise Conv（1x1 逐点卷积）两步。</p>
+
+  <pre><code>// 标准卷积:
+// 输入: (H, W, Cin), 卷积核: (K, K, Cin, Cout)
+// 计算量: HW * K^2 * Cin * Cout
+
+// 深度可分离卷积:
+// Step 1: Depthwise Conv (KxK, 每通道独立)
+//   计算量: HW * K^2 * Cin
+// Step 2: Pointwise Conv (1x1)
+//   计算量: HW * 1 * Cin * Cout
+// 总计算量: HW * Cin * (K^2 + Cout)
+
+// 当 K=3, Cout=256 时:
+// 标准卷积: HW * 9 * Cin * 256
+// 深度可分离: HW * Cin * (9 + 256)
+// 计算量比 = (9 + 256) / (9 * 256) = 265 / 2304 = 11.5%</code></pre>
+
+  <div class="callout">
+    <strong>DeepLab 系列演进:</strong><br>
+    DeepLabv1 (2015): 空洞卷积 + CRF 后处理<br>
+    DeepLabv2 (2017): ASPP 多尺度模块<br>
+    DeepLabv3 (2017): 改进 ASPP + 图像级特征<br>
+    DeepLabv3+ (2018): 编码-解码结构 + 深度可分离卷积
+  </div>
+</section>
+
+<section id="maskrcnn" class="toc-link">
+  <h2><span class="num">05</span> Mask R-CNN</h2>
+
+  <p>Mask R-CNN 在 Faster R-CNN 的基础上增加了一个并行的分割分支,实现了目标检测和实例分割的统一框架。它是实例分割领域最具影响力的模型之一。</p>
+
+  <h3>RoI Align 与 RoI Pool 的区别</h3>
+  <p>Faster R-CNN 使用 RoI Pooling 将不同大小的候选区域映射到固定尺寸的特征图,但 RoI Pooling 存在两次量化操作（坐标取整和网格划分取整）,导致空间信息丢失,这在像素级分割任务中是不可接受的。</p>
+
+  <p>RoI Align 取消了量化步骤,使用双线性插值获取浮点数坐标上的特征值,保留了亚像素级别的空间精度。</p>
+
+  <pre><code>// RoI Align 计算过程
+// 输入: 特征图 F, 候选区域 box (x1, y1, x2, y2)
+// 输出: 固定大小 (P, P, C) 的特征
+
+// 1. 将候选区域在特征图上映射为浮点数坐标
+// 2. 将候选区域划分为 P x P 个 bin 单元
+// 3. 对每个 bin 单元均匀采样 4 个点
+// 4. 对每个采样点,用双线性插值计算特征值
+// 5. 对 4 个点的特征值取平均 (或 max pooling)
+// 6. 得到 (P, P, C) 的输出
+
+// 对比 RoI Pooling:
+// RoI Pooling: 量化 -> 取整 -> grid -> max pool
+// RoI Align:   浮点数 -> 采样 -> 插值 -> avg pool
+
+// 在实例分割中,RoI Align 比 RoI Pooling 提升 10-50% 的 mask AP</code></pre>
+
+  <h3>Mask 分支结构</h3>
+  <pre><code>// Mask R-CNN 整体结构
+
+// 骨干 (Backbone): ResNet-FPN
+//   -> 特征金字塔 (P2-P6)
+
+// RPN (Region Proposal Network)
+//   -> 候选区域
+
+// RoI Align (对每个候选区域)
+
+// 三个并行分支:
+//   1. 分类分支 (FC): (N, num_classes)    类别预测
+//   2. 回归分支 (FC): (N, num_classes * 4) 框回归
+//   3. 分割分支 (Conv): (N, num_classes, 28, 28)  逐像素 mask
+
+// Mask 分支细节:
+// RoI Align 输出 -> (14x14x256)
+// 4x Conv (3x3, 256) + ReLU
+// 1x DeConv (2x2, 256) -> 上采样到 28x28
+// 1x Conv (1x1, num_classes) -> 预测每个类别的 mask
+
+// 关键: mask 分支为每个类别预测一个独立的二值 mask
+// 但只在推理时根据分类结果选择对应类别的 mask</code></pre>
+
+  <h3>与检测共享特征</h3>
+  <p>Mask R-CNN 的检测分支和分割分支共享骨干网络和 RPN 的特征。这种共享让分割任务受益于检测任务的定位监督,同时也让检测任务受益于分割任务的精细特征。</p>
+
+  <pre><code>// 训练损失
+L = L_cls (分类 CrossEntropy)
+  + L_box (框回归 SmoothL1)
+  + L_mask (分割 Binary CrossEntropy)
+
+// L_mask 只对正样本 RoI 中与 GT 对应的类别计算
+// 对其他类别的 mask 输出不计算梯度
+
+// 多任务学习的优势:
+// 1. 共享特征提取器,减少参数量
+// 2. 分割任务提供像素级监督,提升空间敏感度
+// 3. 检测任务提供实例级监督,提升语义理解</code></pre>
+
+  <div class="callout">
+    <strong>Mask R-CNN 的通用性:</strong><br>
+    Mask R-CNN 的框架被扩展到多个任务,如 Keypoint R-CNN（人体关键点检测）、TensorMask（密集实例分割）、以及 PointRend（高分辨率 mask 细化）。
+  </div>
+</section>
+
+<section id="panoptic" class="toc-link">
+  <h2><span class="num">06</span> Panoptic FPN 全景分割</h2>
+
+  <p>全景分割由 FAIR 在 2019 年提出,旨在统一语义分割和实例分割。Panoptic FPN 是全景分割的经典基线模型,它将 Mask R-CNN 的实例分割输出与一个并行的语义分割分支融合。</p>
+
+  <h3>Panoptic FPN 架构</h3>
+  <pre><code>// Panoptic FPN 结构
+// 骨干: ResNet-FPN (与 Mask R-CNN 相同)
+
+// 实例分割分支 (Mask R-CNN):
+// -> RPN -> RoI Align -> 分类 + 框回归 + mask
+// -> 输出: 实例分割结果 (things only)
+
+// 语义分割分支 (FCN-style):
+// -> FPN 各层特征融合
+// -> 统一上采样到 1/4 原图尺寸
+// -> 卷积预测语义分割图 (stuff + things)
+
+// 全景融合模块:
+// 输入: 实例分割结果 + 语义分割结果
+// 流程:
+//   1. 对每个像素,优先分配实例分割结果
+//   2. 未被实例覆盖的像素,分配语义分割结果
+//   3. 冲突解决: 如果实例和语义结果矛盾,
+//      取置信度更高的结果
+
+// 输出: (H, W) 全景标注图
+// 每个像素存储 (class_id, instance_id)
+// stuff 类别: instance_id = 0
+// things 类别: instance_id = 1, 2, 3 ...</code></pre>
+
+  <h3>开集与闭集全景分割</h3>
+  <p>全景分割按照训练和测试的类别定义分为开集和闭集两种设置。</p>
+
+  <table>
+    <thead>
+      <tr><th>设置</th><th>描述</th><th>示例</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>闭集 (Closed-set)</td><td>训练集中出现的所有 stuff 和 things 在测试集中出现</td><td>Cityscapes, COCO Panoptic</td></tr>
+      <tr><td>开集 (Open-set)</td><td>测试集可能出现训练集中未见过的新类别</td><td>Street View 场景</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Panoptic Quality (PQ) 指标</h3>
+  <pre><code>// PQ 是全景分割的标准评估指标
+
+// 匹配规则:
+// 对预测结果和 GT 分别分成:
+//   - Things: 可计数的目标 (需实例匹配)
+//   - Stuff:  不可数的材质 (语义匹配即可)
+
+// 对每个预测-真值匹配对:
+//   IOU > 0.5 视为 True Positive
+
+// PQ = (sum_TP IOU) / (TP + 0.5 * FP + 0.5 * FN)
+//    = [sum_TP IOU / TP] * [TP / (TP + 0.5 * FP + 0.5 * FN)]
+//    = SQ (Segmentation Quality) * RQ (Recognition Quality)
+
+// SQ: 匹配到的分割质量 (IOU)
+// RQ: 识别质量 (类似 F1 score)</code></pre>
+
+  <div class="callout">
+    <strong>全景分割的挑战:</strong><br>
+    全景分割需要同时处理 stuff 和 things,两类任务的特性和损失函数不同,可能会出现训练不平衡。此外,全景融合过程中的冲突解决策略对最终结果有显著影响。
+  </div>
+</section>
+
+<section id="loss" class="toc-link">
+  <h2><span class="num">07</span> 分割损失函数</h2>
+
+  <p>分割损失函数的设计对模型性能至关重要。像素级分类和区域级重叠各有不同的损失设计方法。</p>
+
+  <h3>交叉熵损失 (Cross Entropy)</h3>
+  <pre><code># 像素级交叉熵
+import torch.nn as nn
+
+# 标准交叉熵
+criterion = nn.CrossEntropyLoss()  # 自动包含 softmax
+loss = criterion(predictions, targets)
+# predictions: (B, C, H, W)
+# targets: (B, H, W) 每个像素的类别 ID
+
+# 加权交叉熵 (处理类别不平衡)
+weights = torch.tensor([0.1, 1.0, 2.0, 10.0])  # 各类别权重
+criterion_weighted = nn.CrossEntropyLoss(weight=weights)
+loss = criterion_weighted(predictions, targets)</code></pre>
+
+  <h3>Dice Loss</h3>
+  <p>Dice Loss 基于 Dice 系数（Soft IOU）,衡量预测区域与真实区域的重叠程度。它在医学图像分割中非常流行,因为该类任务中前景区域往往很小（类别高度不平衡）。</p>
+
+  <pre><code># Dice Loss 实现
+def dice_loss(pred, target, smooth=1e-6):
+    # pred: (B, C, H, W) 经 softmax 后的概率
+    # target: (B, H, W) 类别 ID
+
+    # 将 target 转换为 one-hot
+    target_one_hot = F.one_hot(target, num_classes=C)
+    target_one_hot = target_one_hot.permute(0, 3, 1, 2).float()
+
+    # 对每个类别计算 Dice
+    intersection = (pred * target_one_hot).sum(dim=(2, 3))
+    union = pred.sum(dim=(2, 3)) + target_one_hot.sum(dim=(2, 3))
+
+    dice = (2.0 * intersection + smooth) / (union + smooth)
+    return 1 - dice.mean()</code></pre>
+
+  <h3>Focal Loss (分割版本)</h3>
+  <p>Focal Loss 在分割任务中同样有效,尤其用于难例挖掘和处理类别不平衡。</p>
+
+  <pre><code># 分割版 Focal Loss
+def focal_loss_seg(pred, target, alpha=0.25, gamma=2.0):
+    # pred: (B, C, H, W) raw logits
+    # target: (B, H, W) 类别 ID
+
+    ce_loss = F.cross_entropy(pred, target, reduction='none')
+    # ce_loss: (B, H, W)
+
+    pt = torch.exp(-ce_loss)
+    focal = alpha * (1 - pt) ** gamma * ce_loss
+
+    return focal.mean()
+
+# 组合损失 (常用)
+# 很多分割模型使用 CE + Dice 的组合损失
+loss = 0.5 * cross_entropy_loss(pred, target)      + 0.5 * dice_loss(pred, target)</code></pre>
+
+  <table>
+    <thead>
+      <tr><th>损失函数</th><th>优点</th><th>缺点</th><th>适用场景</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>交叉熵</td><td>简单,收敛稳定</td><td>类别不平衡时效果差</td><td>平衡数据集</td></tr>
+      <tr><td>Dice Loss</td><td>对前景-背景不平衡鲁棒</td><td>训练不稳定,梯度不平滑</td><td>医学图像,小目标分割</td></tr>
+      <tr><td>Focal Loss</td><td>难例挖掘,不平衡鲁棒</td><td>多一个超参数 (gamma)</td><td>密集预测,长尾分布</td></tr>
+      <tr><td>CE + Dice</td><td>两全其美</td><td>需调权重</td><td>通用分割任务</td></tr>
+      <tr><td>Boundary Loss</td><td>关注边界质量</td><td>计算复杂</td><td>边界质量要求高</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="metrics" class="toc-link">
+  <h2><span class="num">08</span> 评估指标</h2>
+
+  <h3>mIOU (Mean Intersection over Union)</h3>
+  <p>mIOU 是语义分割最核心的评估指标,计算预测分割与 GT 之间逐类别的 IOU,再取平均。</p>
+
+  <pre><code>// mIOU 计算
+// 对每个类别 c:
+//   IOU_c = TP_c / (TP_c + FP_c + FN_c)
+// mIOU = (1 / C) * sum(IOU_c for c in 1..C)
+
+// 其中:
+// TP_c: 预测为 c 且 GT 也为 c 的像素数
+// FP_c: 预测为 c 但 GT 不为 c 的像素数
+// FN_c: GT 为 c 但预测不为 c 的像素数
+
+// 实现:
+def compute_miou(pred, target, num_classes):
+    # pred: (H, W), target: (H, W)
+    ious = []
+    for cls in range(num_classes):
+        pred_mask = (pred == cls)
+        target_mask = (target == cls)
+        intersection = (pred_mask & target_mask).sum().item()
+        union = (pred_mask | target_mask).sum().item()
+        if union == 0:
+            ious.append(float('nan'))
+        else:
+            ious.append(intersection / union)
+    # 忽略 nan (该类在 GT 中未出现)
+    valid_ious = [iou for iou in ious if not math.isnan(iou)]
+    return sum(valid_ious) / len(valid_ious)</code></pre>
+
+  <h3>其他评估指标</h3>
+  <table>
+    <thead>
+      <tr><th>指标</th><th>公式</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Pixel Accuracy (PA)</td><td>sum(TP) / total_pixels</td><td>最简单的指标,在类别不平衡时偏向多数类</td></tr>
+      <tr><td>Mean Pixel Accuracy (MPA)</td><td>mean(TP_c / pixel_count_c)</td><td>逐类计算 PA 再平均,更公平</td></tr>
+      <tr><td>Frequency Weighted IOU (FWIOU)</td><td>sum(w_c * IOU_c) where w_c = pixel_count_c / total</td><td>按类别频率加权的 IOU,考虑像素占比</td></tr>
+      <tr><td>Dice Coefficient (F1)</td><td>2*TP / (2*TP + FP + FN)</td><td>与 IOU 单调相关但数值更高,医学分割常用</td></tr>
+      <tr><td>Global Accuracy</td><td>正确分类像素 / 总像素</td><td>同 Pixel Accuracy</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>分割指标对比:</strong><br>
+    mIOU 在语义分割领域是最受认可的指标,因为它同时考虑了 FP 和 FN,FWIOU 适合类别极不均衡的场景（路面占 90%,路灯只占 0.1%）,Dice 在医学领域更常用因为它对区域重叠更敏感。
+  </div>
+</section>
+
+<section id="real-time" class="toc-link">
+  <h2><span class="num">09</span> 实时分割模型</h2>
+
+  <p>在实际应用中（自动驾驶、无人机、移动端）,对分割模型的推理速度有很高的要求。实时分割模型通过轻量级骨干网络、多分支结构、剪枝和量化等技术,在保持可用精度的同时实现高速推理。</p>
+
+  <h3>ICNet (Image Cascade Network)</h3>
+  <p>ICNet 使用级联图像金字塔 + 多分辨率分支,在不同分辨率的分支上分配不同的计算资源。低分辨率分支快速处理全局语义,高分辨率分支精细处理局部细节。</p>
+
+  <pre><code>// ICNet 结构
+// 输入: 三路并行的不同分辨率图像
+
+// 低分辨率分支 (1/4 原图, 快速路径):
+//   输入 512x512 -> 缩放到 128x128
+//   轻量级网络 (数个卷积)
+//   处理全局语义信息
+//   生成粗糙分割图
+
+// 中分辨率分支 (1/2 原图):
+//   输入 256x256
+//   中等容量网络
+//   融合低分辨率分支的上采样特征
+
+// 高分辨率分支 (原图):
+//   输入 512x512
+//   轻量级网络 (只有几层卷积)
+//   融合中分辨率分支的特征
+//   保持边缘细节
+
+// 级联特征融合 (CFF) 模块:
+//   将低分辨率分支的特征上采样
+//   与当前分支的特征融合
+//   结合类别引导的边缘监督
+
+// 性能: ICNet 在 Cityscapes 上达到 69.5 mIOU @ 30 FPS (Titan X)</code></pre>
+
+  <h3>BiSeNet (Bilateral Segmentation Network)</h3>
+  <p>BiSeNet 将分割任务分解为两条路径：空间路径（Spatial Path）保留空间细节、上下文路径（Context Path）捕获语义信息。</p>
+
+  <pre><code>// BiSeNet v2 架构
+
+// 空间路径 (Spatial Path):
+//   输入: 原图 (1x 分辨率)
+//   三层卷积 (stride=2), 输出 1/8 分辨率
+//   保留丰富空间细节 (边缘、纹理)
+//   计算量小 (只有几层)
+
+// 上下文路径 (Context Path):
+//   输入: 下采样 1/2 后的图像
+//   轻量骨干网络 (如 Xception 或 MobileNet)
+//   输出 1/32 分辨率
+//   使用注意力精炼模块 (ARM) 增强特征
+//   捕获全局语义信息
+
+// 特征融合模块 (FFM):
+//   将空间路径和上下文路径的特征融合
+//   空间路径提供细节 (边缘)
+//   上下文路径提供语义 (类别)
+//   输出: 分割结果
+
+// BiseNetv2 性能:
+// Cityscapes: 72.6 mIOU @ 156 FPS (RTX 2080)
+// 模型大小: 约 5MB</code></pre>
+
+  <h3>PP-LiteSeg</h3>
+  <p>PP-LiteSeg 是百度 PaddleSeg 推出的轻量级实时分割模型,它在 BiSeNet 的基础上引入了灵活的解耦解码器和统一注意力融合模块。</p>
+
+  <pre><code>// PP-LiteSeg 特点:
+
+// 1. 灵活解耦解码器 (FDD):
+//    将标准卷积分解为深度可分离卷积
+//    显著减少参数量和 FLOPs
+
+// 2. 统一注意力融合模块 (UAFM):
+//    对空间特征和语义特征进行注意力融合
+//    自动学习两种特征的权重分配
+
+// 3. 骨干网络:
+//    使用 STDC 网络 (Short-Term Dense Concatenate)
+//    专为实时分割设计的轻量骨干
+
+// PP-LiteSeg 性能:
+// Cityscapes: 77.5 mIOU @ 273 FPS (RTX 3090)
+// 模型大小: 约 4.5 MB (INT8 量化后约 1.5 MB)</code></pre>
+
+  <table>
+    <thead>
+      <tr><th>模型</th><th>骨干</th><th>mIOU (Cityscapes)</th><th>FPS (RTX 3090)</th><th>参数量</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>ICNet</td><td>PSPNet-50</td><td>69.5</td><td>30</td><td>26.5M</td></tr>
+      <tr><td>BiSeNetv2</td><td>Custom</td><td>72.6</td><td>156</td><td>5.0M</td></tr>
+      <tr><td>STDC1-Seg</td><td>STDC1</td><td>74.6</td><td>273</td><td>12.5M</td></tr>
+      <tr><td>PP-LiteSeg-T</td><td>STDC1</td><td>74.0</td><td>306</td><td>3.4M</td></tr>
+      <tr><td>PP-LiteSeg-B</td><td>STDC2</td><td>77.5</td><td>273</td><td>4.5M</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>实时分割选择建议:</strong><br>
+    如果是车载 Jetson 等边缘设备,推荐 PP-LiteSeg-T (INT8 量化后约 1.5MB,< 5ms 延迟)。如果是在桌面 GPU 上运行且对精度要求高,推荐 PP-LiteSeg-B 或 BiSeNetv2。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 ## 文档集合
 
-当前共 **174 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件（common.css / common.js）。
+当前共 **189 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件（common.css / common.js）。
 
 ### 文件结构
 
@@ -15,6 +15,7 @@
 ├── linux-*.html          # 140 篇 Linux 内核深度解析
 ├── docker-*.html         # 12 篇 Docker / 容器技术解析
 ├── rust-*.html           # 13 篇 Rust 语言深度解析
+├── vision-*.html         # 15 篇 AI 视觉技术解析
 └── windows-*.html        # 9 篇 Windows 平台技术解析
 ```
 
@@ -26,6 +27,7 @@
 | Docker / 容器 | 12 | 容器技术 | namespaces, cgroups, OCI, runc, containerd, buildkit 等 |
 | Rust | 13 | 系统编程 | 所有权、trait、unsafe、async、tokio、web/gui/embedded 框架 |
 | Windows | 9 | 平台开发 | Win32, MFC, ATL/WTL, COM, UWP, WinUI3, MAUI, WPF, WebView2 |
+| AI 视觉 | 15 | 计算机视觉 | OpenCV, YOLO, PyTorch, TensorFlow, ONNX |
 
 ### 已覆盖主题（Linux 内核）
 
@@ -279,6 +281,26 @@
 | 12 | rust-unsafe.html | unsafe Rust |
 | 13 | rust-web-frameworks.html | Web 框架（Axum/Actix/Rocket） |
 
+### 已覆盖主题（AI 视觉）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | vision-opencv-intro.html | OpenCV 入门与环境搭建 |
+| 2 | vision-opencv-image.html | OpenCV 图像处理基础 |
+| 3 | vision-opencv-features.html | OpenCV 特征检测与匹配 |
+| 4 | vision-yolo-evolution.html | YOLO 系列模型演进 |
+| 5 | vision-yolo-practice.html | YOLOv8 目标检测实战 |
+| 6 | vision-pytorch-basics.html | PyTorch 基础入门 |
+| 7 | vision-pytorch-classification.html | PyTorch 图像分类实战 |
+| 8 | vision-tensorflow-basics.html | TensorFlow 基础入门 |
+| 9 | vision-tensorflow-detection.html | TensorFlow 目标检测实战 |
+| 10 | vision-onnx-intro.html | ONNX 模型格式与转换 |
+| 11 | vision-onnx-deployment.html | ONNX 模型部署实战 |
+| 12 | vision-model-optimization.html | 模型量化与优化技术 |
+| 13 | vision-object-detection.html | 目标检测基础原理 |
+| 14 | vision-segmentation.html | 图像分割技术详解 |
+| 15 | vision-face-detection.html | 人脸检测与识别技术 |
+
 ### 已覆盖主题（Windows）
 
 | # | 文件 | 主题 |
@@ -432,4 +454,4 @@ const ICON_MAP = {
 | 网络 | 待扩展（WireGuard、MPTCP、SRv6） |
 | 设备驱动 | 待扩展（USB、PCIe、ALSA、V4L2） |
 | Zephyr | 待扩展 |
-| AI | 待扩展 |
+| AI 视觉 | ✅ 15 篇（OpenCV / YOLO / PyTorch / TensorFlow / ONNX） |

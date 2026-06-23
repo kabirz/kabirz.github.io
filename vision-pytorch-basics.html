@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PyTorch 基础入门</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23ee4c2c'/><stop offset='100%25' stop-color='%23ff6b6b'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>T</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>PyTorch 基础入门</h1>
+  <p class="subtitle">Tensor - Autograd - nn.Module - 训练循环</p>
+  <span class="version">PyTorch 2.x</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#intro">PyTorch 简介与安装</a></li>
+    <li><a href="#tensor">Tensor 基础</a></li>
+    <li><a href="#ops">Tensor 运算与索引</a></li>
+    <li><a href="#view">Tensor View 与 Broadcasting</a></li>
+    <li><a href="#autograd">Autograd 自动求导</a></li>
+    <li><a href="#module">nn.Module 与模型搭建</a></li>
+    <li><a href="#dataloader">DataLoader 与 Dataset</a></li>
+    <li><a href="#training">训练循环模板</a></li>
+    <li><a href="#gpu">GPU 加速与混合精度</a></li>
+    <li><a href="#save">保存与加载</a></li>
+    <li><a href="#tb">TensorBoard 可视化</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="intro" class="toc-link">
+  <h2><span class="num">01</span> PyTorch 简介与安装</h2>
+
+  <p>PyTorch 是 Meta（原 Facebook）开发的深度学习框架，以动态计算图（Define-by-Run）为核心设计理念。它提供了灵活的张量计算、自动求导机制以及丰富的神经网络 API，在学术研究和工业部署中都得到广泛应用。</p>
+
+  <p>PyTorch 2.x 引入了 torch.compile 即时编译技术，通过图捕获和底层算子融合，在保持动态图灵活性的同时大幅提升训练和推理性能。</p>
+
+  <div class="callout tip">
+    <strong>核心特性:</strong><br>
+    动态计算图 — 运行时构建，调试友好。<br>
+    Eager 模式 — 每行代码即时执行，符合 Python 直觉。<br>
+    TorchScript / torch.compile — 从动态图到静态图的平滑过渡。<br>
+    Distributed 生态 — DDP / FSDP / DeepSpeed 无缝集成。
+  </div>
+
+  <p>安装 PyTorch 推荐使用 pip 或 conda，官方会根据 CUDA 版本生成对应的安装命令：</p>
+
+<pre><code># CPU 版本（适用于无 GPU 环境）
+pip install torch torchvision torchaudio
+
+# CUDA 12.x 版本
+pip install torch torchvision torchaudio --index-url \
+  https://download.pytorch.org/whl/cu121
+
+# conda 安装（包含 CUDA 依赖）
+conda install pytorch torchvision torchaudio pytorch-cuda=12.1 \
+  -c pytorch -c nvidia
+</code></pre>
+
+  <p>验证安装：</p>
+
+<pre><code>import torch
+print(torch.__version__)          # 2.x.x
+print(torch.cuda.is_available())  # True / False
+print(torch.cuda.get_device_name(0))  # NVIDIA A100 / RTX 4090
+</code></pre>
+</section>
+
+<section id="tensor" class="toc-link">
+  <h2><span class="num">02</span> Tensor 基础</h2>
+
+  <p>Tensor（张量）是 PyTorch 的核心数据结构，可以理解为支持 GPU 加速的多维数组。它在概念上类似 NumPy 的 ndarray，但增加了 <code>requires_grad</code> 等自动求导属性。</p>
+
+  <h3>创建 Tensor</h3>
+
+<pre><code>import torch
+
+# 从 Python 列表创建
+a = torch.tensor([[1, 2], [3, 4]], dtype=torch.float32)
+
+# 特殊初始化
+z = torch.zeros(3, 4)           # 全零
+o = torch.ones(2, 3)            # 全一
+e = torch.eye(5)                # 单位矩阵
+r = torch.randn(3, 3)           # 标准正态分布
+ri = torch.randint(0, 10, (3,))  # 随机整数
+
+# 形状操作
+x = torch.empty(2, 3)           # 未初始化（垃圾值）
+x = torch.full((2, 3), 7)       # 填充常量
+
+# 从 NumPy 互转
+import numpy as np
+arr = np.array([1, 2, 3])
+t = torch.from_numpy(arr)       # ndarray -> Tensor（共享内存）
+arr2 = t.numpy()                # Tensor -> ndarray（共享内存）
+</code></pre>
+
+  <h3>Tensor 属性</h3>
+
+<pre><code>x = torch.randn(3, 4, 5)
+print(x.shape)      # torch.Size([3, 4, 5])
+print(x.dtype)      # torch.float32
+print(x.device)     # cpu / cuda:0
+print(x.ndim)       # 3
+print(x.numel())    # 60（总元素数）
+print(x.stride())   # (20, 5, 1)
+</code></pre>
+</section>
+
+<section id="ops" class="toc-link">
+  <h2><span class="num">03</span> Tensor 运算与索引</h2>
+
+  <p>PyTorch 提供了丰富的张量运算，涵盖算术运算、线性代数、归约操作等。多数运算都支持运算符重载和函数式两种调用方式。</p>
+
+  <h3>算术运算</h3>
+
+<pre><code>a = torch.tensor([1, 2, 3])
+b = torch.tensor([4, 5, 6])
+
+# 运算符重载
+c = a + b    # tensor([5, 7, 9])
+c = a - b    # tensor([-3, -3, -3])
+c = a * b    # tensor([4, 10, 18])  逐元素乘
+c = a / b    # tensor([0.25, 0.40, 0.50])
+c = a ** 2   # tensor([1, 4, 9])
+
+# 函数式
+c = torch.add(a, b)
+c = torch.mul(a, b)
+c = torch.matmul(a, b)  # 点积: tensor(32)
+</code></pre>
+
+  <h3>归约与统计</h3>
+
+<pre><code>x = torch.randn(3, 4)
+
+x.sum()               # 全部元素求和
+x.mean(dim=0)         # 沿着 dim=0 求均值
+x.std()               # 标准差
+x.max()               # 最大值
+x.argmax(dim=1)       # 每行最大值索引
+x.min(dim=0).values   # 每列最小值
+x.clamp(-1, 1)        # 裁剪到 [-1, 1]
+</code></pre>
+
+  <h3>索引与切片</h3>
+
+<pre><code>x = torch.randn(4, 3, 5)
+
+x[0]                  # 第一张三维切片 (3, 5)
+x[:, 0]               # 所有第一行 (4, 5)
+x[1:3, :, :2]         # 第二到第三样本，前两列
+x[..., -1]            # 最后一个通道（省略号）
+
+# 高级索引
+indices = torch.tensor([0, 2, 2])
+x[indices]            # 按行索引选取
+mask = x > 0
+x[mask]               # 布尔掩码索引（返回一维）
+</code></pre>
+</section>
+
+<section id="view" class="toc-link">
+  <h2><span class="num">04</span> Tensor View 与 Broadcasting</h2>
+
+  <h3>View / Reshape</h3>
+
+  <p><code>view()</code> 和 <code>reshape()</code> 用于改变张量形状而不改变数据。view 要求张量在内存中是连续的，reshape 则自动处理非连续情况。</p>
+
+<pre><code>x = torch.randn(2, 3, 4)
+
+# view（需要连续内存）
+y = x.view(2, 12)           # 展平最后两维
+y = x.view(-1, 4)           # 自动推导演算维度: (6, 4)
+
+# reshape（自动处理非连续）
+y = x.permute(2, 0, 1)      # 转置 -> 非连续
+y = y.reshape(-1)           # reshape 不会报错
+
+# 其他形状变换
+z = x.transpose(0, 1)       # 交换维度
+z = x.permute(2, 0, 1)      # 任意维度重排 (C, N, H)
+z = x.squeeze(1)            # 移除大小为 1 的维度
+z = x.unsqueeze(0)          # 增加维度 (1, 2, 3, 4)
+z = x.flatten(start_dim=1)  # 从 dim=1 开始展平
+</code></pre>
+
+  <h3>Broadcasting</h3>
+
+  <p>Broadcasting 是 PyTorch 自动扩展不同形状张量进行逐元素运算的机制。规则与 NumPy 一致：从尾部维度开始对齐，每个维度必须为 1 或相等。</p>
+
+<pre><code># 标量广播
+a = torch.ones(3, 4)
+b = 5.0
+c = a + b  # 5 广播到每个元素: tensor([[6, ...]])
+
+# 向量广播
+a = torch.ones(3, 4)          # (3, 4)
+b = torch.tensor([1, 2, 3, 4])  # (4,) -> 广播为 (3, 4)
+c = a + b
+
+# 列向量广播
+a = torch.ones(3, 4)
+b = torch.tensor([[1], [2], [3]])  # (3, 1) -> 广播为 (3, 4)
+c = a + b
+
+# 多维度广播
+a = torch.ones(2, 1, 5)       # (2, 1, 5)
+b = torch.ones(3, 1)          #      (3, 1) -> (1, 3, 1) -> (2, 3, 5)
+c = a + b                     # 结果形状 (2, 3, 5)
+</code></pre>
+
+  <div class="callout warn">
+    <strong>注意:</strong><br>
+    view 和 reshape 返回的张量与原张量共享数据内存，修改会影响原始数据。使用 <code>.clone()</code> 创建独立副本。
+  </div>
+</section>
+
+<section id="autograd" class="toc-link">
+  <h2><span class="num">05</span> Autograd 自动求导</h2>
+
+  <p>PyTorch 的 autograd 引擎通过运行时构建计算图（DAG）并自动执行反向传播。每个 Tensor 有 <code>.grad_fn</code> 属性记录生成该张量的操作，构成计算图的节点。</p>
+
+  <h3>基本用法</h3>
+
+<pre><code>x = torch.randn(3, requires_grad=True)
+w = torch.randn(3, requires_grad=True)
+b = torch.randn(1, requires_grad=True)
+
+y = (x * w).sum() + b     # 前向：构建计算图
+y.backward()              # 反向：计算梯度
+
+print(x.grad)             # dy/dx
+print(w.grad)             # dy/dw
+print(b.grad)             # dy/db
+</code></pre>
+
+  <h3>计算图机制</h3>
+
+<pre><code>x = torch.tensor(2.0, requires_grad=True)
+y = x ** 2                # grad_fn: PowBackward0
+z = y + 3                 # grad_fn: AddBackward0
+
+print(z.grad_fn)          # &lt;AddBackward0 object&gt;
+print(z.grad_fn.next_functions)  # 前驱节点
+
+z.backward()
+print(x.grad)             # 2 * 2 = 4.0
+</code></pre>
+
+  <h3>梯度清零与累积</h3>
+
+<pre><code># .backward() 默认累积梯度，每次需手动清零
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+for data, target in dataloader:
+    optimizer.zero_grad()       # 梯度清零
+    output = model(data)
+    loss = loss_fn(output, target)
+    loss.backward()
+    optimizer.step()
+
+# 也可以手动清零
+model.zero_grad()
+</code></pre>
+
+  <h3>梯度控制</h3>
+
+<pre><code># 关闭梯度跟踪（推理时）
+with torch.no_grad():
+    y = model(x)                # 不构建计算图，节省内存
+
+# 冻结参数
+for param in model.parameters():
+    param.requires_grad = False
+
+# 查看梯度
+for name, param in model.named_parameters():
+    if param.grad is not None:
+        print(name, param.grad.norm())
+</code></pre>
+
+  <div class="callout tip">
+    <strong>性能提示:</strong><br>
+    训练时使用 <code>loss.backward()</code> 前确保 <code>optimizer.zero_grad()</code> 已调用。推理时始终使用 <code>torch.no_grad()</code> 上下文以避免不必要的计算图构建。
+  </div>
+</section>
+
+<section id="module" class="toc-link">
+  <h2><span class="num">06</span> nn.Module 与模型搭建</h2>
+
+  <p><code>nn.Module</code> 是所有神经网络模块的基类。它提供了参数管理、子模块注册、训练/评估模式切换等基础设施。</p>
+
+  <h3>自定义模块</h3>
+
+<pre><code>import torch.nn as nn
+import torch.nn.functional as F
+
+class MLP(nn.Module):
+    def __init__(self, in_dim, hidden_dim, out_dim):
+        super().__init__()
+        self.fc1 = nn.Linear(in_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, out_dim)
+        self.dropout = nn.Dropout(0.3)
+
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+model = MLP(784, 256, 10)
+print(model)
+</code></pre>
+
+  <h3>nn.Sequential</h3>
+
+<pre><code># 适用于简单前馈网络
+model = nn.Sequential(
+    nn.Linear(784, 256),
+    nn.ReLU(),
+    nn.Dropout(0.3),
+    nn.Linear(256, 128),
+    nn.ReLU(),
+    nn.Linear(128, 10),
+)
+
+# 带命名
+model = nn.Sequential(
+    OrderedDict([
+        ("fc1", nn.Linear(784, 256)),
+        ("relu1", nn.ReLU()),
+        ("fc2", nn.Linear(256, 128)),
+        ("relu2", nn.ReLU()),
+        ("fc3", nn.Linear(128, 10)),
+    ])
+)
+</code></pre>
+
+  <h3>nn.ModuleList / ModuleDict</h3>
+
+<pre><code># 动态层列表
+class MultiHeadNet(nn.Module):
+    def __init__(self, num_heads=3):
+        super().__init__()
+        self.heads = nn.ModuleList([
+            nn.Linear(128, 10) for _ in range(num_heads)
+        ])
+
+    def forward(self, x):
+        return [head(x) for head in self.heads]
+
+# ModuleDict（按名称选择）
+class Selector(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.activations = nn.ModuleDict({
+            "relu": nn.ReLU(),
+            "tanh": nn.Tanh(),
+            "sigmoid": nn.Sigmoid(),
+        })
+
+    def forward(self, x, act="relu"):
+        return self.activations[act](x)
+</code></pre>
+
+  <h3>参数管理</h3>
+
+<pre><code>for name, param in model.named_parameters():
+    print(f"{name}: {param.shape}")
+
+# 统计参数量
+total = sum(p.numel() for p in model.parameters())
+trainable = sum(p.numel() for p in model.parameters()
+                if p.requires_grad)
+
+# 移至 GPU / CPU
+model = model.to("cuda")
+</code></pre>
+</section>
+
+<section id="dataloader" class="toc-link">
+  <h2><span class="num">07</span> DataLoader 与 Dataset</h2>
+
+  <p><code>torch.utils.data.Dataset</code> 和 <code>DataLoader</code> 是 PyTorch 数据加载的核心抽象。Dataset 定义数据索引方式，DataLoader 负责批量加载、打乱和多进程并行。</p>
+
+  <h3>自定义 Dataset</h3>
+
+<pre><code>from torch.utils.data import Dataset, DataLoader
+
+class ImageDataset(Dataset):
+    def __init__(self, image_paths, labels, transform=None):
+        self.image_paths = image_paths
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        img = Image.open(self.image_paths[idx]).convert("RGB")
+        label = self.labels[idx]
+
+        if self.transform:
+            img = self.transform(img)
+
+        return img, label
+
+# 使用
+dataset = ImageDataset(
+    image_paths=["img1.jpg", "img2.jpg"],
+    labels=[0, 1],
+    transform=transforms.ToTensor()
+)
+</code></pre>
+
+  <h3>torchvision 内置数据集</h3>
+
+<pre><code>from torchvision import datasets, transforms
+
+train_data = datasets.CIFAR10(
+    root="./data",
+    train=True,
+    transform=transforms.ToTensor(),
+    download=True
+)
+
+test_data = datasets.MNIST(
+    root="./data",
+    train=False,
+    transform=transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ]),
+    download=True
+)
+</code></pre>
+
+  <h3>DataLoader 参数详解</h3>
+
+<pre><code>dataloader = DataLoader(
+    dataset,
+    batch_size=64,              # 每批样本数
+    shuffle=True,               # 每个 epoch 打乱
+    num_workers=4,              # 子进程数（加载图片等 I/O 密集型任务）
+    pin_memory=True,            # 锁页内存加速 GPU 传输
+    drop_last=True,            # 丢弃最后一个不完整 batch
+    prefetch_factor=2,          # 预取因子（num_workers * 2 个批次）
+    persistent_workers=True,    # epoch 间不销毁 worker
+    timeout=0,                  # 超时（秒，0 表示不限制）
+)
+
+for epoch in range(num_epochs):
+    for batch_idx, (data, target) in enumerate(dataloader):
+        # data: (B, C, H, W) 或 (B, seq_len)
+        # target: (B,) 标签
+        pass
+</code></pre>
+
+  <h3>Transform 组合与自定义</h3>
+
+<pre><code>from torchvision import transforms
+
+# 常见 transform 链
+transform_train = transforms.Compose([
+    transforms.RandomCrop(32, padding=4),
+    transforms.RandomHorizontalFlip(),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.4914, 0.4822, 0.4465],
+        std=[0.2470, 0.2435, 0.2616]
+    ),
+])
+
+# 自定义 transform（类或函数）
+class AddNoise:
+    def __call__(self, tensor, noise_std=0.1):
+        return tensor + torch.randn_like(tensor) * noise_std
+
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    AddNoise(),
+])
+</code></pre>
+
+  <div class="callout warn">
+    <strong>性能提示:</strong><br>
+    <code>num_workers</code> 通常设为 CPU 核心数。GPU 训练时开启 <code>pin_memory=True</code> 可显著加速主机到设备的数据传输。Windows 系统建议 <code>num_workers=0</code> 以避免多进程序列化问题。
+  </div>
+</section>
+
+<section id="training" class="toc-link">
+  <h2><span class="num">08</span> 训练循环模板</h2>
+
+  <p>PyTorch 的训练循环需要手动组织，这提供了完全的控制权。以下是适用于分类任务的通用模板。</p>
+
+<pre><code>import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+def train_one_epoch(model, dataloader, optimizer, criterion,
+                    device, epoch, log_interval=100):
+    model.train()
+    total_loss = 0
+    correct = 0
+    total = 0
+
+    for batch_idx, (data, target) in enumerate(dataloader):
+        data, target = data.to(device), target.to(device)
+
+        optimizer.zero_grad()
+        output = model(data)
+        loss = criterion(output, target)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+        pred = output.argmax(dim=1)
+        correct += pred.eq(target).sum().item()
+        total += target.size(0)
+
+        if batch_idx % log_interval == 0:
+            print(f"Train Epoch: {epoch} "
+                  f"[{batch_idx * len(data)}/{len(dataloader.dataset)}] "
+                  f"Loss: {loss.item():.4f} "
+                  f"Acc: {100. * correct / total:.2f}%")
+
+    return total_loss / len(dataloader), correct / total
+
+
+@torch.no_grad()
+def evaluate(model, dataloader, criterion, device):
+    model.eval()
+    total_loss = 0
+    correct = 0
+
+    for data, target in dataloader:
+        data, target = data.to(device), target.to(device)
+        output = model(data)
+        loss = criterion(output, target)
+
+        total_loss += loss.item()
+        pred = output.argmax(dim=1)
+        correct += pred.eq(target).sum().item()
+
+    avg_loss = total_loss / len(dataloader)
+    accuracy = correct / len(dataloader.dataset)
+    return avg_loss, accuracy
+
+
+# 主循环
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = MLP(784, 256, 10).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.CrossEntropyLoss()
+
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=256)
+
+    for epoch in range(1, 11):
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, optimizer, criterion, device, epoch
+        )
+        test_loss, test_acc = evaluate(
+            model, test_loader, criterion, device
+        )
+        print(f"Epoch {epoch}: "
+              f"Train Loss={train_loss:.4f} Acc={train_acc:.4f} | "
+              f"Test Loss={test_loss:.4f} Acc={test_acc:.4f}")
+</code></pre>
+
+  <div class="callout tip">
+    <strong>最佳实践:</strong><br>
+    使用 <code>@torch.no_grad()</code> 装饰评估函数，避免构建推理时的计算图。训练/评估模式切换通过 <code>model.train()</code> / <code>model.eval()</code> 控制 BatchNorm 和 Dropout 行为。
+  </div>
+</section>
+
+<section id="gpu" class="toc-link">
+  <h2><span class="num">09</span> GPU 加速与混合精度</h2>
+
+  <h3>Device 管理</h3>
+
+<pre><code># 统一的 device 管理器
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# 多 GPU 管理
+print(torch.cuda.device_count())      # GPU 数量
+print(torch.cuda.current_device())    # 当前设备索引
+print(torch.cuda.get_device_capability(0))  # 计算能力
+
+# 数据与模型迁移
+model.to(device)
+data = data.to(device, non_blocking=True)
+target = target.to(device, non_blocking=True)
+
+# DataParallel（简易多卡）
+model = nn.DataParallel(model)  # 自动拆分 batch 到各 GPU
+
+# DistributedDataParallel（推荐）
+# torchrun --nproc_per_node=4 train.py
+</code></pre>
+
+  <h3>torch.cuda.amp 混合精度训练</h3>
+
+  <p>混合精度训练使用 float16 进行前向和反向传播，同时在关键归约操作中保留 float32 精度。AMP 可带来约 1.5-3 倍训练加速，且对模型精度影响极小。</p>
+
+<pre><code>from torch.cuda.amp import autocast, GradScaler
+
+scaler = GradScaler()
+
+for data, target in dataloader:
+    data, target = data.to(device), target.to(device)
+
+    optimizer.zero_grad()
+
+    # 前向在 amp 上下文内
+    with autocast(device_type="cuda"):
+        output = model(data)
+        loss = criterion(output, target)
+
+    # 梯度缩放防止 underflow
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+
+# 推理时也可使用
+model.eval()
+with torch.no_grad(), autocast():
+    output = model(data)
+</code></pre>
+
+  <h3>torch.compile</h3>
+
+<pre><code># PyTorch 2.x 即时编译
+model = MLP(784, 256, 10).to(device)
+model = torch.compile(model, mode="default")
+# mode: "default" / "reduce-overhead" / "max-autotune"
+
+# 只编译推理
+model = torch.compile(model, mode="reduce-overhead")
+model.eval()
+with torch.no_grad():
+    output = model(data)
+</code></pre>
+
+  <div class="callout warn">
+    <strong>注意:</strong><br>
+    torch.compile 目前对动态形状和某些控制流支持有限。在第一次调用时会触发编译（预热），后续调用速度显著提升。CUDA >= 11.6 且新 GPU 架构（Ampere 及以上）效果最佳。
+  </div>
+</section>
+
+<section id="save" class="toc-link">
+  <h2><span class="num">10</span> 保存与加载</h2>
+
+  <p>PyTorch 支持多种模型保存策略，从简单的参数字典到完整的检查点，满足不同场景需求。</p>
+
+  <h3>保存 state_dict（推荐）</h3>
+
+<pre><code># 保存模型参数
+torch.save(model.state_dict(), "model_weights.pth")
+
+# 加载模型参数
+model = MLP(784, 256, 10)   # 必须先创建模型实例
+model.load_state_dict(torch.load("model_weights.pth"))
+model.eval()
+</code></pre>
+
+  <h3>保存完整检查点</h3>
+
+<pre><code>checkpoint = {
+    "epoch": epoch,
+    "model_state_dict": model.state_dict(),
+    "optimizer_state_dict": optimizer.state_dict(),
+    "loss": loss,
+    "lr_scheduler": scheduler.state_dict(),
+    "args": args,
+}
+
+torch.save(checkpoint, "checkpoint_epoch10.pt")
+
+# 加载检查点
+checkpoint = torch.load("checkpoint_epoch10.pt")
+model.load_state_dict(checkpoint["model_state_dict"])
+optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+start_epoch = checkpoint["epoch"] + 1
+</code></pre>
+
+  <h3>TorchScript 导出</h3>
+
+<pre><code># Tracing（推荐用于简单模型）
+model.eval()
+example_input = torch.randn(1, 3, 224, 224).to(device)
+traced_model = torch.jit.trace(model, example_input)
+traced_model.save("model_traced.pt")
+
+# Scripting（支持控制流）
+scripted_model = torch.jit.script(model)
+scripted_model.save("model_scripted.pt")
+
+# 加载 TorchScript
+loaded = torch.jit.load("model_traced.pt")
+output = loaded(example_input)
+</code></pre>
+
+  <div class="callout tip">
+    <strong>最佳实践:</strong><br>
+    训练过程中定期保存检查点（每 N 个 epoch）。保存时建议保留最佳验证精度对应的权重。使用 <code>torch.save(model.module.state_dict(), ...)</code> 处理 DataParallel 封装的模型。
+  </div>
+</section>
+
+<section id="tb" class="toc-link">
+  <h2><span class="num">11</span> TensorBoard 可视化</h2>
+
+  <p>PyTorch 通过 <code>torch.utils.tensorboard</code> 直接集成 TensorBoard，支持标量曲线、模型图、直方图、高维嵌入和图像显示。</p>
+
+  <h3>基本使用</h3>
+
+<pre><code>from torch.utils.tensorboard import SummaryWriter
+
+writer = SummaryWriter(log_dir="runs/experiment_1")
+
+# 标量曲线
+for epoch in range(10):
+    train_loss = train_one_epoch(...)
+    writer.add_scalar("Loss/train", train_loss, epoch)
+    writer.add_scalar("Accuracy/train", train_acc, epoch)
+
+# 模型图
+writer.add_graph(model, example_input)
+
+# 直方图（参数分布）
+for name, param in model.named_parameters():
+    writer.add_histogram(f"params/{name}", param, epoch)
+
+# 图像
+writer.add_images("batch_images", data_grid, global_step=0)
+
+# 嵌入（高维向量可视化）
+writer.add_embedding(features, metadata=labels, label_img=images)
+
+writer.close()
+</code></pre>
+
+  <h3>启动 TensorBoard</h3>
+
+<pre><code># 终端运行
+tensorboard --logdir=runs --port=6006
+
+# Jupyter 内嵌
+%load_ext tensorboard
+%tensorboard --logdir runs
+</code></pre>
+
+  <h3>高级用法</h3>
+
+<pre><code># 精确率-召回率曲线
+writer.add_pr_curve("pr_curve", labels, predictions, epoch)
+
+# 超参数对比
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter(log_dir="runs/hparam_tuning")
+
+best_accuracy = ...
+writer.add_hparams(
+    {"lr": 0.01, "batch_size": 64},
+    {"accuracy": best_accuracy}
+)
+
+# 自定义 matplotlib 图
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots()
+ax.plot(losses)
+writer.add_figure("loss_curve", fig, global_step=epoch)
+</code></pre>
+
+  <div class="callout tip">
+    <strong>阅读建议:</strong><br>
+    <code>torch.utils.tensorboard</code> 标准库文档。<br>
+    PyTorch 官方教程 "Visualizing Models, Data, and Training with TensorBoard"。<br>
+    <code>torch.cuda.amp</code> 混合精度训练的官方文档。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

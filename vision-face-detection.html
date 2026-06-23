@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>人脸检测与识别技术</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%23f39c12'/><stop offset='100%25' stop-color='%23d68910'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>人脸检测与识别技术</h1>
+  <p class="subtitle">MTCNN · RetinaFace · FaceNet · ArcFace</p>
+  <span class="version">计算机视觉 · 人脸分析</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#intro">人脸检测 vs 人脸识别 vs 人脸验证</a></li>
+    <li><a href="#mtcnn">MTCNN 级联网络</a></li>
+    <li><a href="#retinaface">RetinaFace 特征金字塔</a></li>
+    <li><a href="#facenet">FaceNet 与 Triplet Loss</a></li>
+    <li><a href="#arcface">ArcFace 与分类边界分析</a></li>
+    <li><a href="#insightface">InsightFace 开源库</a></li>
+    <li><a href="#alignment">人脸对齐</a></li>
+    <li><a href="#liveness">活体检测</a></li>
+    <li><a href="#system">大规模人脸识别系统</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="intro" class="toc-link">
+  <h2><span class="num">01</span> 人脸检测 vs 人脸识别 vs 人脸验证</h2>
+
+  <p>人脸分析领域包含三个不同层次的任务,它们在目标、输入输出和技术实现上都有显著差异。</p>
+
+  <table>
+    <thead>
+      <tr><th>任务</th><th>输入</th><th>输出</th><th>核心挑战</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>人脸检测</td><td>图像/视频帧</td><td>人脸边界框 + 关键点</td><td>尺度变化、遮挡、大姿态</td></tr>
+      <tr><td>人脸识别</td><td>人脸图像</td><td>身份标签/特征向量</td><td>类间变异、光照、年龄变化</td></tr>
+      <tr><td>人脸验证</td><td>两张人脸图像</td><td>是否为同一人 (1:1)</td><td>特征判别力、阈值选择</td></tr>
+      <tr><td>人脸搜索</td><td>一张人脸图像</td><td>库中匹配的 N 个结果 (1:N)</td><td>大规模索引、检索效率</td></tr>
+      <tr><td>人脸聚类</td><td>多张人脸图像</td><td>按身份分组</td><td>无监督/半监督分组</td></tr>
+    </tbody>
+  </table>
+
+  <h3>典型流程</h3>
+  <pre><code>// 完整的人脸识别系统流程
+
+// 1. 人脸检测 (Face Detection)
+//    输入: 原始图像
+//    输出: 人脸边界框 [(x1,y1,x2,y2,score), ...]
+
+// 2. 人脸对齐 (Face Alignment)
+//    输入: 人脸图像 + 检测到的关键点
+//    输出: 对齐后的标准人脸 (112x112)
+
+// 3. 特征提取 (Feature Extraction)
+//    输入: 对齐后的人脸图像
+//    输出: 固定维度的特征向量 (如 512 维)
+
+// 4. 特征匹配 (Feature Matching)
+//    输入: 当前特征 vs 数据库特征
+//    输出: 相似度分数 / 身份标签
+
+// 各阶段的典型延迟:
+// 检测: 5-15ms (GPU) / 20-100ms (CPU)
+// 对齐: <1ms
+// 特征提取: 3-10ms (GPU)
+// 匹配: <1ms (100万级库) / 10-50ms (1亿级库)</code></pre>
+
+  <h3>评价指标</h3>
+  <ul>
+    <li><strong>检测:</strong> Recall (真阳性率), Precision, IOU, 推理速度</li>
+    <li><strong>验证:</strong> TAR@FAR=1e-4 (Labeled Faces in the Wild, LFW 基准), AUC</li>
+    <li><strong>识别:</strong> Rank-1 Accuracy, mAP (MegaFace, IJB-C 等基准)</li>
+    <li><strong>搜索:</strong> Recall@K, 检索延迟, 索引构建时间</li>
+  </ul>
+</section>
+
+<section id="mtcnn" class="toc-link">
+  <h2><span class="num">02</span> MTCNN 级联网络</h2>
+
+  <p>MTCNN (Multi-Task Cascaded Convolutional Networks) 将人脸检测和对齐任务结合到一个级联架构中。它由三个网络串联组成,以从粗到精的方式逐步检测和细化人脸框与关键点。</p>
+
+  <h3>三阶段级联结构</h3>
+  <pre><code>// MTCNN 整体流程
+
+// 阶段 1: P-Net (Proposal Network)
+// 输入: 图像金字塔 (多尺度缩放)
+// 小型全卷积网络
+// 输出: 候选框 + 边界框回归 + 关键点
+// 策略: 快速过滤大量非人脸区域
+// 生成大量候选框 (~数万个 -> ~数千个)
+// 然后用 NMS (IOU=0.5) 筛选
+
+// 阶段 2: R-Net (Refine Network)
+// 输入: P-Net 输出的候选框 (resize 到 24x24)
+// 稍大的网络 (全连接层)
+// 输出: 精细分类 + 回归 + 关键点
+// 策略: 进一步过滤误报
+// 再用 NMS (IOU=0.5) 筛选
+
+// 阶段 3: O-Net (Output Network)
+// 输入: R-Net 输出的候选框 (resize 到 48x48)
+// 最大的网络
+// 输出: 最终分类 + 精确回归 + 5 个关键点
+// 最终 NMS
+
+// P-Net 结构:
+// Input: 12x12x3
+// Conv 3x3 (10) -> PReLU -> MaxPool 2x2
+// Conv 3x3 (16) -> PReLU
+// Conv 3x3 (32) -> PReLU
+// 三个分支:
+//   face_class:    Conv 1x1 (2) -> Softmax
+//   bbox_reg:      Conv 1x1 (4)
+//   landmark_reg:  Conv 1x1 (10)</code></pre>
+
+  <h3>多任务训练</h3>
+  <pre><code>// MTCNN 训练损失 (三任务联合)
+
+// 1. 人脸分类损失 (Cross Entropy)
+//    只使用有标签的人脸/非人脸数据
+L_det = -[y * log(p) + (1-y) * log(1-p)]
+
+// 2. 边界框回归损失 (L2)
+//    只使用人脸样本
+L_box = ||y_hat_box - y_box||^2
+
+// 3. 关键点回归损失 (L2)
+//    只使用带关键点标注的人脸样本
+L_landmark = ||y_hat_landmark - y_landmark||^2
+
+// 联合训练损失
+L = min(alpha * L_det + beta * L_box + gamma * L_landmark)
+
+// 各阶段的任务权重:
+// P-Net:  L = 1.0 * L_det + 0.5 * L_box + 0.5 * L_lm
+// R-Net:  L = 1.0 * L_det + 0.5 * L_box + 0.5 * L_lm
+// O-Net:  L = 1.0 * L_det + 0.5 * L_box + 1.0 * L_lm</code></pre>
+
+  <h3>训练数据生成</h3>
+  <p>MTCNN 使用四类训练样本,通过数据挖掘和在线难例挖掘 (Online Hard Example Mining, OHEM) 来控制训练样本质量。</p>
+
+  <table>
+    <thead>
+      <tr><th>样本类型</th><th>IOU 范围</th><th>标签</th><th>用途</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>正样本 (Positive)</td><td>IOU > 0.65</td><td>人脸 (1)</td><td>训练检测 + 回归</td></tr>
+      <tr><td>部分样本 (Partial)</td><td>0.4 < IOU <= 0.65</td><td>忽略 (2)</td><td>仅训练回归</td></tr>
+      <tr><td>负样本 (Negative)</td><td>IOU < 0.3</td><td>非人脸 (0)</td><td>训练检测</td></tr>
+      <tr><td>困难样本 (OHEM)</td><td>在线选取</td><td>动态</td><td>提升难分样本能力</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>MTCNN 优缺点:</strong><br>
+    优点: 检测和对齐联合训练,硬件友好,CPU 上也能达到 30+ FPS。<br>
+    缺点: 级联结构推理时间随人脸数量增加而增长,对极端姿态和小人脸（<20px）效果不佳,已被 RetinaFace 等单阶段方法超越。
+  </div>
+</section>
+
+<section id="retinaface" class="toc-link">
+  <h2><span class="num">03</span> RetinaFace 特征金字塔</h2>
+
+  <p>RetinaFace 是一个单阶段人脸检测模型,它在 RetinaNet 的基础上引入了特征金字塔、SSH (Single Stage Headless) 上下文模块和关键点回归分支,在 WiderFace 数据集上取得了全面领先的成绩。</p>
+
+  <h3>核心架构</h3>
+  <pre><code>// RetinaFace 结构
+
+// 骨干网络: ResNet-50/101 或 MobileNet
+
+// 特征金字塔 (FPN):
+//   对骨干网络的 P3-P7 层构建特征金字塔
+//   每层负责检测不同尺度的脸
+//   P3: 高分辨率 -> 小脸
+//   P7: 低分辨率 -> 大脸
+
+// SSH (Single Stage Headless) 上下文模块:
+//   在每个特征金字塔层后跟一个 SSH 模块
+//   由三个并行分支组成:
+//     - 3x3 Conv (主路径)
+//     - 3x3 Conv -> 3x3 Conv (扩大感受野)
+//     - 3x3 Conv -> 3x3 Conv -> 3x3 Conv (进一步扩大)
+//   三个分支拼接后通过 1x1 Conv 降维
+//   提高对上下文信息的利用
+
+// 多层次预测头部:
+//   对每个特征金字塔层:
+//     1. 人脸分类: 每个 anchor 的人脸概率
+//     2. 框回归: anchor 到 GT 的偏移量
+//     3. 关键点回归: 5 个面部关键点 (左眼,右眼,鼻尖,左嘴角,右嘴角)</code></pre>
+
+  <h3>Sample-Aware Loss</h3>
+  <p>RetinaFace 在训练时使用改进的损失函数。针对人脸检测中的类别不平衡和难例挖掘问题,它引入了多层次监督和多任务损失。</p>
+
+  <pre><code>// RetinaFace 损失函数
+
+// 1. 人脸分类损失 - Focal Loss
+L_cls(p, y) = -y * (1-p)^gamma * log(p)
+             -(1-y) * p^gamma * log(1-p)
+
+// 2. 框回归损失 - Smooth L1
+L_box = smooth_l1(pred_box, gt_box)
+
+// 3. 关键点回归损失 - Smooth L1
+L_lmk = smooth_l1(pred_lmk, gt_lmk)
+
+// 总损失 = L_cls + lambda1 * L_box + lambda2 * L_lmk
+// lambda1=0.25, lambda2=0.1
+
+// 难例挖掘策略:
+// 对每个 mini-batch:
+//   1. 保留所有正样本 (人脸)
+//   2. 在负样本中,按损失从高到低排序
+//   3. 选择使得正:负 = 1:3 的负样本数量
+//   4. 丢弃剩余的易负样本</code></pre>
+
+  <h3>Anchor 设计</h3>
+  <p>RetinaFace 为每个特征金字塔层分配特定尺度的 anchor。相比通用目标检测,人脸检测的 anchor 尺度范围更集中（人脸宽高比通常在 0.8-1.2 之间）。</p>
+
+  <table>
+    <thead>
+      <tr><th>特征金字塔层</th><th>Stride</th><th>Anchor 尺度</th><th>Anchor 宽高比</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>P3</td><td>8</td><td>16, 32</td><td>1:1</td></tr>
+      <tr><td>P4</td><td>16</td><td>64, 128</td><td>1:1</td></tr>
+      <tr><td>P5</td><td>32</td><td>256, 512</td><td>1:1</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>RetinaFace 性能:</strong><br>
+    WiderFace 数据集上,RetinaFace-ResNet-50 在 Easy/Medium/Hard 三个子集上的 mAP 分别为 96.2%、95.3%、90.4%。配合 MobileNet 骨干,可以在移动设备上达到 20+ FPS。
+  </div>
+</section>
+
+<section id="facenet" class="toc-link">
+  <h2><span class="num">04</span> FaceNet 与 Triplet Loss</h2>
+
+  <p>FaceNet 是 Google 在 2015 年提出的人脸特征嵌入方法,它直接学习从人脸图像到欧几里得空间的映射,使得同一人的特征向量距离近,不同人的特征向量距离远。</p>
+
+  <h3>核心思想</h3>
+  <p>FaceNet 使用三元组损失 (Triplet Loss) 来训练一个深度卷积网络。三元组由三张图片组成：锚点 (Anchor)、正例 (Positive、同一人)、负例 (Negative、不同人)。</p>
+
+  <pre><code>// 三元组损失 (Triplet Loss)
+
+// 目标: 让 anchor-positive 距离 < anchor-negative 距离
+// 且小于 margin (边界)
+
+// 公式:
+L = max(||f(A) - f(P)||^2 - ||f(A) - f(N)||^2 + alpha, 0)
+
+// 其中:
+// f(A): Anchor 的特征向量
+// f(P): Positive (同一人) 的特征向量
+// f(N): Negative (不同人) 的特征向量
+// alpha: margin 超参数 (通常 0.2 或 0.3)
+
+// 三元组选择策略 (关键!):
+
+// 1. 简单三元组 (Easy Triplets):
+//    d(A,P) + margin < d(A,N)
+//    损失 = 0 -- 不需要优化
+
+// 2. 困难三元组 (Hard Triplets):
+//    d(A,P) > d(A,N)
+//    损失 > 0 -- 最需要优化的样本
+
+// 3. 半困难三元组 (Semi-Hard Triplets):
+//    d(A,P) < d(A,N) < d(A,P) + margin
+//    损失 > 0 -- Google 推荐的选择策略
+
+// 在线难例挖掘:
+// 在每个 mini-batch 中,对每个 anchor 选择最难的负例</code></pre>
+
+  <h3>三元组选择策略详解</h3>
+  <pre><code># 三元组选择 (TensorFlow 风格)
+def batch_hard_triplet_selection(embeddings, labels, margin=0.3):
+    # embeddings: (B, D) 归一化的特征向量
+    # labels: (B,) 身份标签
+
+    # 计算 pairwise 距离矩阵
+    # pair_dist[i][j] = ||embedding[i] - embedding[j]||^2
+
+    # 对每个 anchor:
+    hardest_positive_dist = []
+    hardest_negative_dist = []
+
+    for i in range(B):
+        # 与 i 同身份的所有正例
+        same_identity = (labels == labels[i])
+        # 与 i 不同身份的所有负例
+        diff_identity = ~same_identity
+
+        # 最远正例 (困难正例)
+        pos_dist = pair_dist[i][same_identity]
+        hardest_positive = pos_dist.max()
+
+        # 最近负例 (困难负例)
+        neg_dist = pair_dist[i][diff_identity]
+        hardest_negative = neg_dist.min()
+
+        hardest_positive_dist.append(hardest_positive)
+        hardest_negative_dist.append(hardest_negative)
+
+    # 三元组损失
+    losses = hardest_positive_dist - hardest_negative_dist + margin
+    losses = torch.clamp(losses, min=0.0)
+    return losses.mean()</code></pre>
+
+  <h3>FaceNet 网络结构</h3>
+  <p>FaceNet 可以使用不同的卷积网络作为特征提取器。原始论文比较了两种架构：Zeiler&Fergus 风格的 NN2 和基于 Inception 的 NN3。输出是一个 128 维的特征向量（L2 归一化后位于单位超球面上）。</p>
+
+  <pre><code>// FaceNet 网络结构 (NN2)
+
+// Input: 224x224x3
+// Conv 7x7/2 (64) -> BN -> ReLU -> MaxPool 3x3/2
+// Conv 1x1 (64) -> BN -> ReLU
+// Conv 3x3 (192) -> BN -> ReLU -> MaxPool 3x3/2
+// Inception(3a-3e)   # 前几层 Inception 模块
+// Inception(4a-4e)
+// Inception(5a-5b)
+// AvgPool 7x7 -> FC (128) -> L2 Normalization
+// 输出: 128 维单位向量
+
+// 训练细节:
+// Batch size: 1800 (每张卡 180, 10 卡并行)
+// 每个 batch 约 40 人,每人约 45 张图
+// 学习率: 0.05 SGD, 指数衰减
+// 训练数据: 约 2 亿张人脸图片</code></pre>
+
+  <div class="callout">
+    <strong>FaceNet 的影响:</strong><br>
+    FaceNet 提出了"端到端学习人脸特征嵌入"的范式和有效的三元组在线挖掘策略。它在 LFW 上达到 99.63% 的验证精度,在 YouTube Faces 上达到 95.12%。该工作是人脸识别领域从分类损失转向度量学习的里程碑。
+  </div>
+</section>
+
+<section id="arcface" class="toc-link">
+  <h2><span class="num">05</span> ArcFace 与分类边界分析</h2>
+
+  <p>ArcFace (Additive Angular Margin Loss) 是当前人脸识别领域最广泛使用的损失函数之一。它在 Softmax 的基础上引入了加性角度间隔,使学习到的特征在超球面上具有更好的类内紧凑性和类间可分离性。</p>
+
+  <h3>从 Softmax 到 ArcFace</h3>
+  <pre><code>// Softmax Loss (传统分类损失)
+// 决策边界: W1*x + b1 = W2*x + b2
+// 只要求类别线性可分离,不要求特征紧凑
+
+// 改进: 特征归一化 + 权重归一化 + 角度间隔
+
+// 1. L2-Softmax: 对特征做 L2 归一化
+//    使特征分布在超球面上
+//    x = x / ||x|| * s  (s = scale 参数)
+
+// 2. SphereFace: 乘性角度间隔
+//    cos(m*theta)  m > 1
+//    在角度空间乘以 m,压缩类内角度分布
+
+// 3. CosFace: 加性余弦间隔
+//    cos(theta) - m
+//    在余弦距离上加一个常数值
+
+// 4. ArcFace (最优): 加性角度间隔
+//    cos(theta + m)
+//    在角度空间加一个常数值
+//    几何意义更明确,更稳定</code></pre>
+
+  <h3>ArcFace 损失公式</h3>
+  <pre><code>// ArcFace 损失函数
+
+// L = -1/N * sum(log(
+//        exp(s * cos(theta_yi + m))
+//      / (exp(s * cos(theta_yi + m))
+//         + sum(exp(s * cos(theta_j)))))  // j != yi
+
+// 参数说明:
+// N: batch 大小
+// yi: 第 i 个样本的类别标签
+// theta_j: 特征向量与第 j 类权重的夹角
+// s: 特征缩放因子 (feature scale, 通常 64)
+// m: 角度间隔 (angular margin, 通常 0.5)
+
+// 决策边界分析:
+// ArcFace 的决策边界: cos(theta_1 + m) > cos(theta_2)
+// 等价于: theta_1 < theta_2 - m
+// 即需要真类的角度比最接近的假类至少小 m</code></pre>
+
+  <h3>PyTorch 实现</h3>
+  <pre><code>import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ArcFaceLoss(nn.Module):
+    def __init__(self, embedding_dim, num_classes,
+                 scale=64.0, margin=0.5):
+        super().__init__()
+        self.scale = scale
+        self.margin = margin
+        self.num_classes = num_classes
+        # 权重矩阵 W (类别中心)
+        self.weight = nn.Parameter(
+            torch.FloatTensor(num_classes, embedding_dim))
+        nn.init.xavier_normal_(self.weight)
+
+    def forward(self, embeddings, labels):
+        # embbedings: (B, D) L2 归一化后的特征
+        # 对权重也做 L2 归一化
+        w = F.normalize(self.weight, dim=1)
+
+        # 计算 cos(theta) = embedding * w^T
+        # cos_theta: (B, C)
+        cos_theta = F.linear(embeddings, w)
+        cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
+
+        # 计算 theta 和 cos(theta + m)
+        theta = torch.acos(cos_theta)
+        # 整理,避免梯度震荡
+        one_hot = F.one_hot(labels, self.num_classes).float()
+
+        # cos(theta + m) = cos(theta)cos(m) - sin(theta)sin(m)
+        sin_theta = torch.sin(theta)
+        cos_theta_m = cos_theta * torch.cos(self.margin)                     - sin_theta * torch.sin(self.margin)
+
+        # 只对真类使用 cos(theta + m),其他类保持 cos(theta)
+        output = cos_theta * (1 - one_hot)                + cos_theta_m * one_hot
+
+        # 乘以缩放因子 s
+        output *= self.scale
+
+        # 标准交叉熵损失
+        loss = F.cross_entropy(output, labels)
+        return loss</code></pre>
+
+  <h3>特征归一化分析</h3>
+  <table>
+    <thead>
+      <tr><th>方法</th><th>间隔形式</th><th>几何意义</th><th>LFW 精度</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Softmax</td><td>无间隔</td><td>线性分界面</td><td>~98.5%</td></tr>
+      <tr><td>Center Loss</td><td>类中心距离惩罚</td><td>压缩类内距离</td><td>~99.0%</td></tr>
+      <tr><td>SphereFace</td><td>cos(m*theta)</td><td>乘性角度间隔</td><td>~99.2%</td></tr>
+      <tr><td>CosFace (LMCL)</td><td>cos(theta) - m</td><td>加性余弦间隔</td><td>~99.3%</td></tr>
+      <tr><td>ArcFace</td><td>cos(theta + m)</td><td>加性角度间隔</td><td>~99.8%</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>超参数选择:</strong><br>
+    ArcFace 的 scale s 通常设为 64,margin m 设为 0.5。m 过大导致训练不收敛,m 过小起不到间隔作用。在 MS1M-V2 数据集上使用 ResNet-100 骨干,ArcFace 在 LFW 上可达 99.83%,MegaFace 识别率 98.35%。
+  </div>
+</section>
+
+<section id="insightface" class="toc-link">
+  <h2><span class="num">06</span> InsightFace 开源库</h2>
+
+  <p>InsightFace 是开源的人脸分析工具库,由 InsightFace 团队开发和维护。它提供了 ArcFace 损失的参考实现、完整的人脸检测/识别/对齐训练和推理流程,以及大量预训练模型。</p>
+
+  <h3>核心功能</h3>
+  <pre><code>// InsightFace Python 库使用
+
+import insightface
+import cv2
+import numpy as np
+
+// 1. 加载模型
+model = insightface.app.FaceAnalysis()
+model.prepare(ctx_id=0, det_size=(640, 640))
+// ctx_id=0 使用 GPU, -1 使用 CPU
+// det_size 控制检测分辨率
+
+// 2. 人脸检测 + 识别
+img = cv2.imread("group_photo.jpg")
+faces = model.get(img)
+
+// 每个 face 对象包含:
+for face in faces:
+    // 检测结果
+    print(face.bbox)          # [x1, y1, x2, y2] 边界框
+    print(face.det_score)     # 检测置信度
+    print(face.landmark)      # 5 个关键点
+
+    // 对齐后的人脸
+    print(face.aligned_norm)  # 归一化人脸 (112x112)
+
+    // 识别结果
+    print(face.embedding)     # 512 维特征向量
+    print(face.gender)        # 性别
+    print(face.age)           # 年龄</code></pre>
+
+  <h3>支持的模型库</h3>
+  <table>
+    <thead>
+      <tr><th>模型名称</th><th>骨干</th><th>检测精度</th><th>识别精度</th><th>大小</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>buffalo_l</td><td>ResNet-100</td><td>高</td><td>最高</td><td>~350MB</td></tr>
+      <tr><td>buffalo_m</td><td>ResNet-50</td><td>高</td><td>高</td><td>~200MB</td></tr>
+      <tr><td>buffalo_s</td><td>MobileFaceNet</td><td>中</td><td>中</td><td>~30MB</td></tr>
+      <tr><td>antelopev2</td><td>ResNet-100+</td><td>最高</td><td>最高</td><td>~500MB</td></tr>
+    </tbody>
+  </table>
+
+  <h3>训练自定义模型</h3>
+  <pre><code># InsightFace 训练配置
+# configs/ms1mv3_r18.py
+
+config = dict(
+    # 数据集
+    dataset=dict(
+        type='FaceDataset',
+        dataset_dir='/data/ms1m-retinaface-train',
+        annotation_file='label.txt',
+    ),
+
+    # 模型
+    model=dict(
+        type='ArcFace',
+        backbone=dict(type='ResNet', depth=18),
+        head=dict(type='ArcHead',
+                  embedding_size=512,
+                  num_classes=85742),  # MS1MV3 的类别数
+    ),
+
+    # 训练
+    training=dict(
+        batch_size=512,
+        learning_rate=0.1,
+        scheduler='cosine',
+        epochs=20,
+        save_checkpoint_interval=5,
+    ),
+
+    # 评估
+    eval=dict(
+        val_datasets=['lfw', 'cfp_fp', 'agedb_30'],
+        batch_size=128,
+    ),
+)
+
+# 启动训练
+# python -m insightface.train --config configs/ms1mv3_r18.py</code></pre>
+
+  <div class="callout">
+    <strong>InsightFace 生态:</strong><br>
+    除了 Python 库,InsightFace 还提供了：Java/C++/C# 的跨平台推理 SDK、ONNX 模型导出、TensorRT 加速、以及面向边缘设备的 MNN/NCNN 部署方案。
+  </div>
+</section>
+
+<section id="alignment" class="toc-link">
+  <h2><span class="num">07</span> 人脸对齐</h2>
+
+  <p>人脸对齐是检测到人脸后至关重要的处理步骤。其目标是将检测到的不同姿态、旋转的人脸转换为一个标准化的正面视角,使后续的识别特征对姿态变化鲁棒。</p>
+
+  <h3>关键点检测</h3>
+  <p>人脸对齐的第一步是检测面部关键点 (Landmarks)。最常用的是 5 点标注：左眼中心、右眼中心、鼻尖、左嘴角、右嘴角。也有 68 点、106 点等更精细的标注方案。</p>
+
+  <pre><code>// 5 点关键点标注
+// 索引 0: 左眼中心  (Left Eye)
+// 索引 1: 右眼中心  (Right Eye)
+// 索引 2: 鼻尖      (Nose Tip)
+// 索引 3: 左嘴角    (Left Mouth Corner)
+// 索引 4: 右嘴角    (Right Mouth Corner)
+
+// 标准归一化坐标 (112x112 对齐模板):
+const float TEMPLATE[5][2] = {
+    {38.2946f, 51.6963f},   // 左眼
+    {73.5318f, 51.5014f},   // 右眼
+    {56.0252f, 71.7366f},   // 鼻子
+    {41.5493f, 92.3655f},   // 左嘴角
+    {70.7299f, 92.2041f}    // 右嘴角
+};</code></pre>
+
+  <h3>仿射变换与相似变换</h3>
+  <pre><code># 人脸对齐 (Python + OpenCV)
+import cv2
+import numpy as np
+
+def face_align(image, landmarks, output_size=(112, 112)):
+    # landmarks: 检测到的 5 个关键点 [[x1,y1], ...]
+    # template: 标准模板坐标
+
+    template = np.array([
+        [38.2946, 51.6963],
+        [73.5318, 51.5014],
+        [56.0252, 71.7366],
+        [41.5493, 92.3655],
+        [70.7299, 92.2041]
+    ], dtype=np.float32)
+
+    # 计算仿射变换矩阵 (2x3)
+    # 使用相似变换: 2 自由度旋转 + 缩放 + 平移
+    # 保留形状 (不会像仿射变换那样扭曲)
+
+    # 方法 1: 使用 OpenCV 的 estimateAffinePartial2D
+    # 相似变换 (旋转+缩放+平移, 各向同性)
+    transform_matrix, _ = cv2.estimateAffinePartial2D(
+        landmarks, template, method=cv2.LMEDS)
+
+    # 方法 2: 使用 OpenCV 的 estimateAffine2D
+    # 完全仿射变换 (允许剪切/非均匀缩放)
+    # 通常使用相似变换更稳定
+
+    # 应用变换
+    aligned = cv2.warpAffine(
+        image, transform_matrix,
+        output_size,
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0))
+
+    return aligned</code></pre>
+
+  <h3>对齐质量对识别精度的影响</h3>
+  <table>
+    <thead>
+      <tr><th>对齐方法</th><th>LFW 精度</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>无对齐</td><td>~95%</td><td>直接裁剪检测框</td></tr>
+      <tr><td>粗略对齐</td><td>~98%</td><td>仅仿射变换到标准位置</td></tr>
+      <tr><td>5 点关键点对齐</td><td>~99.5%</td><td>完整关键点检测 + 相似变换</td></tr>
+      <tr><td>3D 人脸对齐</td><td>~99.7%</td><td>3D 模型拟合,处理极端大姿态</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>对齐的注意事项:</strong><br>
+    关键点检测质量直接影响对齐效果。如果检测框不准确或关键点定位偏差大,对齐后的图像可能畸变。建议在推理时加入关键点置信度过滤,并考虑在对齐后进行质量评估（如人脸模糊度、光照条件）。
+  </div>
+</section>
+
+<section id="liveness" class="toc-link">
+  <h2><span class="num">08</span> 活体检测</h2>
+
+  <p>活体检测 (Liveness Detection / Anti-Spoofing) 是防止人脸识别系统被欺骗的技术。攻击者可能使用照片、视频、3D 面具等方式尝试通过身份验证。活体检测的目标是判断摄像头前的人脸是否为真实活体。</p>
+
+  <h3>攻击类型与检测方法</h3>
+  <table>
+    <thead>
+      <tr><th>攻击类型</th><th>描述</th><th>检测难度</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>照片攻击 (Print Attack)</td><td>用打印的照片冒充</td><td>低</td></tr>
+      <tr><td>视频重放攻击 (Replay Attack)</td><td>用录制的人脸视频在屏幕上播放</td><td>中</td></tr>
+      <tr><td>3D 面具攻击 (Mask Attack)</td><td>用 3D 打印面具或硅胶面具</td><td>高</td></tr>
+      <tr><td>Deepfake 攻击</td><td>实时生成或替换人脸</td><td>高</td></tr>
+    </tbody>
+  </table>
+
+  <h3>静默活体检测 (Texture-Based)</h3>
+  <p>静默活体检测通过分析单帧图像的纹理和颜色特征来区分真人和假体。真人的皮肤有独特的纹理和光谱特性,而照片或屏幕有二次成像的特征。</p>
+
+  <pre><code>// 静默活体检测的常用特征
+
+// 1. 纹理分析 (LBP, Local Binary Patterns)
+//    真实人脸有丰富的细节纹理
+//    照片/屏幕表面有规律的重采样纹理
+
+// 2. 颜色空间分析
+//    真实人脸在 HSV/YCbCr 空间有特定分布
+//    照片在色度和饱和度空间分布不均匀
+
+// 3. 频率域分析
+//    屏幕/照片在频域有周期性噪声
+//    利用 FFT/DCT 检测高频周期性模式
+
+// 4. 深度学习方法 (目前主流)
+//    CNN 直接从 RGB 图像学习活体特征
+//    常用架构: ResNet, MobileNet 等轻量网络
+//    输出: 活体概率 (0-1)
+
+// CDCN (Central Difference Convolution):
+// 同时学习空间信息和梯度信息
+// 对纹理失真特别敏感
+// 在多个活体检测数据集上达到 SOTA</code></pre>
+
+  <h3>多模态活体检测</h3>
+  <p>多模态活体检测利用不同传感器的互补信息来提高检测的鲁棒性。</p>
+
+  <pre><code>// 常用传感器模态
+
+// 1. RGB 摄像头
+//    常规的可见光图像
+//    对纹理、边缘敏感
+//    容易被高质量面具欺骗
+
+// 2. 近红外 (NIR) 摄像头
+//    活体皮肤在 850nm/940nm 红外光下反射独特
+//    对照片攻击非常有效 (纸张对红外光高反射)
+//    在暗光环境下也能工作
+
+// 3. 深度传感器 (ToF / 结构光)
+//    真实人脸是 3D 物体,有深度变化
+//    照片/屏幕是平面 (深度一致)
+//    对照片、视频、屏幕攻击完全免疫
+
+// 4. 多光谱分析
+//    从多个光谱波段采集图像
+//    真实皮肤的光谱特性与假体不同
+//    成本高,常用于金融高安全场景</code></pre>
+
+  <h3>动作指令活体检测</h3>
+  <p>通过让用户执行随机指令（眨眼、张嘴、摇头、点头）来验证活体。真人能够自然流畅地执行动作,而照片或视频难以实时生成正确的动作序列。</p>
+
+  <pre><code>// 动作指令活体检测流程
+// 1. 随机生成动作指令序列
+//   例: ["blink", "open_mouth", "turn_left"]
+// 2. 实时跟踪面部动作
+//   使用面部关键点计算动作状态:
+//   - 眨眼: EAR (Eye Aspect Ratio) 下降到阈值以下
+//     EAR = (p2-p6 + p3-p5) / (2 * p1-p4)
+//   - 张嘴: MAR (Mouth Aspect Ratio) 增大
+//     MAR = (p2-p8 + p3-p7 + p4-p6) / (3 * p1-p5)
+//   - 转头: Nose 偏移超过阈值
+// 3. 验证动作序列是否匹配
+// 4. 如果序列匹配且时间合理 -> 活体
+
+// 局限:
+// - 用户体验较差 (需要用户配合)
+// - 可被深度伪造视频攻击</code></pre>
+
+  <div class="callout">
+    <strong>活体检测的挑战与趋势:</strong><br>
+    随着高质量 3D 面具和实时 Deepfake 的进步,单模态活体检测已不够安全。当前趋势是融合多模态（RGB+NIR+Depth）+ 结合动作指令 + 利用时序信息（视频流的运动特征）。在金融支付等高安全场景,通常要求多模态 + 动作指令的组合。
+  </div>
+</section>
+
+<section id="system" class="toc-link">
+  <h2><span class="num">09</span> 大规模人脸识别系统</h2>
+
+  <p>当人脸识别系统从实验室走向生产环境,面临的挑战从模型精度转变为系统架构、检索效率和持续学习。一个典型的大规模人脸识别系统需要处理百万到亿级的人脸数据。</p>
+
+  <h3>系统架构</h3>
+  <pre><code>// 大规模人脸识别系统架构
+
+// 离线部分:
+// - 特征提取管道: 检测 -> 对齐 -> 嵌入 -> 入库
+// - 索引构建: 使用 ANN (Approximate Nearest Neighbor)
+//   如 Faiss, HNSW, ScaNN
+// - 数据管理: 人脸库的分片和备份
+
+// 在线部分:
+// - API 网关: 接收请求,负载均衡
+// - 人脸检测服务: GPU/CPU 推理集群
+// - 特征提取服务: GPU/CPU 推理集群
+// - 检索服务: 快速最近邻搜索
+// - 业务逻辑: 结果后处理,阈值判定
+
+// 典型的端到端延迟分布:
+// 请求传输:  2-5ms
+// 人脸检测:  10-30ms (CPU 单图)
+// 特征提取:  5-15ms (GPU)
+// 向量检索:  1-10ms (百万级) / 10-50ms (亿级)
+// 后处理:    <1ms</code></pre>
+
+  <h3>ANN 索引技术</h3>
+  <p>在大规模人脸库中进行精确的最近邻搜索（暴力搜索,复杂度 O(N*d)）不可行。ANN 通过构建索引将复杂度降低到 O(log N) 或 O(sqrt(N))。</p>
+
+  <table>
+    <thead>
+      <tr><th>方法</th><th>原理</th><th>召回率</th><th>建索时间</th><th>内存</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>IVF (Inverted File)</td><td>K-Means 聚类 + 倒排索引</td><td>中等</td><td>快</td><td>低</td></tr>
+      <tr><td>IVF + PQ</td><td>聚类 + 乘积量化压缩向量</td><td>中高</td><td>中等</td><td>极低</td></tr>
+      <tr><td>HNSW</td><td>分层可导航小世界图</td><td>最高</td><td>慢</td><td>高</td></tr>
+      <tr><td>NSG</td><td>导航扩展图</td><td>高</td><td>中等</td><td>高</td></tr>
+      <tr><td>ScaNN</td><td>Google 的异构搜索</td><td>高</td><td>中等</td><td>中等</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Faiss 使用示例</h3>
+  <pre><code>import faiss
+import numpy as np
+
+# 构建索引
+def build_index(embeddings, dimension=512):
+    # embeddings: (N, D) 浮点数组
+
+    # 简单索引: Flat (暴力搜索, 仅用于小规模验证)
+    index_flat = faiss.IndexFlatIP(dimension)  # 内积相似度
+
+    # 大规模索引: IVF + PQ
+    nlist = int(np.sqrt(len(embeddings)))  # 聚类数
+    quantizer = faiss.IndexFlatIP(dimension)
+    index = faiss.IndexIVFPQ(quantizer, dimension,
+                             nlist, code_size=16, nbits=8)
+    index.train(embeddings)
+    index.add(embeddings)
+
+    # 或使用 HNSW (最高召回率)
+    index_hnsw = faiss.IndexHNSWFlat(dimension, 32)  # 32-neighbors
+    index_hnsw.hnsw.efConstruction = 200
+    index_hnsw.add(embeddings)
+
+    return index
+
+# 检索
+def search(index, query_embedding, top_k=10):
+    # query_embedding: (1, D)
+    # 返回: (scores, indices)
+    scores, indices = index.search(query_embedding, top_k)
+    return scores[0], indices[0]
+
+# 类似度: 使用内积 (cosine = 内积 since L2 normalized)
+# 所有 embedding 应 L2 归一化后再入库和查询
+
+def l2_normalize(embeddings):
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    return embeddings / norms</code></pre>
+
+  <h3>GPU 加速与多级检索</h3>
+  <pre><code># Faiss GPU 索引
+res = faiss.StandardGpuResources()
+gpu_index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
+
+# 多级检索策略
+# 在大规模场景（>1000 万）,使用多级检索:
+# 1. 粗排 (Coarse): 使用 IVF/PQ 快速筛选出 top_1000 候选
+# 2. 精排 (Rerank): 对 top_1000 候选做精确距离计算
+# 3. 后处理: 根据业务规则过滤 (如质量分数阈值)
+
+class TwoStageRetriever:
+    def __init__(self, coarse_index, exact_index):
+        self.coarse_index = coarse_index
+        self.exact_index = exact_index
+
+    def search(self, query, top_k=10, coarse_k=1000):
+        # Stage 1: 粗排
+        _, coarse_ids = self.coarse_index.search(query, coarse_k)
+
+        # Stage 2: 精排 (从粗排候选集中精确计算)
+        # 提取粗排候选的 embedding
+        coarse_embeddings = self.exact_index.reconstruct_batch(coarse_ids[0])
+        # 精确计算余弦相似度
+        similarities = np.dot(query, coarse_embeddings.T)[0]
+        # 重新排序
+        top_indices = np.argsort(similarities)[::-1][:top_k]
+        return similarities[top_indices], coarse_ids[0][top_indices]</code></pre>
+
+  <h3>持续学习与模型更新</h3>
+  <p>人脸识别系统上线后,会遇到新注册用户、光照环境变化、新攻击类型等问题。系统需要支持持续学习和模型更新而不影响线上服务。</p>
+
+  <pre><code>// 模型更新策略
+
+// 1. 增量训练 (Incremental Learning)
+//    使用新数据微调模型
+//    加入正则化保持旧知识 (EWC, LwF 等)
+
+// 2. 特征回滚
+//    保留旧模型和新模型
+//    新用户使用新模型,旧用户可选择切换到新模型
+//    避免同一用户在不同模型间的特征不兼容
+
+// 3. 全量重训练 (Full Retraining)
+//    定期（每月/每季）用全量数据重新训练
+//    发布新模型后,所有用户特征需要重新提取
+//    适合有离线处理管道的场景
+
+// 4. 在线特征更新
+//    用户的特征可以实时更新
+//    每次成功识别后,融合本次特征到已有特征
+//    feature_new = alpha * feature_old + (1-alpha) * feature_current</code></pre>
+
+  <div class="callout">
+    <strong>系统设计要点:</strong><br>
+    对于百万级以下的人脸库,单台 GPU 服务器足以满足实时搜索需求。对于亿级规模,需要使用分布式索引分片,每个 shard 管理一部分数据,搜索时广播到所有 shard 后合并结果。另外,人脸识别系统必须遵守数据隐私法规（如 GDPR）,支持特征删除和完全的账号注销。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>
