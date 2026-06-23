@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux futex 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux futex 深度解析</h1>
+  <p class="subtitle">快速用户空间互斥锁 — pthread_mutex 的基石</p>
+  <span class="version">Linux 7.0.12 · kernel/futex/ (5502 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#fastpath">快速路径与慢速路径</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#api">API 与使用</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>futex（Fast Userspace muTEX）是 Linux 实现<strong>高性能互斥锁</strong>的核心机制。它在无竞争时仅使用原子操作（CAS），不进入内核态；只有在竞争时才通过系统调用挂起线程。pthread_mutex、pthread_cond、pthread_rwlock 的底层都依赖 futex。</p>
+</section>
+
+<section id="fastpath" class="toc-link">
+  <h2><span class="num">02</span> 快速路径与慢速路径</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#1a7f37">快速路径（无竞争，~10ns）：</span>
+
+  用户态 pthread_mutex_lock()
+        │
+        ├── CAS 尝试将 futex word 从 0 → 1
+        │   成功 → 获取锁，<span style="color:#1a7f37">直接返回！不进内核</span>
+        │
+        └── CAS 失败 → 进入慢速路径
+
+<span style="color:#cf222e">慢速路径（有竞争，~1000ns）：</span>
+
+  futex(FUTEX_WAIT, ...) → 系统调用
+        │
+        ↓
+  内核检查 futex word 值
+        │
+        ├── 值仍为 1 → 将当前线程挂到 futex 等待队列
+        │               schedule() → 让出 CPU
+        │
+        └── 值已变 → 快速返回（锁已被释放）
+
+  另一线程释放锁：
+        │
+        ├── CAS 将 futex word 从 1 → 0
+        │
+        ├── futex(FUTEX_WAKE, 1, ...) → 唤醒等待线程
+        │   内核从等待队列取出一个线程 → wake_up_process()
+        │
+        └── 被唤醒的线程重新 CAS 获取锁
+</pre></div>
+</section>
+
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+  <div class="card">
+    <pre><code><span class="cm">// futex word — 用户态 32 位整数</span>
+<span class="cm">// 状态：0=未锁, 1=已锁, 2=已锁且有等待者</span>
+<span class="ty">u32</span> futex_word = <span class="num">0</span>;
+
+<span class="cm">// futex_q — 内核等待队列条目</span>
+<span class="kw">struct</span> <span class="ty">futex_q</span> {
+    <span class="kw">struct</span> <span class="ty">plist_node</span>   node;        <span class="cm">// 优先级队列节点</span>
+    <span class="kw">struct</span> <span class="ty">rt_mutex_waiter</span> *rt_waiter; <span class="cm">// PI futex</span>
+    <span class="kw">struct</span> <span class="ty">futex_hash_bucket</span> *hb; <span class="cm">// 所属哈希桶</span>
+    <span class="ty">u32</span>              key;         <span class="cm">// futex key（地址 + mm）</span>
+    <span class="kw">struct</span> <span class="ty">futex_pi_state</span> *pi_state; <span class="cm">// PI 状态</span>
+};
+
+<span class="cm">// futex_key — 唯一标识一个 futex</span>
+<span class="kw">struct</span> <span class="ty">futex_key</span> {
+    <span class="kw">union</span> {
+        <span class="kw">struct</span> <span class="ty">task_struct</span> *rgctxid; <span class="cm">// robust list</span>
+        <span class="kw">struct</span> <span class="ty">mm_struct</span> *mm;          <span class="cm">// 进程地址空间</span>
+    };
+    <span class="ty">unsigned long</span>  address;   <span class="cm">// futex 在用户态的地址</span>
+    <span class="ty">unsigned int</span>   offset;    <span class="cm">// 偏移量</span>
+};</code></pre>
+  </div>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">04</span> API 与使用</h2>
+  <div class="card">
+    <pre><code><span class="cm">// futex 系统调用</span>
+<span class="ty">int</span> <span class="fn">futex</span>(<span class="ty">u32</span> *uaddr, <span class="ty">int</span> futex_op, <span class="ty">u32</span> val,
+          <span class="kw">const struct</span> <span class="ty">timespec</span> *timeout,
+          <span class="ty">u32</span> *uaddr2, <span class="ty">u32</span> val3);
+
+<span class="cm">// FUTEX_WAIT：检查 *uaddr == val，如果是则挂起</span>
+<span class="cm">// FUTEX_WAKE：唤醒 val 个等待者</span>
+<span class="cm">// FUTEX_REQUEUE：从一个 futex 移动到另一个</span>
+<span class="cm">// FUTEX_CMP_REQUEUE：带比较的 requeue</span>
+
+<span class="cm">// 用户态使用（简化版 pthread_mutex_lock）</span>
+<span class="kw">static inline void</span> <span class="fn">mutex_lock</span>(<span class="ty">int</span> *lock) {
+    <span class="kw">if</span> (<span class="fn">cmpxchg</span>(lock, <span class="num">0</span>, <span class="num">1</span>) != <span class="num">0</span>) {  <span class="cm">// 快速路径</span>
+        <span class="kw">if</span> (*lock == <span class="num">2</span>)
+            <span class="fn">futex_wait</span>(lock, <span class="num">2</span>);     <span class="cm">// 已有等待者，直接等待</span>
+        <span class="kw">while</span> (<span class="fn">cmpxchg</span>(lock, <span class="num">0</span>, <span class="num">2</span>) != <span class="num">0</span>)
+            <span class="fn">futex_wait</span>(lock, <span class="num">2</span>);     <span class="cm">// 慢速路径</span>
+    }
+}
+
+<span class="cm">// 用户态使用（简化版 pthread_mutex_unlock）</span>
+<span class="kw">static inline void</span> <span class="fn">mutex_unlock</span>(<span class="ty">int</span> *lock) {
+    <span class="kw">if</span> (<span class="fn">atomic_dec</span>(lock) != <span class="num">1</span>) {  <span class="cm">// 不是最后一个
+        *lock = <span class="num">0</span>;
+        <span class="fn">futex_wake</span>(lock, <span class="num">1</span>);    <span class="cm">// 唤醒一个等待者</span>
+    }
+}</code></pre>
+  </div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">05</span> 应用场景</h2>
+  <table>
+    <tr><th>场景</th><th>futex 使用</th></tr>
+    <tr><td>pthread_mutex</td><td>互斥锁底层实现</td></tr>
+    <tr><td>pthread_cond</td><td>条件变量底层实现</td></tr>
+    <tr><td>pthread_rwlock</td><td>读写锁底层实现</td></tr>
+    <tr><td>std::mutex (C++)</td><td>依赖 pthread_mutex → futex</td></tr>
+    <tr><td>Go runtime</td><td>sync.Mutex 部分场景使用 futex</td></tr>
+    <tr><td>Rust std::sync::Mutex</td><td>依赖 pthread_mutex → futex</td></tr>
+    <tr><td>Java ReentrantLock</td><td>底层通过 JNI 使用 pthread_mutex</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>为什么 futex 快？</strong><br>
+    99% 的锁操作是无竞争的（只有当前线程在使用锁）。futex 的快速路径仅使用 <strong>CAS 原子操作</strong>（~10ns），<strong>不进入内核态</strong>。只有在有竞争时才通过系统调用（~1000ns）挂起线程。这比纯内核态的 mutex 快 100 倍。
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/futex/</span>          <span class="cmt">总计 5502 行</span>
+├── <span class="file">core.c</span>          <span class="cmt">futex 核心 (2012 行)</span>
+│     └── futex_hash()        <span class="cmt">哈希表查找</span>
+│     └── futex_wait()        <span class="cmt">等待（慢速路径）</span>
+│     └── futex_wake()        <span class="cmt">唤醒</span>
+├── <span class="file">waitwake.c</span>      <span class="cmt">等待/唤醒 (751 行)</span>
+├── <span class="file">syscalls.c</span>      <span class="cmt">系统调用入口 (526 行)</span>
+├── <span class="file">pi.c</span>            <span class="cmt">优先级继承 (1295 行)</span>
+└── <span class="file">requeue.c</span>       <span class="cmt">requeue 操作 (918 行)</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">futex.h</span>          <span class="cmt">futex 内部接口</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/futex/core.c</code> — 从 <code>futex_wait()</code> 和 <code>futex_wake()</code> 理解核心机制。<br>
+    <code>kernel/futex/pi.c</code> — 优先级继承（Priority Inheritance）实现。<br>
+    <code>kernel/futex/waitwake.c</code> — 等待和唤醒的详细实现。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/futex/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

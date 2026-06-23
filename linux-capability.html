@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Capability 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Capability 深度解析</h1>
+  <p class="subtitle">细粒度权限 — 替代传统 root 万能钥匙</p>
+  <span class="version">Linux 7.0.12 · kernel/capability.c (503 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#caps">Linux Capabilities</a></li>
+    <li><a href="#data">核心数据结构</a></li>
+    <li><a href="#flow">检查流程</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>传统 UNIX 权限模型只有 root（UID=0）和普通用户。root 拥有所有特权——修改系统时间、绑定低端口、加载内核模块、访问所有文件。Linux Capabilities 将 root 的超级权限<strong>拆分为 41 个独立能力</strong>，允许精细控制进程权限，是 Docker、容器、Android 安全的基础。</p>
+</section>
+
+<section id="caps" class="toc-link">
+  <h2><span class="num">02</span> Linux Capabilities</h2>
+
+  <h3>五种能力集合</h3>
+  <div class="ascii-diagram"><pre>
+┌──────────────────────────────────────────────────────────┐
+│                   struct cred 中的五种能力集              │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│  cap_permitted  ── 进程允许的全部能力                     │
+│       │                                                  │
+│       ├── cap_effective  ── 实际生效的能力                │
+│       │   （系统调用检查这个集合）                          │
+│       │                                                  │
+│       ├── cap_inheritable ── exec 时可继承的能力          │
+│       │   （文件 capability 允许 + 此集合 → 继承）        │
+│       │                                                  │
+│       ├── cap_bset ── 能力边界集（上限）                  │
+│       │   （fork 的子进程能力不能超过此集）                 │
+│       │                                                  │
+│       └── cap_ambient ── ambient 能力                     │
+│           （非特权 exec 时保留的能力）                     │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+</pre></div>
+
+  <h3>常用 Capabilities</h3>
+  <table>
+    <tr><th>能力</th><th>值</th><th>允许的操作</th></tr>
+    <tr><td>CAP_NET_RAW</td><td>13</td><td>原始套接字（ping、抓包）</td></tr>
+    <tr><td>CAP_NET_BIND_SERVICE</td><td>10</td><td>绑定 1024 以下端口</td></tr>
+    <tr><td>CAP_NET_ADMIN</td><td>12</td><td>网络管理（路由、iptables、网卡配置）</td></tr>
+    <tr><td>CAP_SYS_ADMIN</td><td>21</td><td>大部分系统管理操作（mount、namespace 等）</td></tr>
+    <tr><td>CAP_SYS_PTRACE</td><td>19</td><td>ptrace 调试其他进程</td></tr>
+    <tr><td>CAP_SYS_MODULE</td><td>16</td><td>加载/卸载内核模块</td></tr>
+    <tr><td>CAP_MKNOD</td><td>27</td><td>创建设备文件</td></tr>
+    <tr><td>CAP_SETUID</td><td>7</td><td>修改 UID</td></tr>
+    <tr><td>CAP_KILL</td><td>5</td><td>向任意进程发送信号</td></tr>
+    <tr><td>CAP_DAC_OVERRIDE</td><td>1</td><td>绕过文件权限检查</td></tr>
+  </table>
+</section>
+
+<section id="data" class="toc-link">
+  <h2><span class="num">03</span> 核心数据结构</h2>
+  <div class="card">
+    <pre><code><span class="cm">// include/linux/cred.h:113 — 进程凭证</span>
+<span class="kw">struct</span> <span class="ty">cred</span> {
+    <span class="ty">kuid_t</span>           uid;         <span class="cm">// 真实 UID</span>
+    <span class="ty">kuid_t</span>           euid;        <span class="cm">// 有效 UID</span>
+    <span class="ty">kuid_t</span>           suid;        <span class="cm">// 保存的 UID</span>
+    <span class="ty">kgid_t</span>           gid;         <span class="cm">// 真实 GID</span>
+    <span class="ty">kgid_t</span>           egid;        <span class="cm">// 有效 GID</span>
+    <span class="ty">kuid_t</span>           fsuid;       <span class="cm">// 文件系统 UID</span>
+    <span class="ty">kgid_t</span>           fsgid;       <span class="cm">// 文件系统 GID</span>
+    <span class="ty">kernel_cap_t</span>     cap_inheritable; <span class="cm">// 可继承能力</span>
+    <span class="ty">kernel_cap_t</span>     cap_permitted;   <span class="cm">// 允许的能力</span>
+    <span class="ty">kernel_cap_t</span>     cap_effective;   <span class="cm">// ★ 有效能力（检查用这个）</span>
+    <span class="ty">kernel_cap_t</span>     cap_bset;        <span class="cm">// 能力边界集</span>
+    <span class="ty">kernel_cap_t</span>     cap_ambient;     <span class="cm">// ambient 能力</span>
+    <span class="kw">struct</span> <span class="ty">user_namespace</span> *user_ns; <span class="cm">// 能力的命名空间上下文</span>
+};</code></pre>
+  </div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 检查流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">系统调用中的能力检查：</span>
+
+  进程调用 bind(fd, addr, 80)  <span class="cm">// 绑定端口 80（需要特权）</span>
+        │
+        ↓
+  内核执行权限检查
+        │
+        ├── 1. 检查 euid == 0？
+        │       是 → 检查 cap_effective
+        │       否 → 检查文件权限 + ambient
+        │
+        ├── 2. cap有效能包含 CAP_NET_BIND_SERVICE？
+        │       是 → 允许绑定端口 80
+        │       否 → 返回 EACCES（权限拒绝）
+        │
+        └── 3. 执行系统调用
+
+<span style="color:#1a7f37">capability_capable() — 核心检查函数</span>
+
+  capable(CAP_NET_ADMIN)
+        │
+        ↓
+  security_capable(current->cred, CAP_NET_ADMIN, CAP_OPT_NONE)
+        │
+        ├── 检查 cap_effective 对应位
+        │   bit 12 = 1 → 允许
+        │   bit 12 = 0 → 拒绝
+        │
+        └── 返回 0（允许）或 -EPERM（拒绝）
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">05</span> 应用场景</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看进程的 capabilities</span>
+$ cat /proc/self/status | grep Cap
+CapPrm: 0000003fffffffff  <span class="cm"># permitted（64位掩码）</span>
+CapEff: 0000003fffffffff  <span class="cm"># effective</span>
+CapBnd: 0000003fffffffff  <span class="cm"># bounding set</span>
+
+<span class="cm"># 转换为可读格式</span>
+$ capsh --decode=0000003fffffffff
+0x0000003fffffffff=cap_chown,cap_dac_override,...
+
+<span class="cm"># Docker 默认授予的能力</span>
+$ docker run --rm alpine cat /proc/self/status | grep Cap
+CapPrm: 00000000a80425fb
+<span class="cm"># 仅 14 个能力（对比完整 41 个）</span>
+
+<span class="cm"># 添加额外能力</span>
+$ docker run --cap-add=NET_RAW --rm alpine ping 8.8.8.8
+
+<span class="cm"># 移除能力（最小权限）</span>
+$ docker run --cap-drop=ALL --cap-add=NET_BIND_SERVICE nginx</code></pre>
+  </div>
+
+  <h3>Docker 默认能力</h3>
+  <table>
+    <tr><th>能力</th><th>说明</th><th>容器需要？</th></tr>
+    <tr><td>CAP_CHOWN</td><td>修改文件所有者</td><td>是</td></tr>
+    <tr><td>CAP_DAC_OVERRIDE</td><td>绕过文件权限</td><td>是</td></tr>
+    <tr><td>CAP_FSETID</td><td>设置 setuid/setgid</td><td>是</td></tr>
+    <tr><td>CAP_FOWNER</td><td>绕过文件所有权检查</td><td>是</td></tr>
+    <tr><td>CAP_NET_BIND_SERVICE</td><td>绑定低端口</td><td>是</td></tr>
+    <tr><td>CAP_SYS_CHROOT</td><td>chroot 系统调用</td><td>是</td></tr>
+    <tr><td>CAP_KILL</td><td>发送信号</td><td>是</td></tr>
+    <tr><td>CAP_SETGID</td><td>修改 GID</td><td>是</td></tr>
+    <tr><td>CAP_SETUID</td><td>修改 UID</td><td>是</td></tr>
+    <tr><td>CAP_SYS_ADMIN</td><td>大部分管理操作</td><td><strong>否</strong>（危险）</td></tr>
+    <tr><td>CAP_SYS_MODULE</td><td>加载内核模块</td><td><strong>否</strong>（危险）</td></tr>
+    <tr><td>CAP_SYS_RAWIO</td><td>原始 I/O</td><td><strong>否</strong>（危险）</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+├── <span class="file">capability.c</span>      <span class="cmt">能力核心 (503 行)</span>
+│     └── capable()          <span class="cmt">能力检查入口</span>
+│     └── has_capability()   <span class="cmt">检查指定能力</span>
+│     └── cap_inode_*()      <span class="cmt">文件能力</span>
+└── <span class="file">user_namespace.c</span> <span class="cmt">能力的命名空间</span>
+
+<span class="dir">include/linux/</span>
+├── <span class="file">cred.h</span>            <span class="cmt">struct cred（能力集）</span>
+└── <span class="file">capability.h</span>      <span class="cmt">CAP_* 定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/capability.c</code> — 从 <code>capable()</code> 理解能力检查。<br>
+    <code>include/linux/cred.h</code> — <code>struct cred</code> 定义，理解五种能力集。<br>
+    <code>include/linux/capability.h</code> — CAP_* 常量定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/capability.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

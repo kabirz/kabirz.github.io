@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux kthread 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux kthread 深度解析</h1>
+  <p class="subtitle">内核线程 — 在内核态运行的后台任务</p>
+  <span class="version">Linux 7.0.12 · kernel/kthread.c (1739 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">内核线程类型</a></li>
+    <li><a href="#api">创建 API</a></li>
+    <li><a href="#flow">生命周期</a></li>
+    <li><a href="#usecases">典型内核线程</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>内核线程（kthread）是<strong>仅在内核态运行</strong>的线程，没有用户态地址空间。它们用于执行需要持续运行或延迟执行的内核任务：页面回收（kswapd）、软中断处理（ksoftirqd）、块设备回写（kblockd）、工作队列 worker 线程等。</p>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 内核线程类型</h2>
+  <table>
+    <tr><th>内核线程</th><th>功能</th><th>调度</th></tr>
+    <tr><td><strong>kthreadd</strong>（PID 2）</td><td>所有内核线程的父线程</td><td>常驻</td></tr>
+    <tr><td><strong>ksoftirqd</strong>/N</td><td>每个 CPU 一个，处理软中断</td><td>常驻</td></tr>
+    <tr><td><strong>kswapd</strong>/N</td><td>页面回收（后台内存回收）</td><td>按需</td></tr>
+    <tr><td><strong>kcompactd</strong>/N</td><td>内存压缩</td><td>按需</td></tr>
+    <tr><td><strong>kblockd</strong>/N</td><td>块设备 I/O 调度</td><td>按需</td></tr>
+    <tr><td><strong>watchdog</strong>/N</td><td>CPU 看门狗</td><td>常驻</td></tr>
+    <tr><td><strong>migration</strong>/N</td><td>进程在 CPU 间迁移</td><td>常驻</td></tr>
+    <tr><td><strong>rcu_gp</strong>/N</td><td>RCU 宽限期管理</td><td>常驻</td></tr>
+    <tr><td><strong>rcu_par_gp</strong>/N</td><td>RCU 并行宽限期</td><td>常驻</td></tr>
+    <tr><td><strong>khungtaskd</strong></td><td>检测 D 状态（不可中断睡眠）进程</td><td>常驻</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 创建 API</h2>
+  <div class="card">
+    <pre><code><span class="cm">// 创建内核线程（推荐方式）</span>
+<span class="kw">struct</span> <span class="ty">task_struct</span> *<span class="fn">kthread_create</span>(
+    <span class="ty">int</span> (*threadfn)(<span class="ty">void</span> *data),  <span class="cm">// 线程函数</span>
+    <span class="ty">void</span> *data,                    <span class="cm">// 参数</span>
+    <span class="kw">const</span> <span class="ty">char</span> namefmt[], ...);    <span class="cm">// 名称（显示在 ps 中）</span>
+<span class="cm">// 返回 task_struct，需要 wake_up_process() 启动</span>
+
+<span class="cm">// 创建并立即运行</span>
+<span class="kw">struct</span> <span class="ty">task_struct</span> *<span class="fn">kthread_run</span>(
+    <span class="ty">int</span> (*threadfn)(<span class="ty">void</span> *data),
+    <span class="ty">void</span> *data,
+    <span class="kw">const</span> <span class="ty">char</span> namefmt[], ...);
+
+<span class="cm">// 停止线程</span>
+<span class="fn">kthread_stop</span>(task);
+
+<span class="cm">// 示例：创建一个后台监控线程</span>
+<span class="kw">static int</span> <span class="fn">my_monitor_thread</span>(<span class="ty">void</span> *data) {
+    <span class="kw">while</span> (!<span class="fn">kthread_should_stop</span>()) {
+        <span class="cm">// 执行监控任务</span>
+        <span class="fn">msleep</span>(<span class="num">1000</span>);  <span class="cm">// 每秒检查一次</span>
+    }
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="kw">struct</span> <span class="ty">task_struct</span> *task = <span class="fn">kthread_run</span>(
+    my_monitor_thread, NULL, <span class="st">"my_monitor"</span>);</code></pre>
+  </div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">04</span> 生命周期</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">内核线程生命周期：</span>
+
+  kthread_create() / kthread_run()
+        │
+        ↓
+  <span class="color:#8250df">创建</span>：分配 task_struct，设置内核栈
+        │
+        ↓
+  <span class="color:#1a7f37">就绪</span>：wake_up_process() → 加入运行队列
+        │
+        ↓
+  <span class="color:#cf222e">运行</span>：在内核态执行 threadfn()
+        │
+        ├── kthread_should_stop() → true? → 退出
+        ├── msleep() / schedule() → 让出 CPU
+        └── 信号处理 → 可被信号中断
+        │
+        ↓
+  <span class="color:#8250df">退出</span>：kthread_stop() 或 threadfn 返回
+        │
+        └── 释放资源，从进程列表移除
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">05</span> 典型内核线程</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看所有内核线程</span>
+$ ps -ef | grep '\['
+root       2  0  0 Jun10 ?    00:00:00 [kthreadd]
+root       3  2  0 Jun10 ?    00:00:00 [pool_workqueue_release]
+root       4  2  0 Jun10 ?    00:00:00 [ksoftirqd/0]
+root       5  2  0 Jun10 ?    00:00:00 [rcu_gp]
+root       6  2  0 Jun10 ?    00:00:00 [rcu_par_gp]
+root       9  2  0 Jun10 ?    00:00:00 [migration/0]
+root      10  2  0 Jun10 ?    00:00:01 [watchdog/0]
+root      11  2  0 Jun10 ?    00:00:00 [cpuhp/0]
+root      12  2  0 Jun10 ?    00:00:00 [kdevtmpfs]
+root      14  2  0 Jun10 ?    00:00:00 [kcompactd0]
+root      15  2  0 Jun10 ?    00:00:00 [khungtaskd]
+root      16  2  0 Jun10 ?    00:00:00 [oom_reaper]
+root      17  2  0 Jun10 ?    00:00:00 [writeback]
+root      18  2  0 Jun10 ?    00:00:00 [kblockd]
+root      19  2  0 Jun10 ?    00:00:00 [blkcg_punt_bio]</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">06</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/</span>
+├── <span class="file">kthread.c</span>        <span class="cmt">kthread 核心 (1739 行)</span>
+│     └── kthread_create_on_node() <span class="cmt">创建内核线程</span>
+│     └── kthread_stop()      <span class="cmt">停止线程</span>
+│     └── kthread_should_stop() <span class="cmt">检查停止标志</span>
+│     └── kthreadd()          <span class="cmt">kthreadd 主循环（PID 2）</span>
+└── <span class="file">fork.c</span>            <span class="cmt">进程创建（kthread 基础）</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">kthread.h</span>         <span class="cmt">kthread API 定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/kthread.c</code> — 从 <code>kthread_create_on_node()</code> 理解创建，<code>kthreadd()</code> 理解 kthreadd 主循环。<br>
+    <code>include/linux/kthread.h</code> — kthread API 定义。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/kthread.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
