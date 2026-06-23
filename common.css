@@ -247,3 +247,35 @@ body:not(:has(.doc-sidebar:not(.collapsed))) .doc-sidebar-expand { display: flex
 [data-theme="dark"] .doc-sidebar-item.current { color: #8be9fd; border-left-color: #8be9fd; background: rgba(139,233,253,0.08); }
 [data-theme="dark"] .doc-sidebar-btn { background: #282a36; border-color: #44475a; }
 [data-theme="dark"] .doc-sidebar-overlay { background: rgba(0,0,0,0.5); }
+
+/* Prism 复制按钮 */
+.copy-to-clipboard-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  background: var(--card);
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.copy-to-clipboard-button:hover {
+  background: var(--highlight);
+  border-color: var(--accent);
+}
+.copy-to-clipboard-button[data-copy-state="copy-success"] {
+  border-color: #2da44e;
+  background: #dafbe1;
+}
+[data-theme="dark"] .copy-to-clipboard-button[data-copy-state="copy-success"] {
+  border-color: #3fb950;
+  background: rgba(63,185,80,0.15);
+}
+
+/* Prism 工具栏位置 */
+pre[class*="language-"] { position: relative; }
+div.code-toolbar > .toolbar { position: absolute; top: 6px; right: 8px; opacity: 0.6; transition: opacity 0.2s; }
+div.code-toolbar:hover > .toolbar { opacity: 1; }

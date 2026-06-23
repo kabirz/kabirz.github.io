@@ -500,7 +500,35 @@
   add.forEach(function(l) { allScripts.push(cdn + '/components/prism-' + l + '.min.js'); });
 
   function loadNext(i) {
-    if (i >= allScripts.length) { Prism.highlightAll(); return; }
+    if (i >= allScripts.length) {
+      if (Prism.plugins.copyToClipboard) Prism.plugins.copyToClipboard.delay = 3000;
+      Prism.hooks.add('complete', function() {
+        document.querySelectorAll('.copy-to-clipboard-button').forEach(function(btn) {
+          var icon = document.createElement('span');
+          icon.style.cssText = 'font-size:14px;line-height:1';
+          icon.textContent = '📋';
+          btn.innerHTML = '';
+          btn.appendChild(icon);
+          var obs = new MutationObserver(function() {
+            var state = btn.getAttribute('data-copy-state');
+            if (state === 'copy-success') {
+              icon.textContent = '✅';
+              if (btn._copyTimer) clearTimeout(btn._copyTimer);
+              btn._copyTimer = setTimeout(function() {
+                icon.textContent = '📋';
+                btn._copyTimer = null;
+              }, 3000);
+            } else {
+              icon.textContent = '📋';
+              if (btn._copyTimer) { clearTimeout(btn._copyTimer); btn._copyTimer = null; }
+            }
+          });
+          obs.observe(btn, { attributes: true, attributeFilter: ['data-copy-state'] });
+        });
+      });
+      Prism.highlightAll();
+      return;
+    }
     var s = document.createElement('script');
     s.src = allScripts[i];
     s.async = false;
