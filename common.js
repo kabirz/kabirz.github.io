@@ -196,8 +196,20 @@
     { t:"目标检测基础原理", f:"vision-object-detection.html", top:"vision" },
     { t:"图像分割技术详解", f:"vision-segmentation.html", top:"vision" },
     { t:"人脸检测与识别技术", f:"vision-face-detection.html", top:"vision" },
+    { t:"Go 语言基础", f:"go-basics.html", top:"go" },
+    { t:"Go 并发编程", f:"go-concurrency.html", top:"go" },
+    { t:"Go Goroutine 调度器", f:"go-scheduler.html", top:"go" },
+    { t:"Go 内存管理与 GC", f:"go-gc.html", top:"go" },
+    { t:"Go 内存模型与逃逸分析", f:"go-memory.html", top:"go" },
+    { t:"Go 反射与泛型", f:"go-reflection.html", top:"go" },
+    { t:"Go net/http 深度解析", f:"go-net-http.html", top:"go" },
+    { t:"Go 标准库核心", f:"go-standard-lib.html", top:"go" },
+    { t:"Go Module 包管理", f:"go-module.html", top:"go" },
+    { t:"Go CGo 与跨语言调用", f:"go-cgo.html", top:"go" },
+    { t:"Go 性能分析与调优", f:"go-profiling.html", top:"go" },
+    { t:"Go 泛型深入", f:"go-generics.html", top:"go" },
   ];
-  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", other:"硬件与平台" };
+  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", other:"硬件与平台" };
 
   // 主题切换
   var STORAGE_KEY = 'kernel-docs-theme';
@@ -265,6 +277,7 @@
       fs: { emoji: "📁", color: "#1a7f37" },
       driver: { emoji: "🔌", color: "#8250df" },
       vision: { emoji: "👁️", color: "#e74c3c" },
+      go: { emoji: "🔷", color: "#00ADD8" },
       other: { emoji: "📦", color: "#656d76" }
     };
 

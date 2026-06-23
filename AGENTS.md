@@ -2,7 +2,7 @@
 
 ## 文档集合
 
-当前共 **189 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件（common.css / common.js）。
+当前共 **201 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件（common.css / common.js）。
 
 ### 文件结构
 
@@ -16,6 +16,7 @@
 ├── docker-*.html         # 12 篇 Docker / 容器技术解析
 ├── rust-*.html           # 13 篇 Rust 语言深度解析
 ├── vision-*.html         # 15 篇 AI 视觉技术解析
+├── go-*.html             # 12 篇 Go 语言深度解析
 └── windows-*.html        # 9 篇 Windows 平台技术解析
 ```
 
@@ -28,6 +29,7 @@
 | Rust | 13 | 系统编程 | 所有权、trait、unsafe、async、tokio、web/gui/embedded 框架 |
 | Windows | 9 | 平台开发 | Win32, MFC, ATL/WTL, COM, UWP, WinUI3, MAUI, WPF, WebView2 |
 | AI 视觉 | 15 | 计算机视觉 | OpenCV, YOLO, PyTorch, TensorFlow, ONNX |
+| Go 语言 | 12 | 系统编程 | goroutine、GMP 调度、GC、反射、net/http、Module、CGo、泛型 |
 
 ### 已覆盖主题（Linux 内核）
 
@@ -281,6 +283,23 @@
 | 12 | rust-unsafe.html | unsafe Rust |
 | 13 | rust-web-frameworks.html | Web 框架（Axum/Actix/Rocket） |
 
+### 已覆盖主题（Go 语言）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | go-basics.html | Go 语言基础 |
+| 2 | go-concurrency.html | Go 并发编程 |
+| 3 | go-scheduler.html | Go Goroutine 调度器 |
+| 4 | go-gc.html | Go 内存管理与 GC |
+| 5 | go-memory.html | Go 内存模型与逃逸分析 |
+| 6 | go-reflection.html | Go 反射与泛型 |
+| 7 | go-net-http.html | Go net/http 深度解析 |
+| 8 | go-standard-lib.html | Go 标准库核心 |
+| 9 | go-module.html | Go Module 包管理 |
+| 10 | go-cgo.html | Go CGo 与跨语言调用 |
+| 11 | go-profiling.html | Go 性能分析与调优 |
+| 12 | go-generics.html | Go 泛型深入 |
+
 ### 已覆盖主题（AI 视觉）
 
 | # | 文件 | 主题 |
@@ -455,3 +474,4 @@ const ICON_MAP = {
 | 设备驱动 | 待扩展（USB、PCIe、ALSA、V4L2） |
 | Zephyr | 待扩展 |
 | AI 视觉 | ✅ 15 篇（OpenCV / YOLO / PyTorch / TensorFlow / ONNX） |
+| Go 语言 | ✅ 12 篇（基础/并发/调度/GC/内存/反射/net-http/CGo/模块/泛型/性能） |

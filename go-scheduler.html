@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Go Goroutine 调度器深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%2300ADD8'/><stop offset='100%25' stop-color='%23007d9c'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>G</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Go Goroutine 调度器深度解析</h1>
+  <p class="subtitle">GMP 模型 / 工作窃取 / 抢占式调度 / 网络轮询器</p>
+  <span class="version">Go 1.24 · M:N 混合线程调度 · 内核源码分析</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#background">线程模型背景</a></li>
+    <li><a href="#gmp">GMP 结构</a></li>
+    <li><a href="#schedule">调度循环</a></li>
+    <li><a href="#steal">工作窃取</a></li>
+    <li><a href="#preempt">抢占式调度</a></li>
+    <li><a href="#netpoll">网络轮询器</a></li>
+    <li><a href="#syscall">系统线程管理</a></li>
+    <li><a href="#trace">调度器 Trace 可视化</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="background" class="toc-link">
+  <h2><span class="num">01</span> 线程模型背景</h2>
+
+  <p>要理解 Go 调度器的设计，需要先了解三种常见的用户态线程与内核态线程映射模型。每种模型在并发性、性能和复杂度上做出了不同的取舍。</p>
+
+  <h3>N:1 模型（用户级线程）</h3>
+
+  <p>多个用户线程对应 1 个内核线程。调度完全在用户态完成，切换成本极低，但无法利用多核。一个阻塞系统调用会阻塞所有线程。</p>
+
+  <p>典型例子：早期的 Green Threads (Java 1.1)、GNU Pth。</p>
+
+  <h3>1:1 模型（内核级线程）</h3>
+
+  <p>每个用户线程对应 1 个内核线程。可以直接利用多核和一个线程阻塞不影响其他线程，但线程创建和上下文切换成本高（切换到内核态），每个线程需要独立的栈空间（通常 1-8MB）。</p>
+
+  <p>典型例子：C++ std::thread、Java 的 kernel threads (JVM 后续版本)、POSIX threads (pthreads)。</p>
+
+  <h3>M:N 模型（混合模型）</h3>
+
+  <p>M 个用户线程映射到 N 个内核线程（M &gt; N）。综合了 N:1 的低开销和 1:1 的并行能力，但实现极为复杂。Go 的 GMP 模型就是 M:N 的经典实现。</p>
+
+  <table>
+    <tr><th>模型</th><th>映射</th><th>利用多核</th><th>切换成本</th><th>实现复杂度</th></tr>
+    <tr><td>N:1</td><td>多用户线程 → 1 内核线程</td><td>否</td><td>低（用户态）</td><td>低</td></tr>
+    <tr><td>1:1</td><td>1 用户线程 → 1 内核线程</td><td>是</td><td>高（内核态）</td><td>中等</td></tr>
+    <tr><td>M:N</td><td>M 用户线程 → N 内核线程</td><td>是</td><td>低（用户态调度）</td><td>高</td></tr>
+  </table>
+
+  <p>Go 选择了 M:N 模型，因为它能提供：</p>
+  <ul>
+    <li>极低 goroutine 创建成本（栈初始 2KB vs 线程 1-8MB）</li>
+    <li>高效切换（用户态调度，无需进入内核）</li>
+    <li>天然支持大规模并发（数十万甚至百万 goroutine）</li>
+    <li>屏蔽了底层线程细节，开发者只需关心并发逻辑</li>
+  </ul>
+</section>
+
+<section id="gmp" class="toc-link">
+  <h2><span class="num">02</span> GMP 结构</h2>
+
+  <p>Go 调度器的核心是<strong>GMP 三元组</strong>——Goroutine (G)、Machine (M)、Processor (P)。三者协同工作实现了 M:N 调度模型。</p>
+
+  <h3>G — Goroutine（协程）</h3>
+
+  <p>G 代表一个 goroutine，是 Go 运行时中最小的<strong>可执行单元</strong>。每个 G 包含栈、程序计数器、状态等元数据。</p>
+
+<pre><code>// runtime/runtime2.go (简化结构)
+type g struct {
+    stack       stack        // 栈：lo 和 hi 地址
+    stackguard0 uintptr      // 栈扩展检查哨兵
+    m           *m           // 当前执行该 G 的 M
+    sched       gobuf        // 调度信息（sp, pc, bp）
+    atomicstatus uint32      // G 状态
+    goid        int64        // Goroutine ID
+    waitsince   int64        // 等待开始时间
+    waitreason  string       // 等待原因
+    preempt     bool         // 抢占标记
+    param       any          // 传递的参数
+    lockedm     *m           // 锁定的 M（如 runtime.LockOSThread）
+}
+</code></pre>
+
+  <p>G 的状态机：</p>
+  <table>
+    <tr><th>状态</th><th>说明</th></tr>
+    <tr><td>_Gidle</td><td>刚分配，未初始化</td></tr>
+    <tr><td>_Grunnable</td><td>在运行队列中，等待被 P 调度</td></tr>
+    <tr><td>_Grunning</td><td>正在 M 上执行</td></tr>
+    <tr><td>_Gsyscall</td><td>正在执行系统调用</td></tr>
+    <tr><td>_Gwaiting</td><td>阻塞中（channel 操作、锁等待、网络 I/O）</td></tr>
+    <tr><td>_Gdead</td><td>已用完，在 G 空闲列表中可被复用</td></tr>
+    <tr><td>_Gcopystack</td><td>栈正在扩容/缩容</td></tr>
+    <tr><td>_Gpreempted</td><td>被抢占，等待重新调度</td></tr>
+  </table>
+
+  <h3>M — Machine（线程）</h3>
+
+  <p>M 代表操作系统线程（machine thread），由 Go 运行时向内核申请的实际执行载体。</p>
+
+<pre><code>// runtime/runtime2.go (简化)
+type m struct {
+    g0      *g        // 特殊 goroutine：执行调度代码
+    curg    *g        // 当前正在执行的 G
+    p       puintptr  // 当前关联的 P（nil 时不在执行用户代码）
+    nextp   puintptr  // 暂存的下一个 P（在 syscall 恢复时使用）
+    oldp    puintptr  // 系统调用前的 P
+    tls     [tlsSlots]uintptr  // 线程本地存储
+    schedlink muintptr // 空闲 M 链表链接
+    spinning bool     // 是否在自旋寻找 work
+    lockedg  *g       // LockOSThread 绑定的 G
+}
+</code></pre>
+
+  <p>M 的特点：</p>
+  <ul>
+    <li>M 的数量由 Go 运行时动态管理，默认最大 10000</li>
+    <li>M 必须绑定 P 才能执行 G（在 syscall 时可能解绑）</li>
+    <li>M 有特殊的 <code>g0</code> 栈，用于执行调度代码</li>
+    <li>M 的创建由 <code>runtime.newm</code> 发起，最终通过 <code>clone()</code> 系统调用创建线程</li>
+  </ul>
+
+  <h3>P — Processor（处理器）</h3>
+
+  <p>P 是 M 和 G 之间的<strong>中间上下文</strong>，是 GMP 模型的精髓。P 决定了 M 可以执行 G 的能力（没有 P 的 M 处于 idle 状态）。</p>
+
+<pre><code>// runtime/runtime2.go (简化)
+type p struct {
+    id          int32
+    status      uint32    // _Pidle / _Prunning / _Psyscall / _Pgcstop / _Pdead
+    m           muintptr  // 当前关联的 M
+    runqhead    uint32    // 本地运行队列头
+    runqtail    uint32    // 本地运行队列尾
+    runq        [256]guintptr  // 本地运行队列（环形队列，容量 256）
+    runnext     guintptr  // 下一个要执行的 G（优先级最高）
+    gfree       *g        // 空闲 G 链表
+    mcache      *mcache   // 内存分配器的 per-P 缓存
+    pcache      pageCache // 页缓存
+    wbBuf       wbBuf     // 写屏障缓冲区
+    gcstats     gcStats   // GC 统计
+    // ...
+}
+</code></pre>
+
+  <p>P 的数量由 <code>GOMAXPROCS</code> 决定，默认为 CPU 核心数。每个 P 都有一个<strong>本地运行队列</strong>（runq），容量 256，使用环形队列实现。</p>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    GMP 中 P 的设计是最关键的一环。它解耦了 G 和 M，使得 M 可以高效地在不同的 G 之间切换。P 的本地队列和全局队列构成了两级调度体系，配合工作窃取算法，实现了高效的负载均衡。
+  </div>
+</section>
+
+<section id="schedule" class="toc-link">
+  <h2><span class="num">03</span> 调度循环</h2>
+
+  <p>调度循环是 Go 运行时调度器的核心，由 M 上的 <code>g0</code>（调度 goroutine）执行。其内核是函数 <code>runtime.schedule()</code>。</p>
+
+  <h3>schedule() 调度入口</h3>
+
+<pre><code>// runtime/proc.go — 调度主循环（简化）
+func schedule() {
+    _g_ := getg()  // 当前 M 上的 g0
+    top:
+        // 1. GC 相关检查：如果当前需要 GC 等待，则进入 GC
+        if gcBlackenEnabled != 0 {
+            gp := gcController.findRunnableGCWorker()
+            if gp != nil {
+                execute(gp, true)
+                return
+            }
+        }
+
+        // 2. 安全检查：如果有 lock 的 M，只为它调度
+        if sched.gcwaiting.Load() {
+            gcstopm()  // 停止当前 M
+            goto top
+        }
+
+        // 3. 主调度策略：按优先级尝试获取 G
+        var gp *g
+
+        // 第一优先级：每调度 61 次检查全局队列（公平性）
+        if _g_.m.p.ptr().schedtick%61 == 0 {
+            gp = globrunqget(_g_.m.p.ptr())
+        }
+
+        // 第二优先级：从本地队列获取
+        if gp == nil {
+            gp = runqget(_g_.m.p.ptr())
+        }
+
+        // 第三优先级：工作窃取
+        if gp == nil {
+            gp = findRunnable()  // 包含 netpoll 和 steal
+        }
+
+        // 4. 执行找到的 G
+        execute(gp, true)
+}
+</code></pre>
+
+  <h3>findRunnable() — 寻找可运行的 G</h3>
+
+  <p>这是最复杂也最重要的函数，它尝试从多个来源获取 G：</p>
+
+  <ol>
+    <li>本地运行队列（runqget）</li>
+    <li>全局运行队列（globrunqget）</li>
+    <li>网络轮询器（netpoll：就绪的网络 I/O G）</li>
+    <li>从其他 P 偷取（stealWork）</li>
+    <li>如果以上都失败，M 进入自旋或休眠</li>
+  </ol>
+
+  <h3>execute() — 执行 G</h3>
+
+<pre><code>// runtime/proc.go — 执行 G（简化）
+func execute(gp *g, inheritTime bool) {
+    _g_ := getg()           // 当前 M 上的 g0
+    _g_.m.curg = gp         // M 标记正在执行的 G
+    gp.m = _g_.m            // G 标记归属的 M
+    gp.atomicstatus = _Grunning  // 状态切换
+
+    // 切换栈：从 g0 栈切换到 G 的用户栈
+    // 通过 gogo(&gp.sched) 汇编指令恢复 GP 的寄存器上下文
+    gogo(&gp.sched)
+    // 注意：gogo 之后程序就跳到 G 的用户代码了
+    // 永远不会返回这里
+}
+</code></pre>
+
+  <p>执行 <code>gogo()</code> 汇编函数时，CPU 从 g0 栈切换到 G 的栈，并跳转到 G 保存的 PC（程序计数器）位置继续执行。这个切换过程完全在用户态完成，不进入内核。</p>
+
+  <h3>调度触发时机</h3>
+
+  <p>调度循环不只在主动调用时才触发，以下情况都会进入调度：</p>
+  <ul>
+    <li><strong>主动挂起</strong>：channel 操作、锁等待、time.Sleep</li>
+    <li><strong>系统调用</strong>：进入和退出系统调用时</li>
+    <li><strong>函数调用（栈检查）</strong>：每个函数调用前检查栈是否需扩展</li>
+    <li><strong>抢占标记</strong>：被 <code>sysmon</code> 标记为抢占的 G</li>
+    <li><strong>GC 相关</strong>：垃圾回收开始和结束时的 stop the world</li>
+  </ul>
+</section>
+
+<section id="steal" class="toc-link">
+  <h2><span class="num">04</span> 工作窃取</h2>
+
+  <p>工作窃取（Work Stealing）是 Go 调度器实现<strong>负载均衡</strong>的核心算法。当一个 P 的本地队列为空时，它会尝试从其他 P 的本地队列<strong>偷取</strong>一半的 G。</p>
+
+  <h3>窃取算法</h3>
+
+<pre><code>// runtime/proc.go — 工作窃取（简化）
+func stealWork(now int64) (gp *g, inheritTime bool, err string) {
+    pp := getg().m.p.ptr()
+
+    // 随机化窃取顺序（避免所有 P 窃取同一个目标）
+    rn := cheaprand()
+    const stealTries = 4
+    for i := 0; i &lt; stealTries; i++ {
+        // 按随机顺序尝试偷取
+        for enum := stealOrder.start(rn); !enum.done(); enum.next() {
+            p2 := allp[enum.position()]
+            if p2 == pp {
+                continue  // 不偷自己
+            }
+
+            // 尝试从 p2 偷取一半 G
+            gp := runqsteal(pp, p2, stealRunNextG)
+            if gp != nil {
+                return gp, false, ""
+            }
+        }
+    }
+    return nil, false, "no work found"
+}
+
+// runqsteal — 从目标 P 偷取一半 G
+func runqsteal(_p_, p2 *p, stealRunNextG bool) *g {
+    t := _p_.runqtail
+    n := runqgrab(p2, &amp;_p_.runq, t, stealRunNextG)
+    if n == 0 {
+        return nil
+    }
+    n--  // 取走第一个
+    gp := _p_.runq[(t+n)%uint32(len(_p_.runq))].ptr()
+    if n == 0 {
+        return gp
+    }
+    // 更新队列尾
+    atomic.StoreRel(&amp;_p_.runqtail, t+n)
+    return gp
+}
+</code></pre>
+
+  <h3>窃取策略</h3>
+
+  <ul>
+    <li><strong>随机化窃取顺序</strong>：每次窃取尝试的顺序不同，避免 thundering herd 问题</li>
+    <li><strong>每次窃取一半</strong>：从目标 P 的队列尾偷取一半的 G，保持负载均衡</li>
+    <li><strong>最多尝试 4 次</strong>：每次尝试扫描所有 P（随机顺序），但最多做 4 轮</li>
+    <li><strong>自旋 M</strong>：尝试窃取时 M 处于自旋状态，不释放 CPU</li>
+  </ul>
+
+  <h3>全局队列</h3>
+
+  <p>除了每个 P 的本地队列，Go 还有一个<strong>全局运行队列</strong>。当 P 的本地队列为空且窃取失败时，会尝试从全局队列获取 G。</p>
+
+<pre><code>// 从全局队列批量获取
+func globrunqget(_p_ *p) *g {
+    // 如果全局队列为空，返回 nil
+    if sched.runqsize.Load() == 0 {
+        return nil
+    }
+
+    // 计算每个 P 可以获取的 G 数
+    n := sched.runqsize.Load() / gomaxprocs
+    if n > 1 {
+        n = 1  // 至少拿 1 个
+    }
+    n = min(n, uint32(len(_p_.runq))/2)  // 不超过本地队列容量的一半
+
+    // 批量转移到本地队列
+    gp := sched.runq.pop()
+    n--
+    for n > 0 {
+        gp1 := sched.runq.pop()
+        runqput(_p_, gp1, false)
+        n--
+    }
+    return gp
+}
+</code></pre>
+
+  <p>公平性保证：每 61 次调度，P 会优先检查全局队列一次。这个策略确保了即使有些 P 持续产生 G，全局队列中的 G 也不会被饿死。</p>
+</section>
+
+<section id="preempt" class="toc-link">
+  <h2><span class="num">05</span> 抢占式调度</h2>
+
+  <p>早期的 Go（1.13 之前）只支持<strong>协作式抢占</strong>——goroutine 必须主动让出 CPU（如 channel 操作、系统调用）。从 Go 1.14 开始引入了<strong>基于信号的真正抢占</strong>，解决了长时间占 CPU 的 goroutine 导致的调度延迟问题。</p>
+
+  <h3>sysmon — 监控线程</h3>
+
+  <p><code>runtime.sysmon</code> 是一个特殊的 M（监控线程），不需要 P 即可运行。它负责周期性检查系统状态：</p>
+
+<pre><code>// runtime/proc.go — sysmon（简化）
+func sysmon() {
+    lastpoll := int64(0)
+    now := nanotime()
+    for {
+        usleep(sysmonDelay)  // 休眠 10-60us
+
+        now = nanotime()
+
+        // 1. 网络轮询：检查是否有就绪的网络 I/O
+        lastpoll = pollInterval(now, lastpoll)
+
+        // 2. 抢占长时间运行的 G
+        if sched.gcwaiting.Load() == 0 {
+            // 如果 G 运行超过 10ms，标记为可抢占
+            for _, pp := range allp {
+                if runTime := pp.runTime(now); runTime > 10e6 {
+                    preemptone(pp)
+                }
+            }
+        }
+
+        // 3. GC 触发检查
+        forcegc(now)
+
+        // 4. 回收 dead G 的栈
+        scavenge(now)
+    }
+}
+</code></pre>
+
+  <h3>协作式抢占（栈标记）</h3>
+
+  <p>Go 1.14 前的抢占方式：在每个函数调用的入口检查 <code>stackguard0</code>。如果 G 被标记为抢占，函数调用时会触发栈扩展检查，进而进入调度：</p>
+
+<pre><code>// 汇编层面，每个函数调用前会执行类似于：
+// CMPQ stackguard0, SP
+// JHI morestack
+
+// morestack 会检查是否需要抢占：
+func morestack() {
+    // 检查 stackguard0 是否被设为 StackPreempt
+    if preemptStack() {
+        // 保存当前 G 的上下文
+        // 调用 schedule() 重新调度
+    }
+}
+</code></pre>
+
+  <p>局限：如果 <strong>goroutine 没有函数调用</strong>（如纯数学计算的循环），stackguard0 检查永远不会触发。</p>
+
+  <h3>信号抢占（Go 1.14+）</h3>
+
+<pre><code>// 流程：
+// 1. sysmon 检查到某个 G 连续运行超过 10ms
+// 2. sysmon 调用 preemptone(pp)
+// 3. preemptone 设置该 G 的 preempt = true
+// 4. 向运行该 G 的 M 发送 SIGURG 信号
+// 5. 信号处理函数 suspendsG() 保存寄存器上下文
+// 6. 信号处理函数返回时恢复到 g0 栈
+// 7. g0 执行 schedule() 让出 CPU
+
+// runtime/signal_unix.go — 信号处理
+func doSigPreempt(gp *g, ctxt *sigctxt) {
+    // 保存 G 的 PC/SP 到 gp.sched
+    gp.sched.pc = ctxt.pc()
+    gp.sched.sp = ctxt.sp()
+    // 修改返回地址为 asyncPreempt 函数
+    ctxt.set_pc(funcPC(asyncPreempt))
+    // 信号返回时自动进入 asyncPreempt
+}
+
+// asyncPreempt 最终调用 schedule()
+</code></pre>
+
+  <h3>非合作抢占（Go 1.21+）</h3>
+
+  <p>自 Go 1.21 起，即使用户代码使用了 <code>runtime.LockOSThread()</code> 或在 CGo 中，信号抢占也能工作。Go 1.22 (9.5) 进一步强化了<strong>非合作抢占</strong>（Non-cooperative Preemption）：</p>
+
+  <ul>
+    <li>即使信号被屏蔽（如 CGo 调用），也能通过其他机制触发抢占</li>
+    <li>引入了 <code>mPreemptGen</code> 计数器，追踪每次 M 的抢占尝试</li>
+    <li>改进了栈扫描与抢占的协同，减少了安全点（safepoint）遗漏</li>
+    <li>在内联函数和叶子函数中也实现了抢占点插入</li>
+  </ul>
+
+  <p>至此，Go 调度器从"协作式"进化到了"真正抢占式"，彻底解决了"一个 goroutine 死循环拖死整个进程"的问题。</p>
+</section>
+
+<section id="netpoll" class="toc-link">
+  <h2><span class="num">06</span> 网络轮询器</h2>
+
+  <p>Go 使用<strong>网络轮询器</strong>（netpoller）实现非阻塞 I/O。它基于操作系统提供的多路复用机制（epoll / kqueue / iocp），使得 goroutine 可以"同步地"执行异步 I/O——写代码时感觉像阻塞调用，但底层是非阻塞的。</p>
+
+  <h3>架构概览</h3>
+
+<pre><code>// 用户视角：同步风格
+conn, _ := net.Dial("tcp", "example.com:80")
+// goroutine 好像"阻塞"在这里，但实际是挂起
+n, err := conn.Read(buf)
+// 数据就绪后自动恢复执行
+
+// 底层实现：
+// 1. net.Read() 内部将 fd 设置为非阻塞
+// 2. 如果读操作返回 EAGAIN，调用 gopark() 挂起当前 G
+// 3. G 被添加到 netpoll 的等待队列中
+// 4. M 继续执行其他 G（不阻塞）
+// 5. sysmon 或调度循环轮询 epoll
+// 6. 数据就绪，G 被唤醒重新进入运行队列
+</code></pre>
+
+  <h3>epoll（Linux 实现）</h3>
+
+<pre><code>// runtime/netpoll_epoll.go — Linux 实现
+var epfd int = -1  // eBPF 文件描述符
+
+func netpollinit() {
+    epfd = epollcreate1(_EPOLL_CLOEXEC)
+    // 创建 eventfd 用于唤醒 epoll
+    r, w, _ := nonblockingPipe()
+    ev := epollevent{events: _EPOLLIN}
+    epollctl(epfd, _EPOLL_CTL_ADD, r, &amp;ev)
+}
+
+func netpollopen(fd uintptr, pd *pollDesc) uintptr {
+    ev := epollevent{
+        events: _EPOLLIN | _EPOLLOUT | _EPOLLRDHUP | _EPOLLET,
+        data:   pd,
+    }
+    return epollctl(epfd, _EPOLL_CTL_ADD, int32(fd), &amp;ev)
+}
+
+func netpoll(delay int64) gList {
+    // 调用 epollwait，获取就绪的 fd
+    // 将就绪 fd 对应的 G 从等待状态改为可运行
+    // 返回可运行的 G 列表
+    var events [128]epollevent
+    n := epollwait(epfd, &amp;events[0], int32(len(events)), delay)
+    for i := int32(0); i &lt; n; i++ {
+        pd := events[i].data
+        // pd 中有对应的 g 列表，全部标记为 ready
+        gp := pd.rg
+        if gp != nil {
+            list.push(gp)
+        }
+    }
+    return list
+}
+</code></pre>
+
+  <h3>netpoll 的调用时机</h3>
+
+  <p>netpoll 在以下时机被调用：</p>
+  <ul>
+    <li><strong>findRunnable()</strong>：在调度循环中，尝试从 netpoll 获取就绪的 G</li>
+    <li><strong>sysmon</strong>：监控线程定期轮询 netpoll</li>
+    <li><strong>syscall 返回时</strong>：退出系统调用时检查网络 I/O</li>
+    <li><strong>GC 开始时</strong>：确保所有网络 I/O 绪的 G 被处理</li>
+  </ul>
+
+  <p>这种设计保证了网络 I/O 密集型程序的 goroutine 在数据就绪后能迅速恢复执行。</p>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    网络轮询器是 Go "同步风格写异步代码"的关键。理解 netpoll 有助于理解为什么 Go 的网络 I/O 在 goroutine 层面上看起来是"阻塞"的，却仍然能支撑高并发。本质上，是运行时在替你管理所有 I/O 多路复用。
+  </div>
+</section>
+
+<section id="syscall" class="toc-link">
+  <h2><span class="num">07</span> 系统线程管理</h2>
+
+  <p>系统调用是调度器面临的最大挑战——一个阻塞的系统调用会让 OS 线程阻塞，如果该 M 绑定了 P，就会浪费一个 P 的处理能力。Go 通过 <code>entersyscall</code> 和 <code>exitsyscall</code> 机制优雅地解决了这个问题。</p>
+
+  <h3>entersyscall / exitsyscall</h3>
+
+<pre><code>// 系统调用前后的处理流程：
+// 1. entersyscall 在进入系统调用前调用
+// 2. 保存 G 和 P 的关联关系
+// 3. P 被标记为 _Psyscall（可被其他 M 窃取）
+// 4. M 进入阻塞的系统调用
+// 5. 系统调用返回后调用 exitsyscall
+// 6. 尝试重新绑定原来的 P
+// 7. 如果 P 被抢走（或 GOMAXPROCS 变更），M 把 G 放入全局队列，M 休眠
+
+// runtime/proc.go — 进入系统调用
+func entersyscall() {
+    gp := getg()
+    gp.m.syscalltick = gp.m.p.ptr().syscalltick
+    gp.m.oldp.set(gp.m.p.ptr())
+    gp.m.p.ptr().status = _Psyscall
+    // 不在 P 上运行，但 P 仍然跟这个 M 关联（标记为 syscall）
+}
+
+// 退出系统调用
+func exitsyscall() {
+    gp := getg()
+    oldp := gp.m.oldp.ptr()
+    gp.m.oldp = 0
+
+    // 尝试重新获取原来的 P
+    if exitsyscallfast(oldp) {
+        gp.m.p.ptr().status = _Prunning
+        return  // 成功！继续在原来的 P 上运行
+    }
+
+    // 原来的 P 被抢走了，需要重新调度
+    mcall(exitsyscall0)
+    // exitsyscall0 将 G 放入全局队列
+    // M 尝试找新的 P，找不到就休眠
+    gp.m.p = 0
+    gp.m.nextp = 0
+    schedule()
+}
+</code></pre>
+
+  <h3>HandoffP — P 移交</h3>
+
+  <p>当 M 进入系统调用后，sysmon 监控线程会检查 P 的状态：</p>
+
+<pre><code>// 在 sysmon 中：
+if pp.status == _Psyscall {
+    // 如果系统调用超过一个阈值（通常是 20us）！
+    // 或者超过了 syscalltick，尝试让出 P
+    if原子比较并设置 P 为 _Pidle {
+        // 将 P 从阻塞的 M 手中"抢"下来
+        // P 被放到空闲列表，另一个 M 可以使用它
+        handoffp(pp)
+    }
+}
+
+func handoffp(pp *p) {
+    // 尝试把 P 给一个自旋 M（如果没有，创建一个新的 M）
+    if sched.nmspinning.Load() != 0 || sched.npidle.Load() == 0 {
+        startm(pp, false)  // 创建或唤醒一个 M
+        return
+    }
+    // 把 P 放回空闲列表
+    pidleput(pp)
+}
+</code></pre>
+
+  <h3>线程生命周期管理</h3>
+
+<pre><code>// M 的创建
+func newm(fn func(), pp *p, id int64) {
+    // 分配 m 结构体
+    mp := allocm(pp, fn, id)
+    // 创建 OS 线程（调用 pthread_create 或 clone）
+    newm1(mp)
+}
+
+// M 的休眠与销毁
+// 当 M 找不到可运行的 G 时：
+// - 进入自旋状态（spinning），尝试从其他 P 窃取
+// - 如果持续空闲，休眠（park）
+// - 长时间休眠后，会被 GC 或 sysmon 回收
+
+// 最大 M 数限制
+var maxMcount int32 = 10000  // 硬编码上限
+
+// 当 M 数量达到上限但还需要新 M 时：
+// - 阻塞创建线程的请求
+// - 等待已有的 M 释放
+</code></pre>
+
+  <h3>LockOSThread</h3>
+
+  <p>特殊场景下，goroutine 可以锁定到特定的 OS 线程（如 CGo 调用、GUI 编程）：</p>
+
+<pre><code>// 锁定
+import "runtime"
+runtime.LockOSThread()
+// 该 G 永远只在这个 M 上运行
+// 退出系统调用时，M 不会被抢走
+
+// 解锁
+runtime.UnlockOSThread()
+</code></pre>
+</section>
+
+<section id="trace" class="toc-link">
+  <h2><span class="num">08</span> 调度器 Trace 可视化</h2>
+
+  <p>理解调度器行为的最佳方式是可视化。Go 提供了强大的 <code>go tool trace</code> 命令，可以记录和展示 goroutine 的完整生命周期。</p>
+
+  <h3>生成 Trace</h3>
+
+<pre><code>import (
+    "os"
+    "runtime/trace"
+)
+
+func main() {
+    f, _ := os.Create("trace.out")
+    defer f.Close()
+
+    trace.Start(f)
+    defer trace.Stop()
+
+    // 你的并发代码
+    var wg sync.WaitGroup
+    for i := 0; i &lt; 10; i++ {
+        wg.Add(1)
+        go func(n int) {
+            defer wg.Done()
+            time.Sleep(time.Duration(n) * time.Millisecond)
+        }(i)
+    }
+    wg.Wait()
+}
+
+// 查看 trace：
+// go tool trace trace.out
+// 浏览器会自动打开 http://127.0.0.1:49438
+</code></pre>
+
+  <h3>Trace 分析指标</h3>
+
+  <p>通过调度器 trace 可以观察到以下指标：</p>
+
+  <table>
+    <tr><th>指标</th><th>含义</th><th>优化提示</th></tr>
+    <tr><td>Goroutines 数量</td><td>活跃 goroutine 总数</td><td>数量过多说明调度压力大</td></tr>
+    <tr><td>Running</td><td>正在执行的 goroutine</td><td>接近 GOMAXPROCS 为正常</td></tr>
+    <tr><td>Runnable</td><td>可运行但等待调度的 goroutine</td><td>队列积压说明 CPU 不够</td></tr>
+    <tr><td>Syscall</td><td>系统调用中的 goroutine</td><td>持续过高说明 I/O 密集</td></tr>
+    <tr><td>Blocking</td><td>被阻塞的 goroutine</td><td>检查锁竞争或 channel 瓶颈</td></tr>
+    <tr><td>P 状态</td><td>每个 P 的运行/空闲/系统调用</td><td>大量空闲说明负载不均</td></tr>
+  </table>
+
+  <h3>调度器事件分析</h3>
+
+<pre><code>// 使用 GODEBUG 环境变量查看调度事件
+// GODEBUG=schedtrace=1000,scheddetail=1 ./myprogram
+
+// 输出示例：
+// SCHED 0ms: gomaxprocs=4 idleprocs=0 threads=5 spinningthreads=0 idlethreads=0
+//   runqueue=0 [0 0 0 0]
+// SCHED 1000ms: gomaxprocs=4 idleprocs=0 threads=6 spinningthreads=1 idlethreads=0
+//   runqueue=2 [1 0 0 3]
+
+// 字段含义：
+// gomaxprocs    = P 总数（本例 4）
+// idleprocs     = 空闲 P 数
+// threads       = 总 OS 线程数
+// spinningthreads = 自旋线程数
+// idlethreads   = 空闲线程数
+// runqueue      = 全局队列长度
+// [0 0 0 0]     = 每个 P 的本地队列长度
+</code></pre>
+
+  <h3>常见调度问题诊断</h3>
+
+<pre><code>// 问题 1: 线程数持续增长
+// 原因：阻塞系统调用过多，M 被占满
+// 解法：减少系统调用，使用连接池，检查 CGo 调用
+
+// 问题 2: 自旋线程过多
+// 原因：工作窃取频繁，P 过少
+// 解法：增加 GOMAXPROCS，优化负载分布
+
+// 问题 3: 全局队列积压
+// 原因：本地队列已满，或某些 P 产生 G 速度远超消费
+// 解法：用 worker pool 控制并发度，拆分 goroutine 粒度
+
+// 问题 4: P 频繁切换
+// 原因：goroutine 的 CPU 时间片太短
+// 解法：合并小 goroutine，减少不必要的 go 语句
+</code></pre>
+
+  <div class="callout">
+    <strong>调度器总结:</strong><br>
+    Go 的 GMP 调度器是工程实践的杰作——它结合了用户态调度的低开销和内核态线程的并行能力。工作窃取保证了负载均衡，信号抢占解决了"死循环"问题，netpoll 实现了高效的网络 I/O。理解调度器的工作原理，就能更好地优化 Go 程序的并发性能。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

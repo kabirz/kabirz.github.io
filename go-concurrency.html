@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Go 并发编程深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%2300ADD8'/><stop offset='100%25' stop-color='%23007d9c'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>G</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Go 并发编程深度解析</h1>
+  <p class="subtitle">Goroutine / Channel / Select / Sync 原语 / 并发模式</p>
+  <span class="version">Go 1.24 · CSP 并发模型 · Do not communicate by sharing memory</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#goroutine">Goroutine</a></li>
+    <li><a href="#channel">Channel</a></li>
+    <li><a href="#select">Select 多路复用</a></li>
+    <li><a href="#mutex">Sync.Mutex / RWMutex</a></li>
+    <li><a href="#sync-higher">Sync.WaitGroup / Once / Cond</a></li>
+    <li><a href="#pool">Sync.Pool 对象池</a></li>
+    <li><a href="#atomic">Atomic 原子操作</a></li>
+    <li><a href="#patterns">并发模式</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="goroutine" class="toc-link">
+  <h2><span class="num">01</span> Goroutine</h2>
+
+  <p>Goroutine 是 Go 并发模型的核心，是一种由 Go 运行时管理的<strong>轻量级线程</strong>。与操作系统线程相比，goroutine 的创建和切换成本极低（栈初始仅 2-4KB），使得 Go 程序可以轻松创建数十万甚至上百万个 goroutine。</p>
+
+  <h3>go 语句</h3>
+
+  <p>在函数调用前加上 <code>go</code> 关键字即可启动一个 goroutine：</p>
+
+<pre><code>// 基本用法
+go doSomething()
+
+// 匿名函数
+go func() {
+    fmt.Println("在 goroutine 中运行")
+}()
+
+// 带参数（值捕获）
+for i := 0; i &lt; 10; i++ {
+    go func(n int) {
+        fmt.Println(n)
+    }(i)  // 传递 i 的副本
+}
+
+// 错误示范（循环变量捕获问题）
+for i := 0; i &lt; 10; i++ {
+    go func() {
+        fmt.Println(i)  // ❌ 所有 goroutine 看到同一个 i
+    }()
+}
+// Go 1.22+ 已修复此问题，循环变量每次迭代创建新变量
+</code></pre>
+
+  <h3>goroutine 栈</h3>
+
+  <p>Goroutine 使用<strong>动态可增长栈</strong>（初始约 2KB，最大可达 1GB），由运行时管理。栈扩展通过 <code>runtime.morestack</code> 实现：</p>
+
+<pre><code>// 查看当前 goroutine 数量
+import "runtime"
+
+func main() {
+    fmt.Println(runtime.NumGoroutine())
+
+    var wg sync.WaitGroup
+    for i := 0; i &lt; 1000; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            time.Sleep(time.Second)
+        }()
+    }
+    wg.Wait()
+    fmt.Println(runtime.NumGoroutine())  // 回到 1
+}
+</code></pre>
+
+  <h3>GOMAXPROCS</h3>
+
+  <p>GOMAXPROCS 控制 Go 程序可以使用的<strong>操作系统线程数</strong>，默认为 CPU 核心数。它不是 goroutine 数量的上限，而是并发执行 goroutine 的 worker 线程数。</p>
+
+<pre><code>import "runtime"
+
+func main() {
+    fmt.Println("默认 GOMAXPROCS:", runtime.GOMAXPROCS(0))
+    // 设置
+    runtime.GOMAXPROCS(8)  // 最多 8 个 OS 线程
+
+    // 或者通过环境变量设置
+    // GOMAXPROCS=4 go run main.go
+}
+</code></pre>
+
+  <p>关键理解：</p>
+  <ul>
+    <li><strong>GOMAXPROCS</strong> = 并行执行 goroutine 的 P（处理器）数量</li>
+    <li>goroutine 总数远大于 GOMAXPROCS → 调度器分时复用 OS 线程</li>
+    <li>I/O密集型 / CPU密集型任务可通过调节 GOMAXPROCS 优化</li>
+    <li>容器环境下建议用 <code>uber-go/automaxprocs</code> 自动探测 cgroup 配额</li>
+  </ul>
+</section>
+
+<section id="channel" class="toc-link">
+  <h2><span class="num">02</span> Channel</h2>
+
+  <p>Channel 是 Go 实现 CSP（Communicating Sequential Processes）模型的<strong>一等公民</strong>——"不要通过共享内存来通信，而应该通过通信来共享内存"。channel 本身是类型化的、并发安全的、基于 FIFO 的通信管道。</p>
+
+  <h3>创建与基本操作</h3>
+
+<pre><code>// 创建（make 函数，不是 new）
+ch1 := make(chan int)          // 无缓冲 channel
+ch2 := make(chan string, 10)   // 有缓冲 channel，容量 10
+
+// 发送与接收
+ch1 &lt;- 42       // 发送（阻塞直到对端接收）
+val := &lt;-ch1    // 接收（阻塞直到有数据）
+val, ok := &lt;-ch1 // 带关闭检测的接收
+
+// 关闭
+close(ch)       // 关闭后不能再发送，但可以继续接收剩余内容
+</code></pre>
+
+  <h3>无缓冲 vs 有缓冲</h3>
+
+  <p>这是 Go 并发设计中最关键的区别：</p>
+
+  <table>
+    <tr><th>特性</th><th>无缓冲（容量 0）</th><th>有缓冲（容量 &gt; 0）</th></tr>
+    <tr><td>发送</td><td>阻塞直到接收方准备好</td><td>阻塞直到有空间</td></tr>
+    <tr><td>接收</td><td>阻塞直到发送方准备好</td><td>阻塞直到有数据</td></tr>
+    <tr><td>行为</td><td>同步——发送和接收配对</td><td>异步——解耦生产和消费</td></tr>
+    <tr><td>典型用途</td><td>信号通知、同步</td><td>工作队列、限流</td></tr>
+  </table>
+
+<pre><code>// 无缓冲 channel - 确保通知到达
+func main() {
+    done := make(chan struct{})
+    go func() {
+        fmt.Println("工作完成")
+        done &lt;- struct{}{}  // 发送通知
+    }()
+    &lt;-done  // 等待通知（阻塞）
+    fmt.Println("主 goroutine 继续")
+}
+
+// 有缓冲 channel - 工作队列
+func worker(id int, jobs &lt;-chan int) {
+    for j := range jobs {
+        fmt.Printf("worker %d 处理 job %d\n", id, j)
+    }
+}
+
+func main() {
+    jobs := make(chan int, 100)
+    go worker(1, jobs)
+
+    for i := 0; i &lt; 50; i++ {
+        jobs &lt;- i
+    }
+    close(jobs)  // 通知 worker 没有更多任务
+    time.Sleep(time.Second)
+}
+</code></pre>
+
+  <h3>关闭与 range</h3>
+
+  <p>使用 <code>range</code> 遍历 channel 直到关闭：</p>
+
+<pre><code>func producer(out chan&lt;- int) {
+    for i := 0; i &lt; 10; i++ {
+        out &lt;- i * 2
+    }
+    close(out)  // 必须关闭，否则 range 死锁
+}
+
+func main() {
+    ch := make(chan int)
+    go producer(ch)
+
+    // range 自动检测 close
+    for val := range ch {
+        fmt.Println(val)
+    }
+    // 等价于：
+    // for {
+    //     val, ok := &lt;-ch
+    //     if !ok { break }
+    //     fmt.Println(val)
+    // }
+}
+</code></pre>
+
+  <p>关闭 channel 的规则：</p>
+  <ul>
+    <li>发送方关闭 channel（接收方不应该关闭）</li>
+    <li>重复关闭 <code>close(ch)</code> 会 panic</li>
+    <li>向已关闭的 channel 发送会 panic</li>
+    <li>从已关闭的 channel 接收立即返回零值 + false</li>
+  </ul>
+
+  <h3>Channel 方向</h3>
+
+  <p>Go 类型系统支持 channel 方向约束，在编译期保证 channel 不被误用：</p>
+
+<pre><code>// 只读 channel（输入）
+func consumer(ch &lt;-chan int) {
+    for v := range ch {
+        fmt.Println(v)
+    }
+}
+
+// 只写 channel（输出）
+func producer(ch chan&lt;- int) {
+    for i := 0; i &lt; 10; i++ {
+        ch &lt;- i
+    }
+    close(ch)
+}
+
+func main() {
+    ch := make(chan int)  // 双向
+    go producer(ch)       // 自动转换为 chan&lt;-int
+    consumer(ch)          // 自动转换为 &lt;-chan int
+}
+</code></pre>
+</section>
+
+<section id="select" class="toc-link">
+  <h2><span class="num">03</span> Select 多路复用</h2>
+
+  <p><code>select</code> 是 Go 并发控制的核心，它允许一个 goroutine 等待多个 channel 操作，任意一个准备好时执行对应的 case。select 将 channel 和逻辑分支结合在一起，避免复杂的轮询和回调。</p>
+
+  <h3>基本 select</h3>
+
+<pre><code>func main() {
+    ch1 := make(chan string)
+    ch2 := make(chan string)
+
+    go func() {
+        time.Sleep(1 * time.Second)
+        ch1 &lt;- "来自 ch1"
+    }()
+    go func() {
+        time.Sleep(2 * time.Second)
+        ch2 &lt;- "来自 ch2"
+    }()
+
+    select {
+    case msg := &lt;-ch1:
+        fmt.Println(msg)
+    case msg := &lt;-ch2:
+        fmt.Println(msg)
+    case &lt;-time.After(3 * time.Second):
+        fmt.Println("超时")
+    }
+}
+</code></pre>
+
+  <h3>默认分支（非阻塞）</h3>
+
+  <p><code>default</code> 分支使 select 变为非阻塞：</p>
+
+<pre><code>// 非阻塞接收
+select {
+case msg := &lt;-ch:
+    fmt.Println("收到:", msg)
+default:
+    fmt.Println("没有数据，不阻塞")
+}
+
+// 非阻塞发送
+select {
+case ch &lt;- value:
+    fmt.Println("发送成功")
+default:
+    fmt.Println("channel 已满，跳过发送")
+}
+
+// 非阻塞检查 channel 状态
+select {
+case &lt;-signal:
+    fmt.Println("收到信号")
+default:
+    fmt.Println("信号未到，继续工作")
+}
+</code></pre>
+
+  <h3>定时器与超时模式</h3>
+
+<pre><code>// 超时控制
+func fetchWithTimeout(url string, timeout time.Duration) (string, error) {
+    result := make(chan string, 1)
+
+    go func() {
+        data, err := httpFetch(url)
+        if err != nil {
+            return
+        }
+        result &lt;- data
+    }()
+
+    select {
+    case data := &lt;-result:
+        return data, nil
+    case &lt;-time.After(timeout):
+        return "", errors.New("请求超时")
+    }
+}
+
+// 定期执行 + 可取消
+func heartbeat(ctx context.Context, interval time.Duration) &lt;-chan struct{} {
+    out := make(chan struct{})
+    go func() {
+        ticker := time.NewTicker(interval)
+        defer ticker.Stop()
+        for {
+            select {
+            case &lt;-ticker.C:
+                out &lt;- struct{}{}
+            case &lt;-ctx.Done():
+                return  // 上下文取消时退出
+            }
+        }
+    }()
+    return out
+}
+</code></pre>
+
+  <h3>select 与 for 循环</h3>
+
+  <p>select 经常配合 for 循环使用以实现持续监听：</p>
+
+<pre><code>// 事件循环
+func eventLoop(stop &lt;-chan struct{}) {
+    for {
+        select {
+        case &lt;-stop:
+            fmt.Println("收到停止信号，退出")
+            return
+        case task := &lt;-taskCh:
+            processTask(task)
+        case &lt;-ticker.C:
+            doPeriodicWork()
+        default:
+            // 没有事件时做空闲工作
+            idleWork()
+        }
+    }
+}
+</code></pre>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    select 随机选择就绪的 case（不是顺序扫描），这保证了公平性。同时监听多个 channel 时，不要假设哪个会优先执行。如果需要优先级，可以用嵌套 select 或两个 select 配合 default 实现。
+  </div>
+</section>
+
+<section id="mutex" class="toc-link">
+  <h2><span class="num">04</span> Sync.Mutex / RWMutex</h2>
+
+  <p>虽然 Go 推荐通过 channel 通信来实现并发，但共享内存加互斥锁仍然是某些场景下的最优选择。Go 标准库提供了 <code>sync.Mutex</code> 和 <code>sync.RWMutex</code>，两者都是<strong>不可重入</strong>的（同一 goroutine 不能对同一个已锁定的 Mutex 再次加锁）。</p>
+
+  <h3>Mutex 互斥锁</h3>
+
+<pre><code>type SafeCounter struct {
+    mu    sync.Mutex
+    value int64
+}
+
+func (c *SafeCounter) Inc() {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    c.value++
+}
+
+func (c *SafeCounter) Value() int64 {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    return c.value
+}
+</code></pre>
+
+  <h3>RWMutex 读写锁</h3>
+
+  <p>RWMutex 适用于<strong>读多写少</strong>的场景。多个读操作可以同时进行，写操作是独占的：</p>
+
+<pre><code>type SafeCache struct {
+    mu    sync.RWMutex
+    data  map[string]any
+}
+
+func (c *SafeCache) Get(key string) (any, bool) {
+    c.mu.RLock()           // 读锁
+    defer c.mu.RUnlock()   // 注意是 RUnlock 不是 Unlock
+    v, ok := c.data[key]
+    return v, ok
+}
+
+func (c *SafeCache) Set(key string, value any) {
+    c.mu.Lock()            // 写锁
+    defer c.mu.Unlock()
+    c.data[key] = value
+}
+
+// 读取性能对比（基准测试）：读锁比写锁快约 10 倍
+</code></pre>
+
+  <h3>零值锁</h3>
+
+  <p><code>sync.Mutex</code> 和 <code>sync.RWMutex</code> 的零值就是<strong>已解锁的锁</strong>，可以直接使用。不需要 <code>new</code> 或 <code>make</code>：</p>
+
+<pre><code>// 正确 — 零值可用
+type Counter struct {
+    sync.Mutex       // 可以直接内嵌
+    Count int
+}
+
+func (c *Counter) Add(n int) {
+    c.Lock()         // 直接使用内嵌的 Mutex 方法
+    c.Count += n
+    c.Unlock()
+}
+
+// 即使是指针类型，也建议用 new：
+counter := new(Counter)  // Mutex 零值可用
+
+// 注意：Mutex 不能被复制（复制后两个实例共享同一状态）
+// func (c Counter) Bad() {  // ❌ 值接收者会复制 Mutex
+//     c.Lock()
+// }
+</code></pre>
+
+  <h3>锁的常见陷阱</h3>
+
+<pre><code>// 陷阱 1: 忘记解锁（使用 defer 保证）
+func (c *Counter) Bad() {
+    c.Lock()
+    val := c.Count
+    // 如果这里有 return 或 panic...
+    // c.Unlock()  // 可能不会执行
+}
+
+func (c *Counter) Good() {
+    c.Lock()
+    defer c.Unlock()  // 即使 return 或 panic 也执行
+    return c.Count
+}
+
+// 陷阱 2: 锁不可重入
+type Service struct {
+    mu sync.Mutex
+}
+
+func (s *Service) Process() {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    s.Validate()  // ❌ 如果 Validate 也加锁，死锁
+}
+
+// 陷阱 3: 复制锁
+type SafeMap struct {
+    mu sync.Mutex
+    m  map[int]int
+}
+
+func copyStruct(s SafeMap) {  // ❌ 值传递会复制锁
+    s.mu.Lock()
+    // ...
+    s.mu.Unlock()
+}
+</code></pre>
+</section>
+
+<section id="sync-higher" class="toc-link">
+  <h2><span class="num">05</span> Sync.WaitGroup / Once / Cond</h2>
+
+  <p>除了互斥锁，sync 包还提供了多个高级同步原语，用于协调 goroutine 的执行流程。</p>
+
+  <h3>WaitGroup — 等待一组 goroutine</h3>
+
+<pre><code>func main() {
+    var wg sync.WaitGroup
+
+    for i := 0; i &lt; 5; i++ {
+        wg.Add(1)  // 计数器 +1
+        go func(id int) {
+            defer wg.Done()  // 计数器 -1
+            fmt.Printf("worker %d 开始\n", id)
+            time.Sleep(time.Duration(id) * 100 * time.Millisecond)
+            fmt.Printf("worker %d 结束\n", id)
+        }(i)
+    }
+
+    wg.Wait()  // 阻塞直到计数器为 0
+    fmt.Println("所有 worker 完成")
+}
+
+// 常见错误：在 goroutine 内部调用 wg.Add
+for i := 0; i &lt; 5; i++ {
+    go func() {
+        wg.Add(1)  // ❌ 可能主 goroutine 已经 wg.Wait() 了
+        defer wg.Done()
+        // ...
+    }()
+}
+wg.Wait()  // ❌ 可能在 Add 之前就执行了
+</code></pre>
+
+  <h3>Once — 只执行一次</h3>
+
+<pre><code>type Singleton struct {
+    // ...
+}
+
+var (
+    instance *Singleton
+    once     sync.Once
+)
+
+func GetInstance() *Singleton {
+    once.Do(func() {
+        instance = &amp;Singleton{}
+        fmt.Println("创建唯一实例")
+    })
+    return instance
+}
+
+// sync.Once 的 Do 函数保证：
+// - 只执行一次
+// - 即使并发调用也只会有一个 goroutine 执行
+// - 内部 mutex + atomic 实现
+</code></pre>
+
+  <h3>Cond — 条件变量</h3>
+
+  <p>Cond 用于 goroutine 等待特定条件变为 true。它比 channel 更灵活，也更复杂：</p>
+
+<pre><code>type Queue struct {
+    items []int
+    cond  *sync.Cond
+}
+
+func NewQueue() *Queue {
+    return &amp;Queue{
+        cond: sync.NewCond(&amp;sync.Mutex{}),
+    }
+}
+
+func (q *Queue) Enqueue(item int) {
+    q.cond.L.Lock()
+    defer q.cond.L.Unlock()
+    q.items = append(q.items, item)
+    q.cond.Signal()  // 通知一个等待者
+}
+
+func (q *Queue) Dequeue() int {
+    q.cond.L.Lock()
+    defer q.cond.L.Unlock()
+    for len(q.items) == 0 {
+        q.cond.Wait()  // 等待（自动解锁，被唤醒后自动加锁）
+    }
+    item := q.items[0]
+    q.items = q.items[1:]
+    return item
+}
+</code></pre>
+
+  <p>Cond 的三个方法：</p>
+  <ul>
+    <li><code>Wait()</code> — 自动解锁 → 阻塞等待 → 被唤醒后加锁</li>
+    <li><code>Signal()</code> — 唤醒一个等待者</li>
+    <li><code>Broadcast()</code> — 唤醒所有等待者</li>
+  </ul>
+
+  <p>Cond 很少直接使用，因为 channel 通常能更清晰地表达同样的语义。Cond 适用于<strong>多个等待者竞争同一个资源</strong>的场景。</p>
+</section>
+
+<section id="pool" class="toc-link">
+  <h2><span class="num">06</span> Sync.Pool 对象池</h2>
+
+  <p><code>sync.Pool</code> 是一个<strong>临时对象缓存池</strong>，用于减少频繁分配和 GC 的压力。它的设计目标是"临时"——池中的对象可能在任意时刻被 GC 回收，所以 Pool 适合缓存分配开销大的临时对象。</p>
+
+<pre><code>type Pool struct {
+    // New 在 Get 发现池为空时调用，创建新对象
+    New func() any
+}
+
+// 创建一个 buffer 池
+var bufferPool = sync.Pool{
+    New: func() any {
+        return new(bytes.Buffer)
+    },
+}
+
+func processData(data []byte) string {
+    buf := bufferPool.Get().(*bytes.Buffer)
+    buf.Reset()              // 重置而不是新建
+    defer bufferPool.Put(buf)  // 放回池中
+
+    // 使用 buffer
+    buf.Write(data)
+    buf.WriteString(" processed")
+    return buf.String()
+}
+
+// Benchmark 对比（000 次操作）:
+// 无 Pool: 70ms, 大量 GC
+// 有 Pool: 15ms, 几乎无 GC
+</code></pre>
+
+  <h3>Pool 的实现细节</h3>
+
+<pre><code>// 运行时实现（简化）：
+// 每个 P 有一个私有池和一个共享池链表
+// Get: 先尝试私有的，再尝试共享的，最后调用 New
+// Put: 放回当前 P 的共享池
+
+// 关键特性：
+// 1. 无锁（per-P 本地缓存）
+// 2. GC 时会清空所有 Pool
+// 3. 是"丢失缓存"不是"泄漏缓存"
+// 4. 跨 goroutine 安全
+
+// 适用场景：
+// - 频繁分配/释放的小对象（如 buffer, 临时切片）
+// - 高吞吐的并发处理
+// - 减少 GC 压力的辅助手段
+
+// 不适用场景：
+// - 有状态的长期对象
+// - 需要保证对象存活时间的场景
+</code></pre>
+
+  <p>Pool 与 GC 的关系：每次 GC 时，Pool 中的所有对象都会被<strong>无声清空</strong>。这意味着 Pool 不能用于有持久状态的连接池（应当用 channel 实现连接池）。</p>
+</section>
+
+<section id="atomic" class="toc-link">
+  <h2><span class="num">07</span> Atomic 原子操作</h2>
+
+  <p>Go 的 <code>sync/atomic</code> 包提供了底层原子内存操作，由 CPU 指令直接支持（如 x86 的 <code>LOCK CMPXCHG</code>），比互斥锁开销小得多。适用于计数器、标志位、状态转换等简单场景。</p>
+
+  <h3>原子操作的基本函数</h3>
+
+<pre><code>import "sync/atomic"
+
+var counter atomic.Int64  // Go 1.19 引入的类型化 API
+
+// 基本操作
+counter.Store(100)        // 原子写入
+v := counter.Load()       // 原子读取
+old := counter.Add(5)     // 原子增减并返回旧值
+swapped := counter.CompareAndSwap(100, 200)  // CAS
+
+// 旧版函数式 API（仍可使用）
+var counter2 int64
+atomic.AddInt64(&amp;counter2, 1)
+atomic.StoreInt64(&amp;counter2, 100)
+v2 := atomic.LoadInt64(&amp;counter2)
+
+// Benchmark: atomic 比 Mutex 快约 5-10 倍
+</code></pre>
+
+  <h3>Atomic.Value</h3>
+
+  <p><code>atomic.Value</code> 用于原子地读写<strong>任意类型</strong>的值，适用于配置热更新、安全快照等场景：</p>
+
+<pre><code>type Config struct {
+    Host    string
+    Port    int
+    Timeout time.Duration
+}
+
+type Server struct {
+    config atomic.Value  // 存储 *Config
+}
+
+func (s *Server) LoadConfig() *Config {
+    return s.config.Load().(*Config)
+}
+
+func (s *Server) UpdateConfig(cfg *Config) {
+    s.config.Store(cfg)
+}
+
+// 使用场景：无需锁，实现无锁读取
+func main() {
+    srv := &amp;Server{}
+    srv.UpdateConfig(&amp;Config{
+        Host:    "0.0.0.0",
+        Port:    8080,
+        Timeout: 30 * time.Second,
+    })
+
+    // 并发安全读取（无锁）
+    go func() {
+        for {
+            cfg := srv.LoadConfig()
+            fmt.Printf("当前配置: %+v\n", cfg)
+            time.Sleep(100 * time.Millisecond)
+        }
+    }()
+}
+</code></pre>
+
+  <h3>原子操作与内存模型</h3>
+
+  <p>Go 的 atomic 遵循 <strong>happens-before</strong> 语义：</p>
+  <ul>
+    <li>atomic Store → 后续对其他 goroutine 的 Load 可见</li>
+    <li>atomic Load → 看到之前的 Store</li>
+    <li>atomic 操作构成同步点：Store 释放、Load 获取</li>
+    <li>不使用 atomic 的共享变量访问是 data race</li>
+  </ul>
+
+<pre><code>// 使用 atomic 实现无锁通知
+var ready atomic.Bool
+
+// goroutine 1
+go func() {
+    time.Sleep(time.Second)
+    ready.Store(true)  // 设置标志
+}()
+
+// goroutine 2
+for !ready.Load() {
+    runtime.Gosched()  // 出让 CPU
+}
+fmt.Println("检测到 ready")
+</code></pre>
+</section>
+
+<section id="patterns" class="toc-link">
+  <h2><span class="num">08</span> 并发模式</h2>
+
+  <p>Go 社区积累了大量实用的并发编程模式，这些模式将 channel、select、goroutine 组合成可复用的结构。</p>
+
+  <h3>Worker Pool（工作者池）</h3>
+
+<pre><code>func workerPool(numWorkers int, jobs &lt;-chan int, results chan&lt;- int) {
+    var wg sync.WaitGroup
+    for i := 0; i &lt; numWorkers; i++ {
+        wg.Add(1)
+        go func(id int) {
+            defer wg.Done()
+            for job := range jobs {
+                results &lt;- job * 2  // 模拟处理
+            }
+        }(i)
+    }
+    wg.Wait()
+    close(results)
+}
+
+func main() {
+    jobs := make(chan int, 100)
+    results := make(chan int, 100)
+
+    go workerPool(10, jobs, results)
+
+    for i := 0; i &lt; 50; i++ {
+        jobs &lt;- i
+    }
+    close(jobs)
+
+    for r := range results {
+        fmt.Println(r)
+    }
+}
+</code></pre>
+
+  <h3>Fan-Out / Fan-In</h3>
+
+  <p>Fan-Out：将输入分发给多个 goroutine 并行处理。Fan-In：合并多个 channel 到同一个输出 channel。</p>
+
+<pre><code>// Fan-Out：分发到多个 goroutine
+func fanOut(input &lt;-chan int, workers int) []&lt;-chan int {
+    channels := make([]&lt;-chan int, workers)
+    for i := 0; i &lt; workers; i++ {
+        ch := make(chan int)
+        channels[i] = ch
+        go func(out chan&lt;- int) {
+            for v := range input {
+                out &lt;- v * 2
+            }
+            close(out)
+        }(ch)
+    }
+    return channels
+}
+
+// Fan-In：合并多个 channel
+func fanIn(channels ...&lt;-chan int) &lt;-chan int {
+    out := make(chan int)
+    var wg sync.WaitGroup
+    for _, ch := range channels {
+        wg.Add(1)
+        go func(c &lt;-chan int) {
+            defer wg.Done()
+            for v := range c {
+                out &lt;- v
+            }
+        }(ch)
+    }
+    go func() {
+        wg.Wait()
+        close(out)
+    }()
+    return out
+}
+
+func main() {
+    input := make(chan int)
+    go func() {
+        for i := 0; i &lt; 20; i++ {
+            input &lt;- i
+        }
+        close(input)
+    }()
+
+    channels := fanOut(input, 4)
+    merged := fanIn(channels...)
+
+    for v := range merged {
+        fmt.Println(v)
+    }
+}
+</code></pre>
+
+  <h3>流水线（Pipeline）</h3>
+
+  <p>流水线模式将一个处理阶段拆分为多个步骤，每个步骤由一个 goroutine 执行，通过 channel 连接前后阶段：</p>
+
+<pre><code>// 阶段 1: 生成数字
+func generate(nums ...int) &lt;-chan int {
+    out := make(chan int)
+    go func() {
+        for _, n := range nums {
+            out &lt;- n
+        }
+        close(out)
+    }()
+    return out
+}
+
+// 阶段 2: 平方
+func square(in &lt;-chan int) &lt;-chan int {
+    out := make(chan int)
+    go func() {
+        for n := range in {
+            out &lt;- n * n
+        }
+        close(out)
+    }()
+    return out
+}
+
+// 阶段 3: 乘以 2
+func multiply(in &lt;-chan int) &lt;-chan int {
+    out := make(chan int)
+    go func() {
+        for n := range in {
+            out &lt;- n * 2
+        }
+        close(out)
+    }()
+    return out
+}
+
+func main() {
+    // 流水线：generate → square → multiply
+    for v := range multiply(square(generate(1, 2, 3, 4, 5))) {
+        fmt.Println(v)  // 输出: 2, 8, 18, 32, 50
+    }
+}
+</code></pre>
+
+  <h3>扇出（Fan-Out Stage）</h3>
+
+<pre><code>// 在流水线中，如果一个阶段性能不够，可以扇出多个相同阶段的 goroutine：
+func fanOutStage(in &lt;-chan int, workers int) &lt;-chan int {
+    out := make(chan int)
+    var wg sync.WaitGroup
+    for i := 0; i &lt; workers; i++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for n := range in {
+                // 模拟耗时计算
+                out &lt;- n * n
+            }
+        }()
+    }
+    go func() {
+        wg.Wait()
+        close(out)
+    }()
+    return out
+}
+</code></pre>
+
+  <h3>超时控制模式</h3>
+
+<pre><code>// Or-Channel：只要任意一个 channel 完成就返回
+func or(channels ...&lt;-chan struct{}) &lt;-chan struct{} {
+    switch len(channels) {
+    case 0:
+        return nil
+    case 1:
+        return channels[0]
+    }
+
+    done := make(chan struct{})
+    go func() {
+        defer close(done)
+        select {
+        case &lt;-channels[0]:
+        case &lt;-channels[1]:
+        case &lt;-or(channels[2:]...):  // 递归
+        }
+    }()
+    return done
+}
+</code></pre>
+
+  <h3>上下文传递模式</h3>
+
+<pre><code>// 通过 context 传递取消信号和超时
+func withTimeout(ctx context.Context, duration time.Duration) {
+    ctx, cancel := context.WithTimeout(ctx, duration)
+    defer cancel()
+
+    result := make(chan string, 1)
+    go func() {
+        result &lt;- expensiveOperation()
+    }()
+
+    select {
+    case v := &lt;-result:
+        fmt.Println("结果:", v)
+    case &lt;-ctx.Done():
+        fmt.Println("操作超时或被取消")
+    }
+}
+</code></pre>
+
+  <div class="callout">
+    <strong>并发编程总结:</strong><br>
+    Go 的并发原语设计精简但功能强大。理解 goroutine 的轻量特性、channel 的同步语义以及 select 的多路复用，配合 sync 包的工具，可以构建出安全、高效、可维护的并发程序。核心原则：通过通信来共享内存，而不是通过共享内存来通信。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

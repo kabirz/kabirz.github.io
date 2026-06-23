@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Go net/http 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%2300ADD8'/><stop offset='100%25' stop-color='%23007d9c'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>G</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Go net/http 深度解析</h1>
+  <p class="subtitle">HTTP/1.1/2 协议实现、路由、中间件与连接管理</p>
+  <span class="version">Go 1.22+ · net/http 标准库</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#sec1">Net/HTTP 包架构</a></li>
+    <li><a href="#sec2">ServeMux 路由</a></li>
+    <li><a href="#sec3">中间件模式</a></li>
+    <li><a href="#sec4">HTTP/1.1 连接管理</a></li>
+    <li><a href="#sec5">HTTP/2 实现</a></li>
+    <li><a href="#sec6">Client 实现</a></li>
+    <li><a href="#sec7">请求上下文</a></li>
+    <li><a href="#sec8">路由库对比</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="sec1" class="toc-link">
+  <h2><span class="num">01</span> Net/HTTP 包架构</h2>
+
+  <p><code>net/http</code> 是 Go 标准库中最重要也最复杂的包之一。它提供了一个完整的 HTTP 客户端和服务端实现，涵盖 HTTP/1.1 和 HTTP/2 协议。整个包的架构围绕几个核心类型展开。</p>
+
+  <h3>核心类型一览</h3>
+  <table>
+    <tr><th>类型</th><th>职责</th><th>关键方法/字段</th></tr>
+    <tr><td><code>http.Server</code></td><td>HTTP 服务端，监听端口、管理连接</td><td><code>ListenAndServe</code>, <code>Shutdown</code>, <code>Handler</code></td></tr>
+    <tr><td><code>http.Handler</code></td><td>请求处理器接口</td><td><code>ServeHTTP(ResponseWriter, *Request)</code></td></tr>
+    <tr><td><code>http.Request</code></td><td>封装 HTTP 请求</td><td><code>Method</code>, <code>URL</code>, <code>Header</code>, <code>Body</code>, <code>Context</code></td></tr>
+    <tr><td><code>http.ResponseWriter</code></td><td>构建 HTTP 响应</td><td><code>Write</code>, <code>WriteHeader</code>, <code>Header</code></td></tr>
+    <tr><td><code>http.Client</code></td><td>HTTP 客户端，发送请求</td><td><code>Do</code>, <code>Get</code>, <code>Post</code>, <code>Transport</code></td></tr>
+    <tr><td><code>http.Transport</code></td><td>底层连接池和传输</td><td><code>RoundTrip</code>, <code>MaxIdleConns</code></td></tr>
+  </table>
+
+  <h3>请求处理流程</h3>
+  <div class="card">
+    <pre><code><span class="cm">// net/http 服务端请求处理的核心流程</span>
+<span class="cm">//</span>
+<span class="cm">// 1. server.ListenAndServe()  → net.Listen("tcp", addr)</span>
+<span class="cm">// 2. server.Serve(l)          → 接受连接，启动 goroutine 处理</span>
+<span class="cm">// 3. conn.serve()             → 读取请求、创建 http.Request</span>
+<span class="cm">// 4. server.Handler.ServeHTTP → 路由到具体 handler</span>
+<span class="cm">// 5. handler 写入 ResponseWriter</span>
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    mux := http.NewServeMux()
+    mux.HandleFunc(<span class="s">"/hello"</span>, <span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set(<span class="s">"Content-Type"</span>, <span class="s">"text/plain"</span>)
+        w.Write([]<span class="kw">byte</span>(<span class="s">"Hello, World!"</span>))
+    })
+    
+    server := &amp;http.Server{
+        Addr:    <span class="s">":8080"</span>,
+        Handler: mux,
+    }
+    
+    log.Fatal(server.ListenAndServe())
+}</code></pre>
+  </div>
+
+  <h3>Server 配置详解</h3>
+  <div class="card">
+    <pre><code>server := &amp;http.Server{
+    Addr:         <span class="s">":8080"</span>,
+    Handler:      myHandler,
+    ReadTimeout:  <span class="num">5</span> * time.Second,    <span class="cm">// 读取请求超时</span>
+    WriteTimeout: <span class="num">10</span> * time.Second,   <span class="cm">// 写入响应超时</span>
+    IdleTimeout:  <span class="num">120</span> * time.Second,   <span class="cm">// keep-alive 空闲超时</span>
+    
+    <span class="cm">// 请求体大小限制</span>
+    MaxHeaderBytes: <span class="num">1</span> &lt;&lt; <span class="num">20</span>,  <span class="cm">// 1MB</span>
+    
+    <span class="cm">// 优雅关闭的回调</span>
+    ConnContext: <span class="kw">func</span>(ctx context.Context, c net.Conn) context.Context {
+        <span class="kw">return</span> context.WithValue(ctx, <span class="s">"conn"</span>, c)
+    },
+    
+    <span class="cm">// 自定义错误处理</span>
+    ErrorLog: log.New(os.Stderr, <span class="s">"HTTP: "</span>, log.LstdFlags),
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>关键点</strong>：<code>http.Server</code> 的 <code>Shutdown</code> 方法提供了优雅关闭能力，它会停止接受新连接，等待现有请求完成后再退出。
+  </div>
+</section>
+
+<section id="sec2" class="toc-link">
+  <h2><span class="num">02</span> ServeMux 路由</h2>
+
+  <h3>Go 1.22 增强的 ServeMux</h3>
+  <p>Go 1.22 对 <code>http.ServeMux</code> 进行了重大升级，新增了方法匹配、通配符路由和路径优先级规则。这使得标准库路由在没有第三方库的情况下也能满足大多数场景。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">func</span> <span class="fn">main</span>() {
+    mux := http.NewServeMux()
+    
+    <span class="cm">// Go 1.22 新增: 方法匹配</span>
+    mux.HandleFunc(<span class="s">"GET /api/users"</span>, listUsers)
+    mux.HandleFunc(<span class="s">"POST /api/users"</span>, createUser)
+    
+    <span class="cm">// 通配符参数</span>
+    mux.HandleFunc(<span class="s">"GET /api/users/{id}"</span>, getUser)
+    mux.HandleFunc(<span class="s">"PUT /api/users/{id}"</span>, updateUser)
+    mux.HandleFunc(<span class="s">"DELETE /api/users/{id}"</span>, deleteUser)
+    
+    <span class="cm">// 通配符后缀匹配</span>
+    mux.HandleFunc(<span class="s">"GET /files/{path...}"</span>, serveFile)
+    
+    <span class="fn">log.Fatal</span>(http.ListenAndServe(<span class="s">":8080"</span>, mux))
+}
+
+<span class="kw">func</span> <span class="fn">getUser</span>(w http.ResponseWriter, r *http.Request) {
+    <span class="cm">// 获取通配符参数</span>
+    id := r.PathValue(<span class="s">"id"</span>)
+    w.Write([]<span class="kw">byte</span>(<span class="s">"User ID: "</span> + id))
+}</code></pre>
+  </div>
+
+  <h3>模式匹配优先级</h3>
+  <p>ServeMux 的模式匹配遵循明确的优先级规则：</p>
+  <ol>
+    <li><strong>精确路径</strong>（如 <code>/api/users</code>）优先于通配符路径</li>
+    <li><strong>通配符路径</strong>（如 <code>/api/users/{id}</code>）优先于后缀通配符</li>
+    <li><strong>后缀通配符</strong>（如 <code>/files/{path...}</code>）优先级最低</li>
+    <li>如果多个模式同等匹配，则方法匹配的（<code>"GET /api/users"</code>）优先于无方法匹配的（<code>"/api/users"</code>）</li>
+  </ol>
+
+  <h3>Handler 注册机制</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 内部实现要点</span>
+<span class="cm">//</span>
+<span class="cm">// ServeMux 内部维护一个 pattern → handler 的映射表</span>
+<span class="cm">// 并按优先级排序。匹配时按优先级遍历，返回第一个匹配项。</span>
+<span class="cm">//</span>
+<span class="cm">// patterns 的注册格式:</span>
+<span class="cm">//   "/path"             - 无方法限制</span>
+<span class="cm">//   "GET /path"         - 仅 GET</span>
+<span class="cm">//   "POST /path"        - 仅 POST</span>
+<span class="cm">//   "PUT /path/{param}" - 带通配符参数</span>
+<span class="cm">//   "GET /{param...}"   - 后缀通配符</span>
+
+<span class="cm">// 注册 handler 的内部流程:</span>
+<span class="cm">// 1. 解析 pattern 字符串（方法 + 路径模板）</span>
+<span class="cm">// 2. 提取通配符名称（{name}、{name...}）</span>
+<span class="cm">// 3. 计算优先级分数</span>
+<span class="cm">// 4. 插入到排序后的 patterns 列表</span>
+<span class="cm">// 5. 检查是否有冲突（相同 pattern 重复注册）</span></code></pre>
+  </div>
+
+  <h3>DefaultServeMux 与全局注册</h3>
+  <div class="card">
+    <pre><code><span class="kw">func</span> <span class="fn">init</span>() {
+    <span class="cm">// 不推荐生产使用 - 全局状态难以管理</span>
+    http.HandleFunc(<span class="s">"/health"</span>, healthHandler)
+}
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    <span class="cm">// 如果 Handler 为 nil，使用 DefaultServeMux</span>
+    log.Fatal(http.ListenAndServe(<span class="s">":8080"</span>, <span class="kw">nil</span>)) <span class="cm">// 使用 DefaultServeMux</span>
+}
+
+<span class="cm">// 推荐做法：始终使用显式的 ServeMux 实例</span>
+<span class="kw">func</span> <span class="fn">main</span>() {
+    mux := http.NewServeMux()
+    mux.Handle(<span class="s">"/api"</span>, &amp;apiHandler{})
+    log.Fatal(http.ListenAndServe(<span class="s">":8080"</span>, mux))
+}</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>注意</strong>：Go 1.22 的 ServeMux 变更了某些模式的行为。如果你的代码升级自旧版本，请测试路由匹配是否正确，特别是斜杠结尾和通配符相关模式。
+  </div>
+</section>
+
+<section id="sec3" class="toc-link">
+  <h2><span class="num">03</span> 中间件模式</h2>
+
+  <h3>HandlerFunc 链</h3>
+  <p>Go 的 HTTP 中间件模式通过嵌套 <code>http.Handler</code> 实现。每个中间件接收一个 Handler，返回一个新的 Handler，在其中添加额外逻辑后调用下一个 Handler。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">type</span> Middleware <span class="kw">func</span>(http.Handler) http.Handler
+
+<span class="cm">// 日志中间件</span>
+<span class="kw">func</span> <span class="fn">Logging</span>() Middleware {
+    <span class="kw">return</span> <span class="kw">func</span>(next http.Handler) http.Handler {
+        <span class="kw">return</span> http.HandlerFunc(<span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+            start := time.Now()
+            
+            <span class="cm">// 包装 ResponseWriter 以捕获状态码</span>
+            sw := &amp;statusWriter{ResponseWriter: w, status: http.StatusOK}
+            
+            next.ServeHTTP(sw, r)
+            
+            log.Printf(<span class="s">"%s %s %d %v"</span>,
+                r.Method, r.URL.Path, sw.status, time.Since(start))
+        })
+    }
+}
+
+<span class="cm">// 应用中间件链</span>
+<span class="kw">func</span> <span class="fn">Apply</span>(handler http.Handler, middlewares ...Middleware) http.Handler {
+    <span class="kw">for</span> i := <span class="fn">len</span>(middlewares) - <span class="num">1</span>; i &gt;= <span class="num">0</span>; i-- {
+        handler = middlewares[i](handler)
+    }
+    <span class="kw">return</span> handler
+}</code></pre>
+  </div>
+
+  <h3>上下文传递</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 认证中间件 - 将用户信息注入 context</span>
+<span class="kw">type</span> contextKey <span class="ty">string</span>
+
+<span class="kw">const</span> UserKey contextKey = <span class="s">"user"</span>
+
+<span class="kw">func</span> <span class="fn">Auth</span>(validator <span class="kw">func</span>(<span class="ty">string</span>) (<span class="ty">string</span>, <span class="ty">error</span>)) Middleware {
+    <span class="kw">return</span> <span class="kw">func</span>(next http.Handler) http.Handler {
+        <span class="kw">return</span> http.HandlerFunc(<span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+            token := r.Header.Get(<span class="s">"Authorization"</span>)
+            <span class="kw">if</span> token == <span class="s">""</span> {
+                http.Error(w, <span class="s">"unauthorized"</span>, http.StatusUnauthorized)
+                <span class="kw">return</span>
+            }
+            
+            userID, err := validator(token)
+            <span class="kw">if</span> err != <span class="kw">nil</span> {
+                http.Error(w, <span class="s">"invalid token"</span>, http.StatusUnauthorized)
+                <span class="kw">return</span>
+            }
+            
+            <span class="cm">// 将用户信息注入 context</span>
+            ctx := context.WithValue(r.Context(), UserKey, userID)
+            next.ServeHTTP(w, r.WithContext(ctx))
+        })
+    }
+}
+
+<span class="cm">// 获取 context 中的用户信息</span>
+<span class="kw">func</span> <span class="fn">UserFromContext</span>(ctx context.Context) (<span class="ty">string</span>, <span class="ty">bool</span>) {
+    user, ok := ctx.Value(UserKey).(<span class="ty">string</span>)
+    <span class="kw">return</span> user, ok
+}</code></pre>
+  </div>
+
+  <h3>恢复中间件（Recovery）</h3>
+  <div class="card">
+    <pre><code><span class="kw">func</span> <span class="fn">Recovery</span>() Middleware {
+    <span class="kw">return</span> <span class="kw">func</span>(next http.Handler) http.Handler {
+        <span class="kw">return</span> http.HandlerFunc(<span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+            <span class="kw">defer</span> <span class="kw">func</span>() {
+                <span class="kw">if</span> err := <span class="fn">recover</span>(); err != <span class="kw">nil</span> {
+                    log.Printf(<span class="s">"panic recovered: %v\n%s"</span>, err, debug.Stack())
+                    http.Error(w, <span class="s">"Internal Server Error"</span>, http.StatusInternalServerError)
+                }
+            }()
+            next.ServeHTTP(w, r)
+        })
+    }
+}
+
+<span class="cm">// 限速中间件</span>
+<span class="kw">func</span> <span class="fn">RateLimit</span>(limit <span class="ty">int</span>, per time.Duration) Middleware {
+    limiter := rate.NewLimiter(rate.Limit(limit)/rate.Limit(per.Seconds()), limit)
+    <span class="kw">return</span> <span class="kw">func</span>(next http.Handler) http.Handler {
+        <span class="kw">return</span> http.HandlerFunc(<span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+            <span class="kw">if</span> !limiter.Allow() {
+                http.Error(w, <span class="s">"too many requests"</span>, http.StatusTooManyRequests)
+                <span class="kw">return</span>
+            }
+            next.ServeHTTP(w, r)
+        })
+    }
+}
+
+<span class="cm">// 使用链</span>
+mux := http.NewServeMux()
+mux.HandleFunc(<span class="s">"/api"</span>, apiHandler)
+
+handler := Apply(mux, Logging(), Recovery(), RateLimit(<span class="num">100</span>, time.Minute))
+http.ListenAndServe(<span class="s">":8080"</span>, handler)</code></pre>
+  </div>
+
+  <h3>中间件排序</h3>
+  <div class="callout tip">
+    <strong>中间件顺序</strong>：Recovery 应放在最外层（最先 apply），Requests 进来时最后执行，这样在 panic 时 Recovery 能捕获。日志中间件通常在外层记录完整请求。认证中间件在业务 handler 之前执行。
+  </div>
+</section>
+
+<section id="sec4" class="toc-link">
+  <h2><span class="num">04</span> HTTP/1.1 连接管理</h2>
+
+  <h3>连接复用与 Keep-Alive</h3>
+  <p>HTTP/1.1 默认使用持久连接（Connection: keep-alive）。在 net/http 中，服务端在同一个 TCP 连接上串行处理多个请求，直到客户端关闭连接或超时。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 服务端 keep-alive 配置</span>
+server := &amp;http.Server{
+    Addr:        <span class="s">":8080"</span>,
+    Handler:     mux,
+    IdleTimeout: <span class="num">60</span> * time.Second,  <span class="cm">// 空闲连接超时</span>
+}
+
+<span class="cm">// 客户端连接池配置</span>
+client := &amp;http.Client{
+    Transport: &amp;http.Transport{
+        MaxIdleConns:       <span class="num">100</span>,               <span class="cm">// 全局最大空闲连接</span>
+        MaxIdleConnsPerHost: <span class="num">10</span>,               <span class="cm">// 每主机最大空闲连接</span>
+        IdleConnTimeout:     <span class="num">90</span> * time.Second,  <span class="cm">// 空闲连接超时</span>
+        DisableKeepAlives:   <span class="kw">false</span>,
+    },
+}</code></pre>
+  </div>
+
+  <h3>超时配置详解</h3>
+  <table>
+    <tr><th>超时类型</th><th>覆盖阶段</th><th>默认值</th><th>建议</th></tr>
+    <tr><td><code>ReadTimeout</code></td><td>读取整个请求（含 Body）</td><td>0（无限制）</td><td>5-30s</td></tr>
+    <tr><td><code>ReadHeaderTimeout</code></td><td>读取请求头</td><td>0（无限制）</td><td>5-10s</td></tr>
+    <tr><td><code>WriteTimeout</code></td><td>写入完整响应</td><td>0（无限制）</td><td>10-60s</td></tr>
+    <tr><td><code>IdleTimeout</code></td><td>keep-alive 连接的空闲等待</td><td>0（使用 ReadTimeout）</td><td>30-120s</td></tr>
+  </table>
+
+  <h3>连接状态监控</h3>
+  <div class="card">
+    <pre><code><span class="cm">// ConnState 回调 - 监控连接生命周期</span>
+server := &amp;http.Server{
+    Addr: <span class="s">":8080"</span>,
+    ConnState: <span class="kw">func</span>(conn net.Conn, state http.ConnState) {
+        log.Printf(<span class="s">"conn %s -> %s"</span>, conn.RemoteAddr(), state)
+        <span class="cm">// state 取值:</span>
+        <span class="cm">// StateNew - 新连接</span>
+        <span class="cm">// StateActive - 正在处理请求</span>
+        <span class="cm">// StateIdle - 空闲（keep-alive）</span>
+        <span class="cm">// StateHijacked - 被劫持（WebSocket）</span>
+        <span class="cm">// StateClosed - 已关闭</span>
+    },
+}
+
+<span class="cm">// 关闭连接处理器</span>
+<span class="kw">func</span> <span class="fn">closeHandler</span>() http.Handler {
+    <span class="kw">return</span> http.HandlerFunc(<span class="kw">func</span>(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set(<span class="s">"Connection"</span>, <span class="s">"close"</span>)  <span class="cm">// 关闭此连接</span>
+        w.Write([]<span class="kw">byte</span>(<span class="s">"closing"</span>))
+    })
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>性能关键</strong>：合理设置 IdleTimeout 可以防止连接泄漏。设置 WriteTimeout 可以防止慢客户端占用连接资源。在生产环境中，永远不要使用默认的 0 超时。
+  </div>
+</section>
+
+<section id="sec5" class="toc-link">
+  <h2><span class="num">05</span> HTTP/2 实现</h2>
+
+  <h3>HTTP/2 协商机制</h3>
+  <p>Go 的 net/http 通过 <code>golang.org/x/net/http2</code> 包支持 HTTP/2。在 TLS 连接上，通过 ALPN（Application-Layer Protocol Negotiation）协商为 h2 协议。在非加密连接上，可以通过 h2c（HTTP/2 Clear Text）显式启用。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// HTTP/2 over TLS（自动协商）</span>
+<span class="kw">func</span> <span class="fn">startHTTP2Server</span>() {
+    server := &amp;http.Server{
+        Addr:    <span class="s">":443"</span>,
+        Handler: mux,
+    }
+    
+    <span class="cm">// 只要使用 TLS，且证书正确配置，HTTP/2 将自动启用</span>
+    log.Fatal(server.ListenAndServeTLS(<span class="s">"cert.pem"</span>, <span class="s">"key.pem"</span>))
+}
+
+<span class="cm">// HTTP/2 h2c（非加密 - 需手动配置）</span>
+<span class="kw">import</span> <span class="s">"golang.org/x/net/http2/h2c"</span>
+
+<span class="kw">func</span> <span class="fn">startH2CServer</span>() {
+    handler := h2c.NewHandler(mux, &amp;http2.Server{})
+    server := &amp;http.Server{
+        Addr:    <span class="s">":8080"</span>,
+        Handler: handler,
+    }
+    log.Fatal(server.ListenAndServe())
+}</code></pre>
+  </div>
+
+  <h3>HTTP/2 流与帧</h3>
+  <p>HTTP/2 将 HTTP 语义映射到二进制帧（Frame）和流（Stream）上：</p>
+  <ul>
+    <li><strong>帧</strong>：HTTP/2 的最小通信单元，包括 HEADERS、DATA、SETTINGS、GOAWAY 等类型</li>
+    <li><strong>流</strong>：在连接上独立的双向字节序列，每个请求对应一个流</li>
+    <li><strong>多路复用</strong>：多个流可以在同一个 TCP 连接上交错传输</li>
+  </ul>
+
+  <div class="card">
+    <pre><code><span class="cm">// HTTP/2 Server Push（已废弃，Go 1.20+ 不推荐）</span>
+<span class="kw">func</span> <span class="fn">pushHandler</span>(w http.ResponseWriter, r *http.Request) {
+    <span class="kw">if</span> pusher, ok := w.(http.Pusher); ok {
+        err := pusher.Push(<span class="s">"/style.css"</span>, &amp;http.PushOptions{
+            Header: http.Header{
+                <span class="s">"Accept-Encoding"</span>: r.Header[<span class="s">"Accept-Encoding"</span>],
+            },
+        })
+        <span class="kw">if</span> err != <span class="kw">nil</span> {
+            log.Printf(<span class="s">"push failed: %v"</span>, err)
+        }
+    }
+    w.Write([]<span class="kw">byte</span>(<span class="s">"&lt;html&gt;..."</span>))
+}
+
+<span class="cm">// HTTP/2 帧类型</span>
+<span class="cm">// HEADERS     - 请求/响应头</span>
+<span class="cm">// DATA        - 请求/响应体</span>
+<span class="cm">// PRIORITY    - 流优先级</span>
+<span class="cm">// RST_STREAM  - 终止流</span>
+<span class="cm">// SETTINGS    - 连接参数协商</span>
+<span class="cm">// PUSH_PROMISE - 服务端推送（已废弃）</span>
+<span class="cm">// PING        - 健康检查/RTT 测量</span>
+<span class="cm">// GOAWAY      - 连接关闭通知</span>
+<span class="cm">// WINDOW_UPDATE - 流量控制</span>
+<span class="cm">// CONTINUATION - 延续头块</span></code></pre>
+  </div>
+
+  <h3>HTTP/2 流量控制</h3>
+  <p>HTTP/2 提供了基于 stream 和连接的流量控制机制。Go 的 net/http 自动管理 WINDOW_UPDATE 帧的发送，开发者无需手动处理。但在高吞吐场景中，了解流量控制窗口大小对性能有影响。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 配置 HTTP/2 server 参数</span>
+server := &amp;http.Server{
+    Addr:    <span class="s">":443"</span>,
+    Handler: mux,
+}
+
+<span class="cm">// 通过 http2.Server 配置 HTTP/2 特定参数</span>
+err := http2.ConfigureServer(server, &amp;http2.Server{
+    MaxConcurrentStreams: <span class="num">1000</span>,        <span class="cm">// 最大并发流数</span>
+    MaxReadFrameSize:     <span class="num">1</span> &lt;&lt; <span class="num">20</span>,    <span class="cm">// 最大帧大小 1MB</span>
+    IdleTimeout:          <span class="num">60</span> * time.Second,
+})
+
+log.Fatal(server.ListenAndServeTLS(<span class="s">"cert.pem"</span>, <span class="s">"key.pem"</span>))</code></pre>
+  </div>
+</section>
+
+<section id="sec6" class="toc-link">
+  <h2><span class="num">06</span> Client 实现</h2>
+
+  <h3>Client 类型与配置</h3>
+  <div class="card">
+    <pre><code><span class="cm">// http.Client 是发送 HTTP 请求的核心类型</span>
+<span class="cm">// 它是一个"零配置即可用"的类型，但生产环境需要仔细配置</span>
+
+<span class="kw">type</span> Client <span class="kw">struct</span> {
+    Transport RoundTripper    <span class="cm">// 传输层（默认为 http.DefaultTransport）</span>
+    CheckRedirect <span class="kw">func</span>(req *Request, via []*Request) <span class="ty">error</span>  <span class="cm">// 重定向策略</span>
+    Jar            CookieJar   <span class="cm">// Cookie 管理</span>
+    Timeout        time.Duration  <span class="cm">// 全局超时</span>
+}
+
+<span class="cm">// 生产级 Client 配置</span>
+client := &amp;http.Client{
+    Timeout: <span class="num">30</span> * time.Second,  <span class="cm">// 包含 DNS 解析到响应读取</span>
+    Transport: &amp;http.Transport{
+        Proxy: http.ProxyFromEnvironment,
+        DialContext: (&amp;net.Dialer{
+            Timeout:   <span class="num">5</span> * time.Second,   <span class="cm">// 连接超时</span>
+            KeepAlive: <span class="num">30</span> * time.Second,   <span class="cm">// TCP keep-alive</span>
+        }).DialContext,
+        TLSHandshakeTimeout:   <span class="num">10</span> * time.Second,
+        ResponseHeaderTimeout: <span class="num">10</span> * time.Second,
+        ExpectContinueTimeout: <span class="num">1</span> * time.Second,
+        MaxIdleConns:          <span class="num">100</span>,
+        MaxIdleConnsPerHost:   <span class="num">20</span>,
+        IdleConnTimeout:       <span class="num">90</span> * time.Second,
+    },
+}</code></pre>
+  </div>
+
+  <h3>Transport 连接池</h3>
+  <p><code>http.Transport</code> 实现了连接池功能。它对每个目标主机维护一个空闲连接列表，在发送请求时复用空闲连接，避免每次请求都建立新的 TCP 连接。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// Transport 的内部结构（简化）</span>
+<span class="kw">type</span> Transport <span class="kw">struct</span> {
+    <span class="cm">// 连接池: map[connectMethodKey][]*persistConn</span>
+    idleConn     <span class="kw">map</span>[connectMethodKey][]*persistConn
+    idleConnWait <span class="kw">map</span>[connectMethodKey]waitReqBucket
+    
+    <span class="cm">// 正在建立的连接</span>
+    dialsInProgress <span class="kw">map</span>[connectMethodKey]*dialReq
+    
+    <span class="cm">// 最大连接数控制</span>
+    MaxConnsPerHost     <span class="ty">int</span>
+    MaxIdleConns        <span class="ty">int</span>
+    MaxIdleConnsPerHost <span class="ty">int</span>
+}
+
+<span class="cm">// 连接池统计</span>
+stats := client.Transport.(*http.Transport).CloseIdleConnections()
+<span class="cm">// 可通过该方法关闭所有空闲连接</span>
+transport.CloseIdleConnections()
+
+<span class="cm">// 自定义 Dial 函数 - 连接池绕过</span>
+transport := &amp;http.Transport{
+    DialContext: <span class="kw">func</span>(ctx context.Context, network, addr <span class="ty">string</span>) (net.Conn, <span class="ty">error</span>) {
+        <span class="cm">// 自定义连接逻辑（如 Unix domain socket）</span>
+        <span class="kw">return</span> net.DialTimeout(<span class="s">"unix"</span>, <span class="s">"/tmp/app.sock"</span>, <span class="num">5</span>*time.Second)
+    },
+}</code></pre>
+  </div>
+
+  <h3>重定向处理</h3>
+  <div class="card">
+    <pre><code>client := &amp;http.Client{
+    CheckRedirect: <span class="kw">func</span>(req *http.Request, via []*http.Request) <span class="ty">error</span> {
+        <span class="kw">if</span> <span class="fn">len</span>(via) &gt;= <span class="num">5</span> {  <span class="cm">// 最多允许 5 次重定向</span>
+            <span class="kw">return</span> fmt.Errorf(<span class="s">"too many redirects"</span>)
+        }
+        <span class="cm">// 记录重定向历史</span>
+        log.Printf(<span class="s">"redirect %d: %s"</span>, <span class="fn">len</span>(via), req.URL)
+        <span class="kw">return</span> <span class="kw">nil</span>  <span class="cm">// nil 表示允许重定向</span>
+    },
+}
+
+<span class="cm">// 不允许任何重定向</span>
+clientNoRedirect := &amp;http.Client{
+    CheckRedirect: <span class="kw">func</span>(req *http.Request, via []*http.Request) <span class="ty">error</span> {
+        <span class="kw">return</span> http.ErrUseLastResponse
+    },
+}</code></pre>
+  </div>
+
+  <h3>并发请求与连接复用</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 共享 Transport 的 Client 可以并发安全地复用连接</span>
+transport := &amp;http.Transport{
+    MaxConnsPerHost:    <span class="num">10</span>,
+    MaxIdleConnsPerHost: <span class="num">5</span>,
+    IdleConnTimeout:    <span class="num">90</span> * time.Second,
+}
+
+client := &amp;http.Client{Transport: transport}
+
+<span class="cm">// 并发请求 - 共享连接池</span>
+<span class="kw">var</span> wg sync.WaitGroup
+<span class="kw">for</span> i := <span class="num">0</span>; i &lt; <span class="num">20</span>; i++ {
+    wg.Add(<span class="num">1</span>)
+    <span class="kw">go</span> <span class="kw">func</span>() {
+        <span class="kw">defer</span> wg.Done()
+        resp, err := client.Get(<span class="s">"https://example.com"</span>)
+        <span class="kw">if</span> err == <span class="kw">nil</span> {
+            resp.Body.Close()
+        }
+    }()
+}
+wg.Wait()
+
+<span class="cm">// 注意：resp.Body 必须被读取并关闭，否则连接无法复用</span></code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>常见陷阱</strong>：每次调用 <code>http.Get()</code> 或 <code>http.Post()</code> 都会创建一个新的 <code>http.Client</code>（使用 DefaultTransport），这意味着不会复用连接。始终共享一个 Client 实例或显式指定 Transport。
+  </div>
+</section>
+
+<section id="sec7" class="toc-link">
+  <h2><span class="num">07</span> 请求上下文</h2>
+
+  <h3>Context 的超时控制</h3>
+  <p>在 HTTP 服务端，每个请求都关联一个 context。当客户端断开连接或请求超时时，context 会被取消，通知所有依赖该 context 的 goroutine 停止工作。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">func</span> <span class="fn">slowHandler</span>(w http.ResponseWriter, r *http.Request) {
+    ctx := r.Context()
+    
+    <span class="cm">// 选择操作：如果 context 取消则立即返回</span>
+    select {
+    <span class="kw">case</span> &lt;-time.After(<span class="num">5</span> * time.Second):
+        w.Write([]<span class="kw">byte</span>(<span class="s">"done"</span>))
+    <span class="kw">case</span> &lt;-ctx.Done():
+        <span class="cm">// 客户端断开或超时</span>
+        log.Printf(<span class="s">"request cancelled: %v"</span>, ctx.Err())
+        <span class="kw">return</span>
+    }
+}
+
+<span class="cm">// 客户端发起带超时的请求</span>
+ctx, cancel := context.WithTimeout(context.Background(), <span class="num">3</span>*time.Second)
+<span class="kw">defer</span> cancel()
+
+req, _ := http.NewRequestWithContext(ctx, <span class="s">"GET"</span>, <span class="s">"https://slow.service"</span>, <span class="kw">nil</span>)
+resp, err := client.Do(req)
+<span class="kw">if</span> err != <span class="kw">nil</span> {
+    log.Printf(<span class="s">"request failed: %v"</span>, err)
+}</code></pre>
+  </div>
+
+  <h3>http.TimeoutHandler</h3>
+  <p>标准库提供了便捷的超时包装器：</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 为 handler 设置超时</span>
+handler := http.TimeoutHandler(
+    http.HandlerFunc(slowHandler),
+    <span class="num">2</span>*time.Second,
+    <span class="s">`{"error":"timeout"}`</span>,
+)
+
+mux := http.NewServeMux()
+mux.Handle(<span class="s">"/api"</span>, handler)
+
+<span class="cm">// TimeoutHandler 内部实现：</span>
+<span class="cm">// 1. 创建 context.WithTimeout(context.Background(), timeout)</span>
+<span class="cm">// 2. 用新的 context 替换 r.Context()</span>
+<span class="cm">// 3. 在单独的 goroutine 中执行 handler</span>
+<span class="cm">// 4. 超时时返回 503 Service Unavailable</span></code></pre>
+  </div>
+
+  <h3>完整的超时链路</h3>
+  <p>一个 HTTP 请求的完整超时链路包含多个层级：</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 层级 1: Server 级别的 ReadTimeout/WriteTimeout</span>
+<span class="cm">// 层级 2: http.TimeoutHandler 包装</span>
+<span class="cm">// 层级 3: Handler 内部使用 context.WithTimeout</span>
+<span class="cm">// 层级 4: 业务代码中的 select + ctx.Done()</span>
+
+<span class="cm">// 最佳实践：多层级超时覆盖</span>
+<span class="kw">func</span> <span class="fn">robustHandler</span>(w http.ResponseWriter, r *http.Request) {
+    <span class="cm">// 在 handler 内部继续加超时</span>
+    ctx, cancel := context.WithTimeout(r.Context(), <span class="num">2</span>*time.Second)
+    <span class="kw">defer</span> cancel()
+    
+    <span class="cm">// 向下游调用传递 context</span>
+    req, _ := http.NewRequestWithContext(ctx, <span class="s">"GET"</span>, backendURL, <span class="kw">nil</span>)
+    resp, err := client.Do(req)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">if</span> errors.Is(err, context.DeadlineExceeded) {
+            http.Error(w, <span class="s">"upstream timeout"</span>, http.StatusGatewayTimeout)
+        } <span class="kw">else</span> {
+            http.Error(w, <span class="s">"upstream error"</span>, http.StatusBadGateway)
+        }
+        <span class="kw">return</span>
+    }
+    <span class="kw">defer</span> resp.Body.Close()
+    io.Copy(w, resp.Body)
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>context 最佳实践</strong>：始终将 <code>r.Context()</code> 传递给下游依赖。不要在请求处理完成后继续使用 context。使用 context cancellation 来优雅释放资源。
+  </div>
+</section>
+
+<section id="sec8" class="toc-link">
+  <h2><span class="num">08</span> 路由库对比</h2>
+
+  <h3>标准库 vs 第三方路由</h3>
+  <table>
+    <tr><th>特性</th><th>net/http (Go 1.22+)</th><th>gin</th><th>echo</th><th>chi</th></tr>
+    <tr><td>路由性能</td><td>中</td><td>高</td><td>高</td><td>中</td></tr>
+    <tr><td>方法匹配</td><td>原生支持</td><td>原生支持</td><td>原生支持</td><td>原生支持</td></tr>
+    <tr><td>路径参数</td><td><code>{id}</code></td><td><code>:id</code></td><td><code>:id</code></td><td><code>{id}</code></td></tr>
+    <tr><td>中间件</td><td>手动链</td><td>内置</td><td>内置</td><td>内置</td></tr>
+    <tr><td>请求验证</td><td>手动</td><td>内置 binding</td><td>内置 validate</td><td>中间件</td></tr>
+    <tr><td>内置渲染</td><td>无</td><td>JSON/XML/Proto</td><td>JSON/XML</td><td>无</td></tr>
+    <tr><td>Swagger 集成</td><td>需第三方</td><td>良好</td><td>良好</td><td>良好</td></tr>
+    <tr><td>依赖</td><td>无</td><td>gin-gonic/gin</td><td>labstack/echo</td><td>go-chi/chi</td></tr>
+  </table>
+
+  <h3>选型指南</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 场景 1: 小型 API / 微服务 → 标准库足够</span>
+mux := http.NewServeMux()
+mux.HandleFunc(<span class="s">"GET /api/v1/users/{id}"</span>, getUser)
+http.ListenAndServe(<span class="s">":8080"</span>, mux)
+
+<span class="cm">// 场景 2: 中型 REST API → chi（标准库兼容）</span>
+<span class="kw">import</span> <span class="s">"github.com/go-chi/chi/v5"</span>
+
+r := chi.NewRouter()
+r.Use(middleware.Logger)
+r.Use(middleware.Recoverer)
+r.Get(<span class="s">"/api/v1/users/{id}"</span>, getUser)
+r.Post(<span class="s">"/api/v1/users"</span>, createUser)
+http.ListenAndServe(<span class="s">":8080"</span>, r)
+
+<span class="cm">// 场景 3: 大型 API + 高性能 → gin</span>
+<span class="kw">import</span> <span class="s">"github.com/gin-gonic/gin"</span>
+
+r := gin.Default()
+r.GET(<span class="s">"/api/v1/users/:id"</span>, getUser)
+r.POST(<span class="s">"/api/v1/users"</span>, createUser)
+r.Run(<span class="s">":8080"</span>)
+
+<span class="cm">// 场景 4: 需要极致性能 + 灵活性 → Echo</span>
+<span class="kw">import</span> <span class="s">"github.com/labstack/echo/v4"</span>
+
+e := echo.New()
+e.Use(middleware.Logger())
+e.GET(<span class="s">"/api/v1/users/:id"</span>, getUser)
+e.Start(<span class="s">":8080"</span>)</code></pre>
+  </div>
+
+  <h3>性能基准对比</h3>
+  <p>以下是大致的性能对比（路由匹配 + 简单响应）：</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// go 1.22, linux/amd64, 路由匹配基准测试</span>
+<span class="cm">//</span>
+<span class="cm">// 标准库 ServeMux:        ~500K req/s</span>
+<span class="cm">// chi v5:                 ~450K req/s</span>
+<span class="cm">// echo v4:                ~800K req/s</span>
+<span class="cm">// gin v1.10:              ~700K req/s</span>
+<span class="cm">// http.ServeMux vs gin:    标准库约 70% 性能</span>
+<span class="cm">//</span>
+<span class="cm">// 注意: 在真实场景中，CPU 瓶颈通常是业务逻辑而非路由</span>
+<span class="cm">// 除非路由匹配是性能瓶颈（几十微秒 vs 毫秒级业务逻辑）</span>
+<span class="cm">// 否则优先选择开发体验更好的路由库</span></code></pre>
+  </div>
+
+  <h3>中间件生态对比</h3>
+  <table>
+    <tr><th>能力</th><th>标准库</th><th>chi</th><th>gin</th><th>echo</th></tr>
+    <tr><td>日志</td><td>无</td><td>Logger</td><td>LoggerWithWriter</td><td>Logger</td></tr>
+    <tr><td>恢复</td><td>无</td><td>Recoverer</td><td>Recovery</td><td>Recover</td></tr>
+    <tr><td>CORS</td><td>无</td><td>cors</td><td>cors</td><td>cors</td></tr>
+    <tr><td>请求 ID</td><td>无</td><td>RequestID</td><td>无</td><td>RequestID</td></tr>
+    <tr><td>限速</td><td>无</td><td>Throttle</td><td>limiter</td><td>limiter</td></tr>
+    <tr><td>认证</td><td>BasicAuth</td><td>BasicAuth</td><td>BasicAuth</td><td>BasicAuth</td></tr>
+    <tr><td>gzip</td><td>无</td><td>Compress</td><td>gzip</td><td>gzip</td></tr>
+  </table>
+
+  <div class="callout">
+    <strong>总体推荐</strong>：Go 1.22+ 的标准库 ServeMux 已经足够强大，适合新项目和小型服务。如果项目需要更丰富的路由功能（路由分组、中间件链、更灵活的模式匹配），chi 是最佳选择（因为它完全兼容 http.Handler）。对于大型项目和 API 优先的团队，gin 提供了最完整的工具箱。
+  </div>
+</section>
+
+</div>
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Go 1.22+ 源码分析 · 生成于 2026-06-23</footer>
+<script src="common.js"></script>
+</body>
+</html>

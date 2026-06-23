@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Go 标准库核心深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%2300ADD8'/><stop offset='100%25' stop-color='%23007d9c'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>G</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Go 标准库核心</h1>
+  <p class="subtitle">io、context、encoding/json、testing、embed 与构建约束</p>
+  <span class="version">Go 1.22+ · 标准库深度解析</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#sec1">IO 接口体系</a></li>
+    <li><a href="#sec2">Context 包</a></li>
+    <li><a href="#sec3">Encoding/JSON</a></li>
+    <li><a href="#sec4">Testing 表格驱动测试</a></li>
+    <li><a href="#sec5">Testing 进阶</a></li>
+    <li><a href="#sec6">Embed 嵌入</a></li>
+    <li><a href="#sec7">构建约束与条件编译</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="sec1" class="toc-link">
+  <h2><span class="num">01</span> IO 接口体系</h2>
+
+  <p>Go 的 <code>io</code> 包是标准库中最精巧的设计之一。它通过一系列小接口的组合，构建了整个 I/O 抽象层。其核心设计哲学是：通过组合小接口来构建复杂功能。</p>
+
+  <h3>核心接口</h3>
+  <table>
+    <tr><th>接口</th><th>方法</th><th>说明</th></tr>
+    <tr><td><code>io.Reader</code></td><td><code>Read(p []byte) (n int, err error)</code></td><td>从数据源读取到缓冲区</td></tr>
+    <tr><td><code>io.Writer</code></td><td><code>Write(p []byte) (n int, err error)</code></td><td>从缓冲区写入到目标</td></tr>
+    <tr><td><code>io.Closer</code></td><td><code>Close() error</code></td><td>关闭资源</td></tr>
+    <tr><td><code>io.Seeker</code></td><td><code>Seek(offset int64, whence int) (int64, error)</code></td><td>移动读写位置</td></tr>
+    <tr><td><code>io.ReaderAt</code></td><td><code>ReadAt(p []byte, off int64) (n int, err error)</code></td><td>从指定偏移量读取</td></tr>
+    <tr><td><code>io.WriterAt</code></td><td><code>WriteAt(p []byte, off int64) (n int, err error)</code></td><td>从指定偏移量写入</td></tr>
+  </table>
+
+  <h3>组合接口</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 标准库预定义的组合接口</span>
+<span class="kw">type</span> ReadWriter <span class="kw">interface</span> {
+    Reader
+    Writer
+}
+
+<span class="kw">type</span> ReadWriteCloser <span class="kw">interface</span> {
+    Reader
+    Writer
+    Closer
+}
+
+<span class="kw">type</span> ReadWriteSeeker <span class="kw">interface</span> {
+    Reader
+    Writer
+    Seeker
+}
+
+<span class="cm">// 这些接口通过嵌入方式组合，零开销</span>
+<span class="cm">// 任何实现了 Reader 和 Writer 的类型自动实现 ReadWriter</span></code></pre>
+  </div>
+
+  <h3>io.Copy 的实现原理</h3>
+  <p><code>io.Copy</code> 是 I/O 操作中最常用的函数，它将数据从 Reader 复制到 Writer，直到 EOF。其内部有值得一提的优化路径：</p>
+
+  <div class="card">
+    <pre><code><span class="kw">func</span> <span class="fn">Copy</span>(dst Writer, src Reader) (<span class="ty">int64</span>, <span class="ty">error</span>) {
+    <span class="cm">// 优化路径 1: 如果 src 实现了 WriterTo，直接调用</span>
+    <span class="kw">if</span> wt, ok := src.(WriterTo); ok {
+        <span class="kw">return</span> wt.WriteTo(dst)
+    }
+    
+    <span class="cm">// 优化路径 2: 如果 dst 实现了 ReaderFrom，直接调用</span>
+    <span class="kw">if</span> rt, ok := dst.(ReaderFrom); ok {
+        <span class="kw">return</span> rt.ReadFrom(src)
+    }
+    
+    <span class="cm">// 默认路径: 使用 32KB 缓冲区复制</span>
+    buf := <span class="fn">make</span>([]<span class="kw">byte</span>, <span class="num">32</span>*<span class="num">1024</span>)
+    <span class="kw">return</span> copyBuffer(dst, src, buf)
+}
+
+<span class="cm">// io.CopyN 限制复制的字节数</span>
+<span class="cm">// io.CopyBuffer 允许自定义缓冲区大小</span></code></pre>
+  </div>
+
+  <h3>io.Pipe 管道</h3>
+  <p><code>io.Pipe</code> 创建一对 Reader/Writer，写入 Writer 的数据可以立即从 Reader 读出。它是内存中的管道，常用于连接不同的 I/O 处理链。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">func</span> <span class="fn">pipeExample</span>() {
+    pr, pw := io.Pipe()
+    
+    <span class="cm">// 写入端在 goroutine 中进行</span>
+    <span class="kw">go</span> <span class="kw">func</span>() {
+        <span class="kw">defer</span> pw.Close()
+        json.NewEncoder(pw).Encode(<span class="kw">map</span>[<span class="ty">string</span>]<span class="ty">string</span>{
+            <span class="s">"message"</span>: <span class="s">"hello"</span>,
+        })
+    }()
+    
+    <span class="cm">// 读取端同步读取</span>
+    <span class="kw">var</span> result <span class="kw">map</span>[<span class="ty">string</span>]<span class="ty">string</span>
+    json.NewDecoder(pr).Decode(&amp;result)
+    <span class="fn">fmt.Println</span>(result)  <span class="cm">// map[message:hello]</span>
+}
+
+<span class="cm">// io.Pipe 适用于:</span>
+<span class="cm">// - 将同步 I/O 转为异步管道</span>
+<span class="cm">// - 连接压缩/加密/编码链</span>
+<span class="cm">// - 测试中的 mock 数据流</span></code></pre>
+  </div>
+
+  <h3>实用工具函数</h3>
+  <div class="card">
+    <pre><code><span class="cm">// io.ReadAll - 读取所有数据到内存</span>
+data, err := io.ReadAll(resp.Body)
+
+<span class="cm">// io.ReadFull - 精确读取指定字节数</span>
+buf := <span class="fn">make</span>([]<span class="kw">byte</span>, <span class="num">8</span>)
+_, err := io.ReadFull(r, buf)  <span class="cm">// 要么读满 8 字节，要么返回错误</span>
+
+<span class="cm">// io.MultiReader - 串联多个 Reader</span>
+r := io.MultiReader(bytes.NewReader([]<span class="kw">byte</span>(<span class="s">"part1"</span>)),
+                    bytes.NewReader([]<span class="kw">byte</span>(<span class="s">"part2"</span>)))
+
+<span class="cm">// io.MultiWriter - 同时写入多个 Writer</span>
+<span class="kw">var</span> buf1, buf2 bytes.Buffer
+w := io.MultiWriter(&amp;buf1, &amp;buf2)
+w.Write([]<span class="kw">byte</span>(<span class="s">"data"</span>))  <span class="cm">// 同时写入 buf1 和 buf2</span>
+
+<span class="cm">// io.NopCloser - 为没有 Close 方法的 Reader 添加空关闭</span>
+rc := io.NopCloser(bytes.NewReader(data))</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>设计启示</strong>：io 包展示了 Go 接口设计的精髓：小接口、大组合。os.File、bytes.Buffer、strings.Reader、net.Conn 都实现了这些接口，使它们可以互换使用。
+  </div>
+</section>
+
+<section id="sec2" class="toc-link">
+  <h2><span class="num">02</span> Context 包</h2>
+
+  <h3>Context 接口</h3>
+  <p><code>context.Context</code> 是 Go 中跨 API 和 goroutine 传递超时、取消信号和请求范围数据的标准方式。它自 Go 1.7 起成为标准库的一部分，现已成为 Go 并发编程的基础设施。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">type</span> Context <span class="kw">interface</span> {
+    <span class="cm">// Deadline 返回 context 被取消的时间</span>
+    Deadline() (deadline time.Time, ok <span class="ty">bool</span>)
+    
+    <span class="cm">// Done 返回一个 channel，context 被取消时关闭</span>
+    Done() &lt;-<span class="kw">chan</span> <span class="kw">struct</span>{}
+    
+    <span class="cm">// Err 返回 context 被取消的原因</span>
+    Err() <span class="ty">error</span>
+    
+    <span class="cm">// Value 返回 key 关联的值</span>
+    Value(key <span class="ty">any</span>) <span class="ty">any</span>
+}
+
+<span class="cm">// 两个根 context 工厂函数</span>
+ctx := context.Background()   <span class="cm">// 根 context，从未被取消</span>
+ctx := context.TODO()         <span class="cm">// 占位符，表示将来要使用 context</span></code></pre>
+  </div>
+
+  <h3>取消链传播</h3>
+  <p>Context 最强大的特性是取消信号的自动传播。当父 context 被取消，所有派生的子 context 都会被级联取消。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">func</span> <span class="fn">cancellationChain</span>() {
+    ctx := context.Background()
+    
+    <span class="cm">// 创建可取消的 context</span>
+    ctxA, cancelA := context.WithCancel(ctx)
+    <span class="kw">defer</span> cancelA()
+    
+    <span class="cm">// 从 ctxA 派生 - 取消链: 取消 A → 取消 B</span>
+    ctxB, cancelB := context.WithCancel(ctxA)
+    <span class="kw">defer</span> cancelB()
+    
+    <span class="cm">// 从 ctxB 派生 - 取消链: 取消 A → 取消 B → 取消 C</span>
+    ctxC, cancelC := context.WithCancel(ctxB)
+    <span class="kw">defer</span> cancelC()
+    
+    <span class="cm">// 取消 A → B 和 C 同时收到 Done 信号</span>
+    cancelA()
+    
+    <span class="fn">println</span>(ctxA.Err())  <span class="cm">// context.Canceled</span>
+    <span class="fn">println</span>(ctxB.Err())  <span class="cm">// context.Canceled</span>
+    <span class="fn">println</span>(ctxC.Err())  <span class="cm">// context.Canceled</span>
+}
+
+<span class="cm">// 内部实现: 每个可取消的 context 维护一个 children 列表</span>
+<span class="cm">// 当 cancel() 被调用时，遍历 children 并逐个取消</span></code></pre>
+  </div>
+
+  <h3>WithDeadline 与 WithTimeout</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 绝对时间截止</span>
+deadline := time.Now().Add(<span class="num">5</span> * time.Second)
+ctx, cancel := context.WithDeadline(context.Background(), deadline)
+<span class="kw">defer</span> cancel()
+
+<span class="cm">// 相对时间截止（自动转换为 Deadline）</span>
+ctx, cancel := context.WithTimeout(context.Background(), <span class="num">5</span>*time.Second)
+<span class="kw">defer</span> cancel()
+
+<span class="cm">// 监听取消</span>
+select {
+<span class="kw">case</span> &lt;-ctx.Done():
+    <span class="kw">switch</span> {
+    <span class="kw">case</span> errors.Is(ctx.Err(), context.DeadlineExceeded):
+        log.Println(<span class="s">"timeout"</span>)
+    <span class="kw">case</span> errors.Is(ctx.Err(), context.Canceled):
+        log.Println(<span class="s">"cancelled"</span>)
+    }
+<span class="kw">case</span> result &lt;-ch:
+    <span class="cm">// 正常处理结果</span>
+}
+
+<span class="cm">// WithTimeoutCause (Go 1.21+) - 自定义超时错误原因</span>
+ctx, cancel := context.WithTimeoutCause(
+    context.Background(),
+    <span class="num">5</span>*time.Second,
+    fmt.Errorf(<span class="s">"database query timed out"</span>),
+)
+<span class="kw">defer</span> cancel()
+<span class="cm">// ctx.Err() 返回时会被 context.Cause(ctx) 获取到自定义错误</span></code></pre>
+  </div>
+
+  <h3>WithValue 与键类型</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 使用自定义类型作为 key 避免冲突</span>
+<span class="kw">type</span> ctxKey <span class="ty">string</span>
+
+<span class="kw">const</span> (
+    UserIDKey    ctxKey = <span class="s">"user_id"</span>
+    TraceIDKey   ctxKey = <span class="s">"trace_id"</span>
+    RequestIDKey ctxKey = <span class="s">"request_id"</span>
+)
+
+<span class="kw">func</span> <span class="fn">WithUserID</span>(ctx context.Context, uid <span class="ty">string</span>) context.Context {
+    <span class="kw">return</span> context.WithValue(ctx, UserIDKey, uid)
+}
+
+<span class="kw">func</span> <span class="fn">UserIDFromContext</span>(ctx context.Context) (<span class="ty">string</span>, <span class="ty">bool</span>) {
+    uid, ok := ctx.Value(UserIDKey).(<span class="ty">string</span>)
+    <span class="kw">return</span> uid, ok
+}
+
+<span class="cm">// context 的 Value 链式查找</span>
+<span class="cm">// WithValue 返回的 context 存储了 (key, value, parent) 三元组</span>
+<span class="cm">// Value() 方法沿着 parent 链向上查找，直到找到匹配的 key</span></code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>context 使用守则</strong>：不要将 context 存储在结构体中。context 应作为函数的第一个参数传递。仅传递请求范围内的数据，不要使用 context 传递可选参数。
+  </div>
+</section>
+
+<section id="sec3" class="toc-link">
+  <h2><span class="num">03</span> Encoding/JSON</h2>
+
+  <h3>Marshal 与 Unmarshal</h3>
+  <p><code>encoding/json</code> 是 Go 最常用的序列化库。它通过结构体标签（struct tag）控制 JSON 字段的映射行为。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">type</span> User <span class="kw">struct</span> {
+    ID        <span class="ty">int</span>       `json:<span class="s">"id"</span>`
+    Name      <span class="ty">string</span>    `json:<span class="s">"name"</span>`
+    Email     <span class="ty">string</span>    `json:<span class="s">"email,omitempty"</span>`
+    CreatedAt time.Time `json:<span class="s">"created_at"</span>`
+    Password  <span class="ty">string</span>    `json:<span class="s">"-"</span>`       <span class="cm">// 忽略此字段</span>
+}
+
+<span class="cm">// 序列化</span>
+user := User{ID: <span class="num">1</span>, Name: <span class="s">"Alice"</span>, CreatedAt: time.Now()}
+data, err := json.Marshal(user)   <span class="cm">// 返回缩进格式</span>
+data, err := json.MarshalIndent(user, <span class="s">""</span>, <span class="s">"  "</span>)  <span class="cm">// 带缩进</span>
+
+<span class="cm">// 反序列化</span>
+<span class="kw">var</span> u User
+err := json.Unmarshal(data, &amp;u)</code></pre>
+  </div>
+
+  <h3>自定义 MarshalJSON / UnmarshalJSON</h3>
+  <p>当默认的 JSON 编码行为不满足需求时，可以实现自定义的序列化方法。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">type</span> DateTime time.Time
+
+<span class="kw">func</span> (dt DateTime) <span class="fn">MarshalJSON</span>() ([]<span class="kw">byte</span>, <span class="ty">error</span>) {
+    t := time.Time(dt)
+    formatted := t.Format(<span class="s">"2006-01-02 15:04:05"</span>)
+    <span class="kw">return</span> json.Marshal(formatted)
+}
+
+<span class="kw">func</span> (dt *DateTime) <span class="fn">UnmarshalJSON</span>(data []<span class="kw">byte</span>) <span class="ty">error</span> {
+    <span class="kw">var</span> s <span class="ty">string</span>
+    <span class="kw">if</span> err := json.Unmarshal(data, &amp;s); err != <span class="kw">nil</span> {
+        <span class="kw">return</span> err
+    }
+    t, err := time.Parse(<span class="s">"2006-01-02 15:04:05"</span>, s)
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        <span class="kw">return</span> err
+    }
+    *dt = DateTime(t)
+    <span class="kw">return</span> <span class="kw">nil</span>
+}
+
+<span class="cm">// 动态 JSON 编码 - 使用 map</span>
+<span class="kw">func</span> (u User) <span class="fn">MarshalJSON</span>() ([]<span class="kw">byte</span>, <span class="ty">error</span>) {
+    <span class="kw">type</span> Alias User  <span class="cm">// 避免递归</span>
+    <span class="kw">return</span> json.Marshal(<span class="kw">struct</span>{
+        Alias
+        Age <span class="ty">int</span> `json:<span class="s">"age"</span>`  <span class="cm">// 添加额外字段</span>
+    }{
+        Alias: Alias(u),
+        Age:   <span class="num">25</span>,
+    })
+}</code></pre>
+  </div>
+
+  <h3>流式编码与解码</h3>
+  <div class="card">
+    <pre><code><span class="cm">// Decoder - 从 Reader 流式读取 JSON</span>
+file, _ := os.Open(<span class="s">"large.json"</span>)
+<span class="kw">defer</span> file.Close()
+
+decoder := json.NewDecoder(file)
+<span class="kw">for</span> {
+    <span class="kw">var</span> item Item
+    err := decoder.Decode(&amp;item)
+    <span class="kw">if</span> errors.Is(err, io.EOF) {
+        <span class="kw">break</span>
+    }
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        log.Fatal(err)
+    }
+    process(item)
+}
+
+<span class="cm">// Encoder - 流式写入 JSON 到 Writer</span>
+w := os.Stdout
+encoder := json.NewEncoder(w)
+encoder.SetIndent(<span class="s">""</span>, <span class="s">"  "</span>)
+encoder.Encode(data)
+
+<span class="cm">// 流式编码可用于逐行输出的 JSON Lines 格式</span>
+<span class="kw">for</span> _, item := <span class="kw">range</span> items {
+    json.NewEncoder(w).Encode(item)
+}</code></pre>
+  </div>
+
+  <h3>Decoder 的高级配置</h3>
+  <div class="card">
+    <pre><code>decoder := json.NewDecoder(reader)
+
+<span class="cm">// 拒绝未知字段（默认忽略）</span>
+decoder.DisallowUnknownFields()
+
+<span class="cm">// 不要求大数字使用 Number 类型</span>
+decoder.UseNumber()
+
+<span class="cm">// 限制 JSON 输入大小</span>
+decoder = json.NewDecoder(io.LimitReader(reader, <span class="num">10</span>&lt;&lt;<span class="num">20</span>))  <span class="cm">// 10MB 限制</span>
+
+<span class="cm">// RawMessage - 延迟解析</span>
+<span class="kw">type</span> Response <span class="kw">struct</span> {
+    Code <span class="ty">int</span>             `json:<span class="s">"code"</span>`
+    Data json.RawMessage  `json:<span class="s">"data"</span>`  <span class="cm">// 延迟到确定类型后再解析</span>
+}
+
+<span class="cm">// 先解析外层</span>
+<span class="kw">var</span> resp Response
+json.Unmarshal(data, &amp;resp)
+
+<span class="cm">// 根据条件再解析 Data</span>
+<span class="kw">if</span> resp.Code == <span class="num">200</span> {
+    <span class="kw">var</span> user User
+    json.Unmarshal(resp.Data, &amp;user)
+}</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>性能提示</strong>：对大型 JSON 使用 Decoder 而非 Unmarshal。预分配结构体可以减少反射开销。使用 <code>json.RawMessage</code> 实现延迟解析可以避免不必要的类型映射。
+  </div>
+</section>
+
+<section id="sec4" class="toc-link">
+  <h2><span class="num">04</span> Testing 表格驱动测试</h2>
+
+  <h3>基本表格测试</h3>
+  <p>表格驱动测试（Table-Driven Tests）是 Go 社区最推崇的测试风格。它通过定义输入/期望值的数据表来减少重复代码。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 被测试函数</span>
+<span class="kw">func</span> <span class="fn">Divide</span>(a, b <span class="ty">int</span>) (<span class="ty">int</span>, <span class="ty">error</span>) {
+    <span class="kw">if</span> b == <span class="num">0</span> {
+        <span class="kw">return</span> <span class="num">0</span>, fmt.Errorf(<span class="s">"division by zero"</span>)
+    }
+    <span class="kw">return</span> a / b, <span class="kw">nil</span>
+}
+
+<span class="cm">// 表格驱动测试</span>
+<span class="kw">func</span> <span class="fn">TestDivide</span>(t *<span class="ty">testing</span>.T) {
+    tests := []<span class="kw">struct</span> {
+        name    <span class="ty">string</span>
+        a, b    <span class="ty">int</span>
+        want    <span class="ty">int</span>
+        wantErr <span class="ty">bool</span>
+    }{
+        {name: <span class="s">"positive"</span>, a: <span class="num">10</span>, b: <span class="num">2</span>, want: <span class="num">5</span>},
+        {name: <span class="s">"negative"</span>, a: <span class="num">-6</span>, b: <span class="num">3</span>, want: <span class="num">-2</span>},
+        {name: <span class="s">"divide by one"</span>, a: <span class="num">42</span>, b: <span class="num">1</span>, want: <span class="num">42</span>},
+        {name: <span class="s">"zero numerator"</span>, a: <span class="num">0</span>, b: <span class="num">5</span>, want: <span class="num">0</span>},
+        {name: <span class="s">"division by zero"</span>, a: <span class="num">10</span>, b: <span class="num">0</span>, wantErr: <span class="kw">true</span>},
+    }
+    
+    <span class="kw">for</span> _, tt := <span class="kw">range</span> tests {
+        t.Run(tt.name, <span class="kw">func</span>(t *<span class="ty">testing</span>.T) {
+            got, err := Divide(tt.a, tt.b)
+            <span class="kw">if</span> (err != <span class="kw">nil</span>) != tt.wantErr {
+                t.Errorf(<span class="s">"Divide(%d,%d) error = %v, wantErr %v"</span>,
+                    tt.a, tt.b, err, tt.wantErr)
+                <span class="kw">return</span>
+            }
+            <span class="kw">if</span> got != tt.want {
+                t.Errorf(<span class="s">"Divide(%d,%d) = %d, want %d"</span>,
+                    tt.a, tt.b, got, tt.want)
+            }
+        })
+    }
+}</code></pre>
+  </div>
+
+  <h3>子测试（Subtests）</h3>
+  <p><code>t.Run()</code> 创建的子测试具有独立的生命周期，可以单独运行。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 只运行特定子测试</span>
+<span class="cm">// $ go test -run TestDivide/positive</span>
+<span class="cm">// $ go test -run TestDivide/negative</span>
+
+<span class="cm">// 子测试支持并行</span>
+<span class="kw">for</span> _, tt := <span class="kw">range</span> tests {
+    tt := tt  <span class="cm">// 捕获循环变量</span>
+    t.Run(tt.name, <span class="kw">func</span>(t *<span class="ty">testing</span>.T) {
+        t.Parallel()  <span class="cm">// 并行执行</span>
+        got, err := Divide(tt.a, tt.b)
+        <span class="cm">// ... 断言</span>
+    })
+}
+
+<span class="cm">// setup/teardown 每个子测试</span>
+t.Run(<span class="s">"group"</span>, <span class="kw">func</span>(t *<span class="ty">testing</span>.T) {
+    setup()   <span class="cm">// 组级别前置</span>
+    <span class="kw">defer</span> teardown()  <span class="cm">// 组级别后置</span>
+    
+    t.Run(<span class="s">"sub1"</span>, <span class="kw">func</span>(t *<span class="ty">testing</span>.T) { <span class="cm">/* ... */</span> })
+    t.Run(<span class="s">"sub2"</span>, <span class="kw">func</span>(t *<span class="ty">testing</span>.T) { <span class="cm">/* ... */</span> })
+})</code></pre>
+  </div>
+
+  <h3>t.Helper 与测试辅助函数</h3>
+  <div class="card">
+    <pre><code><span class="cm">// t.Helper() 标记辅助函数，错误报告时跳过该帧</span>
+<span class="kw">func</span> <span class="fn">assertEqual</span>(t *<span class="ty">testing</span>.T, got, want <span class="ty">interface</span>{}) {
+    t.Helper()  <span class="cm">// 错误行号会指向调用者而非本函数</span>
+    <span class="kw">if</span> got != want {
+        t.Errorf(<span class="s">"got %v, want %v"</span>, got, want)
+    }
+}
+
+<span class="kw">func</span> <span class="fn">assertNoError</span>(t *<span class="ty">testing</span>.T, err <span class="ty">error</span>) {
+    t.Helper()
+    <span class="kw">if</span> err != <span class="kw">nil</span> {
+        t.Fatalf(<span class="s">"unexpected error: %v"</span>, err)
+    }
+}
+
+<span class="kw">func</span> <span class="fn">TestWithHelper</span>(t *<span class="ty">testing</span>.T) {
+    result, err := Divide(<span class="num">10</span>, <span class="num">2</span>)
+    assertNoError(t, err)        <span class="cm">// 错误行号指向这里，而非 assertNoError 内部</span>
+    assertEqual(t, result, <span class="num">5</span>)  <span class="cm">// 同上</span>
+}</code></pre>
+  </div>
+
+  <h3>基准测试</h3>
+  <div class="card">
+    <pre><code><span class="kw">func</span> <span class="fn">BenchmarkDivide</span>(b *<span class="ty">testing</span>.B) {
+    <span class="kw">for</span> i := <span class="num">0</span>; i &lt; b.N; i++ {
+        Divide(<span class="num">1000</span>, <span class="num">3</span>)
+    }
+}
+
+<span class="cm">// 并行基准测试</span>
+<span class="kw">func</span> <span class="fn">BenchmarkParallel</span>(b *<span class="ty">testing</span>.B) {
+    b.RunParallel(<span class="kw">func</span>(pb *<span class="ty">testing</span>.PB) {
+        <span class="kw">for</span> pb.Next() {
+            Divide(<span class="num">1000</span>, <span class="num">3</span>)
+        }
+    })
+}
+
+<span class="cm">// 运行:</span>
+<span class="cm">// $ go test -bench=. -benchmem</span>
+<span class="cm">// BenchmarkDivide-8     1000000000     0.25 ns/op    0 B/op   0 allocs/op</span>
+<span class="cm">// BenchmarkParallel-8  2000000000     0.12 ns/op    0 B/op   0 allocs/op</span></code></pre>
+  </div>
+</section>
+
+<section id="sec5" class="toc-link">
+  <h2><span class="num">05</span> Testing 进阶</h2>
+
+  <h3>Fuzzing 测试</h3>
+  <p>Go 1.18 引入了原生 fuzzing 支持。Fuzzing 通过自动生成随机输入来发现边界条件和安全漏洞。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">func</span> <span class="fn">FuzzReverse</span>(f *<span class="ty">testing</span>.F) {
+    <span class="cm">// 添加种子语料库</span>
+    testcases := []<span class="ty">string</span>{<span class="s">"Hello, world"</span>, <span class="s">" " </span>, <span class="s">"!12345"</span>}
+    <span class="kw">for</span> _, tc := <span class="kw">range</span> testcases {
+        f.Add(tc)  <span class="cm">// 种子输入</span>
+    }
+    
+    f.Fuzz(<span class="kw">func</span>(t *<span class="ty">testing</span>.T, orig <span class="ty">string</span>) {
+        rev := Reverse(orig)
+        doubleRev := Reverse(rev)
+        <span class="kw">if</span> orig != doubleRev {
+            t.Errorf(<span class="s">"Before: %q, after: %q"</span>, orig, doubleRev)
+        }
+        <span class="kw">if</span> utf8.ValidString(orig) && !utf8.ValidString(rev) {
+            t.Errorf(<span class="s">"Reverse produced invalid UTF-8: %q"</span>, rev)
+        }
+    })
+}
+
+<span class="cm">// 运行 fuzzing:</span>
+<span class="cm">// $ go test -fuzz=FuzzReverse</span>
+<span class="cm">// $ go test -fuzz=FuzzReverse -fuzztime=30s</span></code></pre>
+  </div>
+
+  <h3>覆盖率</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 生成覆盖率报告</span>
+<span class="cm">// $ go test -cover -coverprofile=coverage.out</span>
+<span class="cm">// $ go tool cover -html=coverage.out -o coverage.html</span>
+
+<span class="cm">// 覆盖率模式</span>
+<span class="cm">// -covermode=set     每条语句是否执行</span>
+<span class="cm">// -covermode=count   每条语句执行次数</span>
+<span class="cm">// -covermode=atomic  并发安全的计数（racer 测试必须）</span>
+
+<span class="cm">// 合并多个包的覆盖率</span>
+<span class="cm">// $ go test -coverprofile=coverage.out ./...</span>
+
+<span class="cm">// 仅运行集成测试</span>
+<span class="cm">// $ go test -tags=integration ./...</span></code></pre>
+  </div>
+
+  <h3>Test Main 与测试生命周期</h3>
+  <div class="card">
+    <pre><code><span class="kw">func</span> <span class="fn">TestMain</span>(m *<span class="ty">testing</span>.M) {
+    <span class="cm">// 测试前的全局设置</span>
+    setup()
+    
+    <span class="cm">// 运行所有测试</span>
+    code := m.Run()
+    
+    <span class="cm">// 测试后的全局清理</span>
+    teardown()
+    
+    <span class="cm">// 退出（必须）</span>
+    os.Exit(code)
+}
+
+<span class="cm">// TestMain 常用于:</span>
+<span class="cm">// - 初始化数据库连接</span>
+<span class="cm">// - 启动测试 HTTP 服务</span>
+<span class="cm">// - 创建临时文件目录</span>
+<span class="cm">// - 设置环境变量</span></code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>测试最佳实践</strong>：使用 <code>go test -race</code> 检测数据竞争。在 CI 中使用 <code>go test -count=1</code> 禁用测试缓存。对重要的包设定覆盖率阈值，低于阈值则 CI 失败。
+  </div>
+</section>
+
+<section id="sec6" class="toc-link">
+  <h2><span class="num">06</span> Embed 嵌入</h2>
+
+  <h3>go:embed 基础用法</h3>
+  <p>自 Go 1.16 起，<code>//go:embed</code> 指令允许在编译时将静态文件嵌入到 Go 二进制文件中。这消除了运行时将配置文件、模板等与二进制文件一起分发的问题。</p>
+
+  <div class="card">
+    <pre><code><span class="kw">import</span> <span class="s">"embed"</span>
+
+<span class="cm">// 嵌入单个文件</span>
+<span class="cm">//go:embed config.yaml</span>
+<span class="kw">var</span> configYAML <span class="ty">string</span>  <span class="cm">// 以字符串形式嵌入</span>
+
+<span class="cm">//go:embed logo.png</span>
+<span class="kw">var</span> logoBytes []<span class="kw">byte</span>    <span class="cm">// 以字节切片形式嵌入</span>
+
+<span class="cm">//go:embed templates/index.html</span>
+<span class="kw">var</span> indexTemplate embed.FS  <span class="cm">// 以文件系统形式嵌入（支持多个文件）</span>
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    fmt.Println(configYAML)
+    
+    data, _ := indexTemplate.ReadFile(<span class="s">"templates/index.html"</span>)
+    fmt.Println(<span class="ty">string</span>(data))
+}</code></pre>
+  </div>
+
+  <h3>模式匹配嵌入</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 嵌入整个目录</span>
+<span class="cm">//go:embed static/*</span>
+<span class="kw">var</span> staticFS embed.FS
+
+<span class="cm">// 嵌入子目录</span>
+<span class="cm">//go:embed templates/**/*.html</span>
+<span class="kw">var</span> templatesFS embed.FS
+
+<span class="cm">// 多个 embed 指令</span>
+<span class="cm">//go:embed config.yaml</span>
+<span class="cm">//go:embed secrets/*.enc</span>
+<span class="cm">//go:embed migrations/*.sql</span>
+<span class="kw">var</span> appFS embed.FS
+
+<span class="cm">// 嵌入后的文件系统是只读的</span>
+<span class="kw">func</span> <span class="fn">embedExample</span>() {
+    <span class="cm">// 列出嵌入的文件</span>
+    entries, _ := appFS.ReadDir(<span class="s">"."</span>)
+    <span class="kw">for</span> _, e := <span class="kw">range</span> entries {
+        fmt.Println(e.Name())
+    }
+    
+    <span class="cm">// 读取子目录文件</span>
+    data, _ := appFS.ReadFile(<span class="s">"migrations/001_init.sql"</span>)
+    fmt.Println(<span class="ty">string</span>(data))
+    
+    <span class="cm">// 注意: embed.FS 不支持 Walk 和绝对路径</span>
+    <span class="cm">// 路径分割符始终是 /（即使是 Windows）</span>
+}</code></pre>
+  </div>
+
+  <h3>embed 的实际应用场景</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 场景 1: 嵌入 HTTP 静态文件</span>
+<span class="cm">//go:embed static</span>
+<span class="kw">var</span> staticFiles embed.FS
+
+<span class="kw">func</span> <span class="fn">main</span>() {
+    mux := http.NewServeMux()
+    mux.Handle(<span class="s">"/static/"</span>, http.FileServer(
+        http.FS(staticFiles),
+    ))
+    http.ListenAndServe(<span class="s">":8080"</span>, mux)
+}
+
+<span class="cm">// 场景 2: 嵌入 SQL 迁移文件</span>
+<span class="cm">//go:embed migrations/*.sql</span>
+<span class="kw">var</span> migrations embed.FS
+
+<span class="kw">func</span> <span class="fn">runMigrations</span>(db *sql.DB) {
+    entries, _ := migrations.ReadDir(<span class="s">"migrations"</span>)
+    <span class="kw">for</span> _, entry := <span class="kw">range</span> entries {
+        data, _ := migrations.ReadFile(<span class="s">"migrations/"</span> + entry.Name())
+        db.Exec(<span class="ty">string</span>(data))
+    }
+}
+
+<span class="cm">// 场景 3: 嵌入模板</span>
+<span class="cm">//go:embed templates</span>
+<span class="kw">var</span> templateFS embed.FS
+
+<span class="kw">func</span> <span class="fn">renderTemplate</span>(name <span class="ty">string</span>, data <span class="ty">interface</span>{}) (<span class="ty">string</span>, <span class="ty">error</span>) {
+    tmpl := template.Must(template.ParseFS(templateFS,
+        <span class="s">"templates/base.html"</span>, <span class="s">"templates/"</span>+name))
+    <span class="kw">var</span> buf strings.Builder
+    err := tmpl.Execute(&amp;buf, data)
+    <span class="kw">return</span> buf.String(), err
+}</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <strong>约束条件</strong>：<code>//go:embed</code> 指令只能出现在包级别变量声明之上。嵌入路径不能包含 <code>..</code> 或指向包目录之外。嵌入的文件必须在执行 <code>go build</code> 时存在。嵌入的 FS 是只读的，无法在运行时修改。
+  </div>
+</section>
+
+<section id="sec7" class="toc-link">
+  <h2><span class="num">07</span> 构建约束与条件编译</h2>
+
+  <h3>构建标签（Build Tags）</h3>
+  <p>构建约束（Build Constraints）通过 <code>//go:build</code> 指令控制特定文件在哪些平台或条件下被编译。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 仅在 Linux 平台编译</span>
+<span class="cm">//go:build linux</span>
+
+<span class="kw">package</span> main
+
+<span class="kw">func</span> <span class="fn">platformInfo</span>() <span class="ty">string</span> {
+    <span class="kw">return</span> <span class="s">"Running on Linux"</span>
+}
+
+<span class="cm">// 文件: info_windows.go</span>
+<span class="cm">//go:build windows</span>
+<span class="kw">package</span> main
+<span class="kw">func</span> <span class="fn">platformInfo</span>() <span class="ty">string</span> {
+    <span class="kw">return</span> <span class="s">"Running on Windows"</span>
+}
+
+<span class="cm">// 文件: info_darwin.go</span>
+<span class="cm">//go:build darwin</span>
+<span class="kw">package</span> main
+<span class="kw">func</span> <span class="fn">platformInfo</span>() <span class="ty">string</span> {
+    <span class="kw">return</span> <span class="s">"Running on macOS"</span>
+}</code></pre>
+  </div>
+
+  <h3>构建标签表达式语法</h3>
+  <table>
+    <tr><th>表达式</th><th>含义</th></tr>
+    <tr><td><code>//go:build linux</code></td><td>仅在 Linux 上编译</td></tr>
+    <tr><td><code>//go:build !linux</code></td><td>不在 Linux 上编译</td></tr>
+    <tr><td><code>//go:build linux && amd64</code></td><td>仅在 Linux amd64 上编译</td></tr>
+    <tr><td><code>//go:build linux || darwin</code></td><td>在 Linux 或 macOS 上编译</td></tr>
+    <tr><td><code>//go:build ignore</code></td><td>永远不编译该文件</td></tr>
+    <tr><td><code>//go:build integration</code></td><td>仅当指定 <code>-tags=integration</code> 时编译</td></tr>
+  </table>
+
+  <h3>文件名约定</h3>
+  <p>Go 还支持通过文件名后缀自动推断构建约束，这种方式不需要显式的 <code>//go:build</code> 指令。</p>
+
+  <div class="card">
+    <pre><code><span class="cm">// 文件名约定（在 _test.go 之前匹配）</span>
+<span class="cm">//</span>
+<span class="cm">// *\_GOOS\_GOARCH  - 指定 OS 和架构</span>
+<span class="cm">// *\_GOOS         - 指定 OS</span>
+<span class="cm">// *\_GOARCH       - 指定架构</span>
+<span class="cm">//</span>
+<span class="cm">// 示例:</span>
+<span class="cm">//   server_linux.go        - 仅在 Linux 编译</span>
+<span class="cm">//   server_windows.go      - 仅在 Windows 编译</span>
+<span class="cm">//   server_linux_amd64.go  - 仅在 Linux amd64 编译</span>
+<span class="cm">//   server_test.go         - 不参与构建约束匹配</span>
+
+<span class="cm">// 这些文件不需要 //go:build 指令</span>
+<span class="cm">// 编译器自动从文件名推断构建约束</span>
+
+<span class="cm">// 推荐使用文件名约定而非显式 build tag，因为:</span>
+<span class="cm">// 1. 更简洁，不需要额外指令</span>
+<span class="cm">// 2. 更直观，文件名一目了然</span>
+<span class="cm">// 3. IDE 和工具支持更好</span></code></pre>
+  </div>
+
+  <h3>条件标签的工程实践</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 1. 生产 vs 调试代码</span>
+<span class="cm">//go:build debug</span>
+<span class="kw">package</span> main
+<span class="kw">var</span> debugMode = <span class="kw">true</span>
+<span class="kw">func</span> <span class="fn">init</span>() { log.Println(<span class="s">"debug mode enabled"</span>) }
+
+<span class="cm">// 构建: go build -tags=debug</span>
+
+<span class="cm">// 2. 集成测试</span>
+<span class="cm">//go:build integration</span>
+<span class="kw">package</span> main_test
+<span class="kw">func</span> <span class="fn">TestDatabaseIntegration</span>(t *<span class="ty">testing</span>.T) { <span class="cm">/* ... */</span> }
+
+<span class="cm">// 运行: go test -tags=integration ./...</span>
+
+<span class="cm">// 3. 特性门控</span>
+<span class="cm">//go:build enterprise</span>
+<span class="kw">func</span> <span class="fn">enableEnterpriseFeatures</span>() {
+    <span class="cm">// 高级功能代码</span>
+}
+
+<span class="cm">// 4. CGo 开关</span>
+<span class="cm">//go:build cgo</span>
+<span class="kw">import</span> <span class="s">"C"</span>
+<span class="cm">// C 绑定代码</span></code></pre>
+  </div>
+
+  <h3>构建约束组合示例</h3>
+  <div class="card">
+    <pre><code><span class="cm">// 文件: util.go - 所有平台通用</span>
+<span class="kw">package</span> util
+
+<span class="kw">func</span> <span class="fn">DefaultPath</span>() <span class="ty">string</span> { <span class="kw">return</span> <span class="s">"/var/data"</span> }
+
+<span class="cm">// 文件: util_linux.go</span>
+<span class="cm">//go:build linux</span>
+<span class="kw">package</span> util
+<span class="kw">func</span> <span class="fn">DefaultPath</span>() <span class="ty">string</span> { <span class="kw">return</span> <span class="s">"/var/lib/data"</span> }
+
+<span class="cm">// 文件: util_windows.go</span>
+<span class="cm">//go:build windows</span>
+<span class="kw">package</span> util
+<span class="kw">import</span> <span class="s">"os"</span>
+<span class="kw">func</span> <span class="fn">DefaultPath</span>() <span class="ty">string</span> {
+    <span class="kw">return</span> os.Getenv(<span class="s">"APPDATA"</span>) + <span class="s">"\\MyApp"</span>
+}
+
+<span class="cm">// 文件: util_darwin.go</span>
+<span class="cm">//go:build darwin</span>
+<span class="kw">package</span> util
+<span class="kw">func</span> <span class="fn">DefaultPath</span>() <span class="ty">string</span> { <span class="kw">return</span> <span class="s">"/usr/local/var/data"</span> }
+
+<span class="cm">// 文件: util_other.go</span>
+<span class="cm">//go:build !linux && !windows && !darwin</span>
+<span class="kw">package</span> util
+<span class="kw">func</span> <span class="fn">DefaultPath</span>() <span class="ty">string</span> { <span class="kw">return</span> <span class="s">"/opt/data"</span> }</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <strong>最佳实践</strong>：优先使用文件名约定，需要复杂逻辑时使用 <code>//go:build</code>。版本控制中保持所有平台的文件，在 CI 中对每个目标平台运行测试。避免过度使用条件编译，保持代码库的清晰度。
+  </div>
+
+</section>
+
+</div>
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Go 1.22+ 源码分析 · 生成于 2026-06-23</footer>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Go 语言基础深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%2300ADD8'/><stop offset='100%25' stop-color='%23007d9c'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>G</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Go 语言基础深度解析</h1>
+  <p class="subtitle">类型系统 / 结构体与方法 / 接口 / 错误处理 / 包组织</p>
+  <span class="version">Go 1.24 · 静态类型 · 编译型 · 并发原生</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#types">类型系统</a></li>
+    <li><a href="#struct">结构体与方法</a></li>
+    <li><a href="#interface">接口</a></li>
+    <li><a href="#error">错误处理</a></li>
+    <li><a href="#package">包组织</a></li>
+    <li><a href="#alias">类型别名与定义</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="types" class="toc-link">
+  <h2><span class="num">01</span> 类型系统</h2>
+
+  <p>Go 是<strong>静态强类型</strong>语言，所有变量在编译期都有确定的类型。类型系统分为基本类型和复合类型两大类，同时支持类型定义和类型别名两种扩展机制。</p>
+
+  <h3>基本类型</h3>
+
+  <table>
+    <tr><th>分类</th><th>类型</th><th>说明</th><th>零值</th></tr>
+    <tr><td>布尔</td><td><code>bool</code></td><td>true / false</td><td><code>false</code></td></tr>
+    <tr><td>整数</td><td><code>int8/16/32/64</code>, <code>uint8/16/32/64</code></td><td>定长有符号/无符号</td><td><code>0</code></td></tr>
+    <tr><td></td><td><code>int</code>, <code>uint</code></td><td>平台相关（32位 / 64位）</td><td><code>0</code></td></tr>
+    <tr><td></td><td><code>uintptr</code></td><td>指针整数表示</td><td><code>0</code></td></tr>
+    <tr><td>浮点</td><td><code>float32</code>, <code>float64</code></td><td>IEEE-754</td><td><code>0.0</code></td></tr>
+    <tr><td>复数</td><td><code>complex64</code>, <code>complex128</code></td><td>实部+虚部</td><td><code>(0+0i)</code></td></tr>
+    <tr><td>字符串</td><td><code>string</code></td><td>UTF-8 不可变字节序列</td><td><code>""</code></td></tr>
+    <tr><td>字节</td><td><code>byte</code></td><td><code>uint8</code> 别名</td><td><code>0</code></td></tr>
+    <tr><td>符文</td><td><code>rune</code></td><td><code>int32</code> 别名，代表 Unicode 码点</td><td><code>0</code></td></tr>
+  </table>
+
+  <p>Go 没有隐式类型转换，所有不同类型之间的转换必须显式写出：</p>
+
+<pre><code>var a int32 = 100
+var b int64 = int64(a)   // 显式转换，不是隐式
+var c float64 = float64(a)
+
+// 字符串与字节切片互转
+s := string([]byte{'h', 'e', 'l', 'l', 'o'})
+bts := []byte("hello")
+</code></pre>
+
+  <h3>复合类型</h3>
+
+  <table>
+    <tr><th>类型</th><th>语法</th><th>说明</th></tr>
+    <tr><td>数组</td><td><code>[N]T</code></td><td>定长，值类型（赋值会复制全部元素）</td></tr>
+    <tr><td>切片</td><td><code>[]T</code></td><td>变长，引用类型（底层是数组指针+长度+容量）</td></tr>
+    <tr><td>映射</td><td><code>map[K]V</code></td><td>哈希表，引用类型，K 必须可比较</td></tr>
+    <tr><td>结构体</td><td><code>struct{}</code></td><td>异构字段集合，值类型</td></tr>
+    <tr><td>指针</td><td><code>*T</code></td><td>指向 T 的指针，不支持指针算术</td></tr>
+    <tr><td>函数</td><td><code>func(T) R</code></td><td>函数是一等公民</td></tr>
+    <tr><td>接口</td><td><code>interface{}</code></td><td>方法集合，鸭子类型</td></tr>
+    <tr><td>通道</td><td><code>chan T</code></td><td>goroutine 间通信管道</td></tr>
+  </table>
+
+  <p>数组与切片的本质区别：</p>
+
+<pre><code>// 数组 — 值类型，固定大小
+var arr [3]int = [3]int{1, 2, 3}
+arr2 := arr          // 复制全部 3 个元素
+arr2[0] = 99         // arr[0] 仍为 1
+
+// 切片 — 引用类型，可变大小
+var slc []int = []int{1, 2, 3}
+slc2 := slc          // 共享底层数组
+slc2[0] = 99         // slc[0] 也变为 99
+
+// 切片结构（运行时表示）：
+// reflect.SliceHeader{Data: uintptr, Len: int, Cap: int}
+</code></pre>
+
+  <h3>零值保证</h3>
+
+  <p>Go 的每个变量在声明时自动初始化为零值，不存在"未初始化变量"的状态。这是 Go 安全设计的重要一环。</p>
+
+<pre><code>var i int          // 0
+var f float64      // 0.0
+var s string       // ""
+var b bool         // false
+var p *int         // nil
+var sl []int       // nil（长度 0，容量 0）
+var m map[int]int  // nil
+var ch chan int    // nil
+var st struct{}    // struct{}{}
+</code></pre>
+</section>
+
+<section id="struct" class="toc-link">
+  <h2><span class="num">02</span> 结构体与方法</h2>
+
+  <p>Go 是<strong>面向组合</strong>的语言，结构体是聚合数据的基本单位，方法则是为类型添加行为的机制。Go 没有类继承，但通过结构体内嵌实现组合复用。</p>
+
+  <h3>结构体定义与实例化</h3>
+
+<pre><code>type User struct {
+    ID       int64
+    Name     string
+    Email    string
+    Age      int
+    Metadata map[string]string
+}
+
+// 实例化方式
+u1 := User{}                             // 零值初始化
+u2 := User{ID: 1, Name: "Alice"}         // 字段名指定（推荐）
+u3 := User{1, "Bob", "", 0, nil}         // 位置语法（不推荐，易出错）
+
+// new 返回指针
+u4 := new(User)                           // *User，字段为零值
+u5 := &User{Name: "Charlie"}             // 取地址，等价于 new
+
+// 字段访问
+u1.Name = "Dave"
+name := u2.Name
+</code></pre>
+
+  <h3>Field Tag（字段标签）</h3>
+
+  <p>结构体字段可以附带 tag（元数据字符串），用于序列化、验证、ORM 等场景。tag 是 <code>reflect</code> 包在运行时读取的键值对：</p>
+
+<pre><code>type Config struct {
+    Host    string `json:"host" yaml:"host" validate:"required"`
+    Port    int    `json:"port,omitempty" env:"PORT"`
+    Timeout time.Duration `json:"timeout" default:"30s"`
+    Debug   bool   `json:"debug,omitempty"`
+}
+
+// 运行时读取 tag
+import "reflect"
+
+func readTag(v any) {
+    t := reflect.TypeOf(v)
+    for i := 0; i &lt; t.NumField(); i++ {
+        f := t.Field(i)
+        jsonTag := f.Tag.Get("json")
+        fmt.Printf("%s: %s\n", f.Name, jsonTag)
+    }
+}
+</code></pre>
+
+  <h3>方法接收者</h3>
+
+  <p>Go 方法的接收者可以是值类型或指针类型，这是 Go 设计中的关键决定。</p>
+
+<pre><code>type Counter struct {
+    Value int64
+}
+
+// 值接收者 — 操作的是副本
+func (c Counter) Add(n int64) Counter {
+    c.Value += n     // 不影响原值
+    return c         // 返回新值
+}
+
+// 指针接收者 — 操作的是原值
+func (c *Counter) Inc() {
+    c.Value++        // 修改原值
+}
+
+// 使用
+c := Counter{Value: 10}
+c.Add(5)            // ❌ c.Value 仍为 10
+c.Inc()             // ✅ c.Value 变为 11
+c2 := c.Add(5)      // 必须接收返回值
+</code></pre>
+
+  <p>选择值接收者还是指针接收者的经验法则：</p>
+  <ul>
+    <li>需要修改接收者 → 指针接收者</li>
+    <li>接收者是大结构体（复制成本高） → 指针接收者</li>
+    <li>接收者包含互斥锁等不可复制字段 → 指针接收者</li>
+    <li>小类型（数字、bool、小结构体）且不可变 → 值接收者</li>
+    <li>一致性：同一类型的方法应全部使用同一种接收者</li>
+  </ul>
+
+  <h3>结构体内嵌（Embedding）</h3>
+
+  <p>Go 通过结构体内嵌实现组合复用，这是 Go 替代继承的核心机制：</p>
+
+<pre><code>type Base struct {
+    ID int64
+}
+
+func (b *Base) CreatedAt() time.Time {
+    return time.Now()
+}
+
+type User struct {
+    Base              // 内嵌 — 字段和方法被提升
+    Name  string
+    Email string
+}
+
+// 使用
+u := User{Base: Base{ID: 1}, Name: "Alice"}
+fmt.Println(u.ID)           // ✅ 提升字段，相当于 u.Base.ID
+fmt.Println(u.CreatedAt())  // ✅ 提升方法
+</code></pre>
+
+  <p>内嵌不是继承。你不能将 <code>*User</code> 赋值给 <code>*Base</code>，也没有多态。内嵌只是语法糖，编译器自动生成转发方法。</p>
+</section>
+
+<section id="interface" class="toc-link">
+  <h2><span class="num">03</span> 接口</h2>
+
+  <p>Go 的接口是<strong>隐式实现</strong>的，这是 Go 类型系统最具标志性的设计。一个类型只要实现了接口定义的所有方法，就"隐式地"满足该接口，无须显式声明 <code>implements</code>。</p>
+
+  <h3>接口定义与隐式实现</h3>
+
+<pre><code>// 定义接口
+type Writer interface {
+    Write(p []byte) (n int, err error)
+}
+
+type Reader interface {
+    Read(p []byte) (n int, err error)
+}
+
+type ReadWriter interface {
+    Reader
+    Writer
+}
+
+// 隐式实现 — 无须声明 "implements"
+type File struct {
+    name string
+    data []byte
+}
+
+func (f *File) Read(p []byte) (n int, err error) {
+    copy(p, f.data)
+    return len(f.data), nil
+}
+
+func (f *File) Write(p []byte) (n int, err error) {
+    f.data = append(f.data, p...)
+    return len(p), nil
+}
+// *File 自动满足 Reader 和 Writer 接口
+</code></pre>
+
+  <p>这种设计称为<strong>Duck Typing</strong>（鸭子类型）——"如果它走路像鸭子，叫起来像鸭子，那它就是鸭子"。但 Go 是静态类型语言，接口一致性在编译期检查。</p>
+
+  <h3>空接口 interface{}</h3>
+
+  <p>空接口 <code>interface{}</code>（Go 1.18+ 也可写为 <code>any</code>）没有任何方法，因此所有类型都隐式满足它。它类似于 Java 的 <code>Object</code> 或 C 的 <code>void*</code>，但类型安全：</p>
+
+<pre><code>var v any
+v = 42
+v = "hello"
+v = struct{Name string}{Name: "Alice"}
+v = func() {}
+
+// 获取具体值必须做类型断言
+val := v.(func())
+val()  // 调用函数
+</code></pre>
+
+  <h3>类型断言</h3>
+
+<pre><code>var v any = "hello world"
+
+// 直接断言（不安全的，失败会 panic）
+s := v.(string)
+fmt.Println(s)
+
+// 带逗号模式的断言（安全的）
+s, ok := v.(string)
+if ok {
+    fmt.Println("是字符串:", s)
+} else {
+    fmt.Println("不是字符串")
+}
+</code></pre>
+
+  <h3>类型 Switch</h3>
+
+<pre><code>func inspect(v any) {
+    switch val := v.(type) {
+    case int:
+        fmt.Println("整数:", val)
+    case string:
+        fmt.Println("字符串:", val)
+    case bool:
+        fmt.Println("布尔:", val)
+    case []int:
+        fmt.Println("整数切片, 长度:", len(val))
+    case nil:
+        fmt.Println("空值")
+    default:
+        fmt.Printf("未知类型: %T\n", val)
+    }
+}
+</code></pre>
+
+  <h3>接口值的内部表示</h3>
+
+  <p>在运行时，接口值由 <strong>iface</strong>（带方法集）或 <strong>eface</strong>（空接口）表示，包含两个指针：类型元数据（<code>tab</code> 或 <code>_type</code>）和实际值（<code>data</code>）：</p>
+
+<pre><code>// 空接口的运行时结构（runtime.eface）
+type eface struct {
+    _type *_type      // 具体类型信息
+    data  unsafe.Pointer // 指向实际数据
+}
+
+// 非空接口的运行时结构（runtime.iface）
+type iface struct {
+    tab  *itab        // 接口表：类型 + 方法集
+    data unsafe.Pointer // 指向实际数据
+}
+</code></pre>
+
+  <p>重要：<strong>接口值只有在类型和值都为 nil 时才等于 nil</strong>。将 <code>*int(nil)</code> 赋值给 <code>any</code> 后，该 <code>any</code> 不等于 <code>nil</code>。</p>
+</section>
+
+<section id="error" class="toc-link">
+  <h2><span class="num">04</span> 错误处理</h2>
+
+  <p>Go 的错误处理不使用 try-catch 异常机制，而是通过<strong>显式返回 error 值</strong>的方式，迫使调用者处理每个可能出错的调用。这是 Go 哲学"错误就是值"的体现。</p>
+
+  <h3>error 接口</h3>
+
+<pre><code>// error 是内置接口，只有一个方法
+type error interface {
+    Error() string
+}
+
+// 最常见的实现：errors.New
+import "errors"
+var ErrNotFound = errors.New("not found")
+
+// 使用
+func findUser(id int) (User, error) {
+    if id &lt;= 0 {
+        return User{}, errors.New("invalid id")
+    }
+    // ...
+    return User{}, ErrNotFound
+}
+
+// 调用方必须检查 err
+u, err := findUser(42)
+if err != nil {
+    fmt.Println("错误:", err)
+    return
+}
+fmt.Println("用户:", u)
+</code></pre>
+
+  <h3>自定义错误类型</h3>
+
+  <p>实现 <code>Error() string</code> 方法的任何类型都可以作为 error 使用：</p>
+
+<pre><code>type ValidationError struct {
+    Field   string
+    Value   any
+    Message string
+}
+
+func (e *ValidationError) Error() string {
+    return fmt.Sprintf("验证失败: %s (%v) - %s", e.Field, e.Value, e.Message)
+}
+
+// 使用 errors.As 检查具体类型
+func validateAge(age int) error {
+    if age &lt; 0 || age &gt; 150 {
+        return &amp;ValidationError{
+            Field:   "Age",
+            Value:   age,
+            Message: "年龄必须在 0-150 之间",
+        }
+    }
+    return nil
+}
+
+// 调用方
+err := validateAge(200)
+var ve *ValidationError
+if errors.As(err, &amp;ve) {
+    fmt.Println("字段:", ve.Field)
+    fmt.Println("值:", ve.Value)
+}
+</code></pre>
+
+  <h3>错误包装（Wrap）</h3>
+
+  <p>Go 1.13 引入的错误包装机制：</p>
+
+<pre><code>import "fmt"
+
+func readConfig(path string) error {
+    f, err := os.Open(path)
+    if err != nil {
+        // 包装：添加上下文，保留原始错误
+        return fmt.Errorf("打开配置 %s 失败: %w", path, err)
+    }
+    defer f.Close()
+    // ...
+    return nil
+}
+
+// errors.Is 递归检查错误链
+if errors.Is(err, os.ErrNotExist) {
+    fmt.Println("文件不存在")
+}
+
+// errors.Unwrap 解包
+cause := errors.Unwrap(err)
+</code></pre>
+
+  <h3>Panic / Recover / Defer</h3>
+
+  <p>Go 有 panic/recover 机制，但只应用于<strong>不可恢复</strong的场景（如数组越界、空指针解引用），不应替代常规错误处理。</p>
+
+<pre><code>// defer — 延迟执行，后进先出
+func readFile(path string) ([]byte, error) {
+    f, err := os.Open(path)
+    if err != nil {
+        return nil, err
+    }
+    defer f.Close()  // 函数返回时执行，即使 panic 也会执行
+    return io.ReadAll(f)
+}
+
+// panic — 引发恐慌
+func must(err error) {
+    if err != nil {
+        panic(err)
+    }
+}
+
+// recover — 恢复恐慌（仅在 defer 中有效）
+func safeCall(fn func()) (err error) {
+    defer func() {
+        if r := recover(); r != nil {
+            err = fmt.Errorf("panic: %v", r)
+        }
+    }()
+    fn()
+    return
+}
+</code></pre>
+
+  <p>defer 的执行时机：在<strong>所在函数返回之前</strong>执行，但<strong>在 return 语句赋值之后</strong>。因此 defer 可以修改命名返回值：</p>
+
+<pre><code>func double(x int) (result int) {
+    defer func() {
+        result *= 2  // 修改命名返回值
+    }()
+    result = x
+    return    // 先赋值 result=x，然后执行 defer，最后返回
+}
+// double(5) => 10
+</code></pre>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    Go 的错误处理是 Go 语言最受争议的设计之一。优点是显式可控，缺点是代码中可能出现大量 <code>if err != nil</code>。建议配合 <code>errors.Is</code> / <code>errors.As</code> 和错误包装使用，不要吞掉错误。
+  </div>
+</section>
+
+<section id="package" class="toc-link">
+  <h2><span class="num">05</span> 包组织</h2>
+
+  <p>Go 以 <strong>package</strong> 为基本组织单元，每个目录对应一个包。包是命名空间、可见性和测试的基本粒度。</p>
+
+  <h3>包声明与目录结构</h3>
+
+<pre><code>// 标准项目结构
+myproject/
+├── go.mod              // 模块定义
+├── main.go             // package main → 可执行入口
+├── cmd/
+│   └── server/
+│       └── main.go     // 独立的 main 包
+├── internal/
+│   └── db/
+│       └── db.go       // package db → 仅被父级导入
+├── pkg/
+│   └── config/
+│       └── config.go   // package config → 可导出
+└── api/
+    └── handler.go      // package api
+</code></pre>
+
+  <h3>可见性规则</h3>
+
+  <p>Go 使用<strong>首字母大小写</strong>控制导出：</p>
+  <ul>
+    <li><strong>大写开头</strong>：导出（public），可被其他包访问</li>
+    <li><strong>小写开头</strong>：不导出（private），仅在包内可见</li>
+    <li>规则适用于：变量、常量、函数、类型、方法、结构体字段</li>
+    <li><strong>internal</strong> 包：只能被其父级及同级子目录导入</li>
+  </ul>
+
+<pre><code>// package config
+var Version = "1.0"      // 导出
+var buildTime string     // 不导出
+
+type Config struct {
+    Host    string        // 导出
+    Port    int           // 导出
+    apiKey  string        // 不导出（包外不可访问）
+}
+
+func New() *Config {      // 导出（工厂函数）
+    return &amp;Config{Host: "localhost"}
+}
+
+func (c *Config) Validate() bool { return true }  // 导出
+func (c *Config) encrypt() {}                     // 不导出
+</code></pre>
+
+  <h3>init 函数</h3>
+
+  <p>每个包可以包含一个或多个 <code>init</code> 函数，在包初始化时自动执行，不能被显式调用。执行顺序：</p>
+  <ol>
+    <li>导入的包（深度优先）先初始化</li>
+    <li>常量、变量声明按依赖顺序求值</li>
+    <li>当前包的 <code>init</code> 函数按源文件单词序执行</li>
+    <li><code>main</code> 函数的包最后执行</li>
+  </ol>
+
+<pre><code>// config.go
+package config
+
+var cache map[string]string
+
+func init() {
+    cache = make(map[string]string)
+    fmt.Println("config 包初始化完成")
+}
+
+// database.go（同包）
+package config
+
+func init() {
+    connectDB()
+    fmt.Println("数据库连接初始化完成")
+}
+
+// 执行顺序：先 config.go 的 init，再 database.go 的 init
+</code></pre>
+
+  <h3>导入机制</h3>
+
+<pre><code>// 标准导入
+import (
+    "fmt"
+    "os"
+    "time"
+)
+
+// 别名导入（解决包名冲突）
+import (
+    crand "crypto/rand"
+    mrand "math/rand"
+)
+
+// 空白导入（仅执行 init，不使用包）
+import _ "net/http/pprof"
+
+// 点导入（不推荐，容易混淆）
+import . "fmt"
+// 之后可以直接 Println() 而不是 fmt.Println()
+</code></pre>
+
+  <h3>go.mod 模块管理</h3>
+
+  <p>Go Module 从 1.16 起成为默认依赖管理方式：</p>
+
+<pre><code>// go.mod 示例
+module github.com/user/myproject
+
+go 1.24
+
+require (
+    github.com/gin-gonic/gin v1.9.1
+    go.uber.org/zap v1.27.0
+)
+
+// 版本管理命令
+// go get example.com/pkg@v1.2.3    — 升级到特定版本
+// go mod tidy                      — 清理依赖
+// go mod vendor                    — 生成 vendor 目录
+</code></pre>
+</section>
+
+<section id="alias" class="toc-link">
+  <h2><span class="num">06</span> 类型别名与类型定义的区别</h2>
+
+  <p>Go 提供了两种方式创建新类型：<strong>类型定义</strong>（Type Definition）和<strong>类型别名</strong>（Type Alias）。两者在本质上完全不同，理解它们的区别对编写正确的 Go 代码至关重要。</p>
+
+  <h3>类型定义（Type Definition）</h3>
+
+<pre><code>// 语法：type NewType ExistingType
+type Celsius float64
+type ID int64
+type HandlerFunc func(http.ResponseWriter, *http.Request)
+
+// 新类型拥有独立的方法集，不继承原类型的方法
+var c Celsius = 100.0
+var f float64 = float64(c)  // 必须显式转换
+
+// 可以为新类型定义方法
+func (c Celsius) ToFahrenheit() float64 {
+    return float64(c)*9/5 + 32
+}
+</code></pre>
+
+  <p>类型定义创建了一个<strong>全新的类型</strong>，即使底层类型相同，也不能隐式赋值：</p>
+
+<pre><code>type UserID int64
+type OrderID int64
+
+var uid UserID = 1
+var oid OrderID = 2
+
+// oid = uid          // ❌ 编译错误：类型不匹配
+// oid = OrderID(uid) // ✅ 显式转换才能赋值
+</code></pre>
+
+  <h3>类型别名（Type Alias）</h3>
+
+<pre><code>// 语法：type NewType = ExistingType
+type Rune = int32       // 标准库中的定义
+type Byte = uint8
+type any = interface{}  // Go 1.18 引入
+
+// 别名就是同一个类型，可以互相赋值
+var r Rune = 'A'       // 实际上就是 int32
+var i int32 = r         // ✅ 不需要转换
+
+// 别名不创建新类型，不影响方法集
+// 给别名加方法等于给原类型加方法
+</code></pre>
+
+  <h3>核心区别总结</h3>
+
+  <table>
+    <tr><th>维度</th><th>类型定义 <code>type T X</code></th><th>类型别名 <code>type T = X</code></th></tr>
+    <tr><td>类型标识</td><td>创建全新类型</td><td>只是原类型的别名</td></tr>
+    <tr><td>隐式赋值</td><td>不能互相赋值</td><td>完全等价</td></tr>
+    <tr><td>方法集</td><td>可以增加新方法</td><td>继承原类型方法，不能增加</td></tr>
+    <tr><td>类型转换</td><td>需要显式转换</td><td>不需要转换</td></tr>
+    <tr><td>接口匹配</td><td>新类型不继承原类型接口实现</td><td>完全相同</td></tr>
+  </table>
+
+  <h3>实战：什么时候用什么？</h3>
+
+  <p>类型定义用于：</p>
+  <ul>
+    <li>创建语义上有意义的类型（如 <code>Celsius</code>, <code>UserID</code>）</li>
+    <li>为现有类型添加方法</li>
+    <li>利用类型系统防止参数混用</li>
+    <li>实现类型安全的枚举</li>
+  </ul>
+
+  <p>类型别名用于：</p>
+  <ul>
+    <li>大规模重构时平滑升级类型（不破坏现有代码）</li>
+    <li>标准库中为基本类型提供更语义化的名字（<code>byte</code>, <code>rune</code>）</li>
+    <li>解耦包之间的依赖（如 <code>context.Context</code> 的类型别名用法）</li>
+  </ul>
+
+  <p>一个经典的别名使用场景：</p>
+
+<pre><code>// 旧版本库定义了 type Logger struct
+// 新版本想把 Logger 改名为 BaseLogger，同时保留 Logger 名称兼容
+type BaseLogger struct { /* ... */ }
+
+// 类型别名让旧代码继续编译
+type Logger = BaseLogger
+
+// 旧代码依然可以：
+// var log Logger   // 实际就是 BaseLogger
+</code></pre>
+
+  <div class="callout">
+    <strong>类型系统总结:</strong><br>
+    Go 的类型系统简洁但强大：零值消除未初始化问题；隐式接口实现和鸭子类型让代码灵活；组合优于继承；类型别名与定义的区别体现了渐进式升级的设计哲学。理解这些基础是掌握 Go 的第一步。
+  </div>
+</section>
+
+</div><!-- .container -->
+
+<script src="common.js"></script>
+</body>
+</html>

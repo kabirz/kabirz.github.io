@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Go 泛型深入深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%2300ADD8'/><stop offset='100%25' stop-color='%23007d9c'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>G</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Go 泛型深入深度解析</h1>
+  <p class="subtitle">类型参数、约束、类型推导、泛型容器、性能对比与最佳实践</p>
+  <span class="version">Go 1.18+ · 泛型设计</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#evolution">泛型演进</a></li>
+    <li><a href="#params">类型参数</a></li>
+    <li><a href="#constraints">约束</a></li>
+    <li><a href="#inference">类型推导</a></li>
+    <li><a href="#containers">泛型数据容器</a></li>
+    <li><a href="#algorithms">泛型算法</a></li>
+    <li><a href="#vs-codegen">泛型 vs 代码生成</a></li>
+    <li><a href="#perf">性能对比</a></li>
+    <li><a href="#bestpractices">最佳实践与陷阱</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="evolution" class="toc-link">
+  <h2><span class="num">01</span> 泛型演进</h2>
+  <p>Go 从诞生之初就有"泛型呼声"，但直到 Go 1.18（2022 年 3 月）才正式引入泛型。从设计草案到正式发布经历了 10 多年的讨论和反复迭代。</p>
+
+  <h3>Go 版本里程碑</h3>
+  <table>
+    <tr><th>版本</th><th>时间</th><th>泛型相关变化</th></tr>
+    <tr><td>Go 1.18</td><td>2022.03</td><td>正式引入泛型：类型参数、约束、类型推导</td></tr>
+    <tr><td>Go 1.19</td><td>2022.08</td><td>泛型 Bug 修复、类型推导优化</td></tr>
+    <tr><td>Go 1.20</td><td>2023.02</td><td>允许泛型类型在结构体中用作匿名字段</td></tr>
+    <tr><td>Go 1.21</td><td>2023.08</td><td>新增 <code>clear</code>、<code>min</code>、<code>max</code> 内置泛型函数</td></tr>
+    <tr><td>Go 1.22</td><td>2024.02</td><td>类型推断改进，for range 支持泛型迭代</td></tr>
+    <tr><td>Go 1.23</td><td>2025</td><td>迭代器（iterator）与泛型深度整合</td></tr>
+  </table>
+
+  <h3>Go 1.21 新增内置泛型函数</h3>
+  <pre><code>// Go 1.21 新增的三个泛型函数
+package main
+
+import (
+    "cmp"
+    "maps"
+    "slices"
+)
+
+func main() {
+    // min/max：比较任意可排序类型
+    x := min(3.14, 2.71)       // float64 - 2.71
+    y := max("abc", "xyz")     // string - "xyz"
+    z := min(100, 200, 300)    // int - 100
+
+    // clear：清空 map 或切片元素为零值
+    m := map[string]int{"a": 1}
+    clear(m)
+
+    s := []int{1, 2, 3}
+    clear(s)                   // s 变为 [0, 0, 0]
+
+    // cmp 包：可比较类型的排序工具
+    cmp.Compare(1, 2)          // -1
+    cmp.Less("a", "b")         // true
+    cmp.Or(0, 1, 2)            // 返回第一个非零值 - 1
+
+    // slices 包：泛型切片操作
+    slices.Sort([]int{3, 1, 2})
+    slices.Compact([]int{1, 1, 2, 2, 3})   // [1, 2, 3]
+
+    // maps 包：泛型 map 操作
+    maps.Clone(map[string]int{"a": 1})
+}</code></pre>
+
+  <div class="callout tip">
+    <strong>设计哲学:</strong> Go 的泛型在不引入类型擦除的前提下实现。编译器为每个类型参数的具体实例化生成专门的代码（类似 C++ 模板实例化），而非运行时装箱拆箱。
+  </div>
+</section>
+
+<section id="params" class="toc-link">
+  <h2><span class="num">02</span> 类型参数</h2>
+  <p>类型参数（Type Parameters）是泛型的核心。Go 使用方括号 <code>[]</code> 声明类型参数，而不是像 C++ 的尖括号 <code>&lt;&gt;</code>。</p>
+
+  <h3>函数泛型</h3>
+  <pre><code>package main
+
+import "fmt"
+
+// 单个类型参数
+func Print[T any](v T) {
+    fmt.Println(v)
+}
+
+// 多个类型参数
+func Pair[A, B any](a A, b B) (A, B) {
+    return a, b
+}
+
+// 约束类型参数
+func Sum[T ~int | ~float64](values []T) T {
+    var total T
+    for _, v := range values {
+        total += v
+    }
+    return total
+}
+
+// 调用方式
+func main() {
+    Print[string]("hello")   // 显式指定类型参数
+    Print(42)                // 类型推导（隐式）
+
+    result := Pair(1, "go")
+    fmt.Println(result)
+
+    ints := []int{1, 2, 3}
+    fmt.Println(Sum(ints))   // 6
+}</code></pre>
+
+  <h3>类型泛型</h3>
+  <pre><code>// 泛型结构体
+type Stack[T any] struct {
+    items []T
+}
+
+func (s *Stack[T]) Push(item T) {
+    s.items = append(s.items, item)
+}
+
+func (s *Stack[T]) Pop() (T, bool) {
+    if len(s.items) == 0 {
+        var zero T
+        return zero, false
+    }
+    item := s.items[len(s.items)-1]
+    s.items = s.items[:len(s.items)-1]
+    return item, true
+}
+
+func main() {
+    intStack := Stack[int]{}
+    intStack.Push(1)
+    intStack.Push(2)
+
+    strStack := Stack[string]{}
+    strStack.Push("a")
+    strStack.Push("b")
+
+    v, _ := intStack.Pop()
+    fmt.Println(v)  // 2
+}</code></pre>
+
+  <h3>方法泛型限制</h3>
+  <pre><code>// 方法不能引入新的类型参数（Go 1.18+ 限制）
+type Container[T any] struct {
+    value T
+}
+
+func (c Container[T]) Get() T {
+    return c.value
+}
+
+// 编译错误：方法不能有额外的类型参数
+// func (c Container[T]) Map[U any](fn func(T) U) Container[U]
+
+// 解决：使用顶层函数
+func MapContainer[T, U any](c Container[T], fn func(T) U) Container[U] {
+    return Container[U]{value: fn(c.value)}
+}
+
+// 泛型切片映射函数
+func Map[T, U any](s []T, fn func(T) U) []U {
+    result := make([]U, len(s))
+    for i, v := range s {
+        result[i] = fn(v)
+    }
+    return result
+}
+
+func main() {
+    nums := []int{1, 2, 3}
+    strs := Map(nums, func(i int) string {
+        return fmt.Sprintf("num-%d", i)
+    })
+    fmt.Println(strs)
+}</code></pre>
+
+  <div class="callout warn">
+    <strong>已知限制:</strong> Go 1.18~1.23 均不支持在方法上声明额外的类型参数。这是 Go 泛型设计的主要限制之一，但可以通过泛型函数参数来绕过。
+  </div>
+</section>
+
+<section id="constraints" class="toc-link">
+  <h2><span class="num">03</span> 约束</h2>
+  <p>约束（Constraints）定义了类型参数允许的类型集合。Go 通过接口类型来定义约束。</p>
+
+  <h3>内置约束</h3>
+  <pre><code>import "cmp"
+
+// any：所有类型的约束（interface{} 的别名）
+func Identity[T any](v T) T { return v }
+
+// comparable：可比较类型（支持 == 和 !=）
+func Contains[T comparable](slice []T, target T) bool {
+    for _, v := range slice {
+        if v == target {
+            return true
+        }
+    }
+    return false
+}
+
+// cmp.Ordered：可排序类型（Go 1.21）
+func Sort[T cmp.Ordered](slice []T) {
+    slices.Sort(slice)
+}</code></pre>
+
+  <h3>自定义约束</h3>
+  <pre><code>// 使用接口定义约束
+type Numeric interface {
+    ~int | ~int8 | ~int16 | ~int32 | ~int64 |
+    ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
+    ~float32 | ~float64
+}
+
+type Integer interface {
+    ~int | ~int8 | ~int16 | ~int32 | ~int64 |
+    ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+type Float interface {
+    ~float32 | ~float64
+}
+
+// 组合约束
+type Number interface {
+    Integer | Float
+}
+
+// 使用约束
+func Add[T Number](a, b T) T {
+    return a + b
+}
+
+// 带方法的约束
+type Stringer interface {
+    ~string
+    String() string
+}</code></pre>
+
+  <h3>~ 底层类型匹配</h3>
+  <pre><code>type MyInt int
+type MyString string
+
+// 严格匹配：不接受 MyInt
+func AddStrict[T int](a, b T) T {
+    return a + b
+}
+// AddStrict(MyInt(1), MyInt(2))  // 编译错误
+
+// 宽松匹配：接受底层类型为 int 的所有类型
+func AddLoose[T ~int](a, b T) T {
+    return a + b
+}
+func main() {
+    AddLoose(MyInt(1), MyInt(2))  // 正确编译
+}
+
+// 类型集（Type Set）概念
+// ~int 的类型集：int, MyInt, MyCount, ...
+// int 的类型集：只有 int 本身</code></pre>
+
+  <h3>约束字面量</h3>
+  <pre><code>// 内联约束：无需定义具名约束
+func Min[T ~int | ~float64](a, b T) T {
+    if a &lt; b {
+        return a
+    }
+    return b
+}
+
+// 复杂约束组合
+func Process[T interface {
+    ~[]byte
+    Clone() T
+}](data T) T {
+    return data.Clone()
+}
+
+// 近似元素的限制
+// ~ 只能用于具体类型，不能用于接口
+// ~ 不能用于类型参数</code></pre>
+</section>
+
+<section id="inference" class="toc-link">
+  <h2><span class="num">04</span> 类型推导</h2>
+  <p>类型推导（Type Inference）让调用泛型函数时可以省略大部分类型参数，编译器根据函数参数和返回值的上下文自动推导。</p>
+
+  <h3>函数参数推导</h3>
+  <pre><code>func Map[T, U any](s []T, fn func(T) U) []U {
+    result := make([]U, len(s))
+    for i, v := range s {
+        result[i] = fn(v)
+    }
+    return result
+}
+
+func main() {
+    // 完全显式
+    Map[int, string]([]int{1, 2, 3}, func(i int) string {
+        return fmt.Sprintf("%d", i)
+    })
+
+    // 部分推导：编译器从参数推断 int，从返回值推断 string
+    Map([]int{1, 2, 3}, func(i int) string {
+        return fmt.Sprintf("%d", i)
+    })
+
+    // 完全推导（Go 1.21+）
+    result := Map([]int{1, 2, 3}, func(i int) string {
+        return fmt.Sprintf("%d", i)
+    })
+    _ = result
+}</code></pre>
+
+  <h3>类型实例化</h3>
+  <pre><code>// 编译器为每个类型参数生成专用代码
+type Stack[T any] struct { items []T }
+
+// Stack[int] 和 Stack[string] 生成两份不同代码
+var intStack Stack[int]
+var strStack Stack[string]
+
+// 每个实例化的类型都有自己的方法（独立的代码拷贝）
+// 不同于 Java 泛型的类型擦除
+
+// 接口约束的实例化
+// 当类型参数受接口约束时，通过接口方法调用（间接）
+// 对于具体类型约束，直接生成类型相关代码（内联）</code></pre>
+
+  <div class="callout tip">
+    <strong>推导改进（Go 1.22）:</strong> 支持从上下文字段和返回类型推导。例如 <code>var f Filter[string] = myFilter</code> 可以正确推导 <code>myFilter</code> 的底层类型必须满足 <code>Filter[string]</code>。
+  </div>
+
+  <h3>自动实例化限制</h3>
+  <pre><code>// 限制 1：不能对类型参数做类型断言
+func TypeSwitch[T any](v T) {
+    // switch v.(type) {  // 编译错误！
+    // case int: ...
+    // case string: ...
+    // }
+}
+
+// 限制 2：方法不能有额外的类型参数
+// func (s Stack[T]) Transform[U any](fn func(T) U) Stack[U]
+
+// 限制 3：匿名函数不能有类型参数
+// fn := func[T any](v T) T { return v }
+
+// 限制 4：闭包的类型推导有限（Go 1.18）
+func BadClosure[T any](fn func(T)) {}
+// BadClosure(func(v int) {})  // Go 1.18 错误，1.21 正确
+
+// Go 1.22 改进：上下文类型推断
+type Validator[T any] func(T) bool
+
+func NewValidator[T any](fn func(T) bool) Validator[T] {
+    return fn
+}
+
+// Go 1.22 可以从变量声明推断
+var intValidator Validator[int] = NewValidator(func(i int) bool {
+    return i &gt; 0
+})</code></pre>
+</section>
+
+<section id="containers" class="toc-link">
+  <h2><span class="num">05</span> 泛型数据容器</h2>
+  <p>在泛型之前，Go 的标准容器使用 <code>interface{}</code>，需要运行时类型断言。泛型让容器变得类型安全且更高效。</p>
+
+  <h3>泛型 List</h3>
+  <pre><code>package main
+
+import "fmt"
+
+type List[T any] struct {
+    head *node[T]
+    tail *node[T]
+    size int
+}
+
+type node[T any] struct {
+    value T
+    next  *node[T]
+}
+
+func (l *List[T]) PushBack(v T) {
+    n := &node[T]{value: v}
+    if l.tail == nil {
+        l.head = n
+        l.tail = n
+    } else {
+        l.tail.next = n
+        l.tail = n
+    }
+    l.size++
+}
+
+func (l *List[T]) PushFront(v T) {
+    n := &node[T]{value: v, next: l.head}
+    l.head = n
+    if l.tail == nil {
+        l.tail = n
+    }
+    l.size++
+}
+
+func (l *List[T]) ForEach(fn func(T)) {
+    for cur := l.head; cur != nil; cur = cur.next {
+        fn(cur.value)
+    }
+}</code></pre>
+
+  <h3>泛型 Set</h3>
+  <pre><code>type Set[T comparable] struct {
+    items map[T]struct{}
+}
+
+func NewSet[T comparable]() *Set[T] {
+    return &Set[T]{items: make(map[T]struct{})}
+}
+
+func (s *Set[T]) Add(v T) {
+    s.items[v] = struct{}{}
+}
+
+func (s *Set[T]) Remove(v T) {
+    delete(s.items, v)
+}
+
+func (s *Set[T]) Contains(v T) bool {
+    _, ok := s.items[v]
+    return ok
+}
+
+func (s *Set[T]) Len() int {
+    return len(s.items)
+}
+
+func (s *Set[T]) Union(other *Set[T]) *Set[T] {
+    result := NewSet[T]()
+    for v := range s.items {
+        result.Add(v)
+    }
+    for v := range other.items {
+        result.Add(v)
+    }
+    return result
+}
+
+func (s *Set[T]) Intersect(other *Set[T]) *Set[T] {
+    result := NewSet[T]()
+    for v := range s.items {
+        if other.Contains(v) {
+            result.Add(v)
+        }
+    }
+    return result
+}</code></pre>
+
+  <h3>泛型 OrderedMap</h3>
+  <pre><code>type OrderedMap[K comparable, V any] struct {
+    keys   []K
+    values map[K]V
+}
+
+func NewOrderedMap[K comparable, V any]() *OrderedMap[K, V] {
+    return &OrderedMap[K, V]{
+        keys:   make([]K, 0),
+        values: make(map[K]V),
+    }
+}
+
+func (m *OrderedMap[K, V]) Set(key K, value V) {
+    if _, exists := m.values[key]; !exists {
+        m.keys = append(m.keys, key)
+    }
+    m.values[key] = value
+}
+
+func (m *OrderedMap[K, V]) Get(key K) (V, bool) {
+    v, ok := m.values[key]
+    return v, ok
+}
+
+func (m *OrderedMap[K, V]) Delete(key K) {
+    if _, ok := m.values[key]; ok {
+        delete(m.values, key)
+        for i, k := range m.keys {
+            if k == key {
+                m.keys = append(m.keys[:i], m.keys[i+1:]...)
+                break
+            }
+        }
+    }
+}
+
+func (m *OrderedMap[K, V]) Iterate(fn func(K, V) bool) {
+    for _, k := range m.keys {
+        if !fn(k, m.values[k]) {
+            break
+        }
+    }
+}</code></pre>
+
+  <h3>泛型 Heap</h3>
+  <pre><code>type Heap[T any] struct {
+    items []T
+    less  func(a, b T) bool
+}
+
+func NewHeap[T any](less func(a, b T) bool) *Heap[T] {
+    return &Heap[T]{
+        items: make([]T, 0),
+        less:  less,
+    }
+}
+
+func (h *Heap[T]) Push(v T) {
+    h.items = append(h.items, v)
+    h.siftUp(len(h.items) - 1)
+}
+
+func (h *Heap[T]) Pop() (T, bool) {
+    if len(h.items) == 0 {
+        var zero T
+        return zero, false
+    }
+    v := h.items[0]
+    h.items[0] = h.items[len(h.items)-1]
+    h.items = h.items[:len(h.items)-1]
+    h.siftDown(0)
+    return v, true
+}
+
+func (h *Heap[T]) siftUp(i int) {
+    for i &gt; 0 {
+        parent := (i - 1) / 2
+        if h.less(h.items[i], h.items[parent]) {
+            h.items[i], h.items[parent] = h.items[parent], h.items[i]
+            i = parent
+        } else {
+            break
+        }
+    }
+}
+
+func (h *Heap[T]) siftDown(i int) {
+    n := len(h.items)
+    for {
+        smallest := i
+        left := 2*i + 1
+        right := 2*i + 2
+        if left &lt; n &amp;&amp; h.less(h.items[left], h.items[smallest]) {
+            smallest = left
+        }
+        if right &lt; n &amp;&amp; h.less(h.items[right], h.items[smallest]) {
+            smallest = right
+        }
+        if smallest != i {
+            h.items[i], h.items[smallest] = h.items[smallest], h.items[i]
+            i = smallest
+        } else {
+            break
+        }
+    }
+}
+
+func (h *Heap[T]) Len() int {
+    return len(h.items)
+}
+
+// 使用示例
+func main() {
+    minHeap := NewHeap(func(a, b int) bool { return a &lt; b })
+    minHeap.Push(3)
+    minHeap.Push(1)
+    minHeap.Push(2)
+    v, _ := minHeap.Pop()
+    fmt.Println(v)  // 1
+}</code></pre>
+</section>
+
+<section id="algorithms" class="toc-link">
+  <h2><span class="num">06</span> 泛型算法</h2>
+  <p>泛型使得编写类型安全的算法库成为可能。以下演示常见的泛型算法模式。</p>
+
+  <h3>排序与搜索</h3>
+  <pre><code>import (
+    "cmp"
+    "slices"
+)
+
+// 通用排序（Go 1.21 slices.Sort 已是泛型）
+func Sort[T cmp.Ordered](slice []T) {
+    slices.Sort(slice)
+}
+
+// 倒序
+func SortDesc[T cmp.Ordered](slice []T) {
+    slices.SortFunc(slice, func(a, b T) int {
+        return cmp.Compare(b, a)
+    })
+}
+
+// 二分查找
+func BinarySearch[T cmp.Ordered](slice []T, target T) (int, bool) {
+    left, right := 0, len(slice)-1
+    for left &lt;= right {
+        mid := left + (right-left)/2
+        if slice[mid] == target {
+            return mid, true
+        }
+        if slice[mid] &lt; target {
+            left = mid + 1
+        } else {
+            right = mid - 1
+        }
+    }
+    return -1, false
+}</code></pre>
+
+  <h3>过滤与映射</h3>
+  <pre><code>// 过滤
+func Filter[T any](slice []T, predicate func(T) bool) []T {
+    result := make([]T, 0, len(slice))
+    for _, v := range slice {
+        if predicate(v) {
+            result = append(result, v)
+        }
+    }
+    return result
+}
+
+// 映射
+func Map[T, U any](slice []T, transform func(T) U) []U {
+    result := make([]U, len(slice))
+    for i, v := range slice {
+        result[i] = transform(v)
+    }
+    return result
+}
+
+// 归约
+func Reduce[T, U any](slice []T, initial U, f func(U, T) U) U {
+    result := initial
+    for _, v := range slice {
+        result = f(result, v)
+    }
+    return result
+}
+
+// 测试
+func main() {
+    nums := []int{1, 2, 3, 4, 5, 6}
+
+    // 过滤偶数
+    evens := Filter(nums, func(n int) bool {
+        return n%2 == 0
+    })
+    fmt.Println(evens)  // [2 4 6]
+
+    // 映射为字符串
+    strs := Map(nums, func(n int) string {
+        return fmt.Sprintf("n-%d", n)
+    })
+
+    // 归约求和
+    sum := Reduce(nums, 0, func(acc, n int) int {
+        return acc + n
+    })
+    fmt.Println(sum)  // 21
+}</code></pre>
+
+  <h3>去重与分组</h3>
+  <pre><code>// 去重（stable）
+func Unique[T comparable](slice []T) []T {
+    seen := make(map[T]struct{})
+    result := make([]T, 0, len(slice))
+    for _, v := range slice {
+        if _, ok := seen[v]; !ok {
+            seen[v] = struct{}{}
+            result = append(result, v)
+        }
+    }
+    return result
+}
+
+// 分组
+func GroupBy[T any, K comparable](slice []T, keyFn func(T) K) map[K][]T {
+    result := make(map[K][]T)
+    for _, v := range slice {
+        key := keyFn(v)
+        result[key] = append(result[key], v)
+    }
+    return result
+}
+
+// 分区
+func Partition[T any](slice []T, predicate func(T) bool) ([]T, []T) {
+    matched := make([]T, 0, len(slice)/2)
+    unmatched := make([]T, 0, len(slice)/2)
+    for _, v := range slice {
+        if predicate(v) {
+            matched = append(matched, v)
+        } else {
+            unmatched = append(unmatched, v)
+        }
+    }
+    return matched, unmatched
+}
+
+// 扁平化
+func Flatten[T any](slices [][]T) []T {
+    total := 0
+    for _, s := range slices {
+        total += len(s)
+    }
+    result := make([]T, 0, total)
+    for _, s := range slices {
+        result = append(result, s...)
+    }
+    return result
+}</code></pre>
+
+  <div class="callout tip">
+    <strong>实时性能:</strong> Go 1.21 的 <code>slices</code> 和 <code>maps</code> 包提供了官方泛型算法实现。在大多数情况下优先使用标准库而非自己实现。
+  </div>
+</section>
+
+<section id="vs-codegen" class="toc-link">
+  <h2><span class="num">07</span> 泛型 vs 代码生成</h2>
+  <p>在泛型出现之前，Go 社区使用代码生成工具实现类型安全的重复代码。泛型是否能完全取代代码生成？</p>
+
+  <h3>genny：泛型前的代码生成方案</h3>
+  <pre><code>// genny 使用注释标记生成代码
+// 源文件：stack_genny.go
+//go:generate genny -in=stack_genny.go -out=stack_int.go gen "T=int"
+//go:generate genny -in=stack_genny.go -out=stack_string.go gen "T=string"
+
+package stack
+
+type Stack[T any] struct {
+    items []T
+}
+
+func (s *Stack[T]) Push(item T) {
+    s.items = append(s.items, item)
+}
+
+// genny 会为每个具体类型生成一份完整拷贝
+// 生成后：Stack_int.go, Stack_string.go</code></pre>
+
+  <h3>stringer：字符串方法生成</h3>
+  <pre><code>//go:generate stringer -type=Pill
+
+package pill
+
+type Pill int
+
+const (
+    Placebo Pill = iota
+    Aspirin
+    Ibuprofen
+    Paracetamol
+)
+
+// 运行 go generate 后生成 pill_string.go
+// 包含 func (i Pill) String() string
+
+// 泛型不能替代 stringer，因为 stringer 用于枚举类型
+// 而泛型不能操作具体类型的常量</code></pre>
+
+  <h3>泛型 vs 代码生成对比</h3>
+  <table>
+    <tr><th>特性</th><th>泛型</th><th>代码生成</th></tr>
+    <tr><td>类型安全</td><td>编译时检查</td><td>编译时检查</td></tr>
+    <tr><td>编译速度</td><td>更快（编译器优化）</td><td>需额外生成步骤</td></tr>
+    <tr><td>二进制大小</td><td>按需实例化</td><td>生成全部代码</td></tr>
+    <tr><td>可读性</td><td>单一源文件</td><td>多文件较混乱</td></tr>
+    <tr><td>调试</td><td>调试信息受限</td><td>完整调试信息</td></tr>
+    <tr><td>特殊化</td><td>不支持特化</td><td>可为不同类型定制</td></tr>
+    <tr><td>元数据/反射</td><td>有限制</td><td>完全可扩展</td></tr>
+    <tr><td>适用场景</td><td>通用容器/算法</td><td>枚举方法/编解码/ORM</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <strong>无法替代的场景:</strong> 代码生成仍然必要的场景包括：枚举的 String 方法（stringer）、Protocol Buffers 代码生成、ORM 模型生成、JSON Schema 生成等需要元数据反射的场景。
+  </div>
+</section>
+
+<section id="perf" class="toc-link">
+  <h2><span class="num">08</span> 性能对比</h2>
+  <p>泛型在性能上通常优于接口（interface{}），但可能略低于手写特殊化代码。以下通过基准测试对比三种方案的差异。</p>
+
+  <h3>性能基准测试</h3>
+  <pre><code>package main
+
+import (
+    "testing"
+)
+
+// Interface 方案
+type IntStackInterface struct {
+    items []interface{}
+}
+
+func (s *IntStackInterface) Push(v interface{}) {
+    s.items = append(s.items, v)
+}
+
+func (s *IntStackInterface) Pop() interface{} {
+    if len(s.items) == 0 {
+        return nil
+    }
+    v := s.items[len(s.items)-1]
+    s.items = s.items[:len(s.items)-1]
+    return v
+}
+
+// 泛型方案
+type IntStackGeneric[T any] struct {
+    items []T
+}
+
+func (s *IntStackGeneric[T]) Push(v T) {
+    s.items = append(s.items, v)
+}
+
+func (s *IntStackGeneric[T]) Pop() T {
+    v := s.items[len(s.items)-1]
+    s.items = s.items[:len(s.items)-1]
+    return v
+}
+
+// 手写特殊化方案
+type IntStack struct {
+    items []int
+}
+
+func (s *IntStack) Push(v int) {
+    s.items = append(s.items, v)
+}
+
+func (s *IntStack) Pop() int {
+    v := s.items[len(s.items)-1]
+    s.items = s.items[:len(s.items)-1]
+    return v
+}
+
+// 基准测试
+func BenchmarkInterfaceStack(b *testing.B) {
+    s := &IntStackInterface{}
+    for i := 0; i &lt; b.N; i++ {
+        s.Push(i)
+        s.Pop()
+    }
+}
+
+func BenchmarkGenericStack(b *testing.B) {
+    s := &IntStackGeneric[int]{}
+    for i := 0; i &lt; b.N; i++ {
+        s.Push(i)
+        s.Pop()
+    }
+}
+
+func BenchmarkSpecializedStack(b *testing.B) {
+    s := &IntStack{}
+    for i := 0; i &lt; b.N; i++ {
+        s.Push(i)
+        s.Pop()
+    }
+}</code></pre>
+
+  <h3>典型基准测试结果</h3>
+  <pre><code># Go 1.22, Linux amd64
+BenchmarkInterfaceStack-8     50_000_000    32.5 ns/op    8 B/op    1 allocs/op
+BenchmarkGenericStack-8      100_000_000    12.3 ns/op    0 B/op    0 allocs/op
+BenchmarkSpecializedStack-8  150_000_000     8.1 ns/op    0 B/op    0 allocs/op
+
+# 分析：
+# 泛型 vs 接口：~2.6x 更快，零分配
+# 特殊化 vs 泛型：~1.5x 更快
+# 泛型消除了接口的装箱拆箱开销和逃逸分析</code></pre>
+
+  <div class="callout tip">
+    <strong>性能差异来源:</strong> 泛型为每个实例化类型生成专用代码，避免了接口的装箱/拆箱（boxing/unboxing）和间接调用。手写特殊化代码之所以更快，是因为编译器可以做更激进的内联优化。
+  </div>
+
+  <h3>二进制大小对比</h3>
+  <pre><code># 泛型对二进制大小的影响
+# 三个版本使用相同算法处理 int/float64/string
+
+# Interface 版本（单份代码 + 类型断言）
+go build -o app_interface .
+# 大小：4.2 MB
+
+# 泛型版本（三份实例化代码）
+go build -o app_generic .
+# 大小：5.8 MB（+38%）
+
+# 代码生成版本（三份独立源文件）
+go build -o app_gen .
+# 大小：6.1 MB（+45%）
+
+# 编译速度对比
+# Interface: 0.8s
+# 泛型: 1.2s
+# 代码生成: 2.1s（含生成步骤）</code></pre>
+
+  <table>
+    <tr><th>方案</th><th>运行时性能</th><th>二进制大小</th><th>编译速度</th><th>代码维护</th></tr>
+    <tr><td>interface{}</td><td>较慢（装箱）</td><td>小</td><td>快</td><td>差（类型断言）</td></tr>
+    <tr><td>泛型</td><td>快（零装箱）</td><td>中等</td><td>中等</td><td>好</td></tr>
+    <tr><td>代码生成</td><td>最快（特化）</td><td>大</td><td>慢（需生成）</td><td>中等</td></tr>
+    <tr><td>手写特殊化</td><td>最快</td><td>视情况</td><td>最快</td><td>差（重复代码）</td></tr>
+  </table>
+</section>
+
+<section id="bestpractices" class="toc-link">
+  <h2><span class="num">09</span> 最佳实践与陷阱</h2>
+
+  <h3>最佳实践</h3>
+  <pre><code>// 1. 优先使用标准库泛型
+// Go 1.21 的 slices 和 maps 包已经覆盖大部分场景
+import (
+    "slices"
+    "maps"
+)
+
+// 2. 使用 cmp.Ordered 而非自定义排序约束
+func SortAndSearch[T cmp.Ordered](slice []T, target T) bool {
+    slices.Sort(slice)
+    _, found := slices.BinarySearch(slice, target)
+    return found
+}
+
+// 3. 避免不必要的类型参数
+// ❌ 不好的设计
+type Wrapper[T any] struct {
+    Value T
+}
+func ProcessInt(w Wrapper[int]) {
+    fmt.Println(w.Value)
+}
+
+// ✅ 直接使用具体类型
+type IntWrapper struct {
+    Value int
+}
+
+// 4. 用类型推导简化调用
+// 调用者无需显式指定类型参数
+func NewStack[T any]() *Stack[T] {
+    return &Stack[T]{}
+}
+// s := NewStack[int]()  // 简洁
+
+// 5. 在公共 API 中优先使用泛型而非 interface{}
+// ❌ 旧 API
+func Sort(data sort.Interface)
+// ✅ 新 API（泛型）
+func Sort[T cmp.Ordered](data []T)</code></pre>
+
+  <h3>常见陷阱</h3>
+  <pre><code>// 陷阱 1：误用 any 导致运行时错误
+func Unmarshal[T any](data []byte) (T, error) {
+    var v T
+    // 不是所有 T 都实现了 json.Unmarshaler
+    err := json.Unmarshal(data, &amp;v)
+    return v, err
+}
+
+// 正确做法：约束具体的反序列化方式
+type JSONable interface {
+    ~string | ~[]byte
+}
+
+// 陷阱 2：零值陷阱
+func First[T any](items []T) T {
+    if len(items) == 0 {
+        var zero T  // 创建零值（不是 nil！）
+        return zero
+    }
+    return items[0]
+}
+
+// Go 1.21 可以使用 clear 清零
+func Reset[T any](items []T) {
+    clear(items)  // 所有元素归零
+}
+
+// 陷阱 3：无法约束方法集合
+// 不能这样定义约束：
+// type HasString interface {
+//     String() string  // OK
+//     ~string           // 编译错误：不能混合方法和类型集
+// }
+
+// 陷阱 4：约束可以很复杂
+type ComplexConstraint[T any] interface {
+    ~[]T
+    ~string
+}
+// 这种约束只能匹配同时是 []T 和 string 的类型（不现实）
+
+// 陷阱 5：性能陷阱 - 频繁实例化
+// 以下导致大量代码膨胀
+type ManyInstances struct {
+    a Stack[float64]
+    b Stack[float32]
+    c Stack[int]
+    d Stack[int8]
+    e Stack[int16]
+    f Stack[int32]
+    g Stack[int64]
+    h Stack[uint]
+    i Stack[string]
+}
+
+// 改进：使用接口作为内部实现
+type StackCore struct {
+    items []interface{}
+}
+// 但失去类型安全性</code></pre>
+
+  <h3>何时使用泛型</h3>
+  <table>
+    <tr><th>适合使用泛型</th><th>不适合使用泛型</th></tr>
+    <tr><td>通用容器（List、Set、Map、Stack、Queue）</td><td>业务逻辑中单一类型的函数</td></tr>
+    <tr><td>通用算法（排序、搜索、映射、过滤、归约）</td><td>需要类型特化或性能极致优化</td></tr>
+    <tr><td>数据管道和转换函数</td><td>枚举类型方法生成</td></tr>
+    <tr><td>需要类型安全的包装器</td><td>需要反射和运行时类型检查</td></tr>
+    <tr><td>减少相同逻辑的重复代码</td><td>API 设计不需要泛型灵活性</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>决策指南:</strong> 如果一个函数或类型需要为三种以上不同类型重复实现，且这些类型满足相同的约束，就应该用泛型。如果只有一两种类型，手写特殊化代码更简洁高效。
+  </div>
+</section>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

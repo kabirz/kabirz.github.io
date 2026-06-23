@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Go CGo 与跨语言调用深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%2300ADD8'/><stop offset='100%25' stop-color='%23007d9c'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>G</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Go CGo 与跨语言调用深度解析</h1>
+  <p class="subtitle">CGo 机制、类型映射、内存管理、性能优化与最佳实践</p>
+  <span class="version">Go 1.22+ · CGo 实现</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#basics">CGo 基础</a></li>
+    <li><a href="#types">类型映射</a></li>
+    <li><a href="#memory">内存管理</a></li>
+    <li><a href="#overhead">cgo 调用开销</a></li>
+    <li><a href="#batch">批量调用优化</a></li>
+    <li><a href="#callback">回调 Go 函数</a></li>
+    <li><a href="#build">混合构建</a></li>
+    <li><a href="#profiling">性能测量工具</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="basics" class="toc-link">
+  <h2><span class="num">01</span> CGo 基础</h2>
+  <p>CGo 是 Go 语言内置的 FFI（Foreign Function Interface）机制，允许 Go 代码直接调用 C 语言函数，也允许 C 代码调用 Go 函数。CGo 通过 <code>import "C"</code> 伪包和特殊的注释语法实现。</p>
+
+  <h3>基础语法</h3>
+  <p>CGo 代码写在 Go 源文件中，C 代码写在 <code>import "C"</code> 之前的注释中：</p>
+  <pre><code>package main
+
+/*
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+// C 函数声明
+void hello(const char* name) {
+    printf("Hello, %s!\n", name);
+}
+
+// 返回结构体
+typedef struct {
+    int x;
+    int y;
+} Point;
+
+Point make_point(int x, int y) {
+    Point p = {x, y};
+    return p;
+}
+*/
+import "C"
+import "fmt"
+
+func main() {
+    // 调用 C 函数
+    C.hello(C.CString("Go"))
+    
+    // 调用返回结构体的 C 函数
+    p := C.make_point(C.int(10), C.int(20))
+    fmt.Printf("Point: %d, %d\n", p.x, p.y)
+}</code></pre>
+
+  <h3>#cgo 指令</h3>
+  <p><code>#cgo</code> 注释用于控制 C 编译器的标志和链接选项：</p>
+  <pre><code>// 编译标志
+// #cgo CFLAGS: -I/usr/local/include
+// #cgo CPPFLAGS: -I/opt/include
+// #cgo LDFLAGS: -L/usr/local/lib -lmylib -lpthread
+
+// 条件编译（按 OS 和架构）
+// #cgo linux CFLAGS: -DLINUX
+// #cgo darwin CFLAGS: -DMACOS
+// #cgo windows LDFLAGS: -lws2_32
+
+// 按自定义构建标签
+// #cgo amd64 CFLAGS: -msse4
+
+// 指定 C 编译器
+// #cgo CC: clang-14
+// #cgo CXX: clang++-14
+
+package main
+import "C"</code></pre>
+
+  <h3>CGo 的工作流程</h3>
+  <p>Go 工具链在编译 CGo 文件时会自动调用 C 编译器：</p>
+  <pre><code># 查看 CGo 相关的环境变量
+go env CC                       # C 编译器路径
+go env CGO_ENABLED              # CGo 是否启用（1/0）
+go env CGO_CFLAGS               # 额外的 C 编译标志
+go env CGO_LDFLAGS              # 额外的链接标志
+
+# 禁止 CGo（会跳过所有含 import "C" 的文件）
+go env -w CGO_ENABLED=0
+
+# 查看 CGo 生成的临时文件
+go build -x -work ./mypackage</code></pre>
+
+  <div class="callout warn">
+    <strong>重要限制:</strong> CGo 不是纯 Go 的一部分。使用 CGo 意味着你的程序依赖于 C 工具链，交叉编译会更复杂，而且无法使用 <code>-buildmode=pie</code> 等特性。
+  </div>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 类型映射</h2>
+  <p>CGo 在 Go 和 C 类型之间提供了自动映射。理解这些映射规则是正确使用 CGo 的前提。</p>
+
+  <h3>基本类型映射</h3>
+  <table>
+    <tr><th>C 类型</th><th>Go 类型</th><th>说明</th></tr>
+    <tr><td><code>char</code></td><td><code>C.char</code></td><td>可能有符号或无符号（依赖平台）</td></tr>
+    <tr><td><code>signed char</code></td><td><code>C.schar</code></td><td>有符号 8 位</td></tr>
+    <tr><td><code>unsigned char</code></td><td><code>C.uchar</code></td><td>无符号 8 位</td></tr>
+    <tr><td><code>short</code></td><td><code>C.short</code></td><td>16 位</td></tr>
+    <tr><td><code>int</code></td><td><code>C.int</code></td><td>32 位</td></tr>
+    <tr><td><code>unsigned int</code></td><td><code>C.uint</code></td><td>无符号 32 位</td></tr>
+    <tr><td><code>long</code></td><td><code>C.long</code></td><td>大小依赖平台</td></tr>
+    <tr><td><code>long long</code></td><td><code>C.longlong</code></td><td>64 位</td></tr>
+    <tr><td><code>float</code></td><td><code>C.float</code></td><td>32 位浮点</td></tr>
+    <tr><td><code>double</code></td><td><code>C.double</code></td><td>64 位浮点</td></tr>
+    <tr><td><code>void</code></td><td><code>_Ctype_void</code></td><td>不完整类型</td></tr>
+    <tr><td><code>size_t</code></td><td><code>C.size_t</code></td><td>大小类型（无符号）</td></tr>
+    <tr><td><code>char*</code></td><td><code>*C.char</code></td><td>C 字符串指针</td></tr>
+  </table>
+
+  <h3>字符串转换</h3>
+  <p>字符串是 CGo 中最常用的跨边界数据类型，Go 提供了两个转换函数：</p>
+  <pre><code>import "C"
+import "unsafe"
+
+func main() {
+    // Go 字符串 → C 字符串
+    // C.CString 会在 C 堆上分配内存（需要手动释放）
+    cs := C.CString("Hello from Go")
+    defer C.free(unsafe.Pointer(cs))
+    
+    // C 字符串 → Go 字符串
+    // C.GoString 会复制 C 字符串到 Go 内存空间
+    goStr := C.GoString(cs)
+    
+    // C 字符串（限定长度）→ Go 字符串
+    // 适用于非 nul 结尾的 C 字符串
+    limited := C.GoStringN(cs, C.int(5)) // "Hello"
+    
+    _ = goStr
+    _ = limited
+}</code></pre>
+
+  <div class="callout tip">
+    <strong>内存管理要点:</strong> <code>C.CString</code> 在 C 堆上分配内存且不会被 Go GC 回收，所以必须用 <code>C.free</code> 手动释放。忘记释放会导致内存泄漏。
+  </div>
+
+  <h3>指针传递</h3>
+  <p>Go 指针不能直接传递给 C，除非使用 <code>unsafe.Pointer</code> 转换。Go 1.17 引入了 <code>runtime.Pinner</code> 来固定 Go 对象的内存位置：</p>
+  <pre><code>import (
+    "C"
+    "runtime"
+    "unsafe"
+)
+
+func main() {
+    data := []byte("hello")
+    
+    // 方法 1：使用 Pinner 固定 Go 对象（推荐）
+    pinner := new(runtime.Pinner)
+    defer pinner.Unpin()
+    pinner.Pin(&data[0])
+    
+    // 现在可以将 data 指针安全传递给 C
+    C.process_data(unsafe.Pointer(&data[0]), C.int(len(data)))
+    
+    // 方法 2：在 C 堆上分配，复制数据
+    cBuf := C.malloc(C.size_t(len(data)))
+    defer C.free(cBuf)
+    copy((*[1 &lt;&lt; 30]byte)(cBuf)[:len(data)], data)
+    C.process_data(cBuf, C.int(len(data)))
+}</code></pre>
+
+  <h3>结构体与联合体</h3>
+  <pre><code>/*
+typedef struct {
+    char name[64];
+    int age;
+    float salary;
+} Employee;
+
+typedef union {
+    int i;
+    float f;
+    double d;
+} Value;
+*/
+import "C"
+
+func main() {
+    // 在 Go 中操作 C 结构体
+    var emp C.Employee
+    emp.name = [64]C.char{}  // 数组字段
+    emp.age = C.int(30)
+    emp.salary = C.float(5000.0)
+    
+    // 结构体字段访问
+    _ = emp.age        // C.int 类型
+    _ = emp.salary     // C.float 类型
+}</code></pre>
+</section>
+
+<section id="memory" class="toc-link">
+  <h2><span class="num">03</span> 内存管理</h2>
+  <p>CGo 涉及 Go GC 管理的堆和 C 手动管理的内存堆之间的交互，正确管理跨语言内存是 CGo 编程中最容易出错的环节。</p>
+
+  <h3>C 堆内存分配</h3>
+  <p>使用 <code>C.malloc</code> 和 <code>C.free</code> 在 C 堆上分配和释放内存：</p>
+  <pre><code>import "C"
+import "unsafe"
+
+// 分配并初始化 C 内存
+func allocateBuffer(size int) unsafe.Pointer {
+    ptr := C.malloc(C.size_t(size))
+    if ptr == nil {
+        panic("C malloc failed")
+    }
+    // 清零
+    C.memset(ptr, 0, C.size_t(size))
+    return ptr
+}
+
+func main() {
+    buf := allocateBuffer(1024)
+    defer C.free(buf)  // 必须释放！
+    
+    // 使用 C 内存
+    C.process_buffer(buf, C.int(1024))
+}</code></pre>
+
+  <div class="callout danger">
+    <strong>常见内存问题:</strong> C 堆内存不受 Go GC 管理。如果 <code>C.free</code> 未调用，内存会泄露直到进程退出。反过来，如果在 C 代码中持有 Go 指针且 Go GC 移动了对象，会导致野指针崩溃。
+  </div>
+
+  <h3>跨语言内存泄漏案例</h3>
+  <pre><code>// 错误示例：C.CString 未释放导致泄漏
+func logMessage(msg string) {
+    // 每次调用都分配 C 内存，但从不释放
+    cs := C.CString(msg)
+    C.log_message(cs)
+    // 缺少 C.free(unsafe.Pointer(cs))
+}
+
+// 正确做法：使用 defer 确保释放
+func logMessageSafe(msg string) {
+    cs := C.CString(msg)
+    defer C.free(unsafe.Pointer(cs))
+    C.log_message(cs)
+}
+
+// 错误示例：在循环中分配不释放
+func processMany(messages []string) {
+    for _, msg := range messages {
+        cs := C.CString(msg)
+        C.process(cs)
+        // 应该在循环内释放！
+    }
+}
+
+// 正确做法
+func processManySafe(messages []string) {
+    for _, msg := range messages {
+        cs := C.CString(msg)
+        C.process(cs)
+        C.free(unsafe.Pointer(cs))
+    }
+}</code></pre>
+
+  <h3>Go 对象固定（Pinning）</h3>
+  <p>从 Go 1.21 开始，<code>runtime.Pinner</code> 提供了安全的 Go 对象固定机制：</p>
+  <pre><code>import (
+    "runtime"
+    "unsafe"
+)
+
+type PinnedBuffer struct {
+    data   []byte
+    pinner runtime.Pinner
+}
+
+func NewPinnedBuffer(size int) *PinnedBuffer {
+    buf := &PinnedBuffer{
+        data: make([]byte, size),
+    }
+    // 固定底层数组，使其不被 GC 移动
+    buf.pinner.Pin(&buf.data[0])
+    return buf
+}
+
+func (pb *PinnedBuffer) Ptr() unsafe.Pointer {
+    return unsafe.Pointer(&pb.data[0])
+}
+
+func (pb *PinnedBuffer) Close() error {
+    pb.pinner.Unpin()
+    return nil
+}
+
+// 使用示例
+func main() {
+    buf := NewPinnedBuffer(1024)
+    defer buf.Close()
+    
+    // 安全传递指针给 C
+    C.write_data(buf.Ptr(), C.int(len(buf.data)))
+}</code></pre>
+
+  <h3>内存所有权约定</h3>
+  <p>明确约定谁负责释放跨边界内存：</p>
+  <table>
+    <tr><th>场景</th><th>分配方</th><th>释放方</th><th>示例</th></tr>
+    <tr><td>C 返回字符串</td><td>C 库</td><td>C 库（调用 C.free）</td><td><code>libxml2 xmlReadFile</code></td></tr>
+    <tr><td>C.CString</td><td>Go（C 堆）</td><td>Go 调用 C.free</td><td><code>defer C.free(ptr)</code></td></tr>
+    <tr><td>C.malloc</td><td>Go（C 堆）</td><td>Go 调用 C.free</td><td><code>defer C.free(ptr)</code></td></tr>
+    <tr><td>Go 切片传递给 C（同步）</td><td>Go</td><td>Go（GC 自动）</td><td>使用 Pinner 固定</td></tr>
+    <tr><td>Go 切片传递给 C（异步）</td><td>Go</td><td>C 完成后回调释放</td><td>需要 Pinner + 回调</td></tr>
+  </table>
+</section>
+
+<section id="overhead" class="toc-link">
+  <h2><span class="num">04</span> cgo 调用开销</h2>
+  <p>CGo 调用不是免费的。每次跨越 Go 和 C 的边界都有显著的上下文切换开销。</p>
+
+  <h3>调用开销组成</h3>
+  <p>CGo 调用涉及以下成本：</p>
+  <ol>
+    <li><strong>goroutine 栈切换</strong>：Go 的 goroutine 栈通常只有 2KB 且可动态增长，而 C 需要 2MB 的系统栈。CGo 必须在调用前切换到系统栈</li>
+    <li><strong>寄存器保存恢复</strong>：Go 和 C 遵循不同的调用约定（ABI），需要保存和恢复寄存器</li>
+    <li><strong>goroutine 阻塞</strong>：CGo 调用期间当前 goroutine 会被阻塞，但 Go 调度器会将 P 分配给其他 goroutine 执行</li>
+    <li><strong>cgoschedule 成本</strong>：Go runtime 需要调度 <code>sysmon</code> 监控 CGo 调用状态</li>
+  </ol>
+
+  <h3>基准测试</h3>
+  <p>以下基准展示 CGo 调用与纯 Go 调用的差距：</p>
+  <pre><code>// pure_go.go
+func GoNop() {}
+
+// cgo.go
+/*
+void c_nop() {}
+*/
+import "C"
+func CGoNop() { C.c_nop() }
+
+// benchmark_test.go
+func BenchmarkGoNop(b *testing.B) {
+    for i := 0; i &lt; b.N; i++ {
+        GoNop()
+    }
+}
+
+func BenchmarkCGoNop(b *testing.B) {
+    for i := 0; i &lt; b.N; i++ {
+        CGoNop()
+    }
+}</code></pre>
+  <pre><code># 典型结果（Go 1.22, Linux amd64）：
+BenchmarkGoNop-8    1000000000    0.4 ns/op
+BenchmarkCGoNop-8    20000000     75 ns/op    # ~180 倍慢！
+
+# 有参数的调用
+BenchmarkCGoAdd-8    15000000     85 ns/op
+# 调用 C 标准库函数（malloc）
+BenchmarkCGoMalloc-8  5000000    250 ns/op</code></pre>
+
+  <h3>CGO 阈值</h3>
+  <p>在实际项目中，设定 CGo 调用频率的上限是一个重要的架构决策：</p>
+  <pre><code>// 安全阈值示例
+const (
+    // 每秒 CGo 调用建议上限
+    MaxCGOCallsPerSecond = 100_000
+    
+    // 单个请求 CGo 调用建议上限
+    MaxCGOCallsPerRequest = 100
+)
+
+// 如果可以避免，不要在热路径上使用 CGo
+// ❌ 在循环中调用 CGo
+func processData(data []byte) {
+    for _, b := range data {
+        C.process_byte(C.char(b))  // 每个字节一次 CGo 调用
+    }
+}
+
+// ✅ 批处理后调用一次 CGo
+func processData(data []byte) {
+    C.process_buffer(unsafe.Pointer(&data[0]), C.int(len(data)))
+}</code></pre>
+
+  <div class="callout warn">
+    <strong>goroutine 调度影响:</strong> CGo 调用会阻塞当前 goroutine 的 OS 线程。如果同时有大量 CGo 调用，Go 调度器需要启动额外的 OS 线程来处理其他 goroutine。这可能导致线程数暴涨。
+  </div>
+
+  <h3>CGo 调用数量 vs 延迟</h3>
+  <table>
+    <tr><th>每秒调用次数</th><th>延迟影响</th><th>场景</th></tr>
+    <tr><td>&lt; 1,000</td><td>可忽略</td><td>初始化、配置读取</td></tr>
+    <tr><td>1,000 - 10,000</td><td>轻微</td><td>API 封装层</td></tr>
+    <tr><td>10,000 - 100,000</td><td>中等</td><td>数据处理中间层</td></tr>
+    <tr><td>100,000 - 1,000,000</td><td>显著</td><td>高吞吐数据处理</td></tr>
+    <tr><td>&gt; 1,000,000</td><td>严重</td><td>应优化为批量调用</td></tr>
+  </table>
+</section>
+
+<section id="batch" class="toc-link">
+  <h2><span class="num">05</span> 批量调用优化</h2>
+  <p>减少 CGo 边界跨越次数的核心策略是：<strong>批量处理</strong>。将多次小调用合并为一次大调用。</p>
+
+  <h3>批量处理模式</h3>
+  <pre><code>// ❌ 低效：逐元素 CGo 调用
+func sumArraySlow(nums []int32) int32 {
+    var total C.int
+    for _, n := range nums {
+        total += C.add(C.int(n), C.int(0))  // 每次调用 ~75ns
+    }
+    return int32(total)
+}
+
+// ✅ 高效：批量传入数组
+func sumArrayFast(nums []int32) int32 {
+    if len(nums) == 0 {
+        return 0
+    }
+    return int32(C.sum_array(
+        (*C.int32_t)(unsafe.Pointer(&nums[0])),
+        C.size_t(len(nums)),
+    ))
+}
+
+/*
+// C 端实现
+int32_t sum_array(const int32_t* arr, size_t len) {
+    int64_t total = 0;
+    for (size_t i = 0; i &lt; len; i++) {
+        total += arr[i];
+    }
+    return (int32_t)total;
+}
+*/</code></pre>
+
+  <h3>数据打包策略</h3>
+  <pre><code>// 将多个参数打包为结构体，减少 CGo 调用
+type BatchRequest struct {
+    inputs  [][]byte
+    results [][]byte
+}
+
+/*
+typedef struct {
+    const unsigned char* data;
+    int length;
+} Buffer;
+*/
+
+// 将多个输入打包为 Buffer 数组传递给 C
+func processBatch(inputs [][]byte) [][]byte {
+    n := len(inputs)
+    
+    // 创建 C 缓冲区数组
+    bufArray := make([]C.Buffer, n)
+    defer func() {
+        for i := range bufArray {
+            if bufArray[i].data != nil {
+                C.free(unsafe.Pointer(bufArray[i].data))
+            }
+        }
+    }()
+    
+    for i, input := range inputs {
+        bufArray[i].data = (*C.uchar)(C.CBytes(input))
+        bufArray[i].length = C.int(len(input))
+    }
+    
+    // 一次调用处理所有数据
+    C.process_batch(&bufArray[0], C.int(n))
+    
+    // 读取结果...
+    return results
+}</code></pre>
+
+  <div class="callout tip">
+    <strong>优化效果:</strong> 将 10,000 次独立 CGo 调用合并为 1 次批量调用，性能可以从秒级提升到毫秒级。
+  </div>
+
+  <h3>连接池与复用</h3>
+  <p>对于需要反复调用 C 库的场景，使用连接池复用 C 上下文：</p>
+  <pre><code>type CContextPool struct {
+    pool sync.Pool
+}
+
+func NewCContextPool() *CContextPool {
+    return &CContextPool{
+        pool: sync.Pool{
+            New: func() interface{} {
+                ctx := C.create_context()
+                return &cContext{ctx: ctx}
+            },
+        },
+    }
+}
+
+type cContext struct {
+    ctx *C.some_context
+}
+
+func (p *CContextPool) Process(data []byte) []byte {
+    c := p.pool.Get().(*cContext)
+    defer p.pool.Put(c)
+    
+    // 复用 C 上下文，避免重复创建销毁
+    result := C.process_with_context(c.ctx, 
+        (*C.char)(unsafe.Pointer(&data[0])),
+        C.int(len(data)))
+    
+    return C.GoBytes(unsafe.Pointer(result), C.int(C.get_result_len(result)))
+}</code></pre>
+</section>
+
+<section id="callback" class="toc-link">
+  <h2><span class="num">06</span> 回调 Go 函数</h2>
+  <p>CGo 支持从 C 代码调用 Go 函数，通过 <code>//export</code> 指令导出 Go 函数给 C 使用。</p>
+
+  <h3>export 基础用法</h3>
+  <pre><code>package main
+
+/*
+#include &lt;stdint.h&gt;
+
+// C 端声明回调函数指针类型
+typedef void (*callback_fn)(int id, const char* message);
+
+// C 函数，接受回调
+void set_callback(callback_fn cb) {
+    // 注册回调
+}
+
+// C 函数，触发回调
+void trigger_callbacks() {
+    // 遍历注册的回调并调用
+}
+*/
+import "C"
+import "fmt"
+
+//export goCallback
+func goCallback(id C.int, msg *C.char) {
+    fmt.Printf("Callback from C: id=%d, msg=%s\n", id, C.GoString(msg))
+}
+
+func main() {
+    // 将 Go 回调注册到 C
+    C.set_callback(C.callback_fn(C.goCallback))
+    C.trigger_callbacks()
+}</code></pre>
+
+  <div class="callout warn">
+    <strong>export 限制:</strong> <code>//export</code> 只能在 <code>main</code> 包中使用，否则无法被 C 链接。从 C 调用 Go 函数时，Go 运行时需要切换到 Go 的栈，额外增加了开销。
+  </div>
+
+  <h3>闭包跨边界</h3>
+  <p>C 语言不支持闭包，所以无法直接传递 Go 闭包给 C。解决方法是在 C 端存储上下文指针：</p>
+  <pre><code>package main
+
+/*
+typedef struct {
+    void* user_data;
+    void (*callback)(void* user_data, int result);
+} async_op;
+
+async_op* create_async_op(void* user_data, void (*cb)(void*, int)) {
+    async_op* op = malloc(sizeof(async_op));
+    op-&gt;user_data = user_data;
+    op-&gt;callback = cb;
+    return op;
+}
+
+void execute_async(async_op* op) {
+    // 模拟异步执行
+    op-&gt;callback(op-&gt;user_data, 42);
+}
+*/
+import "C"
+import "unsafe"
+
+//export goAsyncCallback
+func goAsyncCallback(userData unsafe.Pointer, result C.int) {
+    // 恢复 Go 闭包
+    callback := *(*func(int))(userData)
+    callback(int(result))
+}
+
+func AsyncOperation(cb func(int)) {
+    // 存储闭包到堆上
+    cbPtr := (*C.void)(unsafe.Pointer(&cb))
+    op := C.create_async_op(cbPtr, C.callback_fn(C.goAsyncCallback))
+    defer C.free(unsafe.Pointer(op))
+    C.execute_async(op)
+}
+
+func main() {
+    AsyncOperation(func(result int) {
+        println("Got result:", result)
+    })
+}</code></pre>
+
+  <h3>避免回调中的 Go 对象泄漏</h3>
+  <pre><code>// 安全包装器：确保 Go 对象在回调完成后被清理
+type CallbackHandle struct {
+    cb     func(int)
+    pinner runtime.Pinner
+}
+
+func NewCallbackHandle(cb func(int)) *CallbackHandle {
+    h := &CallbackHandle{cb: cb}
+    h.pinner.Pinner(h)  // 固定自己
+    return h
+}
+
+func (h *CallbackHandle) Release() {
+    h.pinner.Unpin()
+}
+
+//export goSafeCallback
+func goSafeCallback(handlePtr unsafe.Pointer, result C.int) {
+    handle := (*CallbackHandle)(handlePtr)
+    handle.cb(int(result))
+}</code></pre>
+</section>
+
+<section id="build" class="toc-link">
+  <h2><span class="num">07</span> 混合构建</h2>
+  <p>CGo 项目的构建比纯 Go 项目复杂，涉及 C 编译器、链接器和构建标签。</p>
+
+  <h3>构建标签与条件编译</h3>
+  <p>使用构建标签控制是否启用 CGo：</p>
+  <pre><code>// nocgo.go（禁用 CGo 时的纯 Go 实现）
+//go:build !cgo
+
+package crypto
+
+func computeHash(data []byte) []byte {
+    // 纯 Go 实现
+    return pureGoHash(data)
+}
+
+// cgo.go（启用 CGo 时调用 OpenSSL）
+//go:build cgo
+
+package crypto
+
+/*
+#cgo LDFLAGS: -lcrypto
+#include &lt;openssl/sha.h&gt;
+*/
+import "C"
+import "unsafe"
+
+func computeHash(data []byte) []byte {
+    // 使用 OpenSSL 的 SHA256 实现（性能更高）
+    hash := make([]byte, 32)
+    C.SHA256((*C.uchar)(unsafe.Pointer(&data[0])),
+        C.size_t(len(data)),
+        (*C.uchar)(unsafe.Pointer(&hash[0])))
+    return hash
+}</code></pre>
+
+  <h3>静态链接与动态链接</h3>
+  <pre><code>// 动态链接（默认）
+// #cgo LDFLAGS: -L/usr/local/lib -lmylib
+// 运行时需要 libmylib.so 在 LD_LIBRARY_PATH 中
+
+// 静态链接
+// #cgo LDFLAGS: -L/usr/local/lib -lmylib -static
+// #cgo pkg-config: --static mylib
+
+// 使用 pkg-config
+// #cgo pkg-config: --static libssl libcrypto
+// 等价于：
+// #cgo LDFLAGS: $(pkg-config --libs --static libssl libcrypto)
+
+// 完全静态构建
+// go build -ldflags='-extldflags "-static"' -tags=netgo,osusergo
+
+// 纯静态且禁用 CGo
+// CGO_ENABLED=0 go build</code></pre>
+
+  <div class="callout tip">
+    <strong>静态链接的优势:</strong> 生成的可执行文件不依赖外部 so 文件，便于容器化部署。缺点是需要 .a 文件且二进制体积较大。
+  </div>
+
+  <h3>CGo 交叉编译</h3>
+  <p>CGo 的交叉编译需要对应的 C 交叉编译器：</p>
+  <pre><code># Linux amd64 → Linux arm64（需要 aarch64-linux-gnu-gcc）
+GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build
+
+# Linux → Windows amd64（需要 x86_64-w64-mingw32-gcc）
+GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc go build
+
+# macOS 交叉编译（需要 osxcross）
+GOOS=darwin GOARCH=amd64 CC=o64-clang go build
+
+# 常用的交叉编译工具
+# sudo apt install gcc-aarch64-linux-gnu       # → ARM64
+# sudo apt install gcc-arm-linux-gnueabihf     # → ARM32
+# sudo apt install gcc-mingw-w64-x86-64        # → Windows
+# brew install FiloSottile/musl-cross/musl-cross  # → musl</code></pre>
+
+  <h3>构建缓存与增量编译</h3>
+  <p>CGo 的编译缓存与纯 Go 不同：</p>
+  <pre><code># CGo 编译产物缓存位置
+go env GOCACHE  # Go 编译缓存（包含 CGo 相关）
+
+# 清除所有 CGo 相关缓存
+go clean -cache
+
+# 查看 C 编译返回的详细日志
+go build -x -v ./...
+
+# CGo 增量编译：改变 C 代码后，对应 .go 文件的时间戳变化会触发重编译
+# 可以使用 cgo 的 -srcdir 模式将 C 源码放在独立目录</code></pre>
+</section>
+
+<section id="profiling" class="toc-link">
+  <h2><span class="num">08</span> 性能测量工具</h2>
+  <p>优化 CGo 性能前需要先测量。以下是常用的 CGo 性能分析工具和方法。</p>
+
+  <h3>微基准测试</h3>
+  <p>Go 的 benchmark 框架可以精确测量 CGo 调用开销：</p>
+  <pre><code>import (
+    "testing"
+    "unsafe"
+)
+
+// 空调用基准
+func BenchmarkCGoEmptyCall(b *testing.B) {
+    for i := 0; i &lt; b.N; i++ {
+        C.c_nop()
+    }
+}
+
+// 参数传递开销
+func BenchmarkCGoPassInt(b *testing.B) {
+    for i := 0; i &lt; b.N; i++ {
+        C.echo_int(C.int(i))
+    }
+}
+
+// 大数据传递开销
+func BenchmarkCGoPassLargeSlice(b *testing.B) {
+    data := make([]byte, 1024*1024) // 1MB
+    b.ResetTimer()
+    for i := 0; i &lt; b.N; i++ {
+        C.process_buffer(unsafe.Pointer(&data[0]), C.int(len(data)))
+    }
+}
+
+// 对比：批量 vs 逐元素
+func BenchmarkCGoBatch(b *testing.B) {
+    nums := make([]C.int, 1000)
+    for i := range nums {
+        nums[i] = C.int(i)
+    }
+    b.ResetTimer()
+    for i := 0; i &lt; b.N; i++ {
+        C.batch_add(&nums[0], C.int(len(nums)))
+    }
+}
+
+func BenchmarkCGoIndividual(b *testing.B) {
+    b.ResetTimer()
+    for i := 0; i &lt; b.N; i++ {
+        for j := 0; j &lt; 1000; j++ {
+            C.add(C.int(j), C.int(j))
+        }
+    }
+}</code></pre>
+
+  <h3>使用 benchstat 分析</h3>
+  <p>运行多次基准测试并用 benchstat 统计对比：</p>
+  <pre><code># 运行基准测试多次
+go test -bench=. -count=10 ./... &gt; bench.txt
+benchstat bench.txt
+
+# 对比优化前后
+go test -bench=. -count=10 -benchtime=100ms &gt; old.txt
+# ... 优化代码后 ...
+go test -bench=. -count=10 -benchtime=100ms &gt; new.txt
+benchstat old.txt new.txt
+
+# 典型输出
+# name         old time/op  new time/op  delta
+# CGoEmptyCall  75.2ns ± 3%  0.4ns ± 2%  -99.5%
+# CGoBatch      85.3ns ± 2%  0.5ns ± 3%  -99.4%</code></pre>
+
+  <h3>阻塞分析</h3>
+  <p>CGo 调用会阻塞 goroutine，使用 pprof 分析阻塞开销：</p>
+  <pre><code>import (
+    "net/http"
+    _ "net/http/pprof"
+    "runtime"
+)
+
+func main() {
+    // 启用阻塞分析
+    runtime.SetBlockProfileRate(1)
+    runtime.SetMutexProfileFraction(1)
+    
+    // 启动 pprof HTTP 服务
+    go func() {
+        http.ListenAndServe(":6060", nil)
+    }()
+    
+    // ... 应用代码
+}</code></pre>
+  <pre><code># 采集阻塞分析
+go tool pprof http://localhost:6060/debug/pprof/block
+
+# 查看 CGo 相关的阻塞
+(pprof) top
+
+# 火焰图
+go tool pprof -http=:8080 http://localhost:6060/debug/pprof/block
+
+# goroutine 堆栈
+go tool pprof http://localhost:6060/debug/pprof/goroutine
+(pprof) top -cum</code></pre>
+
+  <div class="callout tip">
+    <strong>性能优化清单:</strong> 减少 CGo 调用频率（批量处理）；使用 Pinner 避免数据复制；复用 C 上下文和连接池；使用静态链接减少运行时开销；对比纯 Go 实现，只有在确实需要 C 库时才使用 CGo。
+  </div>
+
+  <h3>CGo 开销跟踪</h3>
+  <p>Go 1.20+ 支持通过 <code>GODEBUG=cgocheck=1</code> 调试 CGo 指针传递的安全性：</p>
+  <pre><code>export GODEBUG=cgocheck=1
+# 检测到非法指针传递时会 panic 并提供详细堆栈
+
+# 更详细的 CGo 调度跟踪
+export GODEBUG=cgocheck=1,scheddetail=1,schedtrace=1000
+# schedtrace 每 1000ms 输出一次调度状态
+// 输出示例：
+// SCHED 0ms: gomaxprocs=8 idleprocs=8 threads=5 spinningthreads=0 idlethreads=2 runqueue=0 [0 0 0 0 0 0 0 0]
+// SCHED 1000ms: gomaxprocs=8 idleprocs=6 threads=12 spinningthreads=0 idlethreads=6 runqueue=0 [0 0 0 1 0 0 0 0]
+// 注意 threads 数量：CGo 调用可能导致线程数增加</code></pre>
+
+  <h3>社区工具</h3>
+  <pre><code># 安装 CGo 性能分析工具
+go install golang.org/x/perf/cmd/benchstat@latest
+
+# 使用 perf 分析 C 侧代码
+perf record -g ./myapp
+perf report -g
+
+# 内存分析
+valgrind --leak-check=full ./myapp
+
+# 查看 Go 侧 CGo 相关调用
+go build -x -v ./... 2&gt;&amp;1 | grep cgo</code></pre>
+
+  <div class="callout warn">
+    <strong>决策指南:</strong> 在引入 CGo 前，先问自己：真的需要这个 C 库吗？有没有纯 Go 的替代实现？如果只是性能原因，先 profile 确定瓶颈在 Go 侧还是 C 侧。不少情况下，优化 Go 代码比引入 CGo 带来的收益更大。
+  </div>
+</section>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

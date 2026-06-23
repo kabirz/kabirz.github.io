@@ -321,6 +321,20 @@ const DOCS = [
   { t:"目标检测基础原理", f:"vision-object-detection.html", d:"R-CNN/YOLO/SSD 三大流派、Anchor/Anchor-Free、NMS、mAP", i:"blue", tags:["目标检测","R-CNN","YOLO","SSD","NMS"], top:"vision", topLabel:"AI 视觉", cat:"vision", catLabel:"AI 视觉" },
   { t:"图像分割技术详解", f:"vision-segmentation.html", d:"语义/实例/全景分割、FCN/U-Net/Mask R-CNN、DeepLab、mIoU", i:"green", tags:["分割","U-Net","Mask R-CNN","DeepLab"], top:"vision", topLabel:"AI 视觉", cat:"vision", catLabel:"AI 视觉" },
   { t:"人脸检测与识别技术", f:"vision-face-detection.html", d:"MTCNN/RetinaFace 检测、FaceNet/ArcFace 识别、活体检测", i:"purple", tags:["人脸检测","人脸识别","MTCNN","FaceNet","ArcFace"], top:"vision", topLabel:"AI 视觉", cat:"vision", catLabel:"AI 视觉" },
+
+  // ── Go 语言 ──
+  { t:"Go 语言基础", f:"go-basics.html", d:"类型系统、接口、结构体、错误处理、defer/panic/recover、包组织", i:"blue", tags:["Go","类型","接口","错误处理"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go 并发编程", f:"go-concurrency.html", d:"goroutine、channel 模式、select、sync.Mutex/WaitGroup/Once/Cond、atomic", i:"red", tags:["Go","并发","goroutine","channel","sync"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go Goroutine 调度器", f:"go-scheduler.html", d:"GMP 模型、工作窃取、抢占式调度、调度循环、网络轮询器", i:"purple", tags:["Go","调度","GMP","抢占","调度循环"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go 内存管理与 GC", f:"go-gc.html", d:"三色标记清除、并发 GC、混合写屏障、GC 调优、内存分配器", i:"green", tags:["Go","GC","内存","三色标记","调优"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go 内存模型与逃逸分析", f:"go-memory.html", d:"happens-before 顺序、内存屏障、逃逸分析机制、栈/堆分配、性能影响", i:"orange", tags:["Go","内存模型","逃逸分析","happens-before"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go 反射与泛型", f:"go-reflection.html", d:"reflect 包、类型/值反射、深度比较、泛型约束、类型推导、性能开销", i:"blue", tags:["Go","反射","泛型","type parameter","约束"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go net/http 深度解析", f:"go-net-http.html", d:"HTTP/1.1/2、ServeMux 路由、中间件模式、Client/Transport 连接池", i:"green", tags:["Go","HTTP","ServeMux","中间件","连接池"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go 标准库核心", f:"go-standard-lib.html", d:"io 接口体系、context 取消链、encoding/json、testing 表格驱动测试、embed", i:"purple", tags:["Go","标准库","io","context","testing"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go Module 包管理", f:"go-module.html", d:"go mod 命令、semver、最小版本选择、replace/retract、私有仓库、workspace", i:"orange", tags:["Go","Module","依赖管理","go mod","workspace"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go CGo 与跨语言调用", f:"go-cgo.html", d:"CGo 机制、类型映射、内存管理、cgo 调用开销、性能优化策略", i:"red", tags:["Go","CGo","跨语言","FFI","性能"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go 性能分析与调优", f:"go-profiling.html", d:"pprof CPU/内存/阻塞、trace 调度分析、benchstat 统计、火焰图、调优实战", i:"blue", tags:["Go","pprof","trace","性能","火焰图"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
+  { t:"Go 泛型深入", f:"go-generics.html", d:"类型参数与约束、类型推导、泛型集合/容器、泛型与接口、性能对比、最佳实践", i:"green", tags:["Go","泛型","约束","类型推导","性能"], top:"go", topLabel:"Go 语言", cat:"go", catLabel:"Go 语言" },
 ];
 
 const ICON_MAP = {
@@ -332,6 +346,7 @@ const ICON_MAP = {
   ai: { emoji: "🤖", color: "#ff6b6b" },
   embedded: { emoji: "🔧", color: "#bc4c00" },
   vision: { emoji: "👁️", color: "#e74c3c" },
+  go: { emoji: "🔷", color: "#00ADD8" },
   other: { emoji: "📦", color: "#656d76" }
 };
 
