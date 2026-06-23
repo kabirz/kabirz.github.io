@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Tracepoint 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Tracepoint 深度解析</h1>
+  <p class="subtitle">静态跟踪点 — 编译时定义的内核事件</p>
+  <span class="version">Linux 7.0.12 · kernel/trace/trace_events.c (5084 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#api">API 与使用</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Tracepoint 是内核中<strong>编译时定义的静态跟踪点</strong>。开发者在内核代码中插入 TRACE_EVENT 宏，定义跟踪事件。未启用时零开销（通过 static key 实现），启用时可以记录详细的内核事件信息。perf、ftrace、BPF 都可以使用 tracepoint。</p>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">02</span> API 与使用</h2>
+  <div class="card">
+    <pre><code><span class="cm">// 定义 tracepoint</span>
+TRACE_EVENT(sched_switch,
+    TP_PROTO(<span class="kw">struct</span> <span class="ty">task_struct</span> *prev, <span class="kw">struct</span> <span class="ty">task_struct</span> *next),
+    TP_STRUCT__entry(
+        __array(<span class="ty">char</span>, prev_comm, <span class="num">16</span>)
+        __field(<span class="ty">pid_t</span>, prev_pid)
+        __array(<span class="ty">char</span>, next_comm, <span class="num">16</span>)
+        __field(<span class="ty">pid_t</span>, next_pid)
+    ),
+    TP_fast_assign(
+        <span class="fn">memcpy</span>(__entry-&gt;prev_comm, prev-&gt;comm, <span class="num">16</span>);
+        __entry-&gt;prev_pid = prev-&gt;pid;
+    ),
+    TP_printk(<span class="st">"prev=%s pid=%d next=%s pid=%d"</span>,
+        __entry-&gt;prev_comm, __entry-&gt;prev_pid,
+        __entry-&gt;next_comm, __entry-&gt;next_pid)
+);
+
+<span class="cm">// 在内核代码中插入 tracepoint</span>
+trace_sched_switch(prev, next);</code></pre>
+  </div>
+
+  <h3>查看 tracepoint</h3>
+  <div class="card">
+    <pre><code><span class="cm"># 列出所有可用 tracepoint</span>
+$ ls /sys/kernel/debug/tracing/events/
+block/  ext4/  irq/  net/  sched/  ...
+
+<span class="cm"># 启用特定 tracepoint</span>
+$ echo <span class="num">1</span> > /sys/kernel/debug/tracing/events/sched/sched_switch/enable
+
+<span class="cm"># 查看 tracepoint 输出</span>
+$ cat /sys/kernel/debug/tracing/trace_pipe
+  <span class="cm"># 实时输出调度切换事件</span>
+
+<span class="cm"># 使用 perf 读取 tracepoint</span>
+$ perf record -e sched:sched_switch -a sleep 5
+$ perf script</code></pre>
+  </div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">03</span> 应用场景</h2>
+  <table>
+    <tr><th>场景</th><th>Tracepoint</th><th>说明</th></tr>
+    <tr><td>调度分析</td><td>sched:sched_switch</td><td>进程切换频率和延迟</td></tr>
+    <tr><td>网络分析</td><td>net:net_dev_xmit</td><td>数据包发送事件</td></tr>
+    <tr><td>I/O 分析</td><td>block:block_rq_issue</td><td>块设备请求</td></tr>
+    <tr><td>文件系统</td><td>ext4:ext4_da_write_begin</td><td>ext4 写入事件</td></tr>
+    <tr><td>中断分析</td><td>irq:irq_handler_entry</td><td>中断处理时间</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">04</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/trace/</span>
+├── <span class="file">trace_events.c</span>   <span class="cmt">tracepoint 核心 (5084 行)</span>
+│     └── trace_event_reg()     <span class="cmt">注册 tracepoint</span>
+│     └── trace_event_call()    <span class="cmt">调用 tracepoint</span>
+├── <span class="file">trace_events_sched.c</span> <span class="cmt">调度 tracepoint</span>
+└── <span class="file">trace_events_kmem.c</span>  <span class="cmt">内存 tracepoint</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/trace/trace_events.c</code> — tracepoint 注册和调用框架。<br>
+    <code>include/linux/trace_events.h</code> — TRACE_EVENT 宏定义。<br>
+    <code>tools/perf/util/parse-events.c</code> — perf 如何解析 tracepoint 事件。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/trace/trace_events.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
