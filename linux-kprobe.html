@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Kprobe/Uprobe 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Kprobe/Uprobe 深度解析</h1>
+  <p class="subtitle">动态探针 — 运行时插入调试代码</p>
+  <span class="version">Linux 7.0.12 · kernel/trace/trace_kprobe.c (2214 行) · kernel/trace/trace_uprobe.c (1710 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#kprobe">Kprobe</a></li>
+    <li><a href="#uprobe">Uprobe</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Kprobe 和 Uprobe 是 Linux 的<strong>动态探针机制</strong>。Kprobe 在内核函数入口/返回处插入断点，Uprobe 在用户态函数入口/返回处插入断点。它们允许在不修改代码的情况下，运行时监控任意函数的调用。</p>
+</section>
+
+<section id="kprobe" class="toc-link">
+  <h2><span class="num">02</span> Kprobe</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Kprobe 工作原理：</span>
+
+  在目标函数入口插入断点指令（INT3/x86）
+        │
+        ├── pre_handler() — 函数执行前调用
+        │   可以查看/修改寄存器和参数
+        │
+        ├── 原始指令执行
+        │
+        ├── post_handler() — 函数执行后调用
+        │   可以查看返回值
+        │
+        └── 恢复执行
+
+<span style="color:#1a7f37">Uprobe 工作原理：</span>
+
+  在用户态二进制文件的函数入口插入断点
+  类似 GDB 的断点机制
+  用于监控用户态程序的函数调用
+</pre></div>
+
+  <div class="card">
+    <pre><code><span class="cm">// 内核模块中使用 kprobe</span>
+<span class="kw">#include</span> <span class="st">&lt;linux/kprobes.h&gt;</span>
+
+<span class="kw">static</span> <span class="ty">kprobe_opcode_t</span> kprobe_addr;
+
+<span class="kw">static int</span> <span class="fn">handler_pre</span>(<span class="kw">struct</span> <span class="ty">kprobe</span> *p, <span class="kw">struct</span> <span class="ty">pt_regs</span> *regs)
+{
+    <span class="fn">printk</span>(KERN_INFO <span class="st">"kprobe: function called, ax=%lx\n"</span>, regs-&gt;ax);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="kw">static struct</span> <span class="ty">kprobe</span> kp = {
+    .symbol_name = <span class="st">"tcp_sendmsg"</span>,
+    .pre_handler = handler_pre,
+};
+
+<span class="ty">int</span> <span class="fn">init_module</span>(<span class="ty">void</span>) {
+    <span class="fn">register_kprobe</span>(&amp;kp);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+  </div>
+</section>
+
+<section id="uprobe" class="toc-link">
+  <h2><span class="num">03</span> Uprobe</h2>
+  <div class="card">
+    <pre><code><span class="cm"># Uprobe — 用户态函数探针</span>
+
+<span class="cm"># 在 /usr/bin/myapp 的 main 函数处插入探针</span>
+$ echo 'p:myprobe /usr/bin/myapp:main' > /sys/kernel/debug/tracing/kprobe_events
+$ echo <span class="num">1</span> > /sys/kernel/debug/tracing/events/kprobes/myprobe/enable
+
+<span class="cm"># 或使用 perf</span>
+$ perf probe -x /usr/bin/myapp -a main
+$ perf record -e probe_myapp -aR sleep 10
+
+<span class="cm"># Uprobe 用于监控</span>
+<span class="cm"># - 库函数调用</span>
+<span class="cm"># - 系统调用入口</span>
+<span class="cm"># - 应用特定函数</span></code></pre>
+  </div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 应用场景</h2>
+  <table>
+    <tr><th>场景</th><th>探针类型</th><th>说明</th></tr>
+    <tr><td>内核函数监控</td><td>Kprobe</td><td>监控 tcp_sendmsg 等函数</td></tr>
+    <tr><td>用户态调试</td><td>Kprobe/Uprobe</td><td>监控用户态函数调用</td></tr>
+    <tr><td>BPF 钩子</td><td>Kprobe/Uprobe</td><td>BPF 程序挂载点</td></tr>
+    <tr><td>安全监控</td><td>Kprobe</td><td>监控敏感系统调用</td></tr>
+    <tr><td>性能分析</td><td>Kprobe</td><td>精确的函数计时</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/trace/</span>
+├── <span class="file">trace_kprobe.c</span>   <span class="cmt">Kprobe 核心 (2214 行)</span>
+│     └── register_kprobe()   <span class="cmt">注册 Kprobe</span>
+│     └── kprobe_handler()    <span class="cmt">断点处理</span>
+├── <span class="file">trace_uprobe.c</span>   <span class="cmt">Uprobe 核心 (1710 行)</span>
+└── <span class="file">trace_probe.c</span>    <span class="cmt">探针框架</span>
+
+<span class="dir">include/linux/</span>
+└── <span class="file">kprobes.h</span>        <span class="cmt">struct kprobe 定义</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/trace/trace_kprobe.c</code> — Kprobe 核心，理解断点插入和处理。<br>
+    <code>kernel/trace/trace_uprobe.c</code> — Uprobe 实现，理解用户态探针。<br>
+    <code>include/linux/kprobes.h</code> — <code>struct kprobe</code> 和注册 API。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/trace/trace_kprobe.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

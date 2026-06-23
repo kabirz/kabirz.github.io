@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核追踪全景 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核追踪全景 深度解析</h1>
+  <p class="subtitle">追踪工具总览 — 从 tracepoint 到 BPF</p>
+  <span class="version">Linux 7.0.12 · kernel/trace/ · kernel/bpf/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#taxonomy">工具分类</a></li>
+    <li><a href="#flow">追踪流程</a></li>
+    <li><a href="#usecases">场景选择</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Linux 内核提供了完整的追踪工具链，从静态 tracepoint 到动态 kprobe，从函数跟踪 ftrace 到可编程 BPF。本篇全景梳理所有追踪工具的关系和使用场景。</p>
+</section>
+
+<section id="taxonomy" class="toc-link">
+  <h2><span class="num">02</span> 工具分类</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">Linux 追踪工具分类：</span>
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    静态追踪                              │
+  │  Tracepoint  ──  编译时定义，零开销（未启用时）           │
+  │  perf trace   ──  基于 tracepoint 的用户态工具           │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    动态追踪                              │
+  │  Kprobe      ──  内核函数入口/返回断点                    │
+  │  Uprobe      ──  用户态函数入口/返回断点                  │
+  │  ftrace      ──  函数级跟踪（mcount/fentry）             │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    可编程追踪                             │
+  │  BPF         ──  可编程内核沙箱，动态加载                  │
+  │  BPF + tracepoint ──  在 tracepoint 上运行 BPF 程序      │
+  │  BPF + kprobe  ──  在 kprobe 上运行 BPF 程序             │
+  └─────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────────────────┐
+  │                    用户态工具                             │
+  │  perf        ──  采样、计数、tracepoint                    │
+  │  trace-cmd   ──  ftrace 前端                              │
+  │  bpftrace    ──  高级 BPF 追踪语言                        │
+  │  bcc         ──  BPF 编译器集合                           │
+  └─────────────────────────────────────────────────────────┘
+</pre></div>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 追踪流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">追踪数据流：</span>
+
+  内核/用户态代码
+        │
+        ├── Tracepoint 触发
+        │   → trace_event_call()
+        │   → 记录到 ring buffer
+        │
+        ├── Kprobe 命中断点
+        │   → kprobe_handler()
+        │   → 记录到 ring buffer
+        │
+        └── BPF 程序执行
+            → bpf_prog_run()
+            → 更新 BPF Map / 输出到 ring buffer
+                    │
+                    ↓
+  Ring Buffer（tracefs/共享内存）
+                    │
+                    ↓
+  用户态工具读取
+  ├── perf record → perf.data
+  ├── trace-cmd → trace_pipe
+  ├── bpftrace → stdout
+  └── bcc → stdout
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 场景选择</h2>
+  <table>
+    <tr><th>需求</th><th>推荐工具</th><th>原因</th></tr>
+    <tr><td>快速定位热点函数</td><td>perf top / perf record</td><td>PMU 采样，最低开销</td></tr>
+    <tr><td>跟踪特定函数调用</td><td>ftrace + function_graph</td><td>函数级精度</td></tr>
+    <tr><td>跟踪内核事件</td><td>perf record -e tracepoint</td><td>静态 tracepoint</td></tr>
+    <tr><td>自定义过滤逻辑</td><td>BPF + kprobe</td><td>可编程，高性能</td></tr>
+    <tr><td>用户态函数追踪</td><td>Uprobe / bpftrace</td><td>用户态探针</td></tr>
+    <tr><td>生产环境监控</td><td>BPF + tracepoint</td><td>零开销（未挂载 BPF 时）</td></tr>
+    <tr><td>内核崩溃分析</td><td>Kdump + crash</td><td>事后分析</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/trace/</span>
+├── <span class="file">trace.c</span>          <span class="cmt">trace 框架核心</span>
+├── <span class="file">ftrace.c</span>         <span class="cmt">ftrace (9400 行)</span>
+├── <span class="file">trace_events.c</span>   <span class="cmt">tracepoint (5084 行)</span>
+├── <span class="file">trace_kprobe.c</span>   <span class="cmt">kprobe (2214 行)</span>
+├── <span class="file">trace_uprobe.c</span>   <span class="cmt">uprobe (1710 行)</span>
+└── <span class="file">ring_buffer.c</span>    <span class="cmt">环形缓冲区</span>
+
+<span class="dir">kernel/bpf/</span>
+├── <span class="file">core.c</span>           <span class="cmt">BPF 核心 (3396 行)</span>
+├── <span class="file">hashtab.c</span>        <span class="cmt">BPF Map 实现</span>
+└── <span class="file">verifier.c</span>       <span class="cmt">BPF 验证器</span>
+
+<span class="dir">tools/perf/</span>
+├── <span class="file">perf.c</span>           <span class="cmt">perf 用户态工具</span>
+└── <span class="file">builtin-trace.c</span>  <span class="cmt">perf trace 实现</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/trace/ftrace.c</code> — ftrace 核心（已有专题文章）。<br>
+    <code>kernel/trace/trace_kprobe.c</code> — kprobe 实现（已有专题文章）。<br>
+    <code>kernel/bpf/core.c</code> — BPF 核心（已有专题文章）。<br>
+    本文是这些专题文章的全景导览。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/trace/ · kernel/bpf/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

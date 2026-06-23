@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux BPF Map 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux BPF Map 深度解析</h1>
+  <p class="subtitle">BPF 数据结构 — 内核与用户态的共享数据</p>
+  <span class="version">Linux 7.0.12 · kernel/bpf/hashtab.c · kernel/bpf/arraymap.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">Map 类型</a></li>
+    <li><a href="#api">API 与使用</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>BPF Map 是 eBPF 程序与用户态之间、以及 eBPF 程序之间的<strong>共享数据结构</strong>。它支持多种数据结构（哈希表、数组、环形缓冲区等），是 eBPF 实现有状态处理的核心机制。</p>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> Map 类型</h2>
+  <table>
+    <tr><th>类型</th><th>结构</th><th>用途</th></tr>
+    <tr><td><strong>HASH</strong></td><td>哈希表</td><td>通用键值存储</td></tr>
+    <tr><td><strong>ARRAY</strong></td><td>固定大小数组</td><td>计数器、统计</td></tr>
+    <tr><td><strong>PERCPU_HASH</strong></td><td>每 CPU 哈希表</td><td>无锁高并发统计</td></tr>
+    <tr><td><strong>PERCPU_ARRAY</strong></td><td>每 CPU 数组</td><td>无锁计数器</td></tr>
+    <tr><td><strong>LRU_HASH</strong></td><td>LRU 哈希表</td><td>自动淘汰旧条目</td></tr>
+    <tr><td><strong>RINGBUF</strong></td><td>环形缓冲区</td><td>高效事件流</td></tr>
+    <tr><td><strong>STACK_TRACE</strong></td><td>栈追踪</td><td>调用栈记录</td></tr>
+    <tr><td><strong>DEVMAP</strong></td><td>设备映射</td><td>XDP 重定向</td></tr>
+    <tr><td><strong>CPUMAP</strong></td><td>CPU 映射</td><td>XDP 跨 CPU 转发</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> API 与使用</h2>
+  <div class="card">
+    <pre><code><span class="cm">// BPF 程序中使用 Map</span>
+<span class="kw">struct</span> {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, <span class="num">1024</span>);
+    __type(key, <span class="ty">__u32</span>);
+    __type(value, <span class="ty">__u64</span>);
+} packet_count SEC(<span class="st">".maps"</span>);
+
+SEC(<span class="st">"xdp"</span>)
+<span class="ty">int</span> <span class="fn">xdp_counter</span>(<span class="kw">struct</span> <span class="ty">xdp_md</span> *ctx) {
+    <span class="ty">__u32</span> key = <span class="num">0</span>;
+    <span class="ty">__u64</span> *val = <span class="fn">bpf_map_lookup_elem</span>(&amp;packet_count, &amp;key);
+    <span class="kw">if</span> (val) <span class="fn">__sync_fetch_and_add</span>(val, <span class="num">1</span>);
+    <span class="kw">return</span> XDP_PASS;
+}
+
+<span class="cm">// 用户态读取 Map</span>
+<span class="ty">int</span> map_fd = <span class="fn">bpf_map_create</span>(...);
+<span class="ty">__u32</span> key = <span class="num">0</span>, next_key;
+<span class="ty">__u64</span> value;
+<span class="fn">bpf_map_lookup_elem</span>(map_fd, &amp;key, &amp;value);
+<span class="fn">printf</span>(<span class="st">"packets: %llu\n"</span>, value);</code></pre>
+  </div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">04</span> 应用场景</h2>
+  <table>
+    <tr><th>Map 类型</th><th>场景</th><th>说明</th></tr>
+    <tr><td>HASH</td><td>连接跟踪</td><td>记录 TCP 连接状态</td></tr>
+    <tr><td>PERCPU_ARRAY</td><td>数据包计数</td><td>无锁高性能统计</td></tr>
+    <tr><td>RINGBUF</td><td>事件流</td><td>将事件传递到用户态</td></tr>
+    <tr><td>LRU_HASH</td><td>DDoS 防护</td><td>自动淘汰过期 IP</td></tr>
+    <tr><td>DEVMAP</td><td>XDP 重定向</td><td>网卡间数据包转发</td></tr>
+    <tr><td>STACK_TRACE</td><td>性能分析</td><td>记录调用栈</td></tr>
+  </table>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">kernel/bpf/</span>
+├── <span class="file">hashtab.c</span>        <span class="cmt">哈希表 Map 实现</span>
+├── <span class="file">arraymap.c</span>       <span class="cmt">数组 Map 实现</span>
+├── <span class="file">lru_map.c</span>        <span class="cmt">LRU Map 实现</span>
+├── <span class="file">ringbuf.c</span>        <span class="cmt">环形缓冲区 Map</span>
+├── <span class="file">devmap.c</span>         <span class="cmt">设备映射 Map</span>
+├── <span class="file">cpumap.c</span>         <span class="cmt">CPU 映射 Map</span>
+└── <span class="file">stack_trace_map.c</span> <span class="cmt">栈追踪 Map</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>kernel/bpf/hashtab.c</code> — 哈希表 Map 实现，理解 BPF Map 核心逻辑。<br>
+    <code>kernel/bpf/arraymap.c</code> — 数组 Map 实现，理解简单数据结构。<br>
+    <code>kernel/bpf/ringbuf.c</code> — 环形缓冲区 Map，理解高效事件传递。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · kernel/bpf/ · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
