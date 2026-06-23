@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Writeback 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux Writeback 深度解析</h1>
+  <p class="subtitle">脏页回写 — 数据从内存到磁盘的路径</p>
+  <span class="version">Linux 7.0.12 · mm/page-writeback.c (3114 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#flow">回写流程</a></li>
+    <li><a href="#pdflush">pdflush 与回写线程</a></li>
+    <li><a href="#tuning">配置与调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>Writeback（回写）是将<strong>脏页（dirty pages）从内存写回磁盘</strong>的机制。Linux 采用延迟写入策略：write() 仅将数据写入 Page Cache（标记为脏页），后台回写线程定期将脏页刷入磁盘。这是 Page Cache 性能优化的关键——写操作立即返回，磁盘 I/O 异步执行。</p>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">02</span> 回写流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">脏页回写触发条件：</span>
+
+  ① 脏页比例超过 dirty_background_ratio（默认 10%）
+     → 触发后台回写（background writeback）
+
+  ② 脏页比例超过 dirty_ratio（默认 20%）
+     → 触发前台回写（foreground writeback）
+     → 写入进程被阻塞直到脏页减少
+
+  ③ 脏页存活时间超过 dirty_expire_centisecs（默认 30 秒）
+     → 定时回写
+
+  ④ 用户调用 fsync() / fdatasync()
+     → 立即回写指定文件的所有脏页
+
+  ⑤ 用户调用 sync()
+     → 立即回写所有脏页
+
+<span style="color:#1a7f37">回写执行流程：</span>
+
+  回写线程被唤醒
+        │
+        ├── 遍历所有脏 inode
+        │   writeback_sb_inodes()
+        │
+        ├── 对每个脏 inode
+        │   │
+        │   ├── 调用 a_ops->writepages()
+        │   │   文件系统特定的回写实现
+        │   │
+        │   ├── 提交 I/O 请求
+        │   │   submit_bio() → Block Layer → 网卡驱动
+        │   │
+        │   └── 标记页面为非脏
+        │       ClearPageDirty()
+        │
+        └── 更新回写统计
+</pre></div>
+</section>
+
+<section id="pdflush" class="toc-link">
+  <h2><span class="num">03</span> pdflush 与回写线程</h2>
+  <table>
+    <tr><th>回写机制</th><th>线程</th><th>说明</th></tr>
+    <tr><td><strong>flush</strong></td><td>flush-N:0</td><td>每个 inode 一个回写线程</td></tr>
+    <tr><td><strong>writeback</strong></td><td>writeback</td><td>后台回写线程</td></tr>
+    <tr><td><strong>dirty_writeback</strong></td><td>dirty_writeback_centisecs</td><td>定期唤醒回写</td></tr>
+    <tr><td><strong>fsync</strong></td><td>进程上下文</td><td>同步回写</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>pdflush 已废弃</strong><br>
+    Linux 2.6.32+ 取消了 pdflush，改为 per-inode 的 flush 线程。每个脏 inode 有独立的回写线程，避免了 pdflush 的全局锁竞争问题。
+  </div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">04</span> 配置与调优</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 查看脏页统计</span>
+$ cat /proc/vmstat | grep -E "nr_dirty|nr_writeback"
+nr_dirty     <span class="num">12345</span>    <span class="cm"># 当前脏页数</span>
+nr_writeback <span class="num">678</span>      <span class="cm"># 正在回写的页数</span>
+
+<span class="cm"># 调整回写参数</span>
+$ sysctl -w vm.dirty_ratio=<span class="num">40</span>                <span class="cm"># 脏页比例上限</span>
+$ sysctl -w vm.dirty_background_ratio=<span class="num">5</span>     <span class="cm"># 后台回写触发阈值</span>
+$ sysctl -w vm.dirty_expire_centisecs=<span class="num">3000</span>  <span class="cm"># 脏页最大存活时间</span>
+$ sysctl -w vm.dirty_writeback_centisecs=<span class="num">500</span> <span class="cm"># 回写线程唤醒间隔</span>
+
+<span class="cm"># 强制回写</span>
+$ sync                      <span class="cm"># 回写所有脏页</span>
+$ echo 3 > /proc/sys/vm/drop_caches  <span class="cm"># 释放 Page Cache</span>
+
+<span class="cm"># 数据库服务器推荐配置</span>
+$ sysctl -w vm.dirty_ratio=<span class="num">10</span>
+$ sysctl -w vm.dirty_background_ratio=<span class="num">3</span>
+$ sysctl -w vm.dirty_expire_centisecs=<span class="num">500</span></code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">page-writeback.c</span> <span class="cmt">回写核心 (3114 行)</span>
+│     └── writeback_single_inode() <span class="cmt">回写单个 inode</span>
+│     └── balance_dirty_pages()    <span class="cmt">脏页平衡</span>
+│     └── wb_workfn()              <span class="cmt">回写工作函数</span>
+├── <span class="file">writeback.c</span>      <span class="cmt">回写框架</span>
+├── <span class="file">fsync.c</span>          <span class="cmt">fsync 实现</span>
+└── <span class="file">sync.c</span>           <span class="cmt">sync 实现</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/page-writeback.c</code> — <code>balance_dirty_pages()</code> 理解脏页平衡机制。<br>
+    <code>mm/writeback.c</code> — 回写框架，理解 inode 回写调度。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/page-writeback.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

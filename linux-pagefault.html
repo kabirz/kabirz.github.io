@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内存缺页异常 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内存缺页异常 深度解析</h1>
+  <p class="subtitle">Page Fault — 按需分配、COW、换入的核心机制</p>
+  <span class="version">Linux 7.0.12 · mm/memory.c (7522 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#types">缺页类型</a></li>
+    <li><a href="#flow">处理流程</a></li>
+    <li><a href="#tlb">TLB 与 TLB Shootdown</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>缺页异常（Page Fault）是 Linux 虚拟内存管理的<strong>核心机制</strong>。当进程访问的虚拟地址没有有效的物理页面映射时，CPU 触发缺页异常，内核按需分配物理页面、从磁盘读取数据或执行写时复制。它是 mmap、fork COW、swap 换入、mmap 文件映射的基础。</p>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 缺页类型</h2>
+  <table>
+    <tr><th>类型</th><th>原因</th><th>处理方式</th></tr>
+    <tr><td><strong>Major Fault</strong></td><td>页面在 swap 或磁盘上</td><td>从磁盘读取（慢，~ms）</td></tr>
+    <tr><td><strong>Minor Fault</strong></td><td>页面在内存但未映射</td><td>建立映射（快，~μs）</td></tr>
+    <tr><td><strong>写时复制 (COW)</strong></td><td>写只读页面</td><td>分配新页面 + 复制</td></tr>
+    <tr><td><strong>权限错误</strong></td><td>访问无权限的页面</td><td>发送 SIGSEGV</td></tr>
+  </table>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">03</span> 处理流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">缺页异常处理核心流程：</span>
+
+  CPU 访问虚拟地址 → PTE 无效 → 缺页异常
+        │
+        ↓
+  <span style="color:#8250df">do_page_fault()</span> — 架构特定入口
+        │
+        ├── 1. 获取错误地址和错误码
+        │       fault_address = CR2（x86）
+        │       error_code = 读/写、用户/内核、指令/数据
+        │
+        ├── 2. 查找 VMA
+        │       find_vma(mm, fault_address)
+        │       ├── 找到 → 检查权限
+        │       └── 未找到 → SIGSEGV
+        │
+        ├── 3. 权限检查
+        │       VMA 权限 vs 访问类型
+        │       ├── 读只读页面（COW）→ do_wp_page()
+        │       ├── 写只读页面（COW）→ do_wp_page()
+        │       └── 无权限 → SIGSEGV
+        │
+        └── 4. <span style="color:#1a7f37">handle_mm_fault()</span> — mm/memory.c
+                │
+                ├── 匿名页面 → do_anonymous_page()
+                │   分配零页面，建立映射
+                │
+                ├── 文件映射 → do_fault()
+                │   从磁盘/Page Cache 读取
+                │
+                ├── 写时复制 → do_wp_page()
+                │   分配新页面 + 复制
+                │
+                └── swap → do_swap_page()
+                    从 swap 设备读取
+</pre></div>
+</section>
+
+<section id="tlb" class="toc-link">
+  <h2><span class="num">04</span> TLB 与 TLB Shootdown</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">TLB Shootdown（TLB 失效广播）：</span>
+
+  CPU 0 修改了某页面的 PTE（如 COW 时分配新页面）
+        │
+        ├── CPU 0 的 TLB 已更新
+        │
+        └── 但 CPU 1/2/3 的 TLB 仍缓存旧映射！
+            │
+            ↓
+  发送 IPI（处理器间中断）到其他 CPU
+        │
+        ├── CPU 1 收到 IPI → 刷新 TLB 中相关条目
+        ├── CPU 2 收到 IPI → 刷新 TLB 中相关条目
+        └── CPU 3 收到 IPI → 刷新 TLB 中相关条目
+
+  代价：IPI 延迟 ~1-10μs × CPU 数量
+  这是 COW 和页面迁移的主要开销来源
+</pre></div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">memory.c</span>         <span class="cmt">缺页处理核心 (7522 行)</span>
+│     └── handle_mm_fault()      <span class="cmt">缺页入口</span>
+│     └── do_anonymous_page()    <span class="cmt">匿名页面缺页</span>
+│     └── do_fault()             <span class="cmt">文件映射缺页</span>
+│     └── do_wp_page()           <span class="cmt">写时复制</span>
+│     └── do_swap_page()         <span class="cmt">swap 换入</span>
+├── <span class="file">fault.c</span>          <span class="cmt">架构特定缺页处理</span>
+└── <span class="file">mmap.c</span>           <span class="cmt">VMA 管理</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/memory.c</code> — <code>handle_mm_fault()</code> 是缺页处理核心，理解按需分配和 COW。<br>
+    <code>arch/x86/mm/fault.c</code> — x86 架构的缺页入口，理解异常触发路径。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/memory.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>

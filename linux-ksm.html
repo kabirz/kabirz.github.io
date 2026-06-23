@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux KSM 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+  .ascii-diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin: 20px 0; overflow-x: auto; }
+  .ascii-diagram pre { background: none; border: none; padding: 0; margin: 0; font-size: 0.82em; line-height: 1.5; color: var(--text); white-space: pre; font-family: "Cascadia Code", "Fira Code", Consolas, monospace; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux KSM 深度解析</h1>
+  <p class="subtitle">内核同页合并 — 虚拟化内存去重</p>
+  <span class="version">Linux 7.0.12 · mm/ksm.c (4019 行)</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概述</a></li>
+    <li><a href="#flow">合并流程</a></li>
+    <li><a href="#usecases">应用场景</a></li>
+    <li><a href="#tuning">配置与调优</a></li>
+    <li><a href="#source">源码索引</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概述</h2>
+  <p>KSM（Kernel Same-page Merging）是 Linux 的<strong>内存去重机制</strong>。它定期扫描进程的匿名页面，找到内容相同的页面并将它们合并为一个共享页面（写时复制）。在虚拟化环境中，多个 VM 运行相同操作系统时，KSM 可以节省 30-70% 的内存。</p>
+</section>
+
+<section id="flow" class="toc-link">
+  <h2><span class="num">02</span> 合并流程</h2>
+  <div class="ascii-diagram"><pre>
+<span style="color:#cf222e">KSM 合并流程：</span>
+
+  ksmd 守护进程定期运行
+        │
+        ├── 1. 收集候选页面
+        │       扫描进程地址空间中被标记为可合并的页面
+        │       madvise(MADV_MERGEABLE) 标记
+        │
+        ├── 2. 计算页面校验和
+        │       对每个页面计算 fasthash
+        │
+        ├── 3. 查找匹配
+        │       校验和相同 → 逐字节比较
+        │       确认内容完全相同
+        │
+        ├── 4. 合并页面
+        │       多个相同页面 → 合并为一个
+        │       所有映射指向同一物理页面
+        │       页面标记为 COW（写时复制）
+        │
+        └── 5. 释放多余物理页面
+            返回给伙伴系统
+
+<span style="color:#1a7f37">合并效果示例：</span>
+
+  合并前：
+  VM 1: [page A] [page B] [page C]  <span style="color:#656d76">（3 个不同页面）</span>
+  VM 2: [page A] [page B] [page D]  <span style="color:#656d76">（3 个不同页面）</span>
+  共 6 个物理页面
+
+  合并后：
+  VM 1: [page A] [page B] [page C]  <span style="color:#656d76">（page A, B 共享）</span>
+  VM 2: [page A] [page B] [page D]  <span style="color:#656d76">（page A, B 共享）</span>
+  共 4 个物理页面（节省 33%）
+</pre></div>
+</section>
+
+<section id="usecases" class="toc-link">
+  <h2><span class="num">03</span> 应用场景</h2>
+  <table>
+    <tr><th>场景</th><th>说明</th><th>节省</th></tr>
+    <tr><td>虚拟化（KVM/QEMU）</td><td>多 VM 运行相同 OS</td><td>30-70%</td></tr>
+    <tr><td>容器（Docker）</td><td>多容器共享基础镜像页面</td><td>20-50%</td></tr>
+    <tr><td>桌面系统</td><td>多进程共享库页面</td><td>10-30%</td></tr>
+    <tr><td>科学计算</td><td>多进程处理相同数据</td><td>视数据而定</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <strong>KSM 安全风险</strong><br>
+    KSM 合并的页面可以通过<strong>侧信道攻击</strong>（如缓存定时攻击）检测其他进程的内存内容。因此在多租户环境中，需要权衡内存节省和安全风险。
+  </div>
+</section>
+
+<section id="tuning" class="toc-link">
+  <h2><span class="num">04</span> 配置与调优</h2>
+  <div class="card">
+    <pre><code><span class="cm"># 启用 KSM</span>
+$ echo <span class="num">1</span> > /sys/kernel/mm/ksm/run
+
+<span class="cm"># 查看 KSM 统计</span>
+$ cat /sys/kernel/mm/ksm/pages_shared     <span class="cm"># 共享页面数</span>
+$ cat /sys/kernel/mm/ksm/pages_sharing    <span class="cm"># 引用共享页面的页面数</span>
+$ cat /sys/kernel/mm/ksm/pages_to_scan    <span class="cm"># 每次扫描的页面数</span>
+$ cat /sys/kernel/mm/ksm/sleep_millisecs  <span class="cm"># 扫描间隔（毫秒）</span>
+
+<span class="cm"># 调整扫描参数</span>
+$ echo <span class="num">100</span> > /sys/kernel/mm/ksm/pages_to_scan     <span class="cm"># 每次扫描 100 页</span>
+$ echo <span class="num">20</span> > /sys/kernel/mm/ksm/sleep_millisecs    <span class="cm"># 每 20ms 扫描一次</span>
+
+<span class="cm"># 标记进程页面为可合并</span>
+$ madvise(addr, len, MADV_MERGEABLE);  <span class="cm">// 系统调用</span>
+
+<span class="cm"># QEMU/KVM 使用 KSM</span>
+$ echo <span class="num">1</span> > /sys/kernel/mm/ksm/run
+$ virsh qemu-monitor-command vm --hmp --cmd "info ksm"</code></pre>
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">05</span> 源码索引</h2>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+<span class="dir">mm/</span>
+├── <span class="file">ksm.c</span>            <span class="cmt">KSM 核心 (4019 行)</span>
+│     └── ksm_scan_thread()     <span class="cmt">ksmd 守护进程</span>
+│     └── ksm_do_scan()         <span class="cmt">扫描页面</span>
+│     └── cmp_and_merge()       <span class="cmt">比较和合并</span>
+│     └── stable_merge()        <span class="cmt">稳定合并</span>
+├── <span class="file">rmap.c</span>          <span class="cmt">反向映射（页面合并后更新）</span>
+└── <span class="file">madvise.c</span>       <span class="cmt">MADV_MERGEABLE 实现</span>
+  </pre></div>
+
+  <hr class="divider">
+  <div class="callout">
+    <strong>阅读建议</strong><br>
+    <code>mm/ksm.c</code> — 从 <code>ksm_do_scan()</code> 理解页面扫描和合并逻辑。<br>
+    <code>mm/rmap.c</code> — 反向映射，理解合并后如何更新所有进程的页表。
+  </div>
+</section>
+
+</div>
+
+<footer style="text-align:center;padding:30px 20px;border-top:1px solid var(--border);color:var(--text-dim);font-size:0.85em;background:var(--bg);">基于 Linux 7.0.12 源码分析 · mm/ksm.c · 生成于 2026-06-12</footer>
+<script src="common.js"></script>
+</body>
+</html>
