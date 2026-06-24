@@ -12,7 +12,7 @@
 ├── common.css            # 公共样式（主题、侧边栏、所有组件）
 ├── common.js             # 公共脚本（主题切换、侧边栏生成、滚动高亮、代码高亮）
 ├── AGENTS.md             # 本文档
-├── linux-*.html          # 141 篇 Linux 内核深度解析
+├── linux-*.html          # 140 篇 Linux 内核深度解析
 ├── docker-*.html         # 12 篇 Docker / 容器技术解析
 ├── rust-*.html           # 13 篇 Rust 语言深度解析
 ├── vision-*.html         # 15 篇 AI 视觉技术解析
@@ -25,13 +25,13 @@
 
 | 领域 | 文件数 | 分类 | 说明 |
 |------|--------|------|------|
-| Linux 内核 | 141 | 内核核心 / 文件系统 / 设备驱动 / 网络 / 硬件平台 | 基于 Linux 7.0.12 内核源码 |
+| Linux 内核 | 140 | 内核核心 / 文件系统 / 设备驱动 / 网络 / 硬件平台 | 基于 Linux 7.0.12 内核源码 |
 | Docker / 容器 | 12 | 容器技术 | namespaces, cgroups, OCI, runc, containerd, buildkit 等 |
 | Rust | 13 | 系统编程 | 所有权、trait、unsafe、async、tokio、web/gui/embedded 框架 |
 | Windows | 9 | 平台开发 | Win32, MFC, ATL/WTL, COM, UWP, WinUI3, MAUI, WPF, WebView2 |
 | AI 视觉 | 15 | 计算机视觉 | OpenCV, YOLO, PyTorch, TensorFlow, ONNX |
 | Go 语言 | 12 | 系统编程 | goroutine、GMP 调度、GC、反射、net/http、Module、CGo、泛型 |
-| Python | 13 | 语言生态 | 异步、FastAPI、Pydantic、SQLAlchemy、测试、性能、NumPy 可视化 |
+| Python | 14 | 语言生态 | 异步、FastAPI、Pydantic、SQLAlchemy、测试、性能、NumPy 可视化 |
 
 ### 已覆盖主题（Linux 内核）
 
@@ -485,7 +485,7 @@ const ICON_MAP = {
 
 | 领域 | 状态 |
 |------|------|
-| Linux 内核 | ✅ 141 篇（基本覆盖核心子系统） |
+| Linux 内核 | ✅ 140 篇（基本覆盖核心子系统） |
 | Docker / 容器 | ✅ 12 篇 |
 | Rust | ✅ 13 篇 |
 | Windows | ✅ 9 篇 |
@@ -495,4 +495,4 @@ const ICON_MAP = {
 | Zephyr | 待扩展 |
 | AI 视觉 | ✅ 15 篇（OpenCV / YOLO / PyTorch / TensorFlow / ONNX） |
 | Go 语言 | ✅ 12 篇（基础/并发/调度/GC/内存/反射/net-http/CGo/模块/泛型/性能） |
-| Python | ✅ 13 篇（基础/异步/并发/Pydantic/FastAPI/NiceGUI/SQLAlchemy/测试/性能/NumPy 可视化） |
+| Python | ✅ 14 篇（基础/异步/并发/Pydantic/FastAPI/NiceGUI/SQLAlchemy/测试/性能/NumPy 可视化） |

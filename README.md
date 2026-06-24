@@ -12,12 +12,12 @@
 
 | 领域 | 数量 | 说明 |
 |------|------|------|
-| 🐧 [Linux 内核](linux-mmu.html) | 141 篇 | 内核核心、文件系统、进程、设备驱动、网络、安全、IPC、跟踪调试、硬件平台 |
+| 🐧 [Linux 内核](linux-mmu.html) | 140 篇 | 内核核心、文件系统、进程、设备驱动、网络、安全、IPC、跟踪调试、硬件平台 |
 | 🐳 Docker / 容器 | 12 篇 | 命名空间、cgroups、OCI、runc、containerd、BuildKit、网络、存储等 |
 | 🦀 Rust | 13 篇 | 所有权、trait、unsafe、async、Tokio、Web/GUI/Embedded 框架 |
 | 👁️ AI 视觉 | 15 篇 | OpenCV、YOLO、PyTorch、TensorFlow、ONNX 计算机视觉 |
 | 🔷 Go 语言 | 12 篇 | goroutine、GMP 调度、GC、反射、net/http、Module、CGo |
-| 🐍 Python | 13 篇 | asyncio、FastAPI、Pydantic、SQLAlchemy、测试、性能、NumPy 可视化 |
+| 🐍 Python | 14 篇 | asyncio、FastAPI、Pydantic、SQLAlchemy、测试、性能、NumPy 可视化 |
 | 🪟 Windows | 9 篇 | Win32、MFC、ATL/WTL、COM、UWP、WinUI3、MAUI、WPF、WebView2 |
 
 ## 🚀 快速开始

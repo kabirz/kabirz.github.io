@@ -171,7 +171,6 @@
     { t:"Linux 调试技术全景", f:"linux-debugging-overview.html", top:"linux" },
     { t:"Linux 进程间通信全景", f:"linux-ipc-overview.html", top:"linux" },
     { t:"select/poll/epoll", f:"linux-select-poll-epoll.html", top:"linux" },
-    { t:"vivid 测试图形", f:"linux-vivid-patterns.html", top:"linux" },
     { t:"Windows MFC 深度解析", f:"windows-mfc.html", top:"windows" },
     { t:"Windows Win32 API 深度解析", f:"windows-win32.html", top:"windows" },
     { t:"Windows ATL/WTL 深度解析", f:"windows-atl-wtl.html", top:"windows" },
@@ -222,6 +221,7 @@
     { t:"Python 包管理", f:"python-packaging.html", top:"python" },
     { t:"Python 性能优化", f:"python-performance.html", top:"python" },
     { t:"NumPy 数据可视化", f:"python-numpy-charts.html", top:"python" },
+    { t:"vivid TPG 测试图形", f:"linux-vivid-patterns.html", top:"python" },
   ];
   var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", python:"Python 开发", other:"硬件与平台" };
 
