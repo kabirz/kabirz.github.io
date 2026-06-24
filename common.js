@@ -220,6 +220,7 @@
     { t:"Python 测试", f:"python-testing.html", top:"python" },
     { t:"Python 包管理", f:"python-packaging.html", top:"python" },
     { t:"Python 性能优化", f:"python-performance.html", top:"python" },
+    { t:"NumPy 数据可视化", f:"python-numpy-charts.html", top:"python" },
   ];
   var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", python:"Python 开发", other:"硬件与平台" };
 
