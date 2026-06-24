@@ -6,160 +6,263 @@
 <title>Zephyr 电源管理深度解析</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
 <link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
 
 <div class="hero">
   <h1>Zephyr 电源管理深度解析</h1>
-  <p class="subtitle">PM 框架 / 设备 PM / Tickless / 休眠模式 / 低功耗</p>
-  <span class="version">Zephyr 4.x · subsys/pm/ · pm_policy</span>
+  <p class="subtitle">PM 框架 / 休眠状态 / PM 策略 / 设备 PM / 运行时 PM / 通知器 / 源码分析</p>
+  <span class="version">Zephyr 4.x · subsys/pm/ · pm.c 291 行 · device.c 448 行</span>
 </div>
 
 <nav class="toc">
   <ul>
-    <li><a href="#overview">电源管理概览</a></li>
-    <li><a href="#pm-framework">PM 框架</a></li>
-    <li><a href="#pm-states">休眠状态</a></li>
-    <li><a href="#pm-policy">PM 策略</a></li>
+    <li><a href="#overview">PM 框架概览</a></li>
+    <li><a href="#states">休眠状态</a></li>
+    <li><a href="#policy">PM 策略</a></li>
     <li><a href="#device-pm">设备 PM</a></li>
-    <li><a href="#tickless">Tickless 省电</a></li>
-    <li><a href="#idle">空闲管理</a></li>
-    <li><a href="#api">PM API</a></li>
+    <li><a href="#runtime-pm">运行时 PM</a></li>
+    <li><a href="#notifier">PM 通知器</a></li>
+    <li><a href="#idle">空闲管理与 Tickless</a></li>
+    <li><a href="#config">配置选项</a></li>
+    <li><a href="#example">完整示例</a></li>
   </ul>
 </nav>
 
 <div class="container">
 
 <section id="overview" class="toc-link">
-  <h2><span class="num">01</span> 电源管理概览</h2>
+  <h2><span class="num">01</span> PM 框架概览</h2>
 
-  <p>Zephyr 提供完整的电源管理框架，从空闲线程到深度休眠，帮助降低系统功耗。</p>
+  <p>Zephyr 电源管理框架提供从空闲线程到深度休眠的完整电源管理能力。</p>
 
-  <h3>PM 层次</h3>
+  <h3>PM 组件</h3>
 
-  <div class="mermaid">
-graph TD
-    L0["应用层<br><small>pm_policy_state_lock_get/put() · 手动 PM 控制</small>"]
-    L1["PM 策略层<br><small>pm_policy.c · 休眠决策 · 状态选择</small>"]
-    L0 --> L1
-    L2["设备 PM 层<br><small>设备休眠/唤醒 · 运行时 PM · 系统管理 PM</small>"]
-    L1 --> L2
-    L3["架构 PM 层<br><small>ARM WFI/WFE · RISC-V WFI · x86 HLT</small>"]
-    L2 --> L3
-    L4["硬件层<br><small>低功耗模式 · 电压调节 · 时钟门控</small>"]
-    L3 --> L4
-    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
-    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
-    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
-    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
-    style L4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
-</div>
+  <div class="mermaid">graph TD
+    subgraph APP["应用层"]
+        A1["应用代码"]
+    end
+    subgraph PM_CORE["PM 核心层"]
+        PM1["pm.c<br>系统休眠/恢复"]
+        PM2["policy/<br>PM 策略决策"]
+        PM3["state.c<br>状态管理"]
+        PM4["pm_stats.c<br>统计信息"]
+    end
+    subgraph DEVICE_PM["设备 PM 层"]
+        DEV1["device.c<br>设备 PM 管理"]
+        DEV2["device_runtime.c<br>运行时 PM"]
+        DEV3["device_system_managed.c<br>系统管理 PM"]
+    end
+    subgraph ARCH["架构 PM 层"]
+        ARCH1["ARM WFI/WFE"]
+        ARCH2["RISC-V WFI"]
+        ARCH3["x86 HLT"]
+    end
+    subgraph HW["硬件层"]
+        HW1["低功耗模式"]
+        HW2["电压调节"]
+        HW3["时钟门控"]
+    end
+    A1 --> PM1
+    PM1 --> PM2 & PM3 & PM4
+    PM1 --> DEV1 & DEV2 & DEV3
+    DEV1 & DEV2 --> ARCH1 & ARCH2 & ARCH3
+    ARCH1 & ARCH2 & ARCH3 --> HW1 & HW2 & HW3
+    style PM1 fill:#1769aa15,stroke:#1769aa,color:#1e40af
+  </div>
 
-</section>
-
-<section id="pm-framework" class="toc-link">
-  <h2><span class="num">02</span> PM 框架</h2>
-
-<pre><code class="language-c"><span class="cmt">// PM 框架核心（subsys/pm/pm.c）</span>
-
-<span class="cmt">// 系统休眠状态</span>
-<span class="cmt">// PM_STATE_STANDBY    - 待机（保留 RAM）</span>
-<span class="cmt">// PM_STATE_SUSPEND    - 挂起（部分关闭）</span>
-<span class="cmt">// PM_STATE_SOFT_OFF   - 软关闭（需要唤醒源）</span>
-
-<span class="cmt">// PM 上下文</span>
-struct pm_state_info {
-    enum pm_state state;         <span class="cmt">// 休眠状态</span>
-    uint8_t min_residency;       <span class="cmt">// 最小停留时间（ms）</span>
-    uint8_t exit_latency;        <span class="cmt">// 退出延迟（ms）</span>
-};
-
-<span class="cmt">// 手动控制 PM</span>
-<span class="cmt">// CONFIG_PM=y</span>
-<span class="cmt">// CONFIG_PM_DEVICE=y</span>
-<span class="cmt">// CONFIG_PM_DEVICE_RUNTIME=y   ← 设备运行时 PM</span>
-</code></pre>
-</section>
-
-<section id="pm-states" class="toc-link">
-  <h2><span class="num">03</span> 休眠状态</h2>
+  <h3>PM 核心文件</h3>
 
   <table>
-    <tr><th>状态</th><th>功耗</th><th>唤醒时间</th><th>说明</th></tr>
-    <tr><td>Active</td><td>最高</td><td>0</td><td>正常运行</td></tr>
-    <tr><td>Idle</td><td>低</td><td>极短</td><td>CPU 空闲（WFI）</td></tr>
-    <tr><td>Standby</td><td>更低</td><td>短</td><td>保留 RAM，关闭外设</td></tr>
-    <tr><td>Suspend</td><td>很低</td><td>中等</td><td>大部分关闭</td></tr>
-    <tr><td>Soft Off</td><td>最低</td><td>长</td><td>需要硬件唤醒源</td></tr>
+    <tr><th>文件</th><th>行数</th><th>功能</th></tr>
+    <tr><td><code>pm.c</code></td><td>291</td><td>系统休眠/恢复、状态切换</td></tr>
+    <tr><td><code>device.c</code></td><td>448</td><td>设备 PM 状态管理</td></tr>
+    <tr><td><code>device_runtime.c</code></td><td>665</td><td>运行时 PM（引用计数）</td></tr>
+    <tr><td><code>state.c</code></td><td>143</td><td>状态定义（从 DTS 读取）</td></tr>
+    <tr><td><code>policy_default.c</code></td><td>50</td><td>默认 PM 策略</td></tr>
+    <tr><td><code>pm_stats.c</code></td><td>~100</td><td>PM 统计信息</td></tr>
+  </table>
+</section>
+
+<section id="states" class="toc-link">
+  <h2><span class="num">02</span> 休眠状态</h2>
+
+  <h3>PM 状态定义</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/zephyr/pm/state.h</span>
+enum pm_state {
+    PM_STATE_ACTIVE,         <span class="cmt">// 活跃状态（正常运行）</span>
+    PM_STATE_RUNTIME_IDLE,   <span class="cmt">// 运行时空闲（CPU 停止但外设运行）</span>
+    PM_STATE_STANDBY,        <span class="cmt">// 待机（保留 RAM）</span>
+    PM_STATE_SUSPEND,        <span class="cmt">// 挂起（大部分关闭）</span>
+    PM_STATE_SOFT_OFF,       <span class="cmt">// 软关闭（需要唤醒源）</span>
+    PM_STATE_COUNT           <span class="cmt">// 状态数量</span>
+};
+
+<span class="cmt">// PM 状态信息</span>
+struct pm_state_info {
+    enum pm_state state;         <span class="cmt">// 状态类型</span>
+    uint8_t substate_id;         <span class="cmt">// 子状态 ID</span>
+    uint32_t min_residency_us;   <span class="cmt">// 最小停留时间（微秒）</span>
+    uint32_t exit_latency_us;    <span class="cmt">// 退出延迟（微秒）</span>
+    bool pm_device_disabled;     <span class="cmt">// 是否禁用设备 PM</span>
+};
+</code></pre>
+
+  <h3>状态功耗对比</h3>
+
+  <table>
+    <tr><th>状态</th><th>功耗</th><th>唤醒时间</th><th>保留内容</th><th>说明</th></tr>
+    <tr><td>Active</td><td>最高</td><td>0</td><td>全部</td><td>正常运行</td></tr>
+    <tr><td>Runtime Idle</td><td>低</td><td>极短</td><td>全部</td><td>CPU 停止，外设运行</td></tr>
+    <tr><td>Standby</td><td>更低</td><td>短</td><td>RAM</td><td>关闭大部分外设</td></tr>
+    <tr><td>Suspend</td><td>很低</td><td>中等</td><td>部分 RAM</td><td>大部分关闭</td></tr>
+    <tr><td>Soft Off</td><td>最低</td><td>长</td><td>无</td><td>需要硬件唤醒源</td></tr>
   </table>
 
-  <h3>ARM 休眠模式</h3>
+  <h3>状态从 DTS 读取</h3>
 
-<pre><code class="language-c"><span class="cmt">// ARM Cortex-M 休眠指令</span>
-<span class="cmt">// WFI (Wait For Interrupt) - 等待中断唤醒</span>
-<span class="cmt">// WFE (Wait For Event) - 等待事件唤醒</span>
-<span class="cmt">// WFI 比 WFE 更省电</span>
+<pre><code class="language-c"><span class="cmt">// state.c 中从 Devicetree 读取状态定义</span>
+<span class="cmt">// 每个 CPU 的状态在 DTS 中定义：</span>
+<span class="cmt">// cpus {</span>
+<span class="cmt">//     cpu@0 {</span>
+<span class="cmt">//         cpu-power-states = &amp;idle_state, &amp;standby_state;</span>
+<span class="cmt">//     };</span>
+<span class="cmt">// };</span>
+<span class="cmt">//</span>
+<span class="cmt">// idle_state: power-state {</span>
+<span class="cmt">//     compatible = "zephyr,power-state";</span>
+<span class="cmt">//     power-state-name = "idle";</span>
+<span class="cmt">//     min-residency-us = &lt;100&gt;;</span>
+<span class="cmt">//     exit-latency-us = &lt;10&gt;;</span>
+<span class="cmt">// };</span>
 
-<span class="cmt">// 休眠流程</span>
-<span class="cmt">// 1. 关闭设备时钟</span>
-<span class="cmt">// 2. 降低 CPU 频率</span>
-<span class="cmt">// 3. 执行 WFI 指令</span>
-<span class="cmt">// 4. 中断唤醒</span>
-<span class="cmt">// 5. 恢复设备时钟</span>
-<span class="cmt">// 6. 恢复 CPU 频率</span>
+<span class="cmt">// state.c 中的编译时生成</span>
+#define DEFINE_CPU_STATES(n) \
+    static const struct pm_state_info pmstates_##n[] \
+        = PM_STATE_INFO_LIST_FROM_DT_CPU(n);
+
+DT_FOREACH_CHILD_STATUS_OKAY(DT_PATH(cpus), DEFINE_CPU_STATES);
 </code></pre>
 </section>
 
-<section id="pm-policy" class="toc-link">
-  <h2><span class="num">04</span> PM 策略</h2>
+<section id="policy" class="toc-link">
+  <h2><span class="num">03</span> PM 策略</h2>
 
   <p>PM 策略决定系统在空闲时进入哪种休眠状态。</p>
 
-<pre><code class="language-c"><span class="cmt">// PM 策略（subsys/pm/policy/）</span>
+  <h3>默认策略</h3>
 
-<span class="cmt">// 默认策略：根据空闲时间选择最深的休眠状态</span>
-<span class="cmt">// 如果空闲时间 > min_residency，选择该状态</span>
+<pre><code class="language-c"><span class="cmt">// policy_default.c 中的默认策略</span>
+const struct pm_state_info *pm_policy_next_state(uint8_t cpu, int32_t ticks)
+{
+    uint8_t num_cpu_states;
+    const struct pm_state_info *cpu_states;
+    const struct pm_state_info *out_state = NULL;
 
-<span class="cmt">// 自定义策略</span>
-<span class="cmt">// CONFIG_PM_POLICY_CUSTOM=y</span>
+    <span class="cmt">// 获取 CPU 的所有可用状态</span>
+    num_cpu_states = pm_state_cpu_get_all(cpu, &amp;cpu_states);
 
-<span class="cmt">// 锁定状态（防止进入特定休眠状态）</span>
+    <span class="cmt">// 遍历状态，选择最深的可用状态</span>
+    for (uint32_t i = 0; i &lt; num_cpu_states; i++) {
+        const struct pm_state_info *state = &amp;cpu_states[i];
+        uint32_t min_residency_us = state->min_residency_us + state->exit_latency_us;
+        uint32_t min_residency_ticks = k_us_to_ticks_ceil32(min_residency_us);
+
+        <span class="cmt">// 如果空闲时间不足以进入此状态，停止搜索</span>
+        if (ticks &lt; min_residency_ticks) {
+            break;
+        }
+
+        <span class="cmt">// 检查状态是否可用</span>
+        if (!pm_policy_state_is_available(state->state, state->substate_id)) {
+            continue;
+        }
+
+        out_state = state;
+    }
+
+    return out_state;
+}
+</code></pre>
+
+  <h3>状态锁定</h3>
+
+<pre><code class="language-c"><span class="cmt">// 防止进入特定休眠状态</span>
+<span class="cmt">// 例如：需要保持 UART 运行时，锁定 Standby 状态</span>
+
+<span class="cmt">// 获取锁（防止进入 Standby）</span>
 pm_policy_state_lock_get(PM_STATE_STANDBY, PM_ALL_SUBSTATES);
-<span class="cmt">// ... 临界区 ...</span>
+
+<span class="cmt">// ... 临界区代码 ...</span>
+
+<span class="cmt">// 释放锁</span>
 pm_policy_state_lock_put(PM_STATE_STANDBY, PM_ALL_SUBSTATES);
 
-<span class="cmt">// 禁用休眠</span>
+<span class="cmt">// 禁用所有休眠</span>
 pm_policy_state_lock_get(PM_STATE_SOFT_OFF, PM_ALL_SUBSTATES);
 </code></pre>
+
+  <h3>PM 策略类型</h3>
+
+  <table>
+    <tr><th>策略</th><th>文件</th><th>说明</th></tr>
+    <tr><td>默认</td><td><code>policy_default.c</code></td><td>根据空闲时间选择最深状态</td></tr>
+    <tr><td>状态锁</td><td><code>policy_state_lock.c</code></td><td>防止进入特定状态</td></tr>
+    <tr><td>设备锁</td><td><code>policy_device_lock.c</code></td><td>基于设备状态决策</td></tr>
+    <tr><td>事件</td><td><code>policy_events.c</code></td><td>基于事件决策</td></tr>
+    <tr><td>延迟</td><td><code>policy_latency.c</code></td><td>基于延迟约束决策</td></tr>
+  </table>
 </section>
 
 <section id="device-pm" class="toc-link">
-  <h2><span class="num">05</span> 设备 PM</h2>
+  <h2><span class="num">04</span> 设备 PM</h2>
 
   <p>设备 PM 允许单独控制每个设备的电源状态。</p>
 
-<pre><code class="language-c"><span class="cmt">// 设备 PM 操作</span>
-<span class="cmt">// CONFIG_PM_DEVICE=y</span>
+  <h3>设备 PM 状态</h3>
 
-<span class="cmt">// 设备 PM 状态</span>
-<span class="cmt">// PM_DEVICE_STATE_ACTIVE    - 活跃</span>
-<span class="cmt">// PM_DEVICE_STATE_SUSPENDED - 挂起</span>
-<span class="cmt">// PM_DEVICE_STATE_OFF       - 关闭</span>
+<pre><code class="language-c"><span class="cmt">// include/zephyr/pm/device.h</span>
+enum pm_device_state {
+    PM_DEVICE_STATE_ACTIVE,      <span class="cmt">// 活跃</span>
+    PM_DEVICE_STATE_SUSPENDED,   <span class="cmt">// 挂起</span>
+    PM_DEVICE_STATE_OFF,         <span class="cmt">// 关闭</span>
+};
 
-<span class="cmt">// 设备 PM 控制</span>
-int pm_device_action_run(const struct device *dev, enum pm_device_action action);
-
-<span class="cmt">// 运行时 PM（设备空闲时自动休眠）</span>
-<span class="cmt">// CONFIG_PM_DEVICE_RUNTIME=y</span>
-<span class="cmt">// 驱动调用 pm_device_runtime_get/put 管理引用计数</span>
-
-<span class="cmt">// 示例：UART 设备 PM</span>
-<span class="cmt">// 当没有数据传输时，UART 自动进入低功耗</span>
-<span class="cmt">// 有数据时自动唤醒</span>
+<span class="cmt">// 设备 PM 动作</span>
+enum pm_device_action {
+    PM_DEVICE_ACTION_RESUME,     <span class="cmt">// 恢复</span>
+    PM_DEVICE_ACTION_SUSPEND,    <span class="cmt">// 挂起</span>
+    PM_DEVICE_ACTION_TURN_OFF,   <span class="cmt">// 关闭</span>
+    PM_DEVICE_ACTION_TURN_ON,    <span class="cmt">// 开启</span>
+};
 </code></pre>
 
   <h3>设备 PM 实现</h3>
+
+<pre><code class="language-c"><span class="cmt">// device.c 中的设备 PM 控制</span>
+int pm_device_action_run(const struct device *dev, enum pm_device_action action)
+{
+    struct pm_device_base *pm = dev->pm_base;
+
+    <span class="cmt">// 检查状态转换是否有效</span>
+    if (pm->state == action_target_state[action]) {
+        return -EALREADY;
+    }
+    if (pm->state != action_expected_state[action]) {
+        return -ENOTSUP;
+    }
+
+    <span class="cmt">// 调用驱动的 PM 回调</span>
+    ret = pm->action_cb(dev, action);
+
+    return ret;
+}
+</code></pre>
+
+  <h3>驱动实现 PM 回调</h3>
 
 <pre><code class="language-c"><span class="cmt">// 驱动实现 PM 回调</span>
 static int my_driver_pm_action(const struct device *dev,
@@ -169,6 +272,7 @@ static int my_driver_pm_action(const struct device *dev,
     case PM_DEVICE_ACTION_RESUME:
         <span class="cmt">// 恢复设备</span>
         enable_clocks(dev);
+        configure_pins(dev);
         break;
     case PM_DEVICE_ACTION_SUSPEND:
         <span class="cmt">// 挂起设备</span>
@@ -178,6 +282,10 @@ static int my_driver_pm_action(const struct device *dev,
         <span class="cmt">// 关闭设备</span>
         power_off(dev);
         break;
+    case PM_DEVICE_ACTION_TURN_ON:
+        <span class="cmt">// 开启设备</span>
+        power_on(dev);
+        break;
     default:
         return -ENOTSUP;
     }
@@ -186,83 +294,294 @@ static int my_driver_pm_action(const struct device *dev,
 </code></pre>
 </section>
 
-<section id="tickless" class="toc-link">
-  <h2><span class="num">06</span> Tickless 省电</h2>
+<section id="runtime-pm" class="toc-link">
+  <h2><span class="num">05</span> 运行时 PM</h2>
 
-  <p>Tickless 模式允许系统在空闲时停止周期性 tick 中断，显著降低功耗。</p>
+  <p>运行时 PM 允许设备在空闲时自动休眠，有使用时自动唤醒。</p>
 
-<pre><code class="language-c"><span class="cmt">// Tickless 配置</span>
-<span class="cmt">// CONFIG_TICKLESS_KERNEL=y</span>
-<span class="cmt">// CONFIG_TICKLESS_LOW_POWER=y</span>
+<pre><code class="language-c"><span class="cmt">// device_runtime.c 中的运行时 PM 实现</span>
 
-<span class="cmt">// 工作原理：</span>
-<span class="cmt">// 1. 系统空闲时，查找下一个超时事件</span>
-<span class="cmt">// 2. 设置硬件定时器在该时间点唤醒</span>
-<span class="cmt">// 3. 进入深度休眠（WFI/WFE）</span>
-<span class="cmt">// 4. 中断唤醒，继续执行</span>
+<span class="cmt">// 获取设备（增加引用计数）</span>
+int pm_device_runtime_get(const struct device *dev)
+{
+    struct pm_device *pm = dev->pm;
+    int ret = 0;
 
-<span class="cmt">// 节省的功耗：</span>
-<span class="cmt">// 周期 Tick (1kHz)：CPU 每秒唤醒 1000 次</span>
-<span class="cmt">// Tickless：CPU 只在有事件时唤醒</span>
-<span class="cmt">// 典型节省：50-90% 功耗</span>
+    K_SPINLOCK(&amp;lock) {
+        pm->base.usage++;
+
+        <span class="cmt">// 如果设备已挂起，唤醒它</span>
+        if (pm->base.state == PM_DEVICE_STATE_SUSPENDED) {
+            ret = runtime_resume(dev, false, K_NO_WAIT);
+        }
+    }
+
+    return ret;
+}
+
+<span class="cmt">// 释放设备（减少引用计数）</span>
+int pm_device_runtime_put(const struct device *dev)
+{
+    struct pm_device *pm = dev->pm;
+    int ret = 0;
+
+    K_SPINLOCK(&amp;lock) {
+        if (pm->base.usage > 1U) {
+            pm->base.usage--;
+            early_exit = true;
+        }
+    }
+
+    if (!early_exit) {
+        <span class="cmt">// 最后一个用户，可以挂起设备</span>
+        ret = runtime_suspend(dev, false, K_NO_WAIT);
+    }
+
+    return ret;
+}
+
+<span class="cmt">// 异步释放</span>
+int pm_device_runtime_put_async(const struct device *dev, k_timeout_t delay)
+{
+    <span class="cmt">// 异步挂起设备</span>
+    return runtime_suspend(dev, true, delay);
+}
+</code></pre>
+
+  <h3>运行时 PM 流程</h3>
+
+  <div class="mermaid">graph TD
+    A["驱动使用设备"] --> B["pm_device_runtime_get()"]
+    B --> C["usage++"]
+    C --> D{"设备已挂起?"}
+    D -->|"是"| E["runtime_resume()"]
+    D -->|"否"| F["设备就绪"]
+    E --> F
+    F --> G["驱动完成使用"]
+    G --> H["pm_device_runtime_put()"]
+    H --> I["usage--"]
+    I --> J{"usage == 0?"}
+    J -->|"是"| K["runtime_suspend()"]
+    J -->|"否"| L["保持活跃"]
+    K --> M["设备进入低功耗"]
+    style B fill:#22c55e15,stroke:#22c55e,color:#166534
+    style K fill:#fee2e215,stroke:#ef4444,color:#991b1b
+  </div>
+</section>
+
+<section id="notifier" class="toc-link">
+  <h2><span class="num">06</span> PM 通知器</h2>
+
+<pre><code class="language-c"><span class="cmt">// pm.c 中的通知器机制</span>
+<span class="cmt">// 允许注册回调，在系统进入/退出休眠状态时通知</span>
+
+<span class="cmt">// 通知器结构</span>
+struct pm_notifier {
+    sys_snode_t _node;
+    void (*state_entry)(enum pm_state state);  <span class="cmt">// 进入状态回调</span>
+    void (*state_exit)(enum pm_state state);   <span class="cmt">// 退出状态回调</span>
+    bool report_substate;                       <span class="cmt">// 是否报告子状态</span>
+};
+
+<span class="cmt">// 注册通知器</span>
+struct pm_notifier my_notifier = {
+    .state_entry = my_state_entry_callback,
+    .state_exit = my_state_exit_callback,
+    .report_substate = false,
+};
+
+pm_notifier_register(&amp;my_notifier);
+
+<span class="cmt">// 回调函数</span>
+void my_state_entry_callback(enum pm_state state)
+{
+    <span class="cmt">// 系统即将进入休眠</span>
+    printk("Entering state %d\\n", state);
+}
+
+void my_state_exit_callback(enum pm_state state)
+{
+    <span class="cmt">// 系统刚从休眠唤醒</span>
+    printk("Exited state %d\\n", state);
+}
 </code></pre>
 </section>
 
 <section id="idle" class="toc-link">
-  <h2><span class="num">07</span> 空闲管理</h2>
+  <h2><span class="num">07</span> 空闲管理与 Tickless</h2>
 
-<pre><code class="language-c"><span class="cmt">// 空闲线程（kernel/idle.c）</span>
-<span class="cmt">// 当没有就绪线程时，调度器运行空闲线程</span>
+<pre><code class="language-c"><span class="cmt">// pm.c 中的系统休眠入口</span>
+bool pm_system_suspend(int32_t kernel_ticks)
+{
+    uint8_t id = CPU_ID;
 
-<span class="cmt">// 空闲回调</span>
-<span class="cmt">// CONFIG_IDLE_CUSTOM=y</span>
-<span class="cmt">// void k_idle_hook(void) { ... }</span>
+    <span class="cmt">// 1. 计算下一个事件的时间</span>
+    events_ticks = pm_policy_next_event_ticks();
+    ticks = ticks_expiring_sooner(kernel_ticks, events_ticks);
 
-<span class="cmt">// 或使用工作队列</span>
-<span class="cmt">// CONFIG_SYSTEM_WORKQUEUE_IDLE=y</span>
+    <span class="cmt">// 2. 选择最佳休眠状态</span>
+    pm_state = pm_policy_next_state(id, ticks);
 
-<span class="cmt">// 空闲处理流程：</span>
-<span class="cmt">// 1. 没有就绪线程</span>
-<span class="cmt">// 2. 调度器切换到空闲线程</span>
-<span class="cmt">// 3. 空闲线程执行 PM 策略</span>
-<span class="cmt">// 4. 进入最低功耗状态</span>
-<span class="cmt">// 5. 中断唤醒</span>
-<span class="cmt">// 6. 重新调度</span>
+    <span class="cmt">// 3. 如果选择了休眠状态</span>
+    if (pm_state != NULL) {
+        <span class="cmt">// 4. 通知系统即将休眠</span>
+        pm_state_notify(true);
+
+        <span class="cmt">// 5. 执行休眠前操作</span>
+        pm_state_enter_post_ops(pm_state->state, pm_state->substate_id);
+
+        <span class="cmt">// 6. 进入休眠</span>
+        pm_state_enter(pm_state->state, pm_state->substate_id);
+    }
+
+    return true;
+}
+</code></pre>
+
+  <h3>Tickless 配置</h3>
+
+<pre><code class="language-c"><span class="cmt">// Tickless 配置</span>
+<span class="cmt">// CONFIG_TICKLESS_KERNEL=y</span>
+<span class="cmt">// CONFIG_PM=y</span>
+
+<span class="cmt">// Tickless 工作原理：</span>
+<span class="cmt">// 1. 系统空闲时，查找下一个超时事件</span>
+<span class="cmt">// 2. 设置硬件定时器在该时间点唤醒</span>
+<span class="cmt">// 3. 进入深度休眠（WFI/WFE）</span>
+<span class="cmt">// 4. 中断唤醒，继续执行</span>
 </code></pre>
 </section>
 
-<section id="api" class="toc-link">
-  <h2><span class="num">08</span> PM API</h2>
+<section id="config" class="toc-link">
+  <h2><span class="num">08</span> 配置选项</h2>
 
-<pre><code class="language-c"><span class="cmt">// PM 控制</span>
-int pm_policy_state_lock_get(enum pm_state state, uint8_t substates);
-int pm_policy_state_lock_put(enum pm_state state, uint8_t substates);
+<pre><code class="language-c"><span class="cmt">// PM 配置</span>
+<span class="cmt">// CONFIG_PM=y                          ← 启用系统 PM</span>
+<span class="cmt">// CONFIG_PM_DEVICE=y                   ← 启用设备 PM</span>
+<span class="cmt">// CONFIG_PM_DEVICE_RUNTIME=y           ← 启用运行时 PM</span>
+<span class="cmt">// CONFIG_PM_DEVICE_SYSTEM_MANAGED=y    ← 系统管理设备 PM</span>
 
-<span class="cmt">// 设备 PM</span>
-int pm_device_action_run(const struct device *dev, enum pm_device_action action);
-int pm_device_state_get(const struct device *dev, enum pm_device_state *state);
+<span class="cmt">// Tickless 配置</span>
+<span class="cmt">// CONFIG_TICKLESS_KERNEL=y             ← 启用 Tickless</span>
+<span class="cmt">// CONFIG_TICKLESS_LOW_POWER=y          ← 低功耗 Tickless</span>
+<span class="cmt">// CONFIG_PM_NEED_ALL_DEVICES_IDLE=y    ← 所有设备空闲才休眠</span>
 
-<span class="cmt">// 运行时 PM</span>
-int pm_device_runtime_get(const struct device *dev);
-int pm_device_runtime_put(const struct device *dev);
-int pm_device_runtime_put_async(const struct device *dev);
+<span class="cmt">// PM 策略</span>
+<span class="cmt">// CONFIG_PM_POLICY_DEFAULT=y           ← 默认策略</span>
+<span class="cmt">// CONFIG_PM_POLICY_CUSTOM=y            ← 自定义策略</span>
 
-<span class="cmt">// 信息查询</span>
-const struct pm_state_info *pm_policy_next_state(uint8_t cpu, int32_t ticks);
+<span class="cmt">// 退出延迟转换模式</span>
+<span class="cmt">// CONFIG_PM_PREWAKEUP_CONV_MODE_FLOOR=y  ← 向下取整</span>
+<span class="cmt">// CONFIG_PM_PREWAKEUP_CONV_MODE_CEIL=y   ← 向上取整</span>
+<span class="cmt">// CONFIG_PM_PREWAKEUP_CONV_MODE_NEAR=y   ← 最近取整</span>
+</code></pre>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">09</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== Zephyr 电源管理完整示例 =====</span>
+<span class="cmt">// 演示：设备 PM、运行时 PM、PM 通知器</span>
+
+#include &lt;zephyr/kernel.h&gt;
+#include &lt;zephyr/pm/pm.h&gt;
+#include &lt;zephyr/pm/device.h&gt;
+#include &lt;zephyr/pm/device_runtime.h&gt;
+
+<span class="cmt">// PM 通知器</span>
+static void pm_state_entry(enum pm_state state)
+{
+    printk("Entering power state %d\\n", state);
+}
+
+static void pm_state_exit(enum pm_state state)
+{
+    printk("Exited power state %d\\n", state);
+}
+
+struct pm_notifier pm_notifier = {
+    .state_entry = pm_state_entry,
+    .state_exit = pm_state_exit,
+};
+
+<span class="cmt">// 设备 PM 回调</span>
+static int my_sensor_pm_action(const struct device *dev,
+                               enum pm_device_action action)
+{
+    switch (action) {
+    case PM_DEVICE_ACTION_RESUME:
+        printk("Sensor: resuming\\n");
+        <span class="cmt">// 恢复传感器时钟和配置</span>
+        break;
+    case PM_DEVICE_ACTION_SUSPEND:
+        printk("Sensor: suspending\\n");
+        <span class="cmt">// 关闭传感器时钟</span>
+        break;
+    default:
+        return -ENOTSUP;
+    }
+    return 0;
+}
+
+<span class="cmt">// 应用任务</span>
+void vAppTask(void *pvParameters)
+{
+    <span class="cmt">// 注册 PM 通知器</span>
+    pm_notifier_register(&amp;pm_notifier);
+
+    for (;;) {
+        <span class="cmt">// 使用传感器（运行时 PM 自动管理）</span>
+        pm_device_runtime_get(sensor_dev);
+
+        <span class="cmt">// 读取传感器数据</span>
+        sensor_sample_fetch(sensor_dev);
+        struct sensor_value temp;
+        sensor_channel_get(sensor_dev, SENSOR_CHAN_AMBIENT_TEMP, &amp;temp);
+        printk("Temperature: %.2f\\n", sensor_value_to_double(&amp;temp));
+
+        <span class="cmt">// 释放设备（自动挂起）</span>
+        pm_device_runtime_put(sensor_dev);
+
+        <span class="cmt">// 等待一段时间</span>
+        k_msleep(5000);
+    }
+}
+
+<span class="cmt">// DTS 配置（电源状态）</span>
+<span class="cmt">// cpus {</span>
+<span class="cmt">//     cpu@0 {</span>
+<span class="cmt">//         cpu-power-states = &amp;idle, &amp;standby;</span>
+<span class="cmt">//     };</span>
+<span class="cmt">// };</span>
+<span class="cmt">//</span>
+<span class="cmt">// idle: power-state {</span>
+<span class="cmt">//     compatible = "zephyr,power-state";</span>
+<span class="cmt">//     power-state-name = "idle";</span>
+<span class="cmt">//     min-residency-us = &lt;100&gt;;</span>
+<span class="cmt">//     exit-latency-us = &lt;10&gt;;</span>
+<span class="cmt">// };</span>
+<span class="cmt">//</span>
+<span class="cmt">// standby: power-state {</span>
+<span class="cmt">//     compatible = "zephyr,power-state";</span>
+<span class="cmt">//     power-state-name = "standby";</span>
+<span class="cmt">//     min-residency-us = &lt;1000&gt;;</span>
+<span class="cmt">//     exit-latency-us = &lt;100&gt;;</span>
+<span class="cmt">// };</span>
 </code></pre>
 </section>
 
 <div class="callout">
   <strong>阅读建议:</strong><br>
-  <code>subsys/pm/pm.c</code> PM 框架核心实现。<br>
-  <code>subsys/pm/policy/</code> PM 策略实现。<br>
-  <code>subsys/pm/device.c</code> 设备 PM 框架。<br>
-  <code>kernel/idle.c</code> 空闲线程管理。<br>
-  <code>include/zephyr/pm/state.h</code> PM 状态定义。
+  <code>subsys/pm/pm.c</code> PM 核心实现（291行），重点看 pm_system_suspend、pm_system_resume。<br>
+  <code>subsys/pm/device.c</code> 设备 PM 管理（448行），重点看 pm_device_action_run。<br>
+  <code>subsys/pm/device_runtime.c</code> 运行时 PM 实现（665行），重点看 runtime_suspend、runtime_resume。<br>
+  <code>subsys/pm/state.c</code> 状态管理（143行），从 DTS 读取状态定义。<br>
+  <code>subsys/pm/policy/policy_default.c</code> 默认 PM 策略（50行）。<br>
+  <code>include/zephyr/pm/pm.h</code> PM API 定义。<br>
+  <code>include/zephyr/pm/device.h</code> 设备 PM API 定义。
 </div>
 
 </div>
-<script src="mermaid.min.js"></script>
 <script src="common.js"></script>
 </body>
 </html>
