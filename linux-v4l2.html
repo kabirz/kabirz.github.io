@@ -1,0 +1,1436 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux V4L2 视频框架深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%230055a5'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='44' font-weight='700' fill='white' text-anchor='middle'>V4</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>📹 Linux V4L2 视频框架深度解析</h1>
+  <p class="subtitle">Video for Linux 2 · 驱动程序框架 · UAPI · videobuf2 · 控制框架 · subdev · 媒体控制器</p>
+  <span class="version">Linux 7.0.12</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#sec1">概述与架构</a></li>
+    <li><a href="#sec2">核心数据结构</a></li>
+    <li><a href="#sec3">设备注册与初始化</a></li>
+    <li><a href="#sec4">ioctl 分发机制</a></li>
+    <li><a href="#sec5">videobuf2 框架</a></li>
+    <li><a href="#sec6">控制框架</a></li>
+    <li><a href="#sec7">subdev 子设备</a></li>
+    <li><a href="#sec8">媒体控制器</a></li>
+    <li><a href="#sec9">V4L2 事件机制</a></li>
+    <li><a href="#sec10">DV 时序</a></li>
+    <li><a href="#sec11">Async 异步注册</a></li>
+    <li><a href="#sec12">Memory-to-Memory</a></li>
+    <li><a href="#sec13">FWNODE 与 DT</a></li>
+    <li><a href="#sec14">编解码辅助</a></li>
+    <li><a href="#sec15">file_operations</a></li>
+    <li><a href="#sec16">驱动实例</a></li>
+    <li><a href="#ref">参考</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="sec1" class="toc-link">
+  <h2><span class="num">01</span> 概述与架构</h2>
+
+  <p>V4L2（Video for Linux 2）是 Linux 内核中视频设备驱动的标准框架，定义于 1999 年，取代了早期的 V4L1 API。它提供了统一的接口用于视频采集、输出、VBI（Vertical Blanking Interval）、radio、SDR（Software Defined Radio）和 touch 设备。</p>
+
+  <p>V4L2 采用 <strong>字符设备</strong>模型，主设备号 81，次设备号动态分配。设备节点通常位于 <code>/dev/videoX</code>、<code>/dev/vbiX</code>、<code>/dev/radioX</code>、<code>/dev/swradioX</code> 等。用户空间通过 <code>ioctl()</code> 系统调用与驱动交互。</p>
+
+  <h3>源码结构</h3>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+drivers/media/
+├── v4l2-core/        <span class="cmt">核心框架</span>
+│   ├── v4l2-dev.c           <span class="cmt">字符设备管理</span>
+│   ├── v4l2-ioctl.c         <span class="cmt">ioctl 标准处理</span>
+│   ├── v4l2-device.c        <span class="cmt">顶层设备</span>
+│   ├── v4l2-subdev.c        <span class="cmt">子设备</span>
+│   ├── v4l2-ctrls-core.c    <span class="cmt">控制框架核心</span>
+│   ├── v4l2-ctrls-api.c     <span class="cmt">控制用户 API</span>
+│   ├── v4l2-ctrls-defs.c    <span class="cmt">控制定义表</span>
+│   ├── v4l2-ctrls-request.c <span class="cmt">请求队列控制</span>
+│   ├── v4l2-event.c         <span class="cmt">事件机制</span>
+│   ├── v4l2-fh.c            <span class="cmt">文件句柄</span>
+│   ├── v4l2-common.c        <span class="cmt">公共辅助函数</span>
+│   ├── v4l2-mc.c            <span class="cmt">媒体控制器桥接</span>
+│   ├── v4l2-mem2mem.c       <span class="cmt">内存到内存框架</span>
+│   ├── v4l2-async.c         <span class="cmt">异步 subdev 绑定</span>
+│   ├── v4l2-dv-timings.c    <span class="cmt">数字视频时序</span>
+│   ├── v4l2-fwnode.c        <span class="cmt">firmware 节点解析</span>
+│   ├── v4l2-h264.c          <span class="cmt">H264 编码辅助</span>
+│   ├── v4l2-vp9.c           <span class="cmt">VP9 编码辅助</span>
+│   ├── v4l2-jpeg.c          <span class="cmt">JPEG 编码辅助</span>
+│   └── videobuf2-v4l2.c     <span class="cmt">videobuf2 V4L2 桥接</span>
+├── mc/               <span class="cmt">媒体控制器</span>
+│   ├── mc-device.c          <span class="cmt">媒体设备</span>
+│   ├── mc-entity.c          <span class="cmt">媒体实体与 pad 链接</span>
+│   └── mc-request.c         <span class="cmt">媒体请求</span>
+├── common/videobuf2/ <span class="cmt">videobuf2 核心</span>
+│   ├── videobuf2-core.c     <span class="cmt">核心缓冲管理</span>
+│   ├── videobuf2-v4l2.c     <span class="cmt">V4L2 内存操作</span>
+│   ├── videobuf2-dma-contig.c <span class="cmt">DMA 连续内存</span>
+│   ├── videobuf2-dma-sg.c   <span class="cmt">DMA 分散-聚集</span>
+│   └── videobuf2-vmalloc.c  <span class="cmt">虚拟内存</span>
+└── test-drivers/vivid/ <span class="cmt">虚拟视频测试驱动</span>
+    └── vivid-*.c            <span class="cmt">完整参考实现</span>
+  </pre></div>
+
+  <p>V4L2 框架设计为三层架构：<strong>UAPI 层</strong>（用户空间可见的 ioctl 和数据结构）、<strong>核心层</strong>（v4l2-core 中的框架代码）、<strong>驱动层</strong>（具体硬件驱动）。</p>
+</section>
+
+<section id="sec2" class="toc-link">
+  <h2><span class="num">02</span> 核心数据结构</h2>
+
+  <h3>struct video_device</h3>
+  <p>定义于 <code>include/media/v4l2-dev.h</code>，是 V4L2 框架中最核心的结构体，代表一个 V4L2 设备节点：</p>
+
+<pre><code class="language-c">struct video_device {
+    const struct v4l2_file_operations *fops;  // 文件操作表
+    struct device dev;                        // 内核设备结构
+    struct cdev *cdev;                        // 字符设备
+    struct v4l2_device *v4l2_dev;             // 父设备
+    struct device *dev_parent;                // 父设备指针
+    const struct v4l2_ioctl_ops *ioctl_ops;   // ioctl 操作表
+    struct media_entity *entity;              // 媒体实体
+    struct media_intf_devnode *intf_devnode;  // 媒体接口
+
+    unsigned long flags;     // 设备标志
+    int index;               // 设备编号
+    int minor;               // 次设备号
+    u32 num;                 // 视频节点编号
+
+    /* 标准 ioctl 缓存 */
+    struct v4l2_capability capability;
+    struct v4l2_audio vin;
+    struct v4l2_audioout vaud;
+    struct v4l2_tuner tuner;
+    struct v4l2_modulator modulator;
+    struct v4l2_output output;
+    struct v4l2_input input;
+
+    /* 队列 */
+    spinlock_t fh_lock;      // 文件句柄锁
+    struct list_head fh_list; // 文件句柄链表
+    int dev_debug;            // 调试标志
+};
+  </code></pre>
+
+  <h3>struct v4l2_device</h3>
+  <p>定义于 <code>include/media/v4l2-device.h</code>，是顶层 V4L2 硬件设备的抽象，一个物理设备通常对应一个 <code>v4l2_device</code>：</p>
+
+<pre><code class="language-c">struct v4l2_device {
+    struct device *dev;                    // 绑定到 struct device
+    struct media_device *mdev;             // 关联的媒体设备
+    struct list_head subdevs;              // subdev 列表
+    spinlock_t lock;
+    char name[V4L2_DEVICE_NAME_SIZE];      // 设备名称
+    struct v4l2_ctrl_handler *ctrl_handler; // 控制处理器
+    void (*notify)(struct v4l2_subdev *sd,
+                   unsigned int notification, void *arg);
+    struct v4l2_async_notifier *notifier;
+};
+  </code></pre>
+
+  <h3>struct v4l2_subdev</h3>
+  <p>定义于 <code>include/media/v4l2-subdev.h</code>，代表一个 V4L2 子设备（如传感器、ISP、解码器）：</p>
+
+<pre><code class="language-c">struct v4l2_subdev {
+    struct v4l2_device *v4l2_dev;       // 所属顶层设备
+    struct media_entity entity;         // 媒体实体
+    struct list_head list;              // 链入 v4l2_device.subdevs
+    struct module *owner;
+    const struct v4l2_subdev_ops *ops;  // 操作函数表
+    const struct v4l2_subdev_internal_ops *internal_ops;
+    struct v4l2_ctrl_handler *ctrl_handler;
+    struct device *dev;
+    struct fwnode_handle *fwnode;
+    struct v4l2_async_subdev *asd;      // 异步 subdev 描述符
+    struct v4l2_async_notifier *notifier;
+    char name[V4L2_SUBDEV_NAME_SIZE];
+    u32 grp_id;                         // 组 ID（驱动自定义）
+    bool dev_priv_lock;
+    s64 dev_priv_lock_owner;
+    union {
+        struct v4l2_subdev_platform_data *pdata;
+        struct v4l2_fwnode_endpoint *ep;
+    };
+};
+  </code></pre>
+
+  <h3>struct v4l2_fh</h3>
+  <p>定义于 <code>include/media/v4l2-fh.h</code>，代表一个打开的文件句柄实例，存储每个文件描述符的私有状态：</p>
+
+<pre><code class="language-c">struct v4l2_fh {
+    struct list_head list;         // 链入 video_device.fh_list
+    struct video_device *vdev;     // 所属视频设备
+    struct v4l2_ctrl_handler *ctrl_handler; // 句柄级控制处理器
+    enum v4l2_priority priority;   // 设备访问优先级
+    wait_queue_head_t wait;        // 事件等待队列
+    struct list_head available;    // 可用事件列表
+    struct list_head subscribed;   // 已订阅事件列表
+    struct list_head queued;       // 排队事件列表
+    unsigned int navailable;
+    u32 sequence;
+    struct mutex subscribe_lock;
+};
+  </code></pre>
+</section>
+
+<section id="sec3" class="toc-link">
+  <h2><span class="num">03</span> 设备注册与初始化</h2>
+
+  <p>V4L2 设备的注册流程包含三个层次：<code>v4l2_device</code> 注册、<code>video_device</code> 注册和 <code>v4l2_subdev</code> 注册。</p>
+
+  <h3>v4l2_device 注册</h3>
+  <p><code>v4l2_device_register()</code> 在 <code>v4l2-device.c</code>（约 295 行）中实现：</p>
+
+<pre><code class="language-c">int v4l2_device_register(struct device *dev, struct v4l2_device *v4l2_dev)
+{
+    if (v4l2_dev == NULL)
+        return -EINVAL;
+    INIT_LIST_HEAD(&v4l2_dev->subdevs);
+    spin_lock_init(&v4l2_dev->lock);
+    v4l2_dev->dev = dev;
+    if (dev == NULL) {
+        /* 如果 dev 为 NULL，使用内核虚拟设备 */
+        if (v4l2_device_register_empty)
+            return -EBUSY;
+        v4l2_device_register_empty = v4l2_dev;
+        return 0;
+    }
+    dev_set_drvdata(dev, v4l2_dev);
+    return 0;
+}
+EXPORT_SYMBOL_GPL(v4l2_device_register);
+  </code></pre>
+
+  <h3>video_device 注册</h3>
+  <p><code>__video_register_device()</code> 在 <code>v4l2-dev.c</code>（约 1258 行）中实现，流程如下：</p>
+  <ol>
+    <li>分配次设备号——<code>video_register_device()</code> 调用 <code>ida_alloc()</code> 从 <code>video_device_nr[]</code> 池分配，或使用指定编号</li>
+    <li>初始化字符设备——<code>cdev_init(&vdev->cdev, &v4l2_fops)</code> 绑定 <code>v4l2_fops</code></li>
+    <li>创建设备——<code>device_register()</code> 在 <code>/dev</code> 下创建设备节点</li>
+    <li>设置 <code>vdev->minor</code> 和 <code>vdev->index</code></li>
+    <li>调用 <code>media_device_register_entity()</code> 注册媒体实体（如果启用了媒体控制器）</li>
+  </ol>
+
+<pre><code class="language-c">static int __video_register_device(struct video_device *vdev,
+    enum vcd_device_type type, int nr, int warn_on_nr_alloc,
+    struct module *owner)
+{
+    int ret = 0;
+    int minor_offset = 0;
+    int minor_cnt = VIDEO_NUM_DEVICES;
+    const char *name_base;
+
+    switch (type) {
+    case VFL_TYPE_VIDEO:
+        name_base = "video";
+        break;
+    case VFL_TYPE_VBI:
+        name_base = "vbi";
+        break;
+    case VFL_TYPE_RADIO:
+        name_base = "radio";
+        break;
+    case VFL_TYPE_SDR:
+        name_base = "swradio";
+        break;
+    case VFL_TYPE_TOUCH:
+        name_base = "touch";
+        break;
+    case VFL_TYPE_SUBDEV:
+        name_base = "v4l-subdev";
+        break;
+    }
+    /* ... */
+    vdev->cdev = cdev_alloc();
+    vdev->cdev->ops = &v4l2_fops;
+    ret = cdev_add(vdev->cdev, MKDEV(VIDEO_MAJOR, vdev->minor), 1);
+    if (ret &lt; 0) {
+        pr_err("%s: cdev_add failed\n", __func__);
+        goto cleanup;
+    }
+
+    /* 向 udev 发送 UEVID 事件 */
+    dev = device_create(&video_device_class, vdev->dev_parent,
+            MKDEV(VIDEO_MAJOR, vdev->minor), vdev, "%s%d",
+            name_base, vdev->num);
+    if (IS_ERR(dev)) {
+        ret = PTR_ERR(dev);
+        goto cleanup;
+    }
+
+    /* 注册媒体实体 */
+    if (vdev->entity)
+        media_device_register_entity(vdev->v4l2_dev->mdev,
+                      vdev->entity);
+    return 0;
+}
+  </code></pre>
+
+  <h3>设备类型</h3>
+  <p>V4L2 定义了 6 种设备类型：</p>
+  <table>
+    <tr><th>类型</th><th>节点名称</th><th>用途</th></tr>
+    <tr><td><code>VFL_TYPE_VIDEO</code></td><td><code>/dev/videoX</code></td><td>视频采集/输出</td></tr>
+    <tr><td><code>VFL_TYPE_VBI</code></td><td><code>/dev/vbiX</code></td><td>VBI 数据</td></tr>
+    <tr><td><code>VFL_TYPE_RADIO</code></td><td><code>/dev/radioX</code></td><td>AM/FM 收音机</td></tr>
+    <tr><td><code>VFL_TYPE_SDR</code></td><td><code>/dev/swradioX</code></td><td>软件无线电</td></tr>
+    <tr><td><code>VFL_TYPE_TOUCH</code></td><td><code>/dev/touchX</code></td><td>触摸传感器</td></tr>
+    <tr><td><code>VFL_TYPE_SUBDEV</code></td><td><code>/dev/v4l-subdevX</code></td><td>子设备（MC 模式）</td></tr>
+  </table>
+</section>
+
+<section id="sec4" class="toc-link">
+  <h2><span class="num">04</span> ioctl 分发机制</h2>
+
+  <p><code>v4l2-ioctl.c</code>（约 3534 行）是 V4L2 框架中最大的源文件，实现了 ioctl 的标准处理逻辑。核心入口是 <code>video_ioctl2()</code>：</p>
+
+<pre><code class="language-c">long video_ioctl2(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    struct video_device *vdev = video_devdata(file);
+    const struct v4l2_ioctl_ops *ops = vdev->ioctl_ops;
+    struct v4l2_fh *fh = file->private_data;
+    int ret = -ENOTTY;
+
+    if (ops == NULL)
+        return ret;
+
+    /* 查找并调用对应的 ioctl 处理函数 */
+    ret = v4l2_ioctl(file, cmd, arg);
+    return ret;
+}
+EXPORT_SYMBOL_GPL(video_ioctl2);
+  </code></pre>
+
+  <h3>ioctl 描述符表</h3>
+  <p>V4L2 使用 <code>v4l2_ioctl_info</code> 描述符表来管理所有标准 ioctl。每个描述符包含 ioctl 编号、优先级、标志和处理函数指针：</p>
+
+<pre><code class="language-c">struct v4l2_ioctl_info {
+    unsigned int ioctl;               // ioctl 命令字
+    u32 flags;                         // 标志
+    const char *name;                  // 名称（调试用）
+    int (*func)(const struct v4l2_ioctl_ops *ops,
+                struct file *file, void *arg);
+    /* 辅助函数 */
+    void (*fill)(const struct v4l2_ioctl_ops *ops,
+                 struct file *file, void *arg);
+    int (*req)(struct media_request *req, struct file *file,
+               void *arg);
+};
+  </code></pre>
+
+  <p>该框架自动处理以下通用逻辑：</p>
+  <ul>
+    <li><strong>信息查询</strong>——<code>QUERYCAP</code>、<code>ENUMINPUT</code>、<code>ENUMOUTPUT</code>、<code>ENUMSTD</code>、<code>ENUM_DV_TIMINGS</code></li>
+    <li><strong>格式协商</strong>——<code>FMT</code>、<code>S_FMT</code>、<code>TRY_FMT</code>、<code>ENUM_FMT</code>、<code>ENUM_FRAMESIZES</code>、<code>ENUM_FRAMEINTERVALS</code></li>
+    <li><strong>缓冲管理</strong>——<code>REQBUFS</code>、<code>QUERYBUF</code>、<code>QBUF</code>、<code>DQBUF</code>、<code>EXPBUF</code>、<code>STREAMON</code>、<code>STREAMOFF</code></li>
+    <li><strong>控制</strong>——<code>QUERYCTRL</code>、<code>G_CTRL</code>、<code>S_CTRL</code>、<code>G_EXT_CTRLS</code>、<code>S_EXT_CTRLS</code>、<code>TRY_EXT_CTRLS</code></li>
+    <li><strong>裁剪与选择</strong>——<code>CROPCAP</code>、<code>G_CROP</code>、<code>S_CROP</code>、<code>G_SELECTION</code>、<code>S_SELECTION</code></li>
+    <li><strong>参数与流控制</strong>——<code>G_PARM</code>、<code>S_PARM</code>、<code>G_PRIORITY</code>、<code>S_PRIORITY</code></li>
+  </ul>
+
+  <h3>核心 ioctl 处理流程</h3>
+
+<pre><code class="language-c">/* v4l2_ioctl() 的主 switch 分发 */
+static long v4l2_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    struct video_device *vdev = video_devdata(file);
+    const struct v4l2_ioctl_ops *ops = vdev->ioctl_ops;
+    void *parg = (void __user *)arg;
+    long ret = -ENOTTY;
+
+    /* 1. 通过 ioctl 描述符表查找命令 */
+    const struct v4l2_ioctl_info *info = v4l2_ioctl_find(cmd);
+    if (info == NULL)
+        return ret;
+
+    /* 2. 检查访问权限和优先级 */
+    ret = v4l2_ioctl_check_prio(vdev, cmd, file);
+    if (ret &lt; 0)
+        return ret;
+
+    /* 3. 复制用户空间参数 */
+    ret = v4l2_ioctl_alloc_and_copy(info, arg, true);
+
+    /* 4. 调用驱动实现 */
+    ret = info->func(ops, file, parg);
+
+    /* 5. 复制结果回用户空间 */
+    v4l2_ioctl_alloc_and_copy(info, arg, false);
+
+    return ret;
+}
+  </code></pre>
+
+  <h3>v4l2_ioctl_ops</h3>
+  <p>驱动需要实现 <code>struct v4l2_ioctl_ops</code>，它定义了 140+ 个回调函数指针，覆盖所有标准 ioctl：</p>
+
+<pre><code class="language-c">struct v4l2_ioctl_ops {
+    /* 设备能力 */
+    int (*vidioc_querycap)(struct file *file, void *fh,
+                           struct v4l2_capability *cap);
+
+    /* 格式枚举与设置 */
+    int (*vidioc_enum_fmt_vid_cap)(struct file *file, void *fh,
+                                   struct v4l2_fmtdesc *f);
+    int (*vidioc_try_fmt_vid_cap)(struct file *file, void *fh,
+                                  struct v4l2_format *f);
+    int (*vidioc_s_fmt_vid_cap)(struct file *file, void *fh,
+                                struct v4l2_format *f);
+
+    /* 输入/输出 */
+    int (*vidioc_enum_input)(struct file *file, void *fh,
+                             struct v4l2_input *inp);
+    int (*vidioc_g_input)(struct file *file, void *fh,
+                          unsigned int *i);
+    int (*vidioc_s_input)(struct file *file, void *fh,
+                          unsigned int i);
+
+    /* 缓冲操作 */
+    int (*vidioc_reqbufs)(struct file *file, void *fh,
+                          struct v4l2_requestbuffers *b);
+    int (*vidioc_querybuf)(struct file *file, void *fh,
+                           struct v4l2_buffer *b);
+    int (*vidioc_qbuf)(struct file *file, void *fh,
+                       struct v4l2_buffer *b);
+    int (*vidioc_dqbuf)(struct file *file, void *fh,
+                        struct v4l2_buffer *b);
+    int (*vidioc_streamon)(struct file *file, void *fh,
+                           enum v4l2_buf_type i);
+    int (*vidioc_streamoff)(struct file *file, void *fh,
+                            enum v4l2_buf_type i);
+
+    /* ... 共 140+ 个回调 */
+};
+  </code></pre>
+</section>
+
+<section id="sec5" class="toc-link">
+  <h2><span class="num">05</span> videobuf2 缓冲框架</h2>
+
+  <p>videobuf2（VB2）是 V4L2 的缓冲管理框架，位于 <code>drivers/media/common/videobuf2/</code>。它取代了旧的 videobuf，提供了统一的内存管理接口，支持多种内存访问模式。</p>
+
+  <h3>核心结构</h3>
+
+<pre><code class="language-c">struct vb2_queue {
+    enum v4l2_buf_type            type;       // 缓冲类型
+    unsigned int                  io_modes;   // 支持的 I/O 模式
+    unsigned int                  buf_struct_size; // 驱动私有数据大小
+    const struct vb2_ops          *ops;       // 操作函数表
+    const struct vb2_mem_ops      *mem_ops;   // 内存操作函数表
+
+    /* 缓冲数组 */
+    struct vb2_buffer             **bufs;
+    unsigned int                  num_buffers;
+
+    /* 缓冲队列 */
+    struct list_head              queued_list;    // 已入队
+    struct list_head              done_list;      // 已完成
+    spinlock_t                    done_lock;
+    wait_queue_head_t             done_wq;
+
+    /* 文件句柄 */
+    struct vb2_fileio_data        *fileio;
+
+    /* 状态 */
+    unsigned int                  streaming:1;
+    unsigned int                  start_streaming_called:1;
+    unsigned int                  error:1;
+    unsigned int                  waiting_for_buffers:1;
+    unsigned int                  is_multiplanar:1;
+
+    /* 驱动回调 */
+    void (*buf_queue)(struct vb2_buffer *vb);
+    int (*start_streaming)(struct vb2_queue *q, unsigned int count);
+    void (*stop_streaming)(struct vb2_queue *q);
+    int (*wait_prepare)(struct vb2_queue *q);
+    void (*wait_finish)(struct vb2_queue *q);
+
+    /* 内存相关 */
+    struct device                  *dev;
+    struct vb2_mem_ops             *mem_ops;
+    struct vb2_plane               planes[VB2_MAX_PLANES];
+};
+  </code></pre>
+
+  <h3>四步缓冲生命周期</h3>
+  <ol>
+    <li><strong>REQBUFS</strong>——请求分配缓冲。调用 <code>vb2_core_reqbufs()</code>，经过 <code>__vb2_queue_alloc()</code> 分配 <code>vb2_buffer</code> 对象，通过 <code>mem_ops->alloc()</code> 分配实际内存。</li>
+    <li><strong>QUERYBUF</strong>——查询缓冲信息。返回缓冲的长度、偏移、内存地址等信息给用户空间。</li>
+    <li><strong>QBUF</strong>——将缓冲入队。调用 <code>vb2_core_qbuf()</code> → <code>__enqueue_in_driver()</code> → 驱动 <code>buf_queue()</code> 回调。</li>
+    <li><strong>DQBUF</strong>——从已完成队列出队。调用 <code>vb2_core_dqbuf()</code>，等待 <code>done_wq</code> 条件变量。</li>
+  </ol>
+
+  <h3>三种 I/O 模式</h3>
+  <table>
+    <tr><th>模式</th><th>标志</th><th>说明</th></tr>
+    <tr><td>MMAP</td><td><code>V4L2_MEMORY_MMAP</code></td><td>驱动分配内存，通过 <code>mmap()</code> 映射到用户空间。最常用，性能最好。</td></tr>
+    <tr><td>USERPTR</td><td><code>V4L2_MEMORY_USERPTR</code></td><td>用户空间分配内存，通过用户指针传入内核。驱动使用 <code>get_user_pages()</code> 锁定页面。</td></tr>
+    <tr><td>DMABUF</td><td><code>V4L2_MEMORY_DMABUF</code></td><td>通过 DMA-BUF 文件描述符导入/导出缓冲。用于跨设备零拷贝。</td></tr>
+  </table>
+
+  <h3>内存后端</h3>
+  <table>
+    <tr><th>后端</th><th>说明</th><th>适用场景</th></tr>
+    <tr><td><code>vb2_dma_contig_memops</code></td><td>DMA 连续内存，通过 <code>dma_alloc_coherent()</code> 分配</td><td>大多数摄像头、ISP</td></tr>
+    <tr><td><code>vb2_dma_sg_memops</code></td><td>DMA 分散-聚集，通过 <code>dma_map_sg()</code> 映射</td><td>PCIe 设备、支持 S/G 的硬件</td></tr>
+    <tr><td><code>vb2_vmalloc_memops</code></td><td>虚拟内存，通过 <code>vmalloc()</code> 分配</td><td>模拟器、测试驱动、USB</td></tr>
+  </table>
+
+  <h3>vb2_ops 驱动回调</h3>
+
+<pre><code class="language-c">struct vb2_ops {
+    int (*queue_setup)(struct vb2_queue *q,
+                       unsigned int *num_buffers,
+                       unsigned int *num_planes,
+                       unsigned int sizes[],
+                       struct device *alloc_devs[]);
+    void (*wait_prepare)(struct vb2_queue *q);
+    void (*wait_finish)(struct vb2_queue *q);
+    int (*buf_prepare)(struct vb2_buffer *vb);
+    void (*buf_queue)(struct vb2_buffer *vb);
+    int (*start_streaming)(struct vb2_queue *q, unsigned int count);
+    void (*stop_streaming)(struct vb2_queue *q);
+};
+  </code></pre>
+
+  <p>驱动实现这些回调来执行实际的硬件操作。典型的数据流：</p>
+
+<pre><code class="language-c">/* vivid 驱动中的典型 vb2_ops 实现 */
+static int vivid_queue_setup(struct vb2_queue *vq,
+    unsigned int *nbuffers, unsigned int *nplanes,
+    unsigned int sizes[], struct device *alloc_devs[])
+{
+    struct vivid_dev *dev = vb2_get_drv_priv(vq);
+    /* 计算所需的缓冲大小 */
+    sizes[0] = dev->fmt_rect.width * dev->fmt_rect.height * 2;
+    *nplanes = 1;
+    return 0;
+}
+
+static void vivid_buf_queue(struct vb2_buffer *vb)
+{
+    struct vivid_dev *dev = vb2_get_drv_priv(vb->vb2_queue);
+    struct vivid_buffer *buf = container_of(vb, struct vivid_buffer, vb);
+    spin_lock(&dev->slock);
+    list_add_tail(&buf->list, &dev->vidcap_active);
+    spin_unlock(&dev->slock);
+}
+
+static int vivid_start_streaming(struct vb2_queue *vq, unsigned int count)
+{
+    struct vivid_dev *dev = vb2_get_drv_priv(vq);
+    dev->streaming = true;
+    /* 启动硬件 DMA */
+    schedule_work(&dev->capture_work);
+    return 0;
+}
+  </code></pre>
+</section>
+
+<section id="sec6" class="toc-link">
+  <h2><span class="num">06</span> 控制框架</h2>
+
+  <p>V4L2 控制框架（Control Framework）是驱动和用户空间之间交换参数的标准机制，实现于 <code>v4l2-ctrls-core.c</code>（约 2830 行）、<code>v4l2-ctrls-api.c</code>、<code>v4l2-ctrls-defs.c</code> 和 <code>v4l2-ctrls-request.c</code> 中。</p>
+
+  <h3>核心数据结构</h3>
+
+<pre><code class="language-c">struct v4l2_ctrl {
+    struct list_head    node;        // 链入 handler 的链表
+    struct v4l2_ctrl_handler *handler; // 所属 handler
+    struct v4l2_ctrl    **cluster;  // 簇数组（用于复合控制）
+    unsigned int        ncontrols;  // 簇大小
+    u32                 id;         // 控制 ID（如 V4L2_CID_BRIGHTNESS）
+    enum v4l2_ctrl_type type;       // 类型（整数、布尔、菜单等）
+
+    union {
+        s64 val;                    // 当前值（整数类）
+        char *string;               // 当前值（字符串类）
+        u32 val_u32;                // 当前值（u32）
+    };
+
+    s64 minimum;      // 最小值
+    s64 maximum;      // 最大值
+    s64 default_value; // 默认值
+    u64 step;          // 步长
+    u32 flags;         // V4L2_CTRL_FLAG_*
+
+    const char *name;
+    const char * const *qmenu;  // 菜单项
+    const s64 *qmenu_int;       // 整数菜单
+};
+  </code></pre>
+
+  <h3>控制处理器的生命周期</h3>
+  <ol>
+    <li><strong>初始化</strong>——<code>v4l2_ctrl_handler_init()</code> 分配哈希桶和引用计数</li>
+    <li><strong>添加控制</strong>——<code>v4l2_ctrl_new_std()</code> 添加标准控制、<code>v4l2_ctrl_new_custom()</code> 添加自定义控制</li>
+    <li><strong>设置处理函数</strong>——<code>handler-&gt;notify</code> 回调通知驱动值变化</li>
+    <li><strong>挂载到设备</strong>——<code>vdev-&gt;ctrl_handler = handler</code> 或 <code>sd-&gt;ctrl_handler = handler</code></li>
+  </ol>
+
+  <h3>标准控制类型</h3>
+  <table>
+    <tr><th>类别</th><th>ID 范围</th><th>示例</th></tr>
+    <tr><td>用户控制</td><td><code>V4L2_CID_BASE</code> (0x00980900)</td><td>亮度、对比度、饱和度、色调</td></tr>
+    <tr><td>MPEG 编码</td><td><code>V4L2_CID_MPEG_BASE</code></td><td>比特率、GOP 大小、量化参数</td></tr>
+    <tr><td>摄像头控制</td><td><code>V4L2_CID_CAMERA_CLASS_BASE</code></td><td>曝光、白平衡、对焦、防抖</td></tr>
+    <tr><td>FM 调谐器</td><td><code>V4L2_CID_FM_TX_CLASS_BASE</code></td><td>立体声、RDS 编码</td></tr>
+    <tr><td>JPEG 压缩</td><td><code>V4L2_CID_JPEG_CLASS_BASE</code></td><td>压缩质量、重启间隔</td></tr>
+  </table>
+
+  <h3>控制簇（Cluster）</h3>
+  <p>V4L2 控制框架支持将多个控制组合为一个"簇"，实现原子性的同时更新。例如自动曝光/手动曝光模式下，曝光时间和增益可能互斥，通过簇机制确保一致性：</p>
+
+<pre><code class="language-c">/* 创建 3 个控制的簇 */
+ctrl = v4l2_ctrl_new_std(hdl, &amp;ctrl_ops,
+           V4L2_CID_EXPOSURE_AUTO, ...);
+v4l2_ctrl_auto_cluster(3, &amp;ctrl, 0, true);
+/* 簇: [AUTO_EXPOSURE, EXPOSURE_ABSOLUTE, EXPOSURE_GAIN] */
+  </code></pre>
+
+  <h3>类操作函数</h3>
+  <p>驱动通过 <code>struct v4l2_ctrl_ops</code> 提供控制读写实现：</p>
+
+<pre><code class="language-c">struct v4l2_ctrl_ops {
+    int (*g_volatile_ctrl)(struct v4l2_ctrl *ctrl);
+    int (*try_ctrl)(struct v4l2_ctrl *ctrl);
+    int (*s_ctrl)(struct v4l2_ctrl *ctrl);
+};
+  </code></pre>
+
+  <p><code>s_ctrl</code> 在一个控制值变化时被调用。<code>try_ctrl</code> 用于验证值是否合法但不实际应用。<code>g_volatile_ctrl</code> 用于读取动态变化的值（如自动曝光计算出的实际曝光时间）。</p>
+</section>
+
+<section id="sec7" class="toc-link">
+  <h2><span class="num">07</span> subdev 子设备</h2>
+
+  <p>subdev 框架用于管理复杂的图像处理管线中的各个组件。一个摄像头模组可能包含传感器、ISP、闪光灯等多个子设备，每个 subdev 可以独立控制和配置。实现于 <code>v4l2-subdev.c</code>（约 2637 行）。</p>
+
+  <h3>subdev 操作函数表</h3>
+
+<pre><code class="language-c">struct v4l2_subdev_ops {
+    const struct v4l2_subdev_core_ops     *core;   // 核心操作
+    const struct v4l2_subdev_tuner_ops    *tuner;  // 调谐器
+    const struct v4l2_subdev_audio_ops    *audio;  // 音频
+    const struct v4l2_subdev_video_ops    *video;  // 视频
+    const struct v4l2_subdev_vbi_ops      *vbi;    // VBI
+    const struct v4l2_subdev_ir_ops       *ir;     // 红外
+    const struct v4l2_subdev_sensor_ops   *sensor; // 传感器
+    const struct v4l2_subdev_pad_ops      *pad;    // pad 操作
+};
+
+struct v4l2_subdev_pad_ops {
+    int (*enum_mbus_code)(struct v4l2_subdev *sd,
+                          struct v4l2_subdev_state *state,
+                          struct v4l2_subdev_mbus_code_enum *code);
+    int (*enum_frame_size)(struct v4l2_subdev *sd,
+                           struct v4l2_subdev_state *state,
+                           struct v4l2_subdev_frame_size_enum *fse);
+    int (*set_fmt)(struct v4l2_subdev *sd,
+                   struct v4l2_subdev_state *state,
+                   struct v4l2_subdev_format *format);
+    int (*get_fmt)(struct v4l2_subdev *sd,
+                   struct v4l2_subdev_state *state,
+                   struct v4l2_subdev_format *format);
+    int (*get_selection)(struct v4l2_subdev *sd,
+                         struct v4l2_subdev_state *state,
+                         struct v4l2_subdev_selection *sel);
+    int (*set_selection)(struct v4l2_subdev *sd,
+                         struct v4l2_subdev_state *state,
+                         struct v4l2_subdev_selection *sel);
+    /* ... */
+};
+  </code></pre>
+
+  <h3>v4l2_subdev_state</h3>
+  <p>V4L2 7.0 引入了 <code>v4l2_subdev_state</code> 来管理 subdev 的格式和裁剪状态，取代了旧的 <code>v4l2_subdev_pad_config</code>。每个打开的 subdev 文件句柄可以有自己的 active state（活动状态），TRY ioctl 使用临时 state（尝试状态）：</p>
+
+<pre><code class="language-c">struct v4l2_subdev_state {
+    struct v4l2_subdev_pad_config *pads;
+    struct v4l2_subdev_krouting routing;
+    struct media_pad *stream_config;
+};
+  </code></pre>
+
+  <h3>subdev 注册</h3>
+  <p>注册一个 subdev 的流程：</p>
+
+<pre><code class="language-c">int v4l2_device_register_subdev(struct v4l2_device *v4l2_dev,
+                                struct v4l2_subdev *sd)
+{
+    /* 初始化 subdev 的媒体实体 */
+    media_entity_pads_init(&amp;sd->entity, sd->entity.num_pads,
+                           sd->entity.pads);
+    /* 添加到父设备的 subdev 列表 */
+    list_add_tail(&amp;sd->list, &amp;v4l2_dev->subdevs);
+    /* 注册媒体实体 */
+    if (v4l2_dev->mdev)
+        media_device_register_entity(v4l2_dev->mdev, &amp;sd->entity);
+    return 0;
+}
+  </code></pre>
+
+  <h3>subdev 与 sensor 驱动</h3>
+  <p>一个典型的摄像头传感器驱动（如 <code>drivers/media/i2c/imx219.c</code>）使用 subdev 接口：</p>
+
+<pre><code class="language-c">static const struct v4l2_subdev_sensor_ops imx219_sensor_ops = {
+    .g_skip_frames = imx219_g_skip_frames,
+};
+
+static const struct v4l2_subdev_video_ops imx219_video_ops = {
+    .s_stream = imx219_s_stream,  // 启动/停止流
+};
+
+static const struct v4l2_subdev_pad_ops imx219_pad_ops = {
+    .enum_mbus_code = imx219_enum_mbus_code,
+    .get_fmt = imx219_get_format,
+    .set_fmt = imx219_set_format,
+    .get_selection = imx219_get_selection,
+};
+
+static const struct v4l2_subdev_ops imx219_subdev_ops = {
+    .sensor = &amp;imx219_sensor_ops,
+    .video  = &amp;imx219_video_ops,
+    .pad    = &amp;imx219_pad_ops,
+};
+  </code></pre>
+</section>
+
+<section id="sec8" class="toc-link">
+  <h2><span class="num">08</span> 媒体控制器</h2>
+
+  <p>媒体控制器（Media Controller）框架为 V4L2 提供了數據管线的拓扑描述能力，实现于 <code>drivers/media/mc/</code>。它允许用户空间枚举和配置设备内部的數據路径。</p>
+
+  <h3>核心概念</h3>
+  <table>
+    <tr><th>概念</th><th>C 结构体</th><th>说明</th></tr>
+    <tr><td>媒体设备</td><td><code>struct media_device</code></td><td>整个设备的顶层抽象</td></tr>
+    <tr><td>实体</td><td><code>struct media_entity</code></td><td>管线中的一个功能单元，如传感器、ISP、编码器</td></tr>
+    <tr><td>Pad</td><td><code>struct media_pad</code></td><td>实体的输入/输出端口</td></tr>
+    <tr><td>链接</td><td><code>struct media_link</code></td><td>两个 pad 之间的连接</td></tr>
+    <tr><td>数据流</td><td><code>struct media_pipeline</code></td><td>启用的数据路径</td></tr>
+  </table>
+
+  <h3>实体注册</h3>
+
+<pre><code class="language-c">struct media_entity {
+    struct media_gobj graph_obj;    // 图对象
+    const char *name;                // 实体名称
+    enum media_entity_type obj_type; // 对象类型
+    u32 function;                    // 功能类型（如 MEDIA_ENT_F_CAM_SENSOR）
+    unsigned int num_pads;           // pad 数量
+    struct media_pad *pads;          // pad 数组
+    struct media_entity_operations *ops; // 操作函数
+    int stream_count;                // 活动流计数
+};
+
+struct media_pad {
+    struct media_gobj graph_obj;
+    struct media_entity *entity;     // 所属实体
+    u32 index;                       // pad 索引
+    unsigned long flags;             // MEDIA_PAD_FL_SINK / MEDIA_PAD_FL_SOURCE
+};
+
+struct media_link {
+    struct media_gobj graph_obj;
+    struct media_pad *source;        // 源 pad
+    struct media_pad *sink;          // 宿 pad
+    unsigned long flags;             // 标志（动态/静态/启用）
+};
+  </code></pre>
+
+  <h3>管线配置</h3>
+  <p>用户空间通过 <code>MEDIA_IOC_SETUP_LINK</code> ioctl 启用/禁用链接，通过 <code>MEDIA_IOC_ENUM_LINKS</code> 枚举拓扑。驱动端通过 <code>v4l2_mc_create_media_entity()</code> 在 <code>v4l2-mc.c</code> 中自动创建视频设备与实体之间的关联：</p>
+
+<pre><code class="language-c">int v4l2_mc_create_media_entity(struct video_device *vdev)
+{
+    struct media_device *mdev = vdev->v4l2_dev->mdev;
+    if (mdev == NULL)
+        return 0;
+
+    /* 创建视频设备对应的媒体实体 */
+    vdev->entity = &amp;vdev->media_entity;
+    vdev->entity->function = MEDIA_ENT_F_IO_V4L;
+
+    /* 创建 pad */
+    vdev->entity->num_pads = 1;
+    vdev->entity->pads = &amp;vdev->pad;
+    if (is_output)
+        vdev->pad.flags = MEDIA_PAD_FL_SOURCE;
+    else
+        vdev->pad.flags = MEDIA_PAD_FL_SINK;
+
+    return media_entity_pads_init(vdev->entity,
+                   vdev->entity->num_pads,
+                   vdev->entity->pads);
+}
+  </code></pre>
+
+  <h3>请求（Request）机制</h3>
+  <p>媒体请求允许将多个 subdev 控制的配置更改原子性地同时应用。实现于 <code>mc-request.c</code>（约 539 行）：</p>
+
+<pre><code class="language-c">struct media_request {
+    struct media_device *mdev;
+    int state;                    // 请求状态
+    struct list_head objects;     // 请求包含的对象
+    wait_queue_head_t poll_wait;
+    struct media_request_object *completed;
+};
+  </code></pre>
+
+  <p>请求的使用流程：</p>
+  <ol>
+    <li>用户空间创建请求——<code>MEDIA_IOC_REQUEST_ALLOC</code></li>
+    <li>将多个 SET_CTRL 操作关联到同一个请求——通过 <code>V4L2_EXT_CTRL_FLAG_REQUEST</code> 标志</li>
+    <li>将 QBUF 关联到请求——通过 <code>V4L2_BUF_FLAG_REQUEST_FD</code> 标志</li>
+    <li>提交请求——<code>MEDIA_REQUEST_IOC_QUEUE</code></li>
+    <li>内核按顺序原子性地应用请求中的所有控制</li>
+  </ol>
+</section>
+
+<section id="sec9" class="toc-link">
+  <h2><span class="num">09</span> V4L2 事件机制</h2>
+
+  <p>V4L2 事件机制允许驱动向用户空间发送异步事件通知，实现于 <code>v4l2-event.c</code>（约 373 行）。事件机制基于 <code>struct v4l2_fh</code>，每个文件句柄可以订阅和接收事件。</p>
+
+  <h3>核心结构</h3>
+
+<pre><code class="language-c">struct v4l2_event {
+    u32 type;                // 事件类型
+    union {
+        /* 事件数据，不同事件类型使用不同字段 */
+        struct v4l2_event_vsync vsync;
+        struct v4l2_event_ctrl ctrl;
+        struct v4l2_event_frame_sync frame_sync;
+        struct v4l2_event_src_change src_change;
+        struct v4l2_event_motion_det motion_det;
+        u8 data[64];
+    } u;
+    __u32 pending;           // 待处理事件数
+    __u32 sequence;          // 事件序列号
+    struct timespec timestamp; // 时间戳
+    u32 id;                  // 关联 ID
+    __u32 reserved[8];
+};
+  </code></pre>
+
+  <h3>事件类型</h3>
+  <table>
+    <tr><th>事件类型</th><th>说明</th></tr>
+    <tr><td><code>V4L2_EVENT_ALL</code></td><td>订阅所有事件</td></tr>
+    <tr><td><code>V4L2_EVENT_VSYNC</code></td><td>垂直同步脉冲</td></tr>
+    <tr><td><code>V4L2_EVENT_EOS</code></td><td>编码/解码结束（End of Stream）</td></tr>
+    <tr><td><code>V4L2_EVENT_CTRL</code></td><td>控制值变化</td></tr>
+    <tr><td><code>V4L2_EVENT_FRAME_SYNC</code></td><td>帧同步信号</td></tr>
+    <tr><td><code>V4L2_EVENT_SOURCE_CHANGE</code></td><td>源变化（如分辨率变化）</td></tr>
+    <tr><td><code>V4L2_EVENT_MOTION_DET</code></td><td>运动检测事件</td></tr>
+    <tr><td><code>V4L2_EVENT_PRIVATE_START</code></td><td>驱动私有事件起始</td></tr>
+  </table>
+
+  <h3>事件 API</h3>
+  <p>驱动侧接口：</p>
+
+<pre><code class="language-c">/* 分配事件队列 */
+int v4l2_event_init(struct v4l2_fh *fh);
+
+/* 分配事件队列并订阅事件 */
+int v4l2_event_subscribe(struct v4l2_fh *fh,
+                          const struct v4l2_event_subscription *sub,
+                          unsigned int elems,
+                          const struct v4l2_subscribed_event_ops *ops);
+
+/* 取消订阅 */
+int v4l2_event_unsubscribe(struct v4l2_fh *fh,
+                            const struct v4l2_event_subscription *sub);
+
+/* 投递事件到所有订阅者 */
+int v4l2_event_queue(struct v4l2_device *vdev,
+                     const struct v4l2_event *ev);
+int v4l2_event_queue_fh(struct v4l2_fh *fh,
+                         const struct v4l2_event *ev);
+  </code></pre>
+
+  <p>用户空间通过 <code>VIDIOC_DQEVENT</code> ioctl 等待并取出事件：</p>
+
+<pre><code class="language-c">struct v4l2_event ev;
+ioctl(fd, VIDIOC_DQEVENT, &amp;ev);
+printf("Event type: 0x%x, sequence: %u\n", ev.type, ev.sequence);
+  </code></pre>
+
+  <p>可用于 <code>poll()</code> 系统调用：当有事件可用时，文件描述符变为可读状态。</p>
+</section>
+
+<section id="sec10" class="toc-link">
+  <h2><span class="num">10</span> DV 时序</h2>
+
+  <p>数字视频（DV）时序框架定义于 <code>v4l2-dv-timings.c</code>（约 1275 行），用于 HDMI、DisplayPort、SDI 等数字接口的时序协商和管理。</p>
+
+  <h3>BT.656/BT.1120 时序</h3>
+
+<pre><code class="language-c">struct v4l2_bt_timings {
+    __u32 width;               // 图像宽度（像素）
+    __u32 height;              // 图像高度（行）
+    __u32 interlaced;          // 隔行模式
+    __u32 polarities;          // 同步信号极性
+    __u64 pixelclock;          // 像素时钟（Hz）
+    __u32 hfrontporch;         // 行前肩
+    __u32 hsync;               // 行同步宽度
+    __u32 hbackporch;          // 行后肩
+    __u32 vfrontporch;         // 帧前肩
+    __u32 vsync;               // 帧同步宽度
+    __u32 vbackporch;          // 帧后肩
+    __u32 il_vfrontporch;      // 偶场前肩（隔行）
+    __u32 il_vsync;            // 偶场同步宽度
+    __u32 il_vbackporch;       // 偶场后肩
+    __u32 standards;           // 标准标志
+    __u32 flags;               // 标志
+};
+
+struct v4l2_dv_timings {
+    __u32 type;                // 类型（V4L2_DV_BT_656_1120）
+    union {
+        struct v4l2_bt_timings bt;
+        __u32 reserved[32];
+    };
+};
+  </code></pre>
+
+  <h3>标准时序表</h3>
+  <p>V4L2 内核维护了 <code>v4l2_dv_timings_presets[]</code> 标准时序表，包含常见的 CEA-861 和 VESA 时序：</p>
+  <table>
+    <tr><th>标准</th><th>分辨率</th><th>帧率</th><th>像素时钟</th></tr>
+    <tr><td>CEA-861</td><td>1920×1080</td><td>60p</td><td>148.5 MHz</td></tr>
+    <tr><td>CEA-861</td><td>1920×1080</td><td>60i</td><td>74.25 MHz</td></tr>
+    <tr><td>CEA-861</td><td>1280×720</td><td>60p</td><td>74.25 MHz</td></tr>
+    <tr><td>CEA-861</td><td>720×576</td><td>50p</td><td>27.0 MHz</td></tr>
+    <tr><td>CEA-861</td><td>720×480</td><td>60p</td><td>27.0 MHz</td></tr>
+    <tr><td>VESA</td><td>1920×1080</td><td>60p</td><td>148.5 MHz</td></tr>
+    <tr><td>VESA</td><td>1280×1024</td><td>60p</td><td>108.0 MHz</td></tr>
+    <tr><td>VESA</td><td>1024×768</td><td>60p</td><td>65.0 MHz</td></tr>
+  </table>
+
+  <h3>时序查询与匹配</h3>
+
+<pre><code class="language-c">/* 查找标准时序 */
+int v4l2_find_dv_timings_cap(const struct v4l2_dv_timings *t,
+    const struct v4l2_dv_timings_cap *cap, unsigned int pixelclock_err,
+    const struct v4l2_fract *aspect, int *match);
+
+/* 枚举支持的时序 */
+int v4l2_enum_dv_timings_cap(struct v4l2_enum_dv_timings *t,
+    const struct v4l2_dv_timings_cap *cap,
+    bool (*check)(const struct v4l2_dv_timings *t, void *data),
+    void *data);
+
+/* 检测当前时序 */
+int v4l2_detect_cvt(unsigned int frame_height,
+    unsigned int frame_width, u32 hfreq, u32 vfreq,
+    u32 aspect_h, u32 aspect_w);
+int v4l2_detect_gtf(unsigned int frame_height,
+    unsigned int frame_width, u32 hfreq, u32 vfreq,
+    u32 aspect_h, u32 aspect_w);
+  </code></pre>
+
+  <p>HDMI 接收器驱动使用 <code>v4l2_dv_timings_cap</code> 声明能力，通过 <code>VIDIOC_S_DV_TIMINGS</code> 设置时序，<code>VIDIOC_G_DV_TIMINGS</code> 读取当前时序。当检测到显示器热插拔或分辨率变化时，通过 <code>V4L2_EVENT_SOURCE_CHANGE</code> 事件通知用户空间。</p>
+</section>
+
+<section id="sec11" class="toc-link">
+  <h2><span class="num">11</span> Async 异步 subdev 注册</h2>
+
+  <p>V4L2 异步框架（<code>v4l2-async.c</code>，约 993 行）解决了摄像头模组中各子设备（传感器、闪光灯、ISP）探测顺序不确定的问题。当 subdev 的驱动在不同时间加载时，需要异步绑定机制。</p>
+
+  <h3>核心结构</h3>
+
+<pre><code class="language-c">struct v4l2_async_notifier {
+    struct list_head list;
+    struct v4l2_device *v4l2_dev;
+    struct v4l2_async_notifier *parent;
+    unsigned int num_subdevs;
+    unsigned int num_entries;
+    struct list_head done_list;
+    struct list_head waiting_list;
+    const struct v4l2_async_notifier_operations *ops;
+};
+
+struct v4l2_async_connection {
+    struct list_head list;
+    struct v4l2_async_notifier *notifier;
+    enum v4l2_async_match_type match_type;
+    union {
+        struct fwnode_handle *fwnode;
+        const char *device_name;
+        struct device_node *of_node;
+    };
+};
+  </code></pre>
+
+  <h3>异步绑定流程</h3>
+  <ol>
+    <li><strong>创建 notifier</strong>——主设备驱动调用 <code>v4l2_async_nf_init()</code> 初始化 notifier，并设置 <code>.ops</code>（<code>bound()</code>、<code>unbind()</code>、<code>complete()</code>回调）</li>
+    <li><strong>添加 subdev</strong>——<code>v4l2_async_nf_add_fwnode()</code> / <code>v4l2_async_nf_add_i2c()</code> 添加等待绑定的 subdev</li>
+    <li><strong>注册 notifier</strong>——<code>v4l2_async_nf_register()</code> 将 notifier 注册到系统中</li>
+    <li><strong>匹配绑定</strong>——当 subdev 驱动探测时调用 <code>v4l2_async_register_subdev()</code>，框架遍历所有 notifier 的 <code>waiting_list</code>，匹配 <code>fwnode</code> 或 <code>device_name</code></li>
+    <li><strong>绑定完成</strong>——匹配成功后调用 <code>notifier-&gt;ops-&gt;bound()</code>，所有 subdev 绑定时调用 <code>notifier-&gt;ops-&gt;complete()</code></li>
+  </ol>
+
+<pre><code class="language-c">/* 主设备驱动中的异步绑定示例 */
+static int imx219_probe(struct i2c_client *client)
+{
+    /* subdev 端：注册到异步框架 */
+    v4l2_async_register_subdev(sd);
+}
+
+/* 主控端 (如 isp) */
+static int isp_probe(struct platform_device *pdev)
+{
+    struct v4l2_async_notifier *nf = &amp;isp-&gt;notifier;
+    v4l2_async_nf_init(nf, &amp;isp-&gt;v4l2_dev);
+    v4l2_async_nf_add_fwnode(nf, sensor_fwnode,
+                             struct v4l2_async_connection);
+    nf-&gt;ops = &amp;isp_async_ops;
+    v4l2_async_nf_register(nf);
+}
+
+static int isp_async_bound(struct v4l2_async_notifier *nf,
+                           struct v4l2_subdev *sd,
+                           struct v4l2_async_connection *asd)
+{
+    /* subdev 已绑定，建立媒体控制器链接 */
+    media_create_pad_link(&amp;sd-&gt;entity, 0,
+                          &amp;isp-&gt;video_entity, 0, 0);
+    return 0;
+}
+  </code></pre>
+
+  <p>在 Linux 7.0.12 之前，此框架的名称为 <code>v4l2_async_subdev</code>；7.0.12 中重构为 <code>v4l2_async_connection</code>，以更好地表达 subdev 和 notifier 之间的连接关系。</p>
+</section>
+
+<section id="sec12" class="toc-link">
+  <h2><span class="num">12</span> Memory-to-Memory（M2M）</h2>
+
+  <p>V4L2 M2M 框架（<code>v4l2-mem2mem.c</code>，约 1643 行）专为此类设备设计：设备从输入缓冲读取数据，处理后写入输出缓冲。典型设备包括硬件编码器、解码器、图像缩放器和格式转换器。</p>
+
+  <h3>核心结构</h3>
+
+<pre><code class="language-c">struct v4l2_m2m_dev {
+    struct list_head queues;           // M2M 队列列表
+    spinlock_t lock;
+    struct list_head running_jobs;     // 运行中的作业
+    void (*job_ready)(void *priv);
+    void (*job_abort)(void *priv);
+};
+
+struct v4l2_m2m_ctx {
+    struct v4l2_m2m_dev *m2m_dev;
+    struct vb2_queue out_q;            // 输出队列（SOURCE）
+    struct vb2_queue cap_q;            // 采集队列（SINK）
+    struct list_head rdy_src_queue;    // 就绪的源缓冲
+    struct list_head rdy_dst_queue;    // 就绪的目旳缓冲
+    struct v4l2_m2m_queue_ctx cap_q_ctx;
+    struct v4l2_m2m_queue_ctx out_q_ctx;
+};
+  </code></pre>
+
+  <h3>M2M 工作流</h3>
+  <ol>
+    <li>用户空间在 OUTPUT 队列 <code>QBUF</code> 填入原始数据（如 YUV 帧）</li>
+    <li>用户空间在 CAPTURE 队列 <code>QBUF</code> 填入空缓冲</li>
+    <li>调用 <code>STREAMON</code> 启动两个队列</li>
+    <li>驱动收到 OUTPUT 缓冲后，通过 <code>v4l2_m2m_buf_queue()</code> 排队</li>
+    <li>当两个队列都有就绪缓冲时，<code>v4l2_m2m_job_ready()</code> 返回 true</li>
+    <li>调用驱动注册的 <code>device_run()</code> 回调处理数据</li>
+    <li>处理完成后调用 <code>v4l2_m2m_buf_done()</code> 标记完成</li>
+    <li>用户空间从 CAPTURE 队列 <code>DQBUF</code> 取回处理后的数据</li>
+  </ol>
+
+  <h3>驱动模板</h3>
+
+<pre><code class="language-c">/* M2M 驱动典型结构 */
+static const struct v4l2_m2m_ops my_m2m_ops = {
+    .device_run = my_device_run,       // 启动硬件处理
+    .job_ready  = my_job_ready,        // 检查是否具备处理条件
+    .job_abort  = my_job_abort,        // 中止当前作业
+};
+
+static void my_device_run(void *priv)
+{
+    struct my_dev *dev = priv;
+    struct vb2_buffer *src, *dst;
+
+    /* 获取源和目旳缓冲 */
+    src = v4l2_m2m_next_src_buf(dev-&gt;m2m_ctx);
+    dst = v4l2_m2m_next_dst_buf(dev-&gt;m2m_ctx);
+
+    /* 启动硬件 DMA */
+    my_hw_process(dev,
+                  vb2_plane_vaddr(src, 0),  // 源数据
+                  vb2_plane_vaddr(dst, 0),  // 目旳缓冲
+                  dev-&gt;fmt_size);
+
+    /* 标记完成（通常在硬件中断中调用） */
+    v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
+    v4l2_m2m_buf_done(dst, VB2_BUF_STATE_DONE);
+    v4l2_m2m_job_finish(dev-&gt;m2m_dev, dev-&gt;m2m_ctx);
+}
+
+/* 文件打开时创建 M2M 上下文 */
+static int my_open(struct file *file)
+{
+    struct my_dev *dev = video_drvdata(file);
+    struct v4l2_m2m_ctx *ctx;
+    ctx = v4l2_m2m_ctx_init(dev-&gt;m2m_dev, dev,
+                            &amp;my_queue_init);
+    file-&gt;private_data = ctx;
+}
+  </code></pre>
+</section>
+
+<section id="sec13" class="toc-link">
+  <h2><span class="num">13</span> FWNODE 与设备树</h2>
+
+  <p>V4L2 FWNODE 框架（<code>v4l2-fwnode.c</code>）提供了解析 firmware 接口（设备树、ACPI）的标准化方法，用于获取摄像头模块的硬件配置信息。</p>
+
+  <h3>fwnode 端点解析</h3>
+
+<pre><code class="language-c">struct v4l2_fwnode_endpoint {
+    unsigned int port;                 // 端口号
+    unsigned int id;                   // 端点 ID
+    enum v4l2_mbus_type bus_type;      // 总线类型
+    struct {
+        struct v4l2_fwnode_bus_parallel parallel;
+        struct v4l2_fwnode_bus_mipi_csi1 mipi_csi1;
+        struct v4l2_fwnode_bus_mipi_csi2 mipi_csi2;
+        struct v4l2_fwnode_bus_parallel bt656;
+    } bus;
+    unsigned long *link_frequencies;
+    unsigned int nr_of_link_frequencies;
+};
+  </code></pre>
+
+  <h3>设备树绑定示例</h3>
+
+<pre><code class="language-dts">&amp;i2c5 {
+    imx219: camera@10 {
+        compatible = "sony,imx219";
+        reg = &lt;0x10&gt;;
+        clocks = &lt;&amp;cam_clk&gt;;
+        VANA-supply  = &lt;&amp;cam_vana&gt;;
+        VDIG-supply  = &lt;&amp;cam_vdig&gt;;
+        VDDL-supply  = &lt;&amp;cam_vddl&gt;;
+
+        port {
+            imx219_0: endpoint {
+                remote-endpoint = &lt;&amp;csi1_ep&gt;;
+                data-lanes = &lt;1 2&gt;;
+                clock-noncontinuous;
+                link-frequencies = /bits/ 64 &lt;456000000&gt;;
+            };
+        };
+    };
+};
+  </code></pre>
+
+  <p>驱动通过 <code>v4l2_fwnode_endpoint_parse()</code> 解析上述设备树节点，自动获取总线类型（MIPI CSI-2）、数据通道数、时钟频率等信息：</p>
+
+<pre><code class="language-c">int imx219_probe(struct i2c_client *client)
+{
+    struct v4l2_fwnode_endpoint ep = { .bus_type = 0 };
+    struct fwnode_handle *ep_h;
+
+    ep_h = fwnode_graph_get_next_endpoint(dev_fwnode(&amp;client->dev), NULL);
+    if (!ep_h)
+        return -EPROBE_DEFER;
+
+    ret = v4l2_fwnode_endpoint_parse(ep_h, &amp;ep);
+    fwnode_handle_put(ep_h);
+
+    if (ret == 0) {
+        /* 解析成功，获取 MIPI 配置 */
+        dev_info(&amp;client->dev, "lanes: %d, freq: %llu\n",
+                 ep.bus.mipi_csi2.num_data_lanes,
+                 ep.link_frequencies[0]);
+    }
+}
+  </code></pre>
+
+  <p>V4L2 CCI（Camera Control Interface，<code>v4l2-cci.c</code>）是另一个辅助框架，提供了通过 I2C 读写摄像头寄存器的高级接口，支持多地址宽度、缓存和错误处理。</p>
+</section>
+
+<section id="sec14" class="toc-link">
+  <h2><span class="num">14</span> 编解码辅助模块</h2>
+
+  <p>V4L2 提供了多个编解码辅助模块，帮助驱动实现硬件编码器/解码器的控制逻辑。</p>
+
+  <h3>H.264 辅助（v4l2-h264.c）</h3>
+  <p>提供 H.264 编码的辅助函数，包括 SPS/PPS 解析、DPB（解码图像缓冲）管理和参考帧列表构建：</p>
+
+<pre><code class="language-c">struct v4l2_h264_reflist_builder {
+    unsigned short refs[V4L2_H264_NUM_DPB_ENTRIES];
+    unsigned short unordered_reflist[V4L2_H264_NUM_DPB_ENTRIES];
+    int cur_frame_num;
+    int cur_pic_order_count;
+    unsigned int num_valid:8;
+};
+
+/* 构建参考帧列表（P/B 帧使用） */
+void v4l2_h264_init_reflist_builder(
+    struct v4l2_h264_reflist_builder *b,
+    const struct v4l2_h264_decode_param *dec_param,
+    const struct v4l2_h264_dpb_entry *dpb,
+    unsigned int num_dpb);
+void v4l2_h264_build_p_reflist(
+    const struct v4l2_h264_reflist_builder *b,
+    unsigned int *reflist);
+void v4l2_h264_build_b_reflist(
+    const struct v4l2_h264_reflist_builder *b,
+    unsigned int *reflist0, unsigned int *reflist1);
+  </code></pre>
+
+  <h3>VP9 辅助（v4l2-vp9.c）</h3>
+  <p>提供 VP9 编码的概率计算和参考帧管理：</p>
+
+<pre><code class="language-c">struct v4l2_vp9_frame_context {
+    /* VP9 帧级概率表 */
+    u8 tx_mode;
+    struct v4l2_vp9_segmentation seg;
+    struct v4l2_vp9_loop_filter lf;
+    struct v4l2_vp9_probs probs;
+};
+
+/* 加载 VP9 帧上下文 */
+void v4l2_vp9_frame_context_init(
+    struct v4l2_vp9_frame_context *ctx,
+    const struct v4l2_ctrl_vp9_frame *decode_params);
+  </code></pre>
+
+  <h3>JPEG 辅助（v4l2-jpeg.c）</h3>
+  <p>提供 JPEG 码流解析，包括 DHT（哈夫曼表）、DQT（量化表）、SOF（帧起始）、SOS（扫描起始）等 marker 的解析：</p>
+
+<pre><code class="language-c">/* JPEG 码流解析结构 */
+struct v4l2_jpeg_stream {
+    u8 *data;
+    size_t size;
+};
+
+struct v4l2_jpeg_header {
+    unsigned int frame_width;
+    unsigned int frame_height;
+    enum v4l2_jpeg_chroma_subsampling subsampling;
+    unsigned int num_dht;
+    unsigned int num_dqt;
+    struct v4l2_jpeg_dqt dqt[4];
+    struct v4l2_jpeg_dht dht[4];
+};
+
+/* 解析 JPEG 码流 */
+int v4l2_jpeg_parse_header(struct v4l2_jpeg_header *hdr,
+                            struct v4l2_jpeg_stream *stream);
+  </code></pre>
+
+  <h3>ISP 辅助（v4l2-isp.c）</h3>
+  <p>V4L2 ISP（Image Signal Processor）辅助模块提供了 ISP 管线配置的标准接口，支持统计数据处理、3A（AE/AWB/AF）参数传递和 Bayer 处理配置。</p>
+</section>
+
+<section id="sec15" class="toc-link">
+  <h2><span class="num">15</span> file_operations</h2>
+
+  <p>V4L2 框架通过 <code>struct v4l2_file_operations</code> 将字符设备文件操作映射到驱动实现。驱动可以选择性地实现这些回调：</p>
+
+<pre><code class="language-c">struct v4l2_file_operations {
+    struct module *owner;
+    int (*open)(struct file *file);
+    int (*release)(struct file *file);
+    __poll_t (*poll)(struct file *file,
+                     struct poll_table_struct *wait);
+    long (*ioctl)(struct file *file, unsigned int cmd,
+                  unsigned long arg);
+    int (*mmap)(struct file *file, struct vm_area_struct *vma);
+    int (*get_unmapped_area)(struct file *file,
+                             unsigned long addr,
+                             unsigned long len,
+                             unsigned long pgoff,
+                             unsigned long flags);
+    ssize_t (*read)(struct file *file, char __user *buf,
+                    size_t count, loff_t *ppos);
+    ssize_t (*write)(struct file *file, const char __user *buf,
+                     size_t count, loff_t *ppos);
+};
+  </code></pre>
+
+  <h3>默认 v4l2_fops</h3>
+  <p>框架提供默认文件操作表 <code>v4l2_fops</code>，定义了通用的 <code>open</code>、<code>release</code>、<code>ioctl</code> 等实现：</p>
+
+<pre><code class="language-c">static const struct v4l2_file_operations v4l2_fops = {
+    .owner   = THIS_MODULE,
+    .open    = v4l2_open,
+    .release = v4l2_release,
+    .poll    = v4l2_poll,
+    .unlocked_ioctl = video_ioctl2,
+    .mmap    = v4l2_mmap,
+    .read    = v4l2_read,
+    .write   = v4l2_write,
+};
+  </code></pre>
+
+  <p><code>v4l2_open()</code>（在 <code>v4l2-dev.c</code> 中）：</p>
+
+<pre><code class="language-c">static int v4l2_open(struct inode *inode, struct file *file)
+{
+    struct video_device *vdev;
+    int ret;
+
+    vdev = video_devdata(file);
+    if (vdev == NULL)
+        return -ENODEV;
+
+    /* 检查设备是否已注册 */
+    if (!video_is_registered(vdev))
+        return -ENODEV;
+
+    /* 检查设备类型权限 */
+    if (vdev->fops-&gt;open) {
+        ret = vdev->fops-&gt;open(file);
+    } else {
+        /* 默认行为：分配 v4l2_fh */
+        if (vdev-&gt;ioctl_ops) {
+            ret = v4l2_fh_open(file);
+        }
+    }
+    return ret;
+}
+  </code></pre>
+</section>
+
+<section id="sec16" class="toc-link">
+  <h2><span class="num">16</span> 驱动实例分析</h2>
+
+  <h3>vivid（虚拟视频驱动）</h3>
+  <p>vivid 是 V4L2 框架的参考实现，位于 <code>drivers/media/test-drivers/vivid/</code>。它模拟了完整的视频设备管线，包括采集、输出、VBI、radio、SDR 和触摸设备。vivid 展示了 V4L2 框架的全部核心机制：</p>
+  <ul>
+    <li>多 video_device 注册（vidcap、viddir、vbi 等）</li>
+    <li>vb2_queue 管理</li>
+    <li>TPG 测试图形生成</li>
+    <li>完整的控制框架实现（亮度、对比度、饱和度等）</li>
+    <li>DV 时序支持（HDMI 模拟）</li>
+    <li>事件生成（VSYNC、SOURCE_CHANGE）</li>
+    <li>M2M 功能（视频缩放/裁剪）</li>
+    <li>媒体控制器拓扑</li>
+  </ul>
+
+  <h3>UVC（USB Video Class）</h3>
+  <p>UVC 驱动位于 <code>drivers/media/usb/uvc/</code>，是 USB 摄像头标准驱动的实现。它展示了：</p>
+  <ul>
+    <li>USB isochronous 传输与 videobuf2 的集成</li>
+    <li>动态格式协商（通过 USB 探测）</li>
+    <li>自动曝光/白平衡等控制</li>
+    <li>JPEG/MJPEG 硬件压缩处理</li>
+  </ul>
+
+  <h3>驱动编写最小模板</h3>
+
+<pre><code class="language-c">#include &lt;media/v4l2-dev.h&gt;
+#include &lt;media/v4l2-device.h&gt;
+#include &lt;media/v4l2-ioctl.h&gt;
+#include &lt;media/videobuf2-v4l2.h&gt;
+
+struct my_dev {
+    struct v4l2_device v4l2_dev;
+    struct video_device vdev;
+    struct vb2_queue queue;
+    spinlock_t slock;
+};
+
+static const struct v4l2_file_operations my_fops = {
+    .owner   = THIS_MODULE,
+    .open    = v4l2_fh_open,
+    .release = v4l2_fh_release,
+    .poll    = vb2_fop_poll,
+    .unlocked_ioctl = video_ioctl2,
+    .mmap    = vb2_fop_mmap,
+};
+
+static const struct v4l2_ioctl_ops my_ioctl_ops = {
+    .vidioc_querycap     = my_querycap,
+    .vidioc_enum_fmt_vid_cap = my_enum_fmt,
+    .vidioc_try_fmt_vid_cap  = my_try_fmt,
+    .vidioc_s_fmt_vid_cap    = my_s_fmt,
+    .vidioc_reqbufs      = vb2_ioctl_reqbufs,
+    .vidioc_querybuf     = vb2_ioctl_querybuf,
+    .vidioc_qbuf         = vb2_ioctl_qbuf,
+    .vidioc_dqbuf        = vb2_ioctl_dqbuf,
+    .vidioc_streamon     = vb2_ioctl_streamon,
+    .vidioc_streamoff    = vb2_ioctl_streamoff,
+};
+
+static int my_probe(struct platform_device *pdev)
+{
+    struct my_dev *dev;
+    int ret;
+
+    dev = devm_kzalloc(&amp;pdev->dev, sizeof(*dev), GFP_KERNEL);
+
+    /* 1. 注册 v4l2_device */
+    ret = v4l2_device_register(&amp;pdev->dev, &amp;dev->v4l2_dev);
+
+    /* 2. 初始化 vb2_queue */
+    dev->queue.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    dev->queue.io_modes = VB2_MMAP | VB2_USERPTR;
+    dev->queue.ops = &amp;my_queue_ops;
+    dev->queue.mem_ops = &amp;vb2_vmalloc_memops;
+    dev->queue.drv_priv = dev;
+    ret = vb2_queue_init(&amp;dev->queue);
+
+    /* 3. 初始化 video_device */
+    dev->vdev.queue = &amp;dev->queue;
+    dev->vdev.v4l2_dev = &amp;dev->v4l2_dev;
+    dev->vdev.fops = &amp;my_fops;
+    dev->vdev.ioctl_ops = &amp;my_ioctl_ops;
+    dev->vdev.release = video_device_release_empty;
+    dev->vdev.device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
+    video_set_drvdata(&amp;dev->vdev, dev);
+
+    /* 4. 注册 video_device */
+    ret = video_register_device(&amp;dev->vdev, VFL_TYPE_VIDEO, -1);
+
+    return 0;
+}
+  </code></pre>
+</section>
+
+<section id="ref">
+  <h2>参考</h2>
+  <ul>
+    <li><code>include/uapi/linux/videodev2.h</code> — V4L2 用户空间 API 定义（2844 行）</li>
+    <li><code>include/media/v4l2-dev.h</code> — video_device 核心结构</li>
+    <li><code>include/media/v4l2-subdev.h</code> — subdev 接口定义（1998 行）</li>
+    <li><code>include/media/videobuf2-core.h</code> — vb2 核心接口（1335 行）</li>
+    <li><code>include/media/v4l2-ctrls.h</code> — 控制框架接口</li>
+    <li><code>include/media/media-entity.h</code> — 媒体控制器实体</li>
+    <li><code>drivers/media/v4l2-core/</code> — V4L2 核心实现（31 个源文件）</li>
+    <li><code>drivers/media/common/videobuf2/</code> — videobuf2 实现</li>
+    <li><code>drivers/media/mc/</code> — 媒体控制器实现</li>
+    <li><code>drivers/media/test-drivers/vivid/</code> — vivid 参考驱动实现</li>
+    <li><code>drivers/media/i2c/imx219.c</code> — 摄像头传感器驱动实例</li>
+    <li><a href="https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/v4l2.html">V4L2 API 规范</a></li>
+    <li><a href="https://linuxtv.org/downloads/v4l-dvb-apis/">LinuxTV V4L2 文档</a></li>
+  </ul>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>
