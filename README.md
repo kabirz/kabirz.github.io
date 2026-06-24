@@ -4,7 +4,7 @@
 
 ## 📊 文档统计
 
-- **216 篇**深度解析文档
+- **217 篇**深度解析文档
 - **8 大领域**：Linux 内核 / Linux 网络 / Docker 容器 / Rust / AI 视觉 / Go / Python / Windows
 - **基于 Linux 7.0.12** 内核源码
 
@@ -18,7 +18,7 @@
 | 🦀 Rust | 13 篇 | 所有权、trait、unsafe、async、Tokio、Web/GUI/Embedded 框架 |
 | 👁️ AI 视觉 | 15 篇 | OpenCV、YOLO、PyTorch、TensorFlow、ONNX 计算机视觉 |
 | 🔷 Go 语言 | 12 篇 | goroutine、GMP 调度、GC、反射、net/http、Module、CGo |
-| 🐍 Python | 14 篇 | asyncio、FastAPI、Pydantic、SQLAlchemy、测试、性能、NumPy 可视化 |
+| 🐍 Python | 15 篇 | asyncio、FastAPI、Pydantic、SQLAlchemy、测试、性能、NumPy 可视化、torchvision 测试图形 |
 | 🪟 Windows | 9 篇 | Win32、MFC、ATL/WTL、COM、UWP、WinUI3、MAUI、WPF、WebView2 |
 
 ## 🚀 快速开始
@@ -48,7 +48,7 @@ docs/
 ├── rust-*.html           # 13 篇 Rust 语言深度解析
 ├── vision-*.html         # 15 篇 AI 视觉技术解析
 ├── go-*.html             # 12 篇 Go 语言深度解析
-├── python-*.html         # 12 篇 Python 深度解析
+├── python-*.html         # 15 篇 Python 深度解析
 └── windows-*.html        # 9 篇 Windows 平台技术解析
 ```
 

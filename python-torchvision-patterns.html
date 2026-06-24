@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PyTorch torchvision — 测试图形生成深度指南</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%233776AB'/><stop offset='100%25' stop-color='%232b5a84'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>P</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>PyTorch torchvision — 测试图形生成深度指南</h1>
+  <p class="subtitle">torchvision.utils · 合成图像 · 色彩/空间测试模式 · 噪声生成 · 变换流水线</p>
+  <span class="version">torchvision ≥ 0.15 · PyTorch ≥ 2.0 · Python 3.10+</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">torchvision 与测试图形</a></li>
+    <li><a href="#tensor-image">张量图像基础</a></li>
+    <li><a href="#utils">torchvision.utils 工具</a></li>
+    <li><a href="#color-patterns">色彩测试图形</a></li>
+    <li><a href="#spatial-patterns">空间测试图形</a></li>
+    <li><a href="#noise">噪声与纹理生成</a></li>
+    <li><a href="#transforms">Transforms 变换流水线</a></li>
+    <li><a href="#pipeline">实战：测试套件流水线</a></li>
+    <li><a href="#best-practices">最佳实践</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> torchvision 与测试图形</h2>
+
+  <p><strong>torchvision</strong> 是 PyTorch 生态的计算机视觉工具库，提供数据集（datasets）、模型（models）、图像变换（transforms）和工具函数（utils）四大模块。其中 <code>torchvision.utils</code> 提供了 <code>make_grid</code>、<code>save_image</code> 等实用工具，配合 PyTorch 张量操作，可以灵活生成各类测试图形。</p>
+
+  <div class="diagram">
+    <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:center;font-size:0.88em;">
+      <div style="flex:1;min-width:120px;background:var(--code-bg);border-radius:8px;padding:16px;border-left:3px solid #ee4c2c;">
+        <div style="font-weight:700;margin-bottom:6px;">torchvision</div>
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">datasets</span>
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">models</span>
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">transforms</span>
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;border:1px solid var(--accent);font-weight:600;">utils ★</span>
+        </div>
+      </div>
+      <div style="flex:2;min-width:200px;background:var(--code-bg);border-radius:8px;padding:16px;border-left:3px solid #3776AB;">
+        <div style="font-weight:700;margin-bottom:6px;">PyTorch 张量操作</div>
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">torch.zeros / ones / rand</span>
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">torch.linspace / meshgrid</span>
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">torch.sin / cos / clamp</span>
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">F.interpolate / resize</span>
+        </div>
+      </div>
+      <div style="flex:1;min-width:120px;background:var(--code-bg);border-radius:8px;padding:16px;border-left:3px solid #2496ed;">
+        <div style="font-weight:700;margin-bottom:6px;">输出</div>
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">save_image</span>
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">make_grid</span>
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">to_pil_image</span>
+          <span style="padding:4px 8px;background:var(--card);border-radius:4px;">matplotlib</span>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:8px;font-size:0.78em;color:var(--text-dim);">torchvision + PyTorch 张量操作构成测试图形生成的核心链路</div>
+  </div>
+
+  <h3>为什么需要合成测试图形</h3>
+  <ul>
+    <li><strong>单元测试</strong>：验证图像处理流水线的正确性（尺寸/通道/数值范围）</li>
+    <li><strong>模型调试</strong>：用已知模式（彩条/棋盘格）验证网络是否能提取特定特征</li>
+    <li><strong>性能基准</strong>：在可控输入下测量前向/反向传播的耗时和内存</li>
+    <li><strong>数据增强验证</strong>：可视化 augment 前后的效果，确认参数配置正确</li>
+  </ul>
+
+  <h3>核心概念</h3>
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+PyTorch 图像张量规范:
+  shape          = (C, H, W)        # 单张图像（C == 1 或 3）
+  shape          = (N, C, H, W)     # 批处理图像
+  dtype          = torch.float32    # 值域 [0, 1]
+  layout         = CHW ( contiguous )
+  color order    = RGB</pre></div>
+
+  <div class="callout">
+    <strong>阅读建议:</strong><br>
+    <code>torchvision/utils.py</code> 中 <code>make_grid</code> 和 <code>save_image</code> 的实现。<br>
+    <code>torchvision/transforms/functional.py</code> 中 <code>to_pil_image</code> / <code>to_tensor</code>。<br>
+    快速实验可搭配 <code>matplotlib</code> 和 <code>PIL</code> 查看。
+  </div>
+</section>
+
+<section id="tensor-image" class="toc-link">
+  <h2><span class="num">02</span> 张量图像基础</h2>
+
+  <p>所有测试图形的构建从 PyTorch 张量开始。理解图像张量的内存布局和数值范围是第一步。</p>
+
+  <h3>创建空白图像</h3>
+  <pre><code class="language-python">import torch
+
+# 单通道灰度图 (1, H, W)
+gray = torch.zeros((1, 256, 256), dtype=torch.float32)
+
+# 三通道彩色图 (3, H, W)
+rgb  = torch.ones((3, 256, 256), dtype=torch.float32) * 0.5
+
+# 批量图像 (N, C, H, W)
+batch = torch.rand((8, 3, 128, 128), dtype=torch.float32)</code></pre>
+
+  <h3>值域与精度</h3>
+  <table>
+    <thead>
+      <tr><th>dtype</th><th>值域</th><th>用途</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>torch.float32</code></td><td>[0.0, 1.0]</td><td>标准训练/推理</td></tr>
+      <tr><td><code>torch.uint8</code></td><td>[0, 255]</td><td>存储 / PIL 互操作</td></tr>
+      <tr><td><code>torch.float16</code></td><td>[0.0, 1.0]</td><td>混合精度训练</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <strong>注意:</strong> torchvision 的 <code>ToTensor()</code> 将 uint8 [0,255] 转换为 float32 [0,1]；<code>ToPILImage()</code> 反之。合成图形时建议全程使用 float32。
+  </div>
+
+  <h3>张量与 PIL 互转</h3>
+  <pre><code class="language-python">from torchvision.transforms.functional import to_pil_image, to_tensor
+from PIL import Image
+
+# tensor (3, H, W) float32 [0,1] → PIL Image
+pil_img = to_pil_image(tensor)
+
+# PIL Image → tensor (3, H, W) float32 [0,1]
+tensor  = to_tensor(pil_img)
+
+# tensor (1, H, W) → 灰度 PIL
+pil_gray = to_pil_image(gray_tensor, mode='L')</code></pre>
+</section>
+
+<section id="utils" class="toc-link">
+  <h2><span class="num">03</span> torchvision.utils 工具</h2>
+
+  <p><code>torchvision.utils</code> 提供了两个高频使用的工具函数，是测试图形生成的基石。</p>
+
+  <div class="diagram">
+    <div style="display:flex;flex-wrap:wrap;gap:12px;justify-content:center;align-items:flex-end;font-size:0.82em;">
+      <div style="text-align:center;">
+        <svg width="160" height="160" viewBox="0 0 160 160" style="border:1px solid var(--border);border-radius:4px;">
+          <rect x="2" y="2" width="36" height="36" fill="#ff6b6b" rx="2"/>
+          <rect x="42" y="2" width="36" height="36" fill="#51cf66" rx="2"/>
+          <rect x="82" y="2" width="36" height="36" fill="#339af0" rx="2"/>
+          <rect x="122" y="2" width="36" height="36" fill="#fcc419" rx="2"/>
+          <rect x="2" y="42" width="36" height="36" fill="#cc5de8" rx="2"/>
+          <rect x="42" y="42" width="36" height="36" fill="#ff922b" rx="2"/>
+          <rect x="82" y="42" width="36" height="36" fill="#20c997" rx="2"/>
+          <rect x="122" y="42" width="36" height="36" fill="#f06595" rx="2"/>
+          <rect x="2" y="82" width="36" height="36" fill="#748ffc" rx="2"/>
+          <rect x="42" y="82" width="36" height="36" fill="#ffe066" rx="2"/>
+          <rect x="82" y="82" width="36" height="36" fill="#69db7c" rx="2"/>
+          <rect x="122" y="82" width="36" height="36" fill="#9775fa" rx="2"/>
+          <rect x="2" y="122" width="36" height="36" fill="#4dabf7" rx="2"/>
+          <rect x="42" y="122" width="36" height="36" fill="#f783ac" rx="2"/>
+          <rect x="82" y="122" width="36" height="36" fill="#38d9a9" rx="2"/>
+          <rect x="122" y="122" width="36" height="36" fill="#dee2e6" rx="2"/>
+        </svg>
+        <div style="margin-top:4px;">输入批次 (N, C, H, W)</div>
+      </div>
+      <div style="font-size:1.5em;color:var(--text-dim);padding-bottom:20px;">→</div>
+      <div style="text-align:center;">
+        <svg width="164" height="164" viewBox="0 0 164 164" style="border:1px solid var(--border);border-radius:4px;background:white;">
+          <rect x="2" y="2" width="36" height="36" fill="#ff6b6b" rx="2"/>
+          <rect x="42" y="2" width="36" height="36" fill="#51cf66" rx="2"/>
+          <rect x="82" y="2" width="36" height="36" fill="#339af0" rx="2"/>
+          <rect x="122" y="2" width="36" height="36" fill="#fcc419" rx="2"/>
+          <rect x="2" y="42" width="36" height="36" fill="#cc5de8" rx="2"/>
+          <rect x="42" y="42" width="36" height="36" fill="#ff922b" rx="2"/>
+          <rect x="82" y="42" width="36" height="36" fill="#20c997" rx="2"/>
+          <rect x="122" y="42" width="36" height="36" fill="#f06595" rx="2"/>
+          <rect x="2" y="82" width="36" height="36" fill="#748ffc" rx="2"/>
+          <rect x="42" y="82" width="36" height="36" fill="#ffe066" rx="2"/>
+          <rect x="82" y="82" width="36" height="36" fill="#69db7c" rx="2"/>
+          <rect x="122" y="82" width="36" height="36" fill="#9775fa" rx="2"/>
+          <rect x="2" y="122" width="36" height="36" fill="#4dabf7" rx="2"/>
+          <rect x="42" y="122" width="36" height="36" fill="#f783ac" rx="2"/>
+          <rect x="82" y="122" width="36" height="36" fill="#38d9a9" rx="2"/>
+          <rect x="122" y="122" width="36" height="36" fill="#dee2e6" rx="2"/>
+        </svg>
+        <div style="margin-top:4px;">make_grid(nrow=4)</div>
+      </div>
+    </div>
+    <div style="margin-top:6px;font-size:0.78em;color:var(--text-dim);">make_grid 将批量图像排列为网格，padding 控制间距，pad_value 控制背景色</div>
+  </div>
+
+  <h3>make_grid — 图像网格排版</h3>
+  <pre><code class="language-python">from torchvision.utils import make_grid
+
+# 批量图像 (N, C, H, W) → 网格 (3, gridH, gridW)
+batch = torch.rand((16, 3, 64, 64))
+grid = make_grid(batch, nrow=4, padding=2, pad_value=1.0)
+
+# grid.shape → (3, 264, 264)  4 行 4 列 + 2px 白边
+# 可指定 normalize=True 自动归一化到 [0,1]
+grid_norm = make_grid(batch, nrow=4, normalize=True, range=(-1, 1))</code></pre>
+
+  <h3>save_image — 直接保存图像</h3>
+  <pre><code class="language-python">from torchvision.utils import save_image
+
+# 单张 (C,H,W) 或批量 (N,C,H,W) 直接保存
+save_image(tensor, "output.png")
+
+# 自动 make_grid + 保存
+save_image(batch, "grid.png", nrow=4, padding=2)
+
+# 指定 normalize 和文件格式
+save_image(batch, "grid.jpg", nrow=4, normalize=True, quality=95)</code></pre>
+
+  <h3>draw_bounding_boxes — 绘制检测框</h3>
+  <pre><code class="language-python">from torchvision.utils import draw_bounding_boxes
+from torchvision.utils import draw_segmentation_masks
+
+# 在图像上绘制检测框 / 分割掩码（用于验证测试）
+img = torch.randint(0, 255, (3, 200, 200), dtype=torch.uint8)
+boxes = torch.tensor([[20, 30, 100, 150]], dtype=torch.float)
+result = draw_bounding_boxes(img, boxes, labels=["object"],
+                             colors="red", width=2)</code></pre>
+
+  <div class="callout">
+    <strong>提示:</strong> <code>save_image</code> 本质是 <code>make_grid</code> + <code>to_pil_image</code> + <code>pil_img.save()</code>。可直接查看源码理解其实现。
+  </div>
+</section>
+
+<section id="color-patterns" class="toc-link">
+  <h2><span class="num">04</span> 色彩测试图形</h2>
+
+  <p>色彩测试图形用于验证色彩空间转换、白平衡、色彩还原等处理流程的正确性。</p>
+
+  <div class="diagram">
+    <div style="display:flex;flex-wrap:wrap;gap:20px;justify-content:center;align-items:flex-end;font-size:0.82em;">
+      <div style="text-align:center;">
+        <svg width="240" height="160" viewBox="0 0 240 160" style="border:1px solid var(--border);border-radius:4px;">
+          <rect x="0" y="0" width="30" height="160" fill="#ffffff"/>
+          <rect x="30" y="0" width="30" height="160" fill="#ffff00"/>
+          <rect x="60" y="0" width="30" height="160" fill="#00ffff"/>
+          <rect x="90" y="0" width="30" height="160" fill="#00ff00"/>
+          <rect x="120" y="0" width="30" height="160" fill="#ff00ff"/>
+          <rect x="150" y="0" width="30" height="160" fill="#ff0000"/>
+          <rect x="180" y="0" width="30" height="160" fill="#0000ff"/>
+          <rect x="210" y="0" width="30" height="160" fill="#000000"/>
+        </svg>
+        <div style="margin-top:4px;">8 色彩条</div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="180" height="120" viewBox="0 0 180 120" style="border:1px solid var(--border);border-radius:4px;">
+          <defs>
+            <linearGradient id="hgrad" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#000"/>
+              <stop offset="100%" stop-color="#fff"/>
+            </linearGradient>
+            <linearGradient id="cbgrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#000"/>
+              <stop offset="100%" stop-color="#fff"/>
+            </linearGradient>
+            <radialGradient id="rgrad" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#fff"/>
+              <stop offset="100%" stop-color="#000"/>
+            </radialGradient>
+          </defs>
+          <rect x="0" y="0" width="60" height="120" fill="url(#hgrad)"/>
+          <rect x="60" y="0" width="60" height="120" fill="url(#cbgrad)"/>
+          <rect x="120" y="0" width="60" height="120" fill="url(#rgrad)"/>
+        </svg>
+        <div style="margin-top:4px;">水平 / 垂直 / 径向渐变</div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="160" height="120" viewBox="0 0 160 120" style="border:1px solid var(--border);border-radius:4px;">
+          <rect x="0" y="0" width="27" height="60" fill="#666"/>
+          <rect x="27" y="0" width="27" height="60" fill="#999"/>
+          <rect x="54" y="0" width="27" height="60" fill="#bbb"/>
+          <rect x="81" y="0" width="27" height="60" fill="#ddd"/>
+          <rect x="108" y="0" width="27" height="60" fill="#eee"/>
+          <rect x="135" y="0" width="27" height="60" fill="#fff"/>
+          <rect x="0" y="60" width="27" height="60" fill="#c44"/>
+          <rect x="27" y="60" width="27" height="60" fill="#4a4"/>
+          <rect x="54" y="60" width="27" height="60" fill="#44c"/>
+          <rect x="81" y="60" width="27" height="60" fill="#cc4"/>
+          <rect x="108" y="60" width="27" height="60" fill="#c4c"/>
+          <rect x="135" y="60" width="27" height="60" fill="#4cc"/>
+        </svg>
+        <div style="margin-top:4px;">24 色色卡（示意）</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>彩条（Color Bars）</h3>
+  <p>经典的 SMPTE 彩条模式，每列一种纯色，常用于视频流水线测试。</p>
+  <pre><code class="language-python">def color_bars(width=320, height=240):
+    """生成 8 色垂直彩条 (3, H, W) float32"""
+    colors = torch.tensor([
+        [1.0, 1.0, 1.0],  # 白
+        [1.0, 1.0, 0.0],  # 黄
+        [0.0, 1.0, 1.0],  # 青
+        [0.0, 1.0, 0.0],  # 绿
+        [1.0, 0.0, 1.0],  # 紫
+        [1.0, 0.0, 0.0],  # 红
+        [0.0, 0.0, 1.0],  # 蓝
+        [0.0, 0.0, 0.0],  # 黑
+    ])  # (8, 3)
+
+    img = torch.zeros((3, height, width))
+    bar_w = width // len(colors)
+    for i, c in enumerate(colors):
+        img[:, :, i*bar_w:(i+1)*bar_w] = c.view(3, 1, 1)
+    return img</code></pre>
+
+  <h3>渐变（Gradient）</h3>
+  <p>水平/垂直/对角渐变，检测量化伪影和色调映射。</p>
+  <pre><code class="language-python">def h_gradient(width=320, height=240):
+    """水平渐变 (3, H, W)"""
+    ramp = torch.linspace(0, 1, width).view(1, 1, width)
+    return ramp.expand(3, height, -1).contiguous()
+
+def v_gradient(width=320, height=240):
+    """垂直渐变"""
+    ramp = torch.linspace(0, 1, height).view(1, height, 1)
+    return ramp.expand(3, -1, width).contiguous()
+
+def radial_gradient(size=256):
+    """径向渐变（中心亮边缘暗）"""
+    y, x = torch.meshgrid(
+        torch.linspace(-1, 1, size),
+        torch.linspace(-1, 1, size),
+        indexing='ij'
+    )
+    dist = torch.sqrt(x**2 + y**2)
+    grad = torch.clamp(1 - dist, 0, 1)
+    return grad.unsqueeze(0).expand(3, -1, -1)</code></pre>
+
+  <h3>色卡（Color Checker）</h3>
+  <p>模拟 Macbeth ColorChecker 的 24 色块，用于色彩校准测试。</p>
+  <pre><code class="language-python">def color_checker(size=64):
+    """24 色色卡 (3, H, W)"""
+    # 经典的 24 个 Macbeth 色块 (sRGB 近似值)
+    patches = torch.tensor([
+        [0.4, 0.2, 0.1], [0.6, 0.4, 0.3], [0.3, 0.5, 0.2],
+        [0.7, 0.5, 0.4], [0.2, 0.3, 0.4], [0.5, 0.2, 0.3],
+        [0.9, 0.8, 0.7], [0.1, 0.1, 0.1], [0.2, 0.2, 0.8],
+        [0.8, 0.2, 0.2], [0.2, 0.8, 0.2], [0.2, 0.2, 0.8],
+        [0.8, 0.8, 0.2], [0.8, 0.2, 0.8], [0.2, 0.8, 0.8],
+        [0.9, 0.6, 0.2], [0.6, 0.3, 0.1], [0.3, 0.6, 0.1],
+        [0.7, 0.7, 0.7], [0.5, 0.5, 0.5], [0.3, 0.3, 0.3],
+        [0.9, 0.9, 0.1], [0.1, 0.9, 0.1], [0.1, 0.1, 0.9],
+    ])  # (24, 3)
+
+    cols, rows = 6, 4
+    img = torch.zeros((3, rows*size, cols*size))
+    for idx, c in enumerate(patches):
+        r, col = divmod(idx, cols)
+        img[:, r*size:(r+1)*size, col*size:(col+1)*size] = c.view(3,1,1)
+    return img  # (3, 4*size, 6*size)</code></pre>
+</section>
+
+<section id="spatial-patterns" class="toc-link">
+  <h2><span class="num">05</span> 空间测试图形</h2>
+
+  <p>空间模式用于验证滤波、边缘检测、缩放、卷积操作的空间频率响应。</p>
+
+  <div class="diagram">
+    <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:center;align-items:flex-end;font-size:0.82em;">
+      <div style="text-align:center;">
+        <svg width="120" height="120" viewBox="0 0 120 120" style="border:1px solid var(--border);border-radius:4px;">
+          <rect x="0" y="0" width="15" height="15" fill="#fff"/><rect x="15" y="0" width="15" height="15" fill="#000"/>
+          <rect x="30" y="0" width="15" height="15" fill="#fff"/><rect x="45" y="0" width="15" height="15" fill="#000"/>
+          <rect x="60" y="0" width="15" height="15" fill="#fff"/><rect x="75" y="0" width="15" height="15" fill="#000"/>
+          <rect x="90" y="0" width="15" height="15" fill="#fff"/><rect x="105" y="0" width="15" height="15" fill="#000"/>
+          <rect x="15" y="15" width="15" height="15" fill="#fff"/><rect x="0" y="15" width="15" height="15" fill="#000"/>
+          <rect x="45" y="15" width="15" height="15" fill="#fff"/><rect x="30" y="15" width="15" height="15" fill="#000"/>
+          <rect x="75" y="15" width="15" height="15" fill="#fff"/><rect x="60" y="15" width="15" height="15" fill="#000"/>
+          <rect x="105" y="15" width="15" height="15" fill="#fff"/><rect x="90" y="15" width="15" height="15" fill="#000"/>
+          <rect x="0" y="30" width="15" height="15" fill="#fff"/><rect x="15" y="30" width="15" height="15" fill="#000"/>
+          <rect x="30" y="30" width="15" height="15" fill="#fff"/><rect x="45" y="30" width="15" height="15" fill="#000"/>
+          <rect x="60" y="30" width="15" height="15" fill="#fff"/><rect x="75" y="30" width="15" height="15" fill="#000"/>
+          <rect x="90" y="30" width="15" height="15" fill="#fff"/><rect x="105" y="30" width="15" height="15" fill="#000"/>
+          <rect x="15" y="45" width="15" height="15" fill="#fff"/><rect x="0" y="45" width="15" height="15" fill="#000"/>
+          <rect x="45" y="45" width="15" height="15" fill="#fff"/><rect x="30" y="45" width="15" height="15" fill="#000"/>
+          <rect x="75" y="45" width="15" height="15" fill="#fff"/><rect x="60" y="45" width="15" height="15" fill="#000"/>
+          <rect x="105" y="45" width="15" height="15" fill="#fff"/><rect x="90" y="45" width="15" height="15" fill="#000"/>
+          <rect x="0" y="60" width="15" height="15" fill="#fff"/><rect x="15" y="60" width="15" height="15" fill="#000"/>
+          <rect x="30" y="60" width="15" height="15" fill="#fff"/><rect x="45" y="60" width="15" height="15" fill="#000"/>
+          <rect x="60" y="60" width="15" height="15" fill="#fff"/><rect x="75" y="60" width="15" height="15" fill="#000"/>
+          <rect x="90" y="60" width="15" height="15" fill="#fff"/><rect x="105" y="60" width="15" height="15" fill="#000"/>
+          <rect x="15" y="75" width="15" height="15" fill="#fff"/><rect x="0" y="75" width="15" height="15" fill="#000"/>
+          <rect x="45" y="75" width="15" height="15" fill="#fff"/><rect x="30" y="75" width="15" height="15" fill="#000"/>
+          <rect x="75" y="75" width="15" height="15" fill="#fff"/><rect x="60" y="75" width="15" height="15" fill="#000"/>
+          <rect x="105" y="75" width="15" height="15" fill="#fff"/><rect x="90" y="75" width="15" height="15" fill="#000"/>
+          <rect x="0" y="90" width="15" height="15" fill="#fff"/><rect x="15" y="90" width="15" height="15" fill="#000"/>
+          <rect x="30" y="90" width="15" height="15" fill="#fff"/><rect x="45" y="90" width="15" height="15" fill="#000"/>
+          <rect x="60" y="90" width="15" height="15" fill="#fff"/><rect x="75" y="90" width="15" height="15" fill="#000"/>
+          <rect x="90" y="90" width="15" height="15" fill="#fff"/><rect x="105" y="90" width="15" height="15" fill="#000"/>
+          <rect x="15" y="105" width="15" height="15" fill="#fff"/><rect x="0" y="105" width="15" height="15" fill="#000"/>
+          <rect x="45" y="105" width="15" height="15" fill="#fff"/><rect x="30" y="105" width="15" height="15" fill="#000"/>
+          <rect x="75" y="105" width="15" height="15" fill="#fff"/><rect x="60" y="105" width="15" height="15" fill="#000"/>
+          <rect x="105" y="105" width="15" height="15" fill="#fff"/><rect x="90" y="105" width="15" height="15" fill="#000"/>
+        </svg>
+        <div style="margin-top:4px;">8×8 棋盘格</div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="120" height="120" viewBox="0 0 120 120" style="border:1px solid var(--border);border-radius:4px;">
+          <defs>
+            <radialGradient id="zp" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#fff"/>
+              <stop offset="10%" stop-color="#000"/><stop offset="20%" stop-color="#fff"/>
+              <stop offset="30%" stop-color="#000"/><stop offset="40%" stop-color="#fff"/>
+              <stop offset="50%" stop-color="#000"/><stop offset="60%" stop-color="#fff"/>
+              <stop offset="70%" stop-color="#000"/><stop offset="80%" stop-color="#fff"/>
+              <stop offset="90%" stop-color="#000"/>
+              <stop offset="100%" stop-color="#fff"/>
+            </radialGradient>
+          </defs>
+          <rect width="120" height="120" fill="url(#zp)"/>
+        </svg>
+        <div style="margin-top:4px;">波带片（Zone Plate）</div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="120" height="120" viewBox="0 0 120 120" style="border:1px solid var(--border);border-radius:4px;">
+          <defs>
+            <pattern id="grating" width="6" height="120" patternUnits="userSpaceOnUse">
+              <rect width="3" height="120" fill="#fff"/>
+              <rect x="3" width="3" height="120" fill="#000"/>
+            </pattern>
+          </defs>
+          <rect width="120" height="120" fill="url(#grating)"/>
+        </svg>
+        <div style="margin-top:4px;">正弦光栅</div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="120" height="120" viewBox="0 0 120 120" style="border:1px solid var(--border);border-radius:4px;">
+          <circle cx="60" cy="60" r="55" fill="none" stroke="#000" stroke-width="4"/>
+          <circle cx="60" cy="60" r="45" fill="none" stroke="#fff" stroke-width="4"/>
+          <circle cx="60" cy="60" r="35" fill="none" stroke="#000" stroke-width="4"/>
+          <circle cx="60" cy="60" r="25" fill="none" stroke="#fff" stroke-width="4"/>
+          <circle cx="60" cy="60" r="15" fill="none" stroke="#000" stroke-width="4"/>
+          <circle cx="60" cy="60" r="5" fill="none" stroke="#fff" stroke-width="4"/>
+        </svg>
+        <div style="margin-top:4px;">同心圆环</div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="120" height="120" viewBox="0 0 120 120" style="border:1px solid var(--border);border-radius:4px;">
+          <line x1="60" y1="60" x2="0" y2="60" stroke="#000" stroke-width="3"/>
+          <line x1="60" y1="60" x2="11" y2="11" stroke="#000" stroke-width="3"/>
+          <line x1="60" y1="60" x2="60" y2="0" stroke="#000" stroke-width="3"/>
+          <line x1="60" y1="60" x2="109" y2="11" stroke="#000" stroke-width="3"/>
+          <line x1="60" y1="60" x2="120" y2="60" stroke="#000" stroke-width="3"/>
+          <line x1="60" y1="60" x2="109" y2="109" stroke="#000" stroke-width="3"/>
+          <line x1="60" y1="60" x2="60" y2="120" stroke="#000" stroke-width="3"/>
+          <line x1="60" y1="60" x2="11" y2="109" stroke="#000" stroke-width="3"/>
+          <circle cx="60" cy="60" r="40" fill="none" stroke="#666" stroke-width="1" stroke-dasharray="2,2"/>
+          <circle cx="60" cy="60" r="20" fill="none" stroke="#666" stroke-width="1" stroke-dasharray="2,2"/>
+        </svg>
+        <div style="margin-top:4px;">分辨率靶</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>棋盘格（Checkerboard）</h3>
+  <pre><code class="language-python">def checkerboard(size=256, tiles=8):
+    """棋盘格 (3, H, W)"""
+    cell = size // tiles
+    pattern = torch.zeros((size, size))
+    for i in range(tiles):
+        for j in range(tiles):
+            if (i + j) % 2 == 0:
+                pattern[i*cell:(i+1)*cell, j*cell:(j+1)*cell] = 1.0
+    return pattern.unsqueeze(0).expand(3, -1, -1)</code></pre>
+
+  <h3>波带片（Zone Plate）</h3>
+  <p>波带片是经典的频率响应测试图，包含从中心到边缘递增的空间频率。</p>
+  <pre><code class="language-python">def zone_plate(size=512):
+    """Fresnel 波带片 (3, H, W)"""
+    y, x = torch.meshgrid(
+        torch.linspace(-1, 1, size),
+        torch.linspace(-1, 1, size),
+        indexing='ij'
+    )
+    r2 = x**2 + y**2
+    pattern = (torch.cos(torch.pi * 40 * r2) + 1) / 2
+    return pattern.unsqueeze(0).expand(3, -1, -1)</code></pre>
+
+  <h3>正弦光栅（Sine Grating）</h3>
+  <pre><code class="language-python">def sine_grating(size=256, freq=8, angle=0):
+    """正弦光栅，可指定频率和角度"""
+    y, x = torch.meshgrid(
+        torch.arange(size, dtype=torch.float32),
+        torch.arange(size, dtype=torch.float32),
+        indexing='ij'
+    )
+    theta = torch.deg2rad(torch.tensor(float(angle)))
+    u = x * torch.cos(theta) + y * torch.sin(theta)
+    pattern = (torch.sin(2 * torch.pi * freq * u / size) + 1) / 2
+    return pattern.unsqueeze(0).expand(3, -1, -1)
+
+# 不同频率组合
+def multi_freq_grating(size=256):
+    """多频率多方向光栅拼接"""
+    configs = [(4,0), (8,0), (16,0), (32,0),
+               (8,45), (8,90), (8,135), (4,90)]
+    grids = []
+    for freq, angle in configs:
+        g = sine_grating(size//2, freq, angle)
+        grids.append(g)
+    return make_grid(grids, nrow=4, padding=4, pad_value=0.5)</code></pre>
+
+  <h3>分辨率靶（Resolution Chart）</h3>
+  <pre><code class="language-python">def resolution_chart(size=512):
+    """辐射状分辨率测试图"""
+    y, x = torch.meshgrid(
+        torch.linspace(-1, 1, size),
+        torch.linspace(-1, 1, size),
+        indexing='ij'
+    )
+    angle = torch.atan2(y, x)
+    radius = torch.sqrt(x**2 + y**2)
+    # 角度决定黑白条纹，半径决定频率
+    n_cycles = 36  # 36 个黑白对
+    pattern = (torch.cos(n_cycles * angle) + 1) / 2
+    # 外围渐变为灰（避免边界硬切）
+    mask = torch.clamp(1 - radius, 0, 1)
+    pattern = pattern * mask + 0.5 * (1 - mask)
+    return pattern.unsqueeze(0).expand(3, -1, -1)</code></pre>
+
+  <h3>圆环（Concentric Circles）</h3>
+  <pre><code class="language-python">def concentric_circles(size=256, n_rings=12):
+    """同心圆环"""
+    y, x = torch.meshgrid(
+        torch.linspace(-1, 1, size),
+        torch.linspace(-1, 1, size),
+        indexing='ij'
+    )
+    r = torch.sqrt(x**2 + y**2)
+    pattern = (torch.sin(n_rings * torch.pi * r) + 1) / 2
+    return pattern.unsqueeze(0).expand(3, -1, -1)</code></pre>
+</section>
+
+<section id="noise" class="toc-link">
+  <h2><span class="num">06</span> 噪声与纹理生成</h2>
+
+  <p>噪声图像用于测试去噪算法、数据增强效果和模型鲁棒性。</p>
+
+  <div class="diagram">
+    <div style="display:flex;flex-wrap:wrap;gap:16px;justify-content:center;align-items:flex-end;font-size:0.82em;">
+      <div style="text-align:center;">
+        <svg width="120" height="120" viewBox="0 0 120 120" style="border:1px solid var(--border);border-radius:4px;">
+          <filter id="uniformNoise">
+            <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="1" seed="1"/>
+            <feColorMatrix type="saturate" values="0"/>
+          </filter>
+          <rect width="120" height="120" filter="url(#uniformNoise)"/>
+        </svg>
+        <div style="margin-top:4px;">均匀噪声</div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="120" height="120" viewBox="0 0 120 120" style="border:1px solid var(--border);border-radius:4px;">
+          <filter id="gaussNoise">
+            <feTurbulence type="fractalNoise" baseFrequency="1.5" numOctaves="2" seed="5"/>
+            <feColorMatrix type="saturate" values="0"/>
+          </filter>
+          <rect width="120" height="120" filter="url(#gaussNoise)"/>
+        </svg>
+        <div style="margin-top:4px;">高斯噪声</div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="120" height="120" viewBox="0 0 120 120" style="border:1px solid var(--border);border-radius:4px;">
+          <filter id="perlinNoise">
+            <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="4" seed="42"/>
+            <feColorMatrix type="saturate" values="0"/>
+          </filter>
+          <rect width="120" height="120" filter="url(#perlinNoise)"/>
+        </svg>
+        <div style="margin-top:4px;">Perlin 纹理</div>
+      </div>
+      <div style="text-align:center;">
+        <svg width="120" height="120" viewBox="0 0 120 120" style="border:1px solid var(--border);border-radius:4px;">
+          <rect width="120" height="120" fill="#666"/>
+          <filter id="saltPepper">
+            <feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="1" seed="99"/>
+            <feComponentTransfer>
+              <feFuncR type="table" tableValues="0 1 1 0"/>
+            </feComponentTransfer>
+          </filter>
+          <rect width="120" height="120" filter="url(#saltPepper)" opacity="0.8"/>
+        </svg>
+        <div style="margin-top:4px;">椒盐噪声（示意）</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>均匀噪声</h3>
+  <pre><code class="language-python">def uniform_noise(h, w, low=0.0, high=1.0):
+    """均匀分布噪声 (3, H, W)"""
+    return torch.empty(3, h, w).uniform_(low, high)</code></pre>
+
+  <h3>高斯噪声</h3>
+  <pre><code class="language-python">def gaussian_noise(h, w, mean=0.0, std=0.1):
+    """高斯噪声，叠加到图像上"""
+    noise = torch.empty(3, h, w).normal_(mean, std)
+    return noise
+
+def add_gaussian_noise(img, std=0.05):
+    """向图像添加高斯噪声，保持 [0,1] 范围"""
+    noise = torch.empty_like(img).normal_(0, std)
+    return torch.clamp(img + noise, 0, 1)</code></pre>
+
+  <h3>椒盐噪声</h3>
+  <pre><code class="language-python">def salt_pepper_noise(img, prob=0.01, salt_val=1.0, pepper_val=0.0):
+    """椒盐噪声，随机像素置为纯白/纯黑"""
+    noisy = img.clone()
+    mask = torch.rand_like(img[:, 0:1, :])  # 所有通道同一 mask
+    noisy[:, mask < prob/2] = pepper_val
+    noisy[:, (mask >= prob/2) & (mask < prob)] = salt_val
+    return noisy</code></pre>
+
+  <h3>Perlin 噪声（纹理）</h3>
+  <pre><code class="language-python">def perlin_noise(size=128, scale=0.1):
+    """简单 Perlin 噪声（上采样均匀噪声）"""
+    small = torch.empty(1, size//4, size//4).uniform_(0, 1)
+    # 双线性插值放大
+    pattern = torch.nn.functional.interpolate(
+        small.unsqueeze(0), size=(size, size),
+        mode='bilinear', align_corners=False
+    ).squeeze(0)
+    return pattern.expand(3, -1, -1)</code></pre>
+
+  <h3>网格 + 噪声组合</h3>
+  <pre><code class="language-python">def noisy_checkerboard(size=256, tiles=8, noise_std=0.05):
+    """棋盘格 + 高斯噪声"""
+    cb = checkerboard(size, tiles)
+    noise = torch.empty_like(cb).normal_(0, noise_std)
+    return torch.clamp(cb + noise, 0, 1)</code></pre>
+</section>
+
+<section id="transforms" class="toc-link">
+  <h2><span class="num">07</span> Transforms 变换流水线</h2>
+
+  <p>torchvision.transforms 不仅用于数据增强，也可作为测试图形生成流水线的组成部分。</p>
+
+  <h3>几何变换</h3>
+  <pre><code class="language-python">from torchvision.transforms import functional as F
+import torchvision.transforms as T
+
+# 调整大小
+resized = F.resize(test_pattern, (224, 224))
+
+# 随机裁剪
+cropped = F.center_crop(test_pattern, (128, 128))
+
+# 旋转（验证旋转等变性）
+rotated = F.rotate(test_pattern, angle=45, fill=0.5)
+
+# 仿射变换
+affined = F.affine(test_pattern, angle=30, translate=(10, 0),
+                   scale=0.8, shear=5, fill=0.5)</code></pre>
+
+  <h3>色彩变换</h3>
+  <pre><code class="language-python"># 调整亮度/对比度/饱和度/色调
+bright = F.adjust_brightness(test_pattern, brightness_factor=1.5)
+contrast = F.adjust_contrast(test_pattern, contrast_factor=2.0)
+saturated = F.adjust_saturation(test_pattern, saturation_factor=0.5)
+hue = F.adjust_hue(test_pattern, hue_factor=0.2)
+
+# 灰度化
+gray = F.rgb_to_grayscale(test_pattern, num_output_channels=3)
+
+# 高斯模糊（用于测试低通滤波）
+blurred = F.gaussian_blur(test_pattern, kernel_size=5, sigma=1.5)</code></pre>
+
+  <h3>Compose 流水线</h3>
+  <pre><code class="language-python"># 定义一个可用于测试的增强流水线
+test_augment = T.Compose([
+    T.RandomResizedCrop(size=224, scale=(0.8, 1.0)),
+    T.RandomHorizontalFlip(p=0.5),
+    T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
+    T.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
+    T.ToTensor(),
+])
+
+# 对合成测试图应用
+result = test_augment(F.to_pil_image(checkerboard(256)))</code></pre>
+
+  <h3>自定义 Transform</h3>
+  <pre><code class="language-python">class AddGaussianNoise(torch.nn.Module):
+    def __init__(self, std=0.05):
+        super().__init__()
+        self.std = std
+
+    def forward(self, img):
+        noise = torch.randn_like(img) * self.std
+        return torch.clamp(img + noise, 0, 1)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(std={self.std})"
+
+# 组合使用
+pipeline = T.Compose([
+    T.ToTensor(),
+    AddGaussianNoise(0.02),
+    T.RandomErasing(p=0.3, scale=(0.02, 0.1)),
+])</code></pre>
+</section>
+
+<section id="pipeline" class="toc-link">
+  <h2><span class="num">08</span> 实战：测试套件流水线</h2>
+
+  <p>将以上模式组合为完整的测试套件，一键生成多维度测试图像。</p>
+
+  <div class="diagram">
+    <div style="display:flex;flex-wrap:wrap;gap:12px;justify-content:center;align-items:center;font-size:0.85em;">
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;">
+        <div style="font-weight:600;">色彩模式</div>
+        <div style="font-size:0.82em;color:var(--text-dim);">彩条·渐变·色卡</div>
+      </div>
+      <div style="font-size:1.2em;color:var(--text-dim);">→</div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;">
+        <div style="font-weight:600;">空间模式</div>
+        <div style="font-size:0.82em;color:var(--text-dim);">棋盘·波带·光栅</div>
+      </div>
+      <div style="font-size:1.2em;color:var(--text-dim);">→</div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;">
+        <div style="font-weight:600;">噪声纹理</div>
+        <div style="font-size:0.82em;color:var(--text-dim);">高斯·椒盐·Perlin</div>
+      </div>
+      <div style="font-size:1.2em;color:var(--text-dim);">→</div>
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center;">
+        <div style="font-weight:600;">make_grid</div>
+        <div style="font-size:0.82em;color:var(--text-dim);">排版·保存·总览</div>
+      </div>
+      <div style="font-size:1.2em;color:var(--text-dim);">→</div>
+      <div style="background:var(--accent);color:white;border-radius:8px;padding:10px 16px;text-align:center;">
+        <div style="font-weight:600;">测试套件</div>
+        <div style="font-size:0.82em;opacity:0.85;">模型验证·性能基准</div>
+      </div>
+    </div>
+    <div style="margin-top:8px;font-size:0.78em;color:var(--text-dim);">从合成到验证的完整流水线</div>
+  </div>
+
+  <h3>完整测试套件类</h3>
+  <pre><code class="language-python">from torchvision.utils import make_grid, save_image
+import torch
+import math
+
+class TestPatternSuite:
+    """综合测试图形生成套件"""
+
+    def __init__(self, size=256):
+        self.size = size
+
+    def color_patterns(self):
+        """色彩测试图形"""
+        return [
+            ("color_bars", color_bars(self.size, self.size)),
+            ("h_gradient", h_gradient(self.size, self.size)),
+            ("radial_gradient", radial_gradient(self.size)),
+            ("color_checker", color_checker(self.size//4)),
+        ]
+
+    def spatial_patterns(self):
+        """空间测试图形"""
+        return [
+            ("checkerboard", checkerboard(self.size, 8)),
+            ("zone_plate", zone_plate(self.size)),
+            ("resolution", resolution_chart(self.size)),
+            ("concentric", concentric_circles(self.size)),
+        ]
+
+    def noise_patterns(self):
+        """噪声测试图形"""
+        return [
+            ("uniform_noise", uniform_noise(self.size, self.size)),
+            ("gaussian_noise", gaussian_noise(self.size, self.size, std=0.2)),
+            ("perlin_noise", perlin_noise(self.size)),
+        ]
+
+    def generate_all(self, output_dir="test_patterns"):
+        """生成所有测试图形"""
+        import os
+        os.makedirs(output_dir, exist_ok=True)
+
+        all_patterns = []
+        all_names = []
+
+        for name, pat in (self.color_patterns()
+                          + self.spatial_patterns()
+                          + self.noise_patterns()):
+            save_image(pat, f"{output_dir}/{name}.png")
+            all_patterns.append(pat)
+            all_names.append(name)
+            print(f"  ✓ {name}.png")
+
+        # 生成总览图
+        grid = make_grid(all_patterns, nrow=4, padding=4, pad_value=1.0)
+        save_image(grid, f"{output_dir}/_overview.png")
+        print(f"\n总览图: {output_dir}/_overview.png")
+        print(f"共 {len(all_patterns)} 个测试图形")
+
+        return all_patterns
+
+# 使用
+suite = TestPatternSuite(size=256)
+patterns = suite.generate_all("test_output")
+
+# 对每个模式应用高斯模糊测试
+for name, pat in suite.spatial_patterns():
+    blurred = F.gaussian_blur(pat.unsqueeze(0), 5, 1.5).squeeze(0)
+    save_image(make_grid([pat, blurred], nrow=2, padding=4),
+               f"test_output/{name}_blur_compare.png")</code></pre>
+
+  <h3>模型行为验证</h3>
+  <p>用测试图形验证预训练模型的响应特性：</p>
+  <pre><code class="language-python">import torchvision.models as models
+
+model = models.resnet18(weights='DEFAULT').eval()
+
+def analyze_response(pattern, model):
+    """分析模型对测试图形的响应"""
+    with torch.no_grad():
+        # pattern: (3, H, W) → (1, 3, H, W)
+        batch = pattern.unsqueeze(0)
+        # 如果尺寸不匹配，resize 到 224
+        if batch.shape[-1] != 224:
+            batch = F.resize(batch, (224, 224))
+        output = model(batch)
+        # 输出 top-5 概率
+        probs = torch.nn.functional.softmax(output[0], dim=0)
+        top5 = probs.topk(5)
+        return list(zip(top5.indices.tolist(), top5.values.tolist()))
+
+# 有趣：模型对波带片和棋盘格的响应差异
+zp_response = analyze_response(zone_plate(512), model)
+cb_response = analyze_response(checkerboard(256, 8), model)
+print("Zone Plate top-5:", zp_response)
+print("Checkerboard top-5:", cb_response)</code></pre>
+
+  <div class="callout">
+    <strong>实战技巧:</strong><br>
+    — 使用 <code>torch.cuda.synchronize()</code> 和 <code>timeit</code> 测量不同模式下的推理延迟。<br>
+    — 波带片的环形纹路对频域分析特别有用，可配合 <code>torch.fft</code> 分析模型的频谱偏好。<br>
+    — 将生成结果上传到 TensorBoard：<code>from torch.utils.tensorboard import SummaryWriter</code>。
+  </div>
+</section>
+
+<section id="best-practices" class="toc-link">
+  <h2><span class="num">09</span> 最佳实践</h2>
+
+  <h3>图像格式规范</h3>
+  <table>
+    <thead>
+      <tr><th>场景</th><th>推荐格式</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>单元测试</td><td>PNG + float32</td><td>无损，精确匹配</td></tr>
+      <tr><td>可视化检查</td><td>make_grid + matplotlib</td><td>快速预览多图</td></tr>
+      <tr><td>性能基准</td><td>定型后转 uint8 + JPEG</td><td>模拟真实加载流程</td></tr>
+      <tr><td>模型输入验证</td><td>save_image + 加载对比</td><td>确认数值一致</td></tr>
+    </tbody>
+  </table>
+
+  <h3>性能准则</h3>
+  <ul>
+    <li><strong>批量生成</strong>：使用 <code>make_grid</code> 而非逐张保存，减少 I/O 次数</li>
+    <li><strong>张量操作</strong>：优先使用 PyTorch 原生操作而非 Python 循环（向量化）</li>
+    <li><strong>设备统一</strong>：生成时指定 <code>device</code>，避免后续多图推理时 CPU→GPU 拷贝</li>
+  </ul>
+
+  <pre><code class="language-python">def generate_on_device(device='cuda', size=256):
+    """在指定设备上生成测试图形"""
+    def _cb():
+        cell = size // 8
+        img = torch.zeros(3, size, size, device=device)
+        for i in range(8):
+            for j in range(8):
+                if (i + j) % 2 == 0:
+                    img[:, i*cell:(i+1)*cell, j*cell:(j+1)*cell] = 1.0
+        return img
+    return _cb
+
+# GPU 生成 + GPU 推理，全程无拷贝
+pattern = generate_on_device('cuda')()
+output = model(pattern.unsqueeze(0))</code></pre>
+
+  <h3>调试建议</h3>
+  <ul>
+    <li><strong>棋盘格 → 卷积测试</strong>：检查 conv 层的输出是否保持棋盘结构（验证 stride/dilation）</li>
+    <li><strong>波带片 → 频率响应</strong>：对 model.features 的输出做 FFT，观察频率衰减曲线</li>
+    <li><strong>彩条 → 颜色一致性</strong>：验证 RGB→BGR→RGB 转换是否还原，BatchNorm 的 running_mean 是否合理</li>
+    <li><strong>噪声 → 鲁棒性基准</strong>：在不同噪声水平下测量 accuracy drop，绘制鲁棒性曲线</li>
+  </ul>
+
+  <pre><code class="language-python">def frequency_response(model, size=256):
+    """用波带片测量模型的频率响应"""
+    zp = zone_plate(size).unsqueeze(0)  # (1,3,size,size)
+    with torch.no_grad():
+        features = model(zp)
+    # 对特征图做平均 FFT
+    from torch.fft import fft2, fftshift
+    feat = features[0].mean(dim=0)  # (H', W')
+    spectrum = torch.log(fftshift(fft2(feat)).abs() + 1e-8)
+    return spectrum
+
+# 可视化频率响应
+spec = frequency_response(model)
+# 比较不同模型的频域偏好</code></pre>
+
+  <div class="callout">
+    <strong>总结:</strong> torchvision + PyTorch 张量操作为测试图形生成提供了完整、灵活的工具链。从简单的彩条到复杂的波带片，从纯色到随机噪声，所有操作都在 GPU 友好的张量空间中完成，天然适配深度学习模型的测试与调试需求。
+  </div>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

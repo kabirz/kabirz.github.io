@@ -2,7 +2,7 @@
 
 ## 文档集合
 
-当前共 **216 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件（common.css / common.js）。
+当前共 **217 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件（common.css / common.js）。
 
 ### 文件结构
 
@@ -17,7 +17,7 @@
 ├── rust-*.html           # 13 篇 Rust 语言深度解析
 ├── vision-*.html         # 15 篇 AI 视觉技术解析
 ├── go-*.html             # 12 篇 Go 语言深度解析
-├── python-*.html         # 12 篇 Python 深度解析
+├── python-*.html         # 15 篇 Python 深度解析
 └── windows-*.html        # 9 篇 Windows 平台技术解析
 ```
 
@@ -32,7 +32,7 @@
 | Windows | 9 | 平台开发 | Win32, MFC, ATL/WTL, COM, UWP, WinUI3, MAUI, WPF, WebView2 |
 | AI 视觉 | 15 | 计算机视觉 | OpenCV, YOLO, PyTorch, TensorFlow, ONNX |
 | Go 语言 | 12 | 系统编程 | goroutine、GMP 调度、GC、反射、net/http、Module、CGo、泛型 |
-| Python | 14 | 语言生态 | 异步、FastAPI、Pydantic、SQLAlchemy、测试、性能、NumPy 可视化 |
+| Python | 15 | 语言生态 | 异步、FastAPI、Pydantic、SQLAlchemy、测试、性能、NumPy 可视化、torchvision 测试图形 |
 
 ### 已覆盖主题（Linux 内核）
 
@@ -303,6 +303,9 @@
 | 10 | python-testing.html | Python 测试 |
 | 11 | python-packaging.html | Python 包管理 |
 | 12 | python-performance.html | Python 性能优化 |
+| 13 | python-numpy-charts.html | NumPy 数据可视化 |
+| 14 | linux-vivid-patterns.html | vivid TPG 测试图形（Linux 内核 + NumPy） |
+| 15 | python-torchvision-patterns.html | torchvision 测试图形生成 |
 
 ### 已覆盖主题（Go 语言）
 
@@ -498,4 +501,4 @@ const ICON_MAP = {
 | Zephyr | 待扩展 |
 | AI 视觉 | ✅ 15 篇（OpenCV / YOLO / PyTorch / TensorFlow / ONNX） |
 | Go 语言 | ✅ 12 篇（基础/并发/调度/GC/内存/反射/net-http/CGo/模块/泛型/性能） |
-| Python | ✅ 14 篇（基础/异步/并发/Pydantic/FastAPI/NiceGUI/SQLAlchemy/测试/性能/NumPy 可视化） |
+| Python | ✅ 15 篇（基础/异步/并发/Pydantic/FastAPI/NiceGUI/SQLAlchemy/测试/性能/NumPy 可视化/torchvision 测试图形） |

@@ -223,6 +223,7 @@
     { t:"Python 性能优化", f:"python-performance.html", top:"python" },
     { t:"NumPy 数据可视化", f:"python-numpy-charts.html", top:"python" },
     { t:"vivid TPG 测试图形", f:"linux-vivid-patterns.html", top:"python" },
+    { t:"torchvision 测试图形生成", f:"python-torchvision-patterns.html", top:"python" },
   ];
   var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"Linux 网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", python:"Python 开发", other:"硬件与平台" };
 
