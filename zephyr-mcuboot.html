@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr MCUboot 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr MCUboot 深度解析</h1>
+  <p class="subtitle">MCUboot 架构 / Flash 分区 / 安全启动 / OTA 升级 / 回滚保护 / 源码分析</p>
+  <span class="version">Zephyr 4.x · subsys/dfu/ · bootloader/mcuboot/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">MCUboot 概览</a></li>
+    <li><a href="#arch">架构设计</a></li>
+    <li><a href="#flash">Flash 分区</a></li>
+    <li><a href="#secure-boot">安全启动</a></li>
+    <li><a href="#ota">OTA 升级流程</a></li>
+    <li><a href="#rollback">回滚保护</a></li>
+    <li><a href="#mcumgr">mcumgr 命令组</a></li>
+    <li><a href="#config">配置选项</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> MCUboot 概览</h2>
+
+  <p>MCUboot 是一个安全的引导加载程序，支持固件签名验证、加密、OTA 升级和回滚保护。</p>
+
+  <h3>核心特性</h3>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>安全启动</td><td>RSA/ECDSA 签名验证</td></tr>
+    <tr><td>固件加密</td><td>AES-128-CTR 加密固件</td></tr>
+    <tr><td>OTA 升级</td><td>支持多种传输方式</td></tr>
+    <tr><td>回滚保护</td><td>升级失败自动回退</td></tr>
+    <tr><td>多槽位</td><td>支持 Slot 0/1/2/3</td></tr>
+    <tr><td>RAM 加载</td><td>固件从 Flash 加载到 RAM 执行</td></tr>
+    <tr><td>加密存储</td><td>加密固件镜像</td></tr>
+    <tr><td>零拷贝</td><td>直接在 Flash 上验证</td></tr>
+  </table>
+
+  <h3>架构总览</h3>
+
+  <div class="mermaid">graph TD
+    subgraph HOST["主机/云端"]
+        H1["OTA 服务器"]
+        H2["imgtool 工具"]
+    end
+    subgraph MCU["MCU 设备"]
+        M1["MCUboot 引导加载程序"]
+        M2["应用固件（Slot 0）"]
+        M3["新固件（Slot 1）"]
+        M4["mcumgr 命令处理"]
+    end
+    subgraph FLASH["Flash 存储"]
+        F1["Bootloader 分区"]
+        F2["Slot 0（当前）"]
+        F3["Slot 1（升级）"]
+        F4["Scratch（临时）"]
+    end
+    H1 -->|"OTA 传输"| M4
+    H2 -->|"签名固件"| M4
+    M4 -->|"写入 Flash"| F3
+    M1 -->|"启动时验证"| F2
+    M1 -->|"升级时验证"| F3
+    M1 --> M2
+    style M1 fill:#1769aa15,stroke:#1769aa,color:#1e40af
+  </div>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构设计</h2>
+
+  <h3>MCUboot 组件</h3>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+bootloader/mcuboot/
+├── boot/
+│   ├── bootutil/           <span class="cmt">核心引导逻辑</span>
+│   │   ├── loader.c        <span class="cmt">启动加载器</span>
+│   │   ├── bootutil_misc.c <span class="cmt">杂项功能</span>
+│   │   ├── capsule.c       <span class="cmt">升级胶囊</span>
+│   │   └── boot_status.c   <span class="cmt">启动状态</span>
+│   ├── zephyr/             <span class="cmt">Zephyr 移植</span>
+│   └── encrypted/          <span class="cmt">加密支持</span>
+├── sysflash/               <span class="cmt">Flash 分区定义</span>
+├── bootutil/include/       <span class="cmt">头文件</span>
+└── scripts/                <span class="cmt">工具脚本</span>
+  </pre></div>
+
+  <h3>Zephyr 集成</h3>
+
+<pre><code class="language-c"><span class="cmt">// subsys/dfu/ 目录</span>
+<span class="cmt">// ├── boot/mcuboot.c     — MCUboot 集成</span>
+<span class="cmt">// ├── img_util/          — 镜像工具函数</span>
+<span class="cmt">// └── Kconfig            — 配置选项</span>
+
+<span class="cmt">// mcumgr 命令组</span>
+<span class="cmt">// subsys/mgmt/mcumgr/grp/img_mgmt/ — 镜像管理命令</span>
+<span class="cmt">// subsys/mgmt/mcumgr/grp/os_mgmt/  — OS 管理命令</span>
+<span class="cmt">// subsys/mgmt/mcumgr/grp/shell_mgmt/ — Shell 命令</span>
+</code></pre>
+</section>
+
+<section id="flash" class="toc-link">
+  <h2><span class="num">03</span> Flash 分区</h2>
+
+  <h3>Flash 布局</h3>
+
+  <div class="file-tree"><pre style="background:none;border:none;padding:0;margin:0;white-space:pre;">
+┌─────────────────────────────────────────────────┐
+│  Bootloader 分区                                │
+│  MCUboot 引导加载程序                           │
+├─────────────────────────────────────────────────┤
+│  Slot 0（主分区）                               │
+│  当前运行的应用固件                              │
+├─────────────────────────────────────────────────┤
+│  Slot 1（次分区）                               │
+│  OTA 升级的新固件                               │
+├─────────────────────────────────────────────────┤
+│  Scratch（临时分区）                            │
+│  升级过程中的临时数据                            │
+├─────────────────────────────────────────────────┤
+│  NVS / Settings                                 │
+│  持久化存储                                     │
+└─────────────────────────────────────────────────┘
+  </pre></div>
+
+  <h3>DTS Flash 分区定义</h3>
+
+<pre><code class="language-dts"><span class="cm">/* Flash 分区定义 */</span>
+&amp;flash0 {
+    <span class="cm">/* Bootloader */</span>
+    partitions {
+        compatible = "fixed-partitions";
+        #address-cells = &lt;1&gt;;
+        #size-cells = &lt;1&gt;;
+
+        boot_partition: partition@0 {
+            label = "mcuboot";
+            reg = &lt;0x00000000 0x8000&gt;;
+        };
+
+        <span class="cm">/* Slot 0 - 当前固件 */</span>
+        slot0_partition: partition@8000 {
+            label = "image-0";
+            reg = &lt;0x00008000 0x60000&gt;;
+        };
+
+        <span class="cm">/* Slot 1 - 升级固件 */</span>
+        slot1_partition: partition@68000 {
+            label = "image-1";
+            reg = &lt;0x00068000 0x60000&gt;;
+        };
+
+        <span class="cm">/* Scratch - 临时分区 */</span>
+        scratch_partition: partition@c8000 {
+            label = "scratch";
+            reg = &lt;0x000c8000 0x4000&gt;;
+        };
+
+        <span class="cm">/* NVS - 持久化存储 */</span>
+        storage_partition: partition@cc000 {
+            label = "storage";
+            reg = &lt;0x000cc000 0x34000&gt;;
+        };
+    };
+};
+</code></pre>
+</section>
+
+<section id="secure-boot" class="toc-link">
+  <h2><span class="num">04</span> 安全启动</h2>
+
+  <h3>签名验证流程</h3>
+
+  <div class="mermaid">graph TD
+    A["MCUboot 启动"] --> B["读取 Slot 0 镜像头"]
+    B --> C{"签名有效?"}
+    C -->|"是"| D["验证完整性"]
+    C -->|"否"| E["尝试 Slot 1"]
+    D --> F{"完整性有效?"}
+    F -->|"是"| G["跳转到应用"]
+    F -->|"否"| E
+    E --> H{"Slot 1 有效?"}
+    H -->|"是"| I["从 Slot 1 启动"]
+    H -->|"否"| J["进入 Recovery 模式"]
+    style G fill:#22c55e15,stroke:#22c55e,color:#166534
+    style J fill:#fee2e215,stroke:#ef4444,color:#991b1b
+  </div>
+
+  <h3>签名配置</h3>
+
+<pre><code class="language-c"><span class="cmt">// MCUboot 签名配置</span>
+<span class="cmt">// CONFIG_BOOT_SIGNATURE=y</span>
+<span class="cmt">// CONFIG_BOOT_SIGNATURE_TYPE_RSA=y</span>
+<span class="cmt">// CONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256=y</span>
+
+<span class="cmt">// 生成签名密钥</span>
+<span class="cmt">// imgtool keygen -k signing-key.pem -t RSA-2048</span>
+<span class="cmt">// imgtool sign --key signing-key.pem firmware.bin signed.bin</span>
+
+<span class="cmt">// 镜像头结构</span>
+struct image_header {
+    uint32_t ih_magic;      <span class="cmt">// 魔数 0x96F3B83D</span>
+    uint32_t ih_load_addr;  <span class="cmt">// 加载地址</span>
+    uint16_t ih_hdr_size;   <span class="cmt">// 头部大小</span>
+    uint16_t ih_protect_tlv_size; <span class="cmt">// TLV 大小</span>
+    uint32_t ih_img_size;   <span class="cmt">// 镜像大小</span>
+    uint32_t ih_flags;      <span class="cmt">// 标志位</span>
+    struct image_version ih_ver; <span class="cmt">// 版本号</span>
+    uint32_t ih_pad1;
+};
+</code></pre>
+</section>
+
+<section id="ota" class="toc-link">
+  <h2><span class="num">05</span> OTA 升级流程</h2>
+
+  <h3>完整升级流程</h3>
+
+  <div class="mermaid">graph TD
+    A["1. 上传新固件"] --> B["mcumgr image upload"]
+    B --> C["写入 Slot 1"]
+    C --> D["校验镜像完整性"]
+    D --> E["2. 测试新固件"]
+    E --> F["mcumgr image test &lt;hash&gt;"]
+    F --> G["标记为测试状态"]
+    G --> H["3. 重启 MCU"]
+    H --> I["MCUboot 验证 Slot 1"]
+    I --> J["从 Slot 1 启动"]
+    J --> K["4. 确认新固件"]
+    K --> L["mcumgr image confirm"]
+    L --> M["新固件永久生效"]
+    style M fill:#22c55e15,stroke:#22c55e,color:#166534
+  </div>
+
+  <h3>mcumgr 镜像管理命令</h3>
+
+<pre><code class="language-bash"><span class="cmt"># 查看镜像信息</span>
+mcumgr image list
+
+<span class="cmt"># 上传新镜像</span>
+mcumgr image upload -e firmware.bin
+
+<span class="cmt"># 测试新镜像（标记为待确认）</span>
+mcumgr image test &lt;hash&gt;
+
+<span class="cmt"># 确认镜像（永久生效）</span>
+mcumgr image confirm &lt;hash&gt;
+
+<span class="cmt"># 回滚到上一版本</span>
+mcumgr image revert
+
+<span class="cmt"># 删除镜像</span>
+mcumgr image erase &lt;hash&gt;
+</code></pre>
+</section>
+
+<section id="rollback" class="toc-link">
+  <h2><span class="num">06</span> 回滚保护</h2>
+
+<pre><code class="language-c"><span class="cmt">// 回滚机制</span>
+<span class="cmt">// CONFIG_BOOT_BOOTUTIL_VALIDATE_SLOT0=y  ← 校验 Slot 0</span>
+<span class="cmt">// CONFIG_BOOT_MCUOOT_DOWNGRADE_PREVENTION=y ← 防止降级</span>
+
+<span class="cmt">// 回滚场景：</span>
+<span class="cmt">// 1. 新固件启动后崩溃</span>
+<span class="cmt">// 2. MCUboot 检测到启动失败</span>
+<span class="cmt">// 3. 自动回滚到 Slot 0</span>
+<span class="cmt">// 4. 标记 Slot 1 为无效</span>
+
+<span class="cmt">// 超时回滚</span>
+<span class="cmt">// CONFIG_BOOTUTIL_CONFIRM_TIMEOUT=10  ← 10秒确认超时</span>
+<span class="cmt">// 超时后自动回滚</span>
+
+<span class="cmt">// 应用侧确认</span>
+<span class="cmt">// 在应用启动后调用 mcuboot_mark_app_confirmed()</span>
+<span class="cmt">// 或通过 mcumgr 命令确认</span>
+</code></pre>
+</section>
+
+<section id="mcumgr" class="toc-link">
+  <h2><span class="num">07</span> mcumgr 命令组</h2>
+
+  <h3>支持的命令组</h3>
+
+  <table>
+    <tr><th>命令组</th><th>目录</th><th>说明</th></tr>
+    <tr><td>Image (img_mgmt)</td><td><code>grp/img_mgmt/</code></td><td>固件镜像管理</td></tr>
+    <tr><td>OS (os_mgmt)</td><td><code>grp/os_mgmt/</code></td><td>OS 管理（复位、日期）</td></tr>
+    <tr><td>Shell (shell_mgmt)</td><td><code>grp/shell_mgmt/</code></td><td>远程 Shell</td></tr>
+    <tr><td>Stats (stat_mgmt)</td><td><code>grp/stat_mgmt/</code></td><td>统计信息</td></tr>
+    <tr><td>FS (fs_mgmt)</td><td><code>grp/fs_mgmt/</code></td><td>文件系统操作</td></tr>
+    <tr><td>Settings (settings_mgmt)</td><td><code>grp/settings_mgmt/</code></td><td>设置管理</td></tr>
+    <tr><td>Enum (enum_mgmt)</td><td><code>grp/enum_mgmt/</code></td><td>枚举管理</td></tr>
+  </table>
+
+  <h3>SMP 传输</h3>
+
+  <table>
+    <tr><th>传输</th><th>目录</th><th>说明</th></tr>
+    <tr><td>UART</td><td><code>transport/serial/</code></td><td>串口传输（最常用）</td></tr>
+    <tr><td>BLE</td><td><code>transport/smp_bt/</code></td><td>蓝牙传输</td></tr>
+    <tr><td>UDP</td><td><code>transport/smp_udp/</code></td><td>UDP 传输</td></tr>
+    <tr><td>HTTP</td><td><code>transport/http/</code></td><td>HTTP 传输</td></tr>
+  </table>
+</section>
+
+<section id="config" class="toc-link">
+  <h2><span class="num">08</span> 配置选项</h2>
+
+<pre><code class="language-c"><span class="cmt">// MCUboot 配置</span>
+<span class="cmt">// CONFIG_BOOTLOADER_MCUBOOT=y          ← 启用 MCUboot</span>
+<span class="cmt">// CONFIG_IMG_MANAGER=y                 ← 镜像管理</span>
+<span class="cmt">// CONFIG_STREAM_FLASH=y                ← 流式 Flash 写入</span>
+
+<span class="cmt">// 签名配置</span>
+<span class="cmt">// CONFIG_MCUBOOT_SIGNATURE=y           ← 签名验证</span>
+<span class="cmt">// CONFIG_MCUBOOT_SIGNATURE_TYPE_RSA=y  ← RSA 签名</span>
+<span class="cmt">// CONFIG_MCUBOOT_SIGNATURE_TYPE_ECDSA_P256=y ← ECDSA 签名</span>
+
+<span class="cmt">// 加密配置</span>
+<span class="cmt">// CONFIG_MCUBOOT_ENCRYPTION=y          ← 固件加密</span>
+<span class="cmt">// CONFIG_MCUBOOT_ENCRYPTION_KEY_FILE="key.pem"</span>
+
+<span class="cmt">// 回滚配置</span>
+<span class="cmt">// CONFIG_BOOT_BOOTUTIL_VALIDATE_SLOT0=y</span>
+<span class="cmt">// CONFIG_BOOTUTIL_CONFIRM_TIMEOUT=10</span>
+
+<span class="cmt">// mcumgr 配置</span>
+<span class="cmt">// CONFIG_MCUMGR=y                      ← 启用 mcumgr</span>
+<span class="cmt">// CONFIG_MCUMGR_GRP_IMG=y              ← 镜像管理命令</span>
+<span class="cmt">// CONFIG_MCUMGR_GRP_OS=y               ← OS 管理命令</span>
+<span class="cmt">// CONFIG_MCUMGR_GRP_SHELL=y            ← Shell 命令</span>
+<span class="cmt">// CONFIG_MCUMGR_TRANSPORT_UART=y       ← UART 传输</span>
+</code></pre>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">09</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== Zephyr MCUboot 完整示例 =====</span>
+<span class="cmt">// 演示：固件确认、升级状态查询、回滚</span>
+
+#include &lt;zephyr/kernel.h&gt;
+#include &lt;zephyr/dfu/mcuboot.h&gt;
+#include &lt;zephyr/mgmt/mcumgr/grp/img_mgmt/img_mgmt.h&gt;
+#include &lt;stdio.h&gt;
+
+<span class="cmt">// 确认当前固件</span>
+void vConfirmFirmware(void)
+{
+    <span class="cmt">// 标记当前固件为已确认</span>
+    int ret = mcuboot_mark_app_confirmed();
+    if (ret == 0) {
+        printk("Firmware confirmed successfully\\n");
+    } else {
+        printk("Firmware confirmation failed: %d\\n", ret);
+    }
+}
+
+<span class="cmt">// 查询升级状态</span>
+void vCheckUpgradeStatus(void)
+{
+    struct image_version ver;
+    uint8_t slot;
+
+    <span class="cmt">// 获取 Slot 0 版本</span>
+    if (img_mgmt_get_version(0, &amp;ver) == 0) {
+        printk("Slot 0: v%d.%d.%d\\n", ver.iv_major, ver.iv_minor, ver.iv_revision);
+    }
+
+    <span class="cmt">// 获取 Slot 1 版本</span>
+    if (img_mgmt_get_version(1, &amp;ver) == 0) {
+        printk("Slot 1: v%d.%d.%d\\n", ver.iv_major, ver.iv_minor, ver.iv_revision);
+    }
+
+    <span class="cmt">// 获取当前活动 Slot</span>
+    slot = img_mgmt_get_active_slot();
+    printk("Active slot: %d\\n", slot);
+}
+
+<span class="cmt">// 监控任务</span>
+void vMonitorTask(void *pvParameters)
+{
+    <span class="cmt">// 启动后确认固件</span>
+    vConfirmFirmware();
+
+    for (;;) {
+        vCheckUpgradeStatus();
+        k_msleep(30000);  <span class="cmt">// 每 30 秒检查一次</span>
+    }
+}
+
+<span class="cmt">// 应用任务</span>
+void vAppTask(void *pvParameters)
+{
+    for (;;) {
+        printk("Application running\\n");
+        k_msleep(5000);
+    }
+}
+
+<span class="cmt">// DTS 配置（Flash 分区）</span>
+<span class="cmt">// &amp;flash0 {</span>
+<span class="cmt">//     partitions {</span>
+<span class="cmt">//         compatible = "fixed-partitions";</span>
+<span class="cmt">//         boot_partition: partition@0 {</span>
+<span class="cmt">//             label = "mcuboot";</span>
+<span class="cmt">//             reg = &lt;0x00000000 0x8000&gt;;</span>
+<span class="cmt">//         };</span>
+<span class="cmt">//         slot0_partition: partition@8000 {</span>
+<span class="cmt">//             label = "image-0";</span>
+<span class="cmt">//             reg = &lt;0x00008000 0x60000&gt;;</span>
+<span class="cmt">//         };</span>
+<span class="cmt">//         slot1_partition: partition@68000 {</span>
+<span class="cmt">//             label = "image-1";</span>
+<span class="cmt">//             reg = &lt;0x00068000 0x60000&gt;;</span>
+<span class="cmt">//         };</span>
+<span class="cmt">//     };</span>
+<span class="cmt">// };</span>
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>bootloader/mcuboot/boot/bootutil/</code> MCUboot 核心引导逻辑。<br>
+  <code>subsys/dfu/boot/mcuboot.c</code> MCUboot Zephyr 集成。<br>
+  <code>subsys/mgmt/mcumgr/grp/img_mgmt/</code> 镜像管理命令实现。<br>
+  <code>subsys/dfu/img_util/</code> 镜像工具函数。
+</div>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

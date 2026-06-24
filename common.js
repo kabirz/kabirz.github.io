@@ -263,6 +263,8 @@
     { t:"Zephyr Retention 掉电保留", f:"zephyr-retention.html", top:"zephyr" },
     { t:"Zephyr 任务看门狗", f:"zephyr-task-wdt.html", top:"zephyr" },
     { t:"Zephyr 网络管理", f:"zephyr-net-management.html", top:"zephyr" },
+    { t:"Zephyr Shell 子系统", f:"zephyr-shell.html", top:"zephyr" },
+    { t:"Zephyr MCUboot 深度解析", f:"zephyr-mcuboot.html", top:"zephyr" },
     { t:"FreeRTOS 整体架构", f:"freertos-overview.html", top:"freertos" },
     { t:"FreeRTOS 任务管理", f:"freertos-task.html", top:"freertos" },
     { t:"FreeRTOS 队列与 IPC", f:"freertos-queue.html", top:"freertos" },

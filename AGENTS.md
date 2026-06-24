@@ -14,7 +14,7 @@
 ├── mermaid.min.js        # Mermaid 图表渲染库（本地，3.3MB）
 ├── AGENTS.md             # 本文档
 ├── linux-*.html          # 141 篇 Linux 相关（115 内核 + 26 网络）
-├── zephyr-*.html         # 39 篇 Zephyr RTOS 深度解析
+├── zephyr-*.html         # 41 篇 Zephyr RTOS 深度解析
 ├── docker-*.html         # 12 篇 Docker / 容器技术解析
 ├── rust-*.html           # 13 篇 Rust 语言深度解析
 ├── vision-*.html         # 15 篇 AI 视觉技术解析
@@ -35,7 +35,7 @@
 | AI 视觉 | 15 | 计算机视觉 | OpenCV, YOLO, PyTorch, TensorFlow, ONNX |
 | Go 语言 | 12 | 系统编程 | goroutine、GMP 调度、GC、反射、net/http、Module、CGo、泛型 |
 | Python | 15 | 语言生态 | 异步、FastAPI、Pydantic、SQLAlchemy、测试、性能、NumPy 可视化、torchvision 测试图形 |
-| Zephyr RTOS | 39 | 嵌入式 | 内核、调度、内存、同步、IPC、定时器、中断、设备模型、驱动、PM、网络、蓝牙、构建、调试、安全、zbus、SMP、文件系统、工作队列、USB、LLEXT、mcumgr、Modem、DFU、传感、CAN、LoRaWAN、Modbus、RTIO、POSIX、输入、统计、Settings、随机数、Retention、看门狗、网络管理 |
+| Zephyr RTOS | 41 | 嵌入式 | 内核、调度、内存、同步、IPC、定时器、中断、设备模型、驱动、PM、网络、蓝牙、构建、调试、安全、zbus、SMP、文件系统、工作队列、USB、LLEXT、mcumgr、Modem、DFU、传感、CAN、LoRaWAN、Modbus、RTIO、POSIX、输入、统计、Settings、随机数、Retention、看门狗、网络管理、Shell、MCUboot |
 
 ### 已覆盖主题（Linux 内核）
 
@@ -404,6 +404,8 @@
 | 37 | zephyr-retention.html | Retention 掉电保留 |
 | 38 | zephyr-task-wdt.html | 任务看门狗 |
 | 39 | zephyr-net-management.html | 网络管理 |
+| 40 | zephyr-shell.html | Shell 子系统 |
+| 41 | zephyr-mcuboot.html | MCUboot 深度解析 |
 
 ---
 
@@ -568,7 +570,7 @@ const ICON_MAP = {
 | 文件系统 | 待扩展（XFS、btrfs、F2FS） |
 | 网络 | 待扩展（WireGuard、MPTCP、SRv6） |
 | 设备驱动 | 待扩展（USB、PCIe、ALSA、V4L2） |
-| Zephyr | ✅ 39 篇（内核/调度/内存/同步/IPC/定时器/中断/设备模型/驱动/PM/网络/蓝牙/构建/调试/安全/zbus/SMP/文件系统/工作队列/USB/LLEXT/mcumgr/Modem/DFU/传感/CAN/LoRaWAN/Modbus/RTIO/POSIX/输入/统计/Settings/随机数/Retention/看门狗/网络管理） |
+| Zephyr | ✅ 41 篇（内核/调度/内存/同步/IPC/定时器/中断/设备模型/驱动/PM/网络/蓝牙/构建/调试/安全/zbus/SMP/文件系统/工作队列/USB/LLEXT/mcumgr/Modem/DFU/传感/CAN/LoRaWAN/Modbus/RTIO/POSIX/输入/统计/Settings/随机数/Retention/看门狗/网络管理/Shell/MCUboot） |
 | AI 视觉 | ✅ 15 篇（OpenCV / YOLO / PyTorch / TensorFlow / ONNX） |
 | Go 语言 | ✅ 12 篇（基础/并发/调度/GC/内存/反射/net-http/CGo/模块/泛型/性能） |
 | Python | ✅ 15 篇（基础/异步/并发/Pydantic/FastAPI/NiceGUI/SQLAlchemy/测试/性能/NumPy 可视化/torchvision 测试图形） |

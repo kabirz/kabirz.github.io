@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr Shell 子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr Shell 子系统深度解析</h1>
+  <p class="subtitle">Shell 架构 / 命令注册 / 后端 / 历史记录 / 通配符 / 动态命令 / 源码分析</p>
+  <span class="version">Zephyr 4.x · subsys/shell/ · shell.c 2396 行</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">Shell 概览</a></li>
+    <li><a href="#arch">架构设计</a></li>
+    <li><a href="#command">命令注册</a></li>
+    <li><a href="#backend">Shell 后端</a></li>
+    <li><a href="#history">历史记录</a></li>
+    <li><a href="#wildcard">通配符与动态命令</a></li>
+    <li><a href="#config">配置选项</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> Shell 概览</h2>
+
+  <p>Zephyr Shell 是一个功能丰富的交互式命令行框架，支持命令注册、自动补全、历史记录、通配符、多后端等特性。</p>
+
+  <h3>核心特性</h3>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>命令注册</td><td>静态/动态命令注册，支持子命令</td></tr>
+    <tr><td>自动补全</td><td>Tab 键自动补全命令和参数</td></tr>
+    <tr><td>历史记录</td><td>上下键浏览历史命令</td></tr>
+    <tr><td>通配符</td><td>支持 * 和 ? 通配符</td></tr>
+    <tr><td>多后端</td><td>UART/RTT/SSH/Telnet/MQTT/WebSocket</td></tr>
+    <tr><td>颜色支持</td><td>VT100 终端颜色输出</td></tr>
+    <tr><td>别名</td><td>命令别名支持</td></tr>
+    <tr><td>远程 CLI</td><td>通过网络远程访问 Shell</td></tr>
+  </table>
+
+  <h3>Shell 架构</h3>
+
+  <div class="mermaid">graph TD
+    subgraph APP["应用层"]
+        A1["用户命令"]
+    end
+    subgraph SHELL["Shell 核心"]
+        S1["shell.c<br>命令解析器"]
+        S2["shell_utils.c<br>工具函数"]
+        S3["shell_help.c<br>帮助系统"]
+        S4["shell_history.c<br>历史记录"]
+        S5["shell_wildcard.c<br>通配符"]
+    end
+    subgraph BACKEND["后端层"]
+        B1["shell_uart.c<br>UART 后端"]
+        B2["shell_rtt.c<br>RTT 后端"]
+        B3["shell_ssh.c<br>SSH 后端"]
+        B4["shell_telnet.c<br>Telnet 后端"]
+        B5["shell_mqtt.c<br>MQTT 后端"]
+        B6["shell_websocket.c<br>WebSocket 后端"]
+    end
+    A1 --> S1
+    S1 --> S2 & S3 & S4 & S5
+    S1 --> B1 & B2 & B3 & B4 & B5 & B6
+    style S1 fill:#1769aa15,stroke:#1769aa,color:#1e40af
+  </div>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构设计</h2>
+
+  <h3>Shell 上下文结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/zephyr/shell/shell.h</span>
+struct shell {
+    const struct shell_backend *backend;   <span class="cmt">// 后端（UART/RTT 等）</span>
+    struct shell_ctx *ctx;                  <span class="cmt">// 运行时上下文</span>
+    const struct shell_transport *iface;   <span class="cmt">// 传输接口</span>
+    const struct shell_vt100_colors *vt100_color; <span class="cmt">// 颜色主题</span>
+};
+
+<span class="cmt">// shell.c 中的上下文结构（简化）</span>
+struct shell_ctx {
+    <span class="cmt">// 命令缓冲区</span>
+    uint8_t cmd_buff[CONFIG_SHELL_CMD_BUFF_SIZE];
+    uint16_t cmd_buff_pos;       <span class="cmt">// 当前光标位置</span>
+    uint16_t cmd_buff_len;       <span class="cmt">// 命令长度</span>
+
+    <span class="cmt">// 历史记录</span>
+    struct shell_history *history;
+
+    <span class="cmt">// 当前活动命令</span>
+    const struct shell_static_entry *active_cmd;
+
+    <span class="cmt">// 状态机</span>
+    enum shell_state state;
+    enum shell_receive_state receive_state;
+
+    <span class="cmt">// Tab 补全</span>
+    struct shell_tab_completion tab_completion;
+};
+</code></pre>
+
+  <h3>命令处理流程</h3>
+
+  <div class="mermaid">graph TD
+    A["用户输入"] --> B["shell_process()"]
+    B --> C{"解析命令"}
+    C --> D{"匹配命令?"}
+    D -->|"是"| E{"参数检查"}
+    D -->|"否"| F["显示 'command not found'"]
+    E -->|"通过"| G["执行命令回调"]
+    E -->|"失败"| H["显示错误信息"]
+    G --> I["输出结果"]
+    I --> J["显示提示符"]
+    style B fill:#1769aa15,stroke:#1769aa,color:#1e40af
+    style G fill:#22c55e15,stroke:#22c55e,color:#166534
+  </div>
+</section>
+
+<section id="command" class="toc-link">
+  <h2><span class="num">03</span> 命令注册</h2>
+
+  <h3>静态命令注册</h3>
+
+<pre><code class="language-c"><span class="cmt">// 静态命令定义</span>
+<span class="cmt">#include &lt;zephyr/shell/shell.h&gt;</span>
+
+<span class="cmt">// 命令处理函数</span>
+static int cmd_hello(const struct shell *sh, size_t argc, char **argv)
+{
+    shell_print(sh, "Hello, %s!", argv[1] ? argv[1] : "World");
+    return 0;
+}
+
+<span class="cmt">// 注册单个命令</span>
+SHELL_CMD_REGISTER(hello, NULL, "Say hello", cmd_hello);
+
+<span class="cmt">// 注册命令组</span>
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_sensor,
+    SHELL_CMD(temperature, NULL, "Read temperature", cmd_temp),
+    SHELL_CMD(humidity, NULL, "Read humidity", cmd_humidity),
+    SHELL_CMD(accel, NULL, "Read accelerometer", cmd_accel),
+    SHELL_SUBCMD_SET_END
+);
+SHELL_CMD_REGISTER(sensor, &amp;sub_sensor, "Sensor commands", NULL);
+</code></pre>
+
+  <h3>命令注册宏展开</h3>
+
+<pre><code class="language-c"><span class="cmt">// SHELL_CMD_REGISTER 宏展开为：</span>
+<span class="cmt">// 1. 定义 shell_static_entry 结构体</span>
+<span class="cmt">// 2. 注册到 shell 命令表</span>
+<span class="cmt">// 3. 在编译时链接到 .shell_cmd 段</span>
+
+<span class="cmt">// SHELL_STATIC_SUBCMD_SET_CREATE 宏展开为：</span>
+<span class="cmt">// 1. 定义子命令数组</span>
+<span class="cmt">// 2. 每个子命令是一个 shell_static_entry</span>
+<span class="cmt">// 3. 父命令指向子命令数组</span>
+</code></pre>
+
+  <h3>命令参数</h3>
+
+<pre><code class="language-c"><span class="cmt">// 命令参数定义</span>
+SHELL_CMD_ARG(name, subcmds, help, handler, mandatory, optional);
+
+<span class="cmt">// 参数：</span>
+<span class="cmt">// name     - 命令名</span>
+<span class="cmt">// subcmds  - 子命令（NULL 表示无子命令）</span>
+<span class="cmt">// help     - 帮助文本</span>
+<span class="cmt">// handler  - 处理函数</span>
+<span class="cmt">// mandatory - 必需参数数量</span>
+<span class="cmt">// optional  - 可选参数数量</span>
+
+<span class="cmt">// 示例：需要 1 个必需参数和 1 个可选参数</span>
+SHELL_CMD_ARG(led, NULL, "Control LED", cmd_led, 1, 1);
+</code></pre>
+</section>
+
+<section id="backend" class="toc-link">
+  <h2><span class="num">04</span> Shell 后端</h2>
+
+  <table>
+    <tr><th>后端</th><th>文件</th><th>说明</th></tr>
+    <tr><td>UART</td><td><code>shell_uart.c</code></td><td>串口终端（最常用）</td></tr>
+    <tr><td>RTT</td><td><code>shell_rtt.c</code></td><td>SEGGER RTT（J-Link 调试）</td></tr>
+    <tr><td>SSH</td><td><code>shell_ssh.c</code></td><td>SSH 远程访问</td></tr>
+    <tr><td>Telnet</td><td><code>shell_telnet.c</code></td><td>Telnet 远程访问</td></tr>
+    <tr><td>MQTT</td><td><code>shell_mqtt.c</code></td><td>MQTT 远程访问</td></tr>
+    <tr><td>WebSocket</td><td><code>shell_websocket.c</code></td><td>Web 浏览器访问</td></tr>
+    <tr><td>Dummy</td><td><code>shell_dummy.c</code></td><td>测试用虚拟后端</td></tr>
+    <tr><td>RPMsg</td><td><code>shell_rpmsg.c</code></td><td>多核 RPMsg 通信</td></tr>
+  </table>
+
+  <h3>UART 后端配置</h3>
+
+<pre><code class="language-c"><span class="cmt">// DTS 中配置 UART 后端</span>
+chosen {
+    zephyr,shell = &amp;uart0;
+};
+
+<span class="cmt">// 或通过 Kconfig</span>
+<span class="cmt">// CONFIG_SHELL_BACKEND_UART=y</span>
+<span class="cmt">// CONFIG_SHELL_BACKEND_SERIAL=y</span>
+</code></pre>
+
+  <h3>多后端支持</h3>
+
+<pre><code class="language-c"><span class="cmt">// 同时启用多个后端</span>
+<span class="cmt">// CONFIG_SHELL_BACKEND_UART=y</span>
+<span class="cmt">// CONFIG_SHELL_BACKEND_RTT=y</span>
+<span class="cmt">// CONFIG_SHELL_BACKEND Telnet=y</span>
+
+<span class="cmt">// 每个后端创建独立的 Shell 实例</span>
+<span class="cmt">// 可以同时从多个终端访问</span>
+</code></pre>
+</section>
+
+<section id="history" class="toc-link">
+  <h2><span class="num">05</span> 历史记录</h2>
+
+<pre><code class="language-c"><span class="cmt">// shell.c 中的历史记录实现</span>
+
+<span class="cmt">// 配置</span>
+<span class="cmt">// CONFIG_SHELL_HISTORY=y</span>
+<span class="cmt">// CONFIG_SHELL_HISTORY_BUFFER_SIZE=512</span>
+
+<span class="cmt">// 历史记录操作</span>
+<span class="cmt">// 1. 上键：获取上一条历史命令</span>
+<span class="cmt">// 2. 下键：获取下一条历史命令</span>
+<span class="cmt">// 3. 输入新命令时保存到历史</span>
+
+<span class="cmt">// shell.c 中的 history_handle()</span>
+static void history_handle(const struct shell *sh, bool up)
+{
+    <span class="cmt">// 备份当前命令</span>
+    strcpy(sh->ctx->temp_buff, sh->ctx->cmd_buff);
+
+    <span class="cmt">// 获取历史命令</span>
+    history_mode = z_shell_history_get(sh->history, up,
+                                       sh->ctx->cmd_buff, &amp;len);
+
+    <span class="cmt">// 更新显示</span>
+    z_shell_op_cursor_home_move(sh);
+    z_clear_eos(sh);
+    z_shell_print_cmd(sh);
+    sh->ctx->cmd_buff_pos = len;
+    sh->ctx->cmd_buff_len = len;
+}
+</code></pre>
+</section>
+
+<section id="wildcard" class="toc-link">
+  <h2><span class="num">06</span> 通配符与动态命令</h2>
+
+<pre><code class="language-c"><span class="cmt">// shell_wildcard.c 中的通配符支持</span>
+
+<span class="cmt">// 支持的通配符：</span>
+<span class="cmt">// * - 匹配任意字符序列</span>
+<span class="cmt">// ? - 匹配单个字符</span>
+
+<span class="cmt">// 示例：</span>
+<span class="cmt">// uart:~$ device list *gpio*</span>
+<span class="cmt">// 列出所有名称包含 "gpio" 的设备</span>
+
+<span class="cmt">// 动态命令</span>
+<span class="cmt">// CONFIG_SHELL_CMDS_DYNAMIC=y</span>
+<span class="cmt">// 运行时添加/删除命令</span>
+
+<span class="cmt">// 动态命令注册</span>
+shell_dynamic_command_add(sh, "my_cmd", cmd_handler);
+</code></pre>
+</section>
+
+<section id="config" class="toc-link">
+  <h2><span class="num">07</span> 配置选项</h2>
+
+  <table>
+    <tr><th>配置宏</th><th>说明</th><th>默认值</th></tr>
+    <tr><td><code>CONFIG_SHELL</code></td><td>启用 Shell</td><td>n</td></tr>
+    <tr><td><code>CONFIG_SHELL_CMDS</code></td><td>启用命令注册</td><td>y</td></tr>
+    <tr><td><code>CONFIG_SHELL_HISTORY</code></td><td>启用历史记录</td><td>y</td></tr>
+    <tr><td><code>CONFIG_SHELL_WILDCARD</code></td><td>启用通配符</td><td>n</td></tr>
+    <tr><td><code>CONFIG_SHELL_PRINTF_BUFF_SIZE</code></td><td>输出缓冲区大小</td><td>256</td></tr>
+    <p><code>CONFIG_SHELL_CMD_BUFF_SIZE</code></td><td>命令缓冲区大小</td><td>256</td></tr>
+    <tr><td><code>CONFIG_SHELL_STACK_SIZE</code></td><td>Shell 线程栈大小</td><td>2048</td></tr>
+    <tr><td><code>CONFIG_SHELL_BACKEND_UART</code></td><td>UART 后端</td><td>y</td></tr>
+    <tr><td><code>CONFIG_SHELL_BACKEND_RTT</code></td><td>RTT 后端</td><td>n</td></tr>
+    <tr><td><code>CONFIG_SHELL_BACKEND_SSH</code></td><td>SSH 后端</td><td>n</td></tr>
+    <tr><td><code>CONFIG_SHELL_BACKEND_TELNET</code></td><td>Telnet 后端</td><td>n</td></tr>
+    <tr><td><code>CONFIG_SHELL_CMDS_SELECT</code></td><td>命令选择模式</td><td>n</td></tr>
+    <tr><td><code>CONFIG_SHELL_HELP</code></td><td>启用帮助系统</td><td>y</td></tr>
+    <tr><td><code>CONFIG_SHELL_TAB</code></td><td>启用 Tab 补全</td><td>y</td></tr>
+  </table>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">08</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== Zephyr Shell 完整示例 =====</span>
+<span class="cmt">// 演示：命令注册、子命令、参数解析、颜色输出</span>
+
+#include &lt;zephyr/kernel.h&gt;
+#include &lt;zephyr/shell/shell.h&gt;
+
+<span class="cmt">// LED 控制命令</span>
+static int cmd_led_on(const struct shell *sh, size_t argc, char **argv)
+{
+    shell_print(sh, "LED turned ON");
+    <span class="cmt">// gpio_pin_set(led_dev, led_pin, 1);</span>
+    return 0;
+}
+
+static int cmd_led_off(const struct shell *sh, size_t argc, char **argv)
+{
+    shell_print(sh, "LED turned OFF");
+    <span class="cmt">// gpio_pin_set(led_dev, led_pin, 0);</span>
+    return 0;
+}
+
+static int cmd_led_toggle(const struct shell *sh, size_t argc, char **argv)
+{
+    shell_print(sh, "LED toggled");
+    return 0;
+}
+
+<span class="cmt">// LED 子命令</span>
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_led,
+    SHELL_CMD(on, NULL, "Turn LED on", cmd_led_on),
+    SHELL_CMD(off, NULL, "Turn LED off", cmd_led_off),
+    SHELL_CMD(toggle, NULL, "Toggle LED", cmd_led_toggle),
+    SHELL_SUBCMD_SET_END
+);
+SHELL_CMD_REGISTER(led, &amp;sub_led, "LED control commands", NULL);
+
+<span class="cmt">// 传感器读取命令（带参数）</span>
+static int cmd_sensor_read(const struct shell *sh, size_t argc, char **argv)
+{
+    <span class="cmt">// argv[0] = "sensor"</span>
+    <span class="cmt">// argv[1] = "read"</span>
+    <span class="cmt">// argv[2] = 参数（如通道号）</span>
+
+    if (argc &lt; 3) {
+        shell_error(sh, "Usage: sensor read &lt;channel&gt;");
+        return -EINVAL;
+    }
+
+    int channel = atoi(argv[2]);
+    shell_print(sh, "Reading channel %d: value=25.5", channel);
+    return 0;
+}
+
+SHELL_CMD_ARG(sensor_read, NULL, "Read sensor channel", cmd_sensor_read, 1, 1);
+SHELL_CMD_REGISTER(sensor, NULL, "Sensor commands", NULL);
+
+<span class="cmt">// 系统信息命令（颜色输出）</span>
+static int cmd_sys_info(const struct shell *sh, size_t argc, char **argv)
+{
+    shell_print(sh, "System Information:");
+    shell_print(sh, "  Kernel: %s", kernel_version_get());
+    shell_print(sh, "  Uptime: %d ms", k_uptime_get_32());
+    shell_print(sh, "  Heap free: %d bytes", k_mem_heap_free(&amp;k_sys_heap));
+
+    <span class="cmt">// 使用颜色输出</span>
+    shell_print(sh, SHELL_GREEN "Status: OK" SHELL_RESET);
+    return 0;
+}
+
+SHELL_CMD_REGISTER(sys, NULL, "System commands", cmd_sys_info);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/shell/shell.c</code> Shell 核心实现（2396行），重点看 shell_process、cmd_precheck、history_handle。<br>
+  <code>include/zephyr/shell/shell.h</code> Shell API 定义。<br>
+  <code>subsys/shell/shell_uart.c</code> UART 后端实现。<br>
+  <code>subsys/shell/backends/</code> 所有后端实现。<br>
+  <code>subsys/shell/shell_wildcard.c</code> 通配符实现。
+</div>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>
