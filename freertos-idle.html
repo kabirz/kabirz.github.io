@@ -10,39 +10,222 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS 空闲任务与电源管理深度解析</h1><p class="subtitle">空闲任务 / 低功耗 / tickless / 守护任务</p><span class="version">FreeRTOS Kernel</span></div>
-<nav class="toc"><ul>
-<li><a href="#idle">空闲任务</a></li>
-<li><a href="#tickless">Tickless 空闲</a></li>
-<li><a href="#power">电源管理</a></li>
-</ul></nav>
-<div class="container">
-<section id="idle" class="toc-link">
-<h2><span class="num">01</span> 空闲任务</h2>
-<pre><code class="language-c"><span class="cmt">// 空闲任务自动创建，优先级为 0</span>
-<span class="cmt">// 执行：回收已删除任务 + 调用钩子</span>
-void vApplicationIdleHook(void) {
-    <span class="cmt">// 可以进入低功耗模式</span>
-}
-</code></pre>
-</section>
-<section id="tickless" class="toc-link">
-<h2><span class="num">02</span> Tickless 空闲</h2>
-<pre><code class="language-c"><span class="cmt">// configUSE_TICKLESS_IDLE = 1</span>
-void vApplicationSleep(TickType_t xExpectedIdleTime) {
-    <span class="cmt">// 停止 tick 中断，进入低功耗</span>
-}
-</code></pre>
-</section>
-<section id="power" class="toc-link">
-<h2><span class="num">03</span> 电源管理</h2>
-<div class="mermaid">graph TD
-    A["正常运行"] -->|"无就绪任务"| B["空闲任务"]
-    B -->|"tickless"| C["停止 tick"]
-    C -->|"低功耗"| D["深度休眠"]
-    D -->|"中断唤醒"| A
+
+<div class="hero">
+  <h1>FreeRTOS 空闲任务与电源管理深度解析</h1>
+  <p class="subtitle">空闲任务 / 钩子函数 / Tickless 低功耗 / 定时器守护任务 / 源码分析</p>
+  <span class="version">FreeRTOS V11.1.0 · tasks.c</span>
 </div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#idle">空闲任务</a></li>
+    <li><a href="#hook">钩子函数</a></li>
+    <li><a href="#tickless">Tickless 低功耗</a></li>
+    <li><a href="#timer-task">定时器守护任务</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="idle" class="toc-link">
+  <h2><span class="num">01</span> 空闲任务</h2>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 中的空闲任务实现</span>
+<span class="cmt">// 空闲任务在 vTaskStartScheduler() 中自动创建</span>
+
+static void prvTaskDeleteTask( TaskHandle_t xHandle )
+{
+    <span class="cmt">// 空闲任务的主要工作：</span>
+    <span class="cmt">// 1. 回收已删除任务的 TCB 和栈内存</span>
+    <span class="cmt">// 2. 调用空闲钩子函数</span>
+}
+
+<span class="cmt">// 空闲任务创建</span>
+<span class="cmt">// tasks.c 中的 vTaskStartScheduler()</span>
+xIdleTaskHandles[ 0 ] = xTaskCreateStatic(
+    prvTaskDeleteTask,
+    configIDLE_TASK_NAME,  <span class="cmt">// "IDLE"</span>
+    configMINIMAL_STACK_SIZE,
+    ( void * ) NULL,
+    tskIDLE_PRIORITY,  <span class="cmt">// 优先级 0（最低）</span>
+    pxIdleTaskStack,
+    &amp;xIdleTaskTCB
+);
+</code></pre>
+
+  <h3>空闲任务工作流程</h3>
+
+  <div class="mermaid">graph TD
+    A["空闲任务运行"] --> B["检查已删除任务"]
+    B --> C{"有已删除任务?"}
+    C -->|"是"| D["回收 TCB 和栈内存"]
+    C -->|"否"| E["调用空闲钩子"]
+    D --> E
+    E --> F{"configUSE_IDLE_HOOK?"}
+    F -->|"是"| G["vApplicationIdleHook()"]
+    F -->|"否"| H["继续空闲"]
+    G --> H
+    style A fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
 </section>
+
+<section id="hook" class="toc-link">
+  <h2><span class="num">02</span> 钩子函数</h2>
+
+<pre><code class="language-c"><span class="cmt">// FreeRTOS 支持 4 种钩子函数</span>
+
+<span class="cmt">// 1. 空闲钩子（configUSE_IDLE_HOOK = 1）</span>
+void vApplicationIdleHook( void )
+{
+    <span class="cmt">// 在空闲任务中执行：</span>
+    <span class="cmt">// - 进入低功耗模式</span>
+    <span class="cmt">// - 执行后台任务</span>
+    <span class="cmt">// - 喂看门狗</span>
+    <span class="cmt">// 不能调用阻塞 API！</span>
+}
+
+<span class="cmt">// 2. 栈溢出钩子（configCHECK_FOR_STACK_OVERFLOW &gt; 0）</span>
+void vApplicationStackOverflowHook( TaskHandle_t xTask, char * pcTaskName )
+{
+    <span class="cmt">// 处理栈溢出</span>
+}
+
+<span class="cmt">// 3. Malloc 失败钩子（configUSE_MALLOC_FAILED_HOOK = 1）</span>
+void vApplicationMallocFailedHook( void )
+{
+    <span class="cmt">// 处理内存分配失败</span>
+}
+
+<span class="cmt">// 4. Tick 钩子（configUSE_TICK_HOOK = 1）</span>
+void vApplicationTickHook( void )
+{
+    <span class="cmt">// 每次 tick 中断调用</span>
+}
+</code></pre>
+</section>
+
+<section id="tickless" class="toc-link">
+  <h2><span class="num">03</span> Tickless 低功耗</h2>
+
+<pre><code class="language-c"><span class="cmt">// Tickless 模式（configUSE_TICKLESS_IDLE = 1）</span>
+<span class="cmt">// 空闲时停止 tick 中断，按需唤醒</span>
+
+<span class="cmt">// 两个钩子函数：</span>
+void vApplicationSleep( TickType_t xExpectedIdleTime )
+{
+    <span class="cmt">// 进入低功耗模式</span>
+    <span class="cmt">// xExpectedIdleTime = 预计空闲 tick 数</span>
+}
+
+<span class="cmt">// 或者实现 portSUPPRESS_TICKS_AND_SLEEP()</span>
+void portSUPPRESS_TICKS_AND_SLEEP( TickType_t xExpectedIdleTime )
+{
+    <span class="cmt">// 1. 停止 tick 中断</span>
+    <span class="cmt">// 2. 计算下一个事件的时间</span>
+    <span class="cmt">// 3. 配置唤醒中断</span>
+    <span class="cmt">// 4. 进入低功耗模式</span>
+    <span class="cmt">// 5. 唤醒后恢复 tick</span>
+}
+</code></pre>
+
+  <h3>Tickless 工作流程</h3>
+
+  <div class="mermaid">graph LR
+    A["正常运行"] -->|"无就绪任务"| B["空闲任务"]
+    B -->|"configUSE_TICKLESS_IDLE"| C["停止 tick"]
+    C -->|"配置唤醒"| D["进入低功耗"]
+    D -->|"中断唤醒"| E["恢复 tick"]
+    E --> A
+    style D fill:#22c55e15,stroke:#22c55e,color:#166534
+  </div>
+</section>
+
+<section id="timer-task" class="toc-link">
+  <h2><span class="num">04</span> 定时器守护任务</h2>
+
+<pre><code class="language-c"><span class="cmt">// 定时器守护任务在 vTaskStartScheduler() 中创建</span>
+<span class="cmt">// configUSE_TIMERS = 1</span>
+
+xTimerTaskHandle = xTaskCreateStatic(
+    prvTimerTask,
+    "Tmr Svc",
+    configTIMER_TASK_STACK_DEPTH,
+    NULL,
+    configTIMER_TASK_PRIORITY,  <span class="cmt">// 通常为 2</span>
+    pxTimerTaskStack,
+    &amp;xTimerTaskTCB
+);
+
+<span class="cmt">// 定时器守护任务职责：</span>
+<span class="cmt">// 1. 处理定时器命令（创建/启动/停止/删除）</span>
+<span class="cmt">// 2. 检查定时器到期</span>
+<span class="cmt">// 3. 执行定时器回调</span>
+<span class="cmt">// 4. 处理 xTimerPendFunctionCall() 调用</span>
+</code></pre>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">05</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS 电源管理完整示例 =====</span>
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include &lt;stdio&gt;
+
+<span class="cmt">// 空闲钩子：进入低功耗</span>
+void vApplicationIdleHook( void )
+{
+    <span class="cmt">// 进入低功耗模式（如 WFI）</span>
+    <span class="cmt">// __WFI();</span>
+}
+
+<span class="cmt">// Tick 钩子：喂看门狗</span>
+void vApplicationTickHook( void )
+{
+    <span class="cmt">// 喂看门狗</span>
+    <span class="cmt">// IWDG->KR = 0xAAAA;</span>
+}
+
+<span class="cmt">// 栈溢出钩子</span>
+void vApplicationStackOverflowHook( TaskHandle_t xTask, char * pcTaskName )
+{
+    printf( "Stack overflow: %s\\n", pcTaskName );
+    for ( ;; ) {}
+}
+
+<span class="cmt">// 应用任务</span>
+void vApplicationTask( void * pvParameters )
+{
+    for ( ;; )
+    {
+        printf( "Application running\\n" );
+        vTaskDelay( pdMS_TO_TICKS( 1000 ) );
+    }
+}
+
+int main( void )
+{
+    <span class="cmt">// 创建应用任务</span>
+    xTaskCreate( vApplicationTask, "App", 256, NULL, 2, NULL );
+
+    <span class="cmt">// 启动调度器</span>
+    <span class="cmt">// 内部会创建空闲任务和定时器守护任务</span>
+    vTaskStartScheduler();
+
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/tasks.c</code> 空闲任务实现，重点看 prvTaskDeleteTask、vTaskStartScheduler。<br>
+  <code>FreeRTOS/Source/timers.c</code> 定时器守护任务实现。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

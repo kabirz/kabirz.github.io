@@ -10,55 +10,217 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS 移植深度解析</h1><p class="subtitle">移植接口 / port.c / 上下文切换 / 新架构移植</p><span class="version">FreeRTOS Kernel · portable/</span></div>
-<nav class="toc"><ul>
-<li><a href="#interface">移植接口</a></li>
-<li><a href="#context">上下文切换</a></li>
-<li><a href="#critical">临界区</a></li>
-<li><a href="#new-port">新架构移植</a></li>
-</ul></nav>
+
+<div class="hero">
+  <h1>FreeRTOS 移植深度解析</h1>
+  <p class="subtitle">移植接口 / port.c / portmacro.h / 上下文切换 / 新架构移植 / 源码分析</p>
+  <span class="version">FreeRTOS V11.1.0 · portable/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#interface">移植接口</a></li>
+    <li><a href="#context">上下文切换</a></li>
+    <li><a href="#critical-port">临界区移植</a></li>
+    <li><a href="#tick-port">Tick 移植</a></li>
+    <li><a href="#new-port">新架构移植步骤</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
 <div class="container">
+
 <section id="interface" class="toc-link">
-<h2><span class="num">01</span> 移植接口</h2>
-<table><tr><th>接口</th><th>说明</th></tr>
-<tr><td><code>portSTACK_TYPE</code></td><td>栈类型定义</td></tr>
-<tr><td><code>portYIELD()</code></td><td>触发上下文切换</td></tr>
-<tr><td><code>portENTER_CRITICAL()</code></td><td>进入临界区</td></tr>
-<tr><td><code>portDISABLE_INTERRUPTS()</code></td><td>禁止中断</td></tr>
-<tr><td><code>portINITIAL_SP</code></td><td>初始栈指针</td></tr></table>
+  <h2><span class="num">01</span> 移植接口</h2>
+
+  <h3>portmacro.h 必须定义的接口</h3>
+
+<pre><code class="language-c"><span class="cmt">// 每个移植必须在 portmacro.h 中定义：</span>
+
+<span class="cmt">// 类型定义</span>
+#define portSTACK_TYPE     uint32_t
+#define portBASE_TYPE      long
+#define portTickType       uint32_t
+#define portMAX_DELAY      0xFFFFFFFF
+
+<span class="cmt">// 上下文切换</span>
+#define portYIELD()        <span class="cmt">// 触发 PendSV 或软中断</span>
+#define portYIELD_FROM_ISR( x ) <span class="cmt">// ISR 中触发上下文切换</span>
+
+<span class="cmt">// 临界区</span>
+#define portENTER_CRITICAL()   <span class="cmt">// 进入临界区</span>
+#define portEXIT_CRITICAL()    <span class="cmt">// 退出临界区</span>
+#define portDISABLE_INTERRUPTS()  <span class="cmt">// 禁止中断</span>
+#define portENABLE_INTERRUPTS()   <span class="cmt">// 恢复中断</span>
+
+<span class="cmt">// 栈对齐</span>
+#define portBYTE_ALIGNMENT  8
+
+<span class="cmt">// 端口名称</span>
+#define portPOSIX_PRIORITY_MAX  31
+</code></pre>
+
+  <h3>port.c 必须实现的函数</h3>
+
+<pre><code class="language-c"><span class="cmt">// port.c 中必须实现的函数</span>
+
+<span class="cmt">// 1. 启动第一个任务（不返回）</span>
+BaseType_t xPortStartScheduler( void );
+
+<span class="cmt">// 2. 停止调度器（可选）</span>
+void vPortEndScheduler( void );
+
+<span class="cmt">// 3. 分配栈空间（可选，用于动态栈）</span>
+StackType_t *pxPortInitialiseStack( StackType_t *pxTopOfStack,
+                                     StackType_t *pxStackBase,
+                                     TaskFunction_t pxCode,
+                                     void *pvParameters );
+</code></pre>
 </section>
+
 <section id="context" class="toc-link">
-<h2><span class="num">02</span> 上下文切换</h2>
-<pre><code class="language-c"><span class="cmt">// ARM Cortex-M PendSV</span>
-void xPortPendSVHandler(void) {
-    <span class="cmt">// 1. 保存当前任务寄存器到栈</span>
-    <span class="cmt">// 2. 切换栈指针到新任务</span>
-    <span class="cmt">// 3. 恢复新任务寄存器</span>
-    <span class="cmt">// 4. bx lr 返回</span>
+  <h2><span class="num">02</span> 上下文切换</h2>
+
+<pre><code class="language-c"><span class="cmt">// ARM Cortex-M4F 移植中的上下文切换（port.c）</span>
+
+<span class="cmt">// PendSV Handler — 上下文切换核心</span>
+void xPortPendSVHandler( void )
+{
+    <span class="cmt">// 保存当前任务上下文</span>
+    __asm volatile(
+        "mrs r0, psp                     \n"  <span class="cmt">// 读取进程栈指针</span>
+        "ldr r3, pxCurrentTCB_const      \n"  <span class="cmt">// 加载 TCB 指针</span>
+        "ldr r2, [r3]                    \n"
+        "stmdb r0!, {r4-r11, r14}        \n"  <span class="cmt">// 保存寄存器</span>
+        "str r0, [r2]                    \n"  <span class="cmt">// 保存栈顶到 TCB</span>
+
+        "bl vTaskSwitchContext           \n"  <span class="cmt">// 切换任务</span>
+
+        "ldr r3, pxCurrentTCB_const      \n"
+        "ldr r1, [r3]                    \n"
+        "ldr r0, [r1]                    \n"  <span class="cmt">// 加载新任务栈顶</span>
+        "ldmia r0!, {r4-r11, r14}        \n"  <span class="cmt">// 恢复寄存器</span>
+        "msr psp, r0                     \n"  <span class="cmt">// 设置 PSP</span>
+        "bx r14                          \n"  <span class="cmt">// 返回</span>
+    );
+}
+</code></pre>
+
+  <h3>上下文切换流程</h3>
+
+  <div class="mermaid">graph TD
+    A["portYIELD()"] --> B["设置 PendSV 挂起位"]
+    B --> C["PendSV Handler 触发"]
+    C --> D["保存当前任务寄存器到栈"]
+    D --> E["调用 vTaskSwitchContext()"]
+    E --> F["选择最高优先级任务"]
+    F --> G["恢复新任务寄存器"]
+    G --> H["bx r14 返回新任务"]
+    style A fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style E fill:#22c55e15,stroke:#22c55e,color:#166534
+  </div>
+</section>
+
+<section id="critical-port" class="toc-link">
+  <h2><span class="num">03</span> 临界区移植</h2>
+
+<pre><code class="language-c"><span class="cmt">// ARM Cortex-M4F 临界区实现</span>
+
+<span class="cmt">// 禁止中断（通过 PRIMASK）</span>
+#define portDISABLE_INTERRUPTS()    __asm volatile( "cpsid i" ::: "memory" )
+
+<span class="cmt">// 恢复中断</span>
+#define portENABLE_INTERRUPTS()     __asm volatile( "cpsie i" ::: "memory" )
+
+<span class="cmt">// 进入临界区</span>
+extern void vPortEnterCritical( void );
+extern void vPortExitCritical( void );
+
+<span class="cmt">// ISR 中进入临界区（保存/恢复中断掩码）</span>
+#define portSET_INTERRUPT_MASK_FROM_ISR()    __asm volatile( "mrs %0, primask \n cpsid i" : "=r" ( ulOriginalMask ) )
+#define portCLEAR_INTERRUPT_MASK_FROM_ISR( x )    __asm volatile( "msr primask, %0" : : "r" ( x ) )
+</code></pre>
+</section>
+
+<section id="tick-port" class="toc-link">
+  <h2><span class="num">04</span> Tick 移植</h2>
+
+<pre><code class="language-c"><span class="cmt">// ARM Cortex-M4F Tick 实现</span>
+
+<span class="cmt">// 配置 SysTick</span>
+void xPortSetupTimerInterrupt( void )
+{
+    <span class="cmt">// 设置 SysTick 重载值</span>
+    portNVIC_SYSTICK_LOAD_REG = ( configCPU_CLOCK_HZ / configTICK_RATE_HZ ) - 1UL;
+
+    <span class="cmt">// 启动 SysTick</span>
+    portNVIC_SYSTICK_CTRL_REG = portNVIC_SYSTICK_CLK |
+                                 portNVIC_SYSTICK_INT |
+                                 portNVIC_SYSTICK_ENABLE;
 }
 
-#define portYIELD() \
-    portNVIC_INT_CTRL_REG = portNVIC_PENDSVSET_BIT
+<span class="cmt">// SysTick Handler</span>
+void xPortSysTickHandler( void )
+{
+    <span class="cmt">// 递增 tick 计数</span>
+    if( xTaskIncrementTick() != pdFALSE )
+    {
+        <span class="cmt">// 需要上下文切换</span>
+        portYIELD_WITHIN_API();
+    }
+}
 </code></pre>
 </section>
-<section id="critical" class="toc-link">
-<h2><span class="num">03</span> 临界区</h2>
-<pre><code class="language-c">#define portDISABLE_INTERRUPTS() portNVIC_SET_PRIMASK(1)
-#define portENABLE_INTERRUPTS()  portNVIC_SET_PRIMASK(0)
-#define portENTER_CRITICAL()     vPortEnterCritical()
-#define portEXIT_CRITICAL()      vPortExitCritical()
-</code></pre>
-</section>
+
 <section id="new-port" class="toc-link">
-<h2><span class="num">04</span> 新架构移植步骤</h2>
-<div class="mermaid">graph TD
+  <h2><span class="num">05</span> 新架构移植步骤</h2>
+
+  <div class="mermaid">graph TD
     S1["1. 创建 portable/ARCH/ 目录"] --> S2["2. 实现 portmacro.h"]
     S2 --> S3["3. 实现 port.c"]
     S3 --> S4["4. 实现上下文切换"]
     S4 --> S5["5. 实现 tick 中断"]
-    S5 --> S6["6. 测试 Demo"]
-</div>
+    S5 --> S6["6. 实现临界区"]
+    S6 --> S7["7. 测试 Demo 程序"]
+    style S1 fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
 </section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">06</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS 移植完整示例 =====</span>
+<span class="cmt">// 以 ARM Cortex-M4F 为例</span>
+
+<span class="cmt">// portmacro.h（简化版）</span>
+#define portSTACK_TYPE     uint32_t
+#define portBASE_TYPE      long
+#define portSTACK_GROWTH   (-1)  <span class="cmt">// 向下增长</span>
+#define portBYTE_ALIGNMENT 8
+#define portYIELD()        portNVIC_INT_CTRL_REG = portNVIC_PENDSVSET_BIT
+
+<span class="cmt">// port.c（简化版）</span>
+BaseType_t xPortStartScheduler( void )
+{
+    <span class="cmt">// 1. 配置 SysTick</span>
+    xPortSetupTimerInterrupt();
+
+    <span class="cmt">// 2. 启动第一个任务</span>
+    portRESTORE_INTERRUPTS();
+
+    <span class="cmt">// 不返回</span>
+    return pdTRUE;
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c</code> ARM Cortex-M4F 移植实现。<br>
+  <code>FreeRTOS/Source/portable/GCC/ARM_CM4F/portmacro.h</code> 移植宏定义。<br>
+  <code>FreeRTOS/Source/portable/template/port.c</code> 移植模板。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

@@ -13,8 +13,8 @@
 
 <div class="hero">
   <h1>FreeRTOS 整体架构深度解析</h1>
-  <p class="subtitle">内核架构 / 源码结构 / 移植层 / 配置系统 / 与 Zephyr 对比</p>
-  <span class="version">FreeRTOS Kernel · MIT 许可 · 嵌入式 RTOS</span>
+  <p class="subtitle">内核架构 / 源码结构 / 移植层 / 配置系统 / 与 Zephyr 对比 / 生态系统</p>
+  <span class="version">FreeRTOS V11.1.0 · MIT 许可 · 嵌入式 RTOS</span>
 </div>
 
 <nav class="toc">
@@ -44,49 +44,47 @@
     <tr><td>调度器</td><td>抢占式 + 协作式 + 时间片轮转</td></tr>
     <tr><td>任务数</td><td>无限制（受 RAM 约束）</td></tr>
     <tr><td>优先级</td><td>0 ~ configMAX_PRIORITIES-1（数值越大优先级越高）</td></tr>
-    <tr><td>SMP 支持</td><td>多核调度（FreeRTOS SMP）</td></tr>
+    <tr><td>SMP 支持</td><td>多核调度（FreeRTOS SMP，较新）</td></tr>
     <tr><td>MPU 支持</td><td>内存保护单元集成</td></tr>
     <tr><td>内存管理</td><td>5 种方案（heap_1 ~ heap_5）</td></tr>
     <tr><td>许可证</td><td>MIT（商业免费）</td></tr>
+    <tr><td>版本</td><td>V11.1.0+（开发分支）</td></tr>
   </table>
 
   <h3>架构总览</h3>
 
-  <div class="mermaid">
-graph TD
-    subgraph 应用层
-        APP["用户应用"]
+  <div class="mermaid">graph TD
+    subgraph APP["应用层"]
+        A1["用户应用"]
     end
-    subgraph 中间件
-        TCP["FreeRTOS-Plus-TCP"]
-        CLI["FreeRTOS-Plus-CLI"]
-        FAT["FreeRTOS-Plus-FAT"]
-        AWS["AWS IoT SDK"]
+    subgraph MW["中间件"]
+        M1["FreeRTOS-Plus-TCP<br>TCP/IP 协议栈"]
+        M2["FreeRTOS-Plus-CLI<br>交互式命令行"]
+        M3["FreeRTOS-Plus-FAT<br>文件系统"]
+        M4["AWS IoT SDK<br>设备 SDK"]
     end
-    subgraph 内核层
-        TASK["任务管理 tasks.c"]
-        QUEUE["队列 queue.c"]
-        TIMER["定时器 timers.c"]
-        EVENT["事件组 event_groups.c"]
-        LIST["链表 list.c"]
-        STREAM["流缓冲 stream_buffer.c"]
+    subgraph KERNEL["内核层"]
+        K1["tasks.c<br>任务管理 (8872行)"]
+        K2["queue.c<br>队列/信号量/互斥锁 (3389行)"]
+        K3["timers.c<br>软件定时器 (1343行)"]
+        K4["event_groups.c<br>事件组"]
+        K5["list.c<br>链表基础设施"]
+        K6["stream_buffer.c<br>流/消息缓冲"]
     end
-    subgraph 移植层
-        PORT["portable/  移植接口"]
-        MEM["MemMang/  内存管理"]
+    subgraph PORT["移植层"]
+        P1["portable/<br>编译器+架构移植"]
+        P2["MemMang/<br>内存管理 heap_1~5"]
     end
-    subgraph 硬件
-        HW["ARM · RISC-V · x86 · Xtensa · PIC · MSP430 ..."]
+    subgraph HW["硬件"]
+        H1["ARM · RISC-V · x86<br>Xtensa · PIC · MSP430"]
     end
-    APP --> TCP & CLI & FAT & AWS
-    TCP & CLI & FAT & AWS --> TASK & QUEUE & TIMER & EVENT
-    TASK & QUEUE & TIMER & EVENT --> LIST
-    TASK & QUEUE --> PORT & MEM
-    PORT & MEM --> HW
-    style TASK fill:#ee673015,stroke:#ee6730,color:#c44d1a
-    style QUEUE fill:#ee673015,stroke:#ee6730,color:#c44d1a
-    style TIMER fill:#ee673015,stroke:#ee6730,color:#c44d1a
-    style EVENT fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    A1 --> M1 & M2 & M3 & M4
+    M1 & M2 & M3 & M4 --> K1 & K2 & K3 & K4
+    K1 & K2 & K3 & K4 --> K5
+    K1 & K2 --> P1 & P2
+    P1 & P2 --> H1
+    style K1 fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style K2 fill:#ee673015,stroke:#ee6730,color:#c44d1a
   </div>
 </section>
 
@@ -100,8 +98,8 @@ graph TD
   <table>
     <tr><th>模块</th><th>源文件</th><th>行数</th><th>功能</th></tr>
     <tr><td>任务管理</td><td><code>tasks.c</code></td><td>8872</td><td>创建/删除/挂起/恢复/调度</td></tr>
-    <tr><td>队列</td><td><code>queue.c</code></td><td>~6000</td><td>队列/信号量/互斥锁（统一实现）</td></tr>
-    <tr><td>定时器</td><td><code>timers.c</code></td><td>~2000</td><td>软件定时器（守护任务实现）</td></tr>
+    <tr><td>队列</td><td><code>queue.c</code></td><td>3389</td><td>队列/信号量/互斥锁（统一实现）</td></tr>
+    <tr><td>定时器</td><td><code>timers.c</code></td><td>1343</td><td>软件定时器（守护任务实现）</td></tr>
     <tr><td>事件组</td><td><code>event_groups.c</code></td><td>~1500</td><td>位掩码事件等待</td></tr>
     <tr><td>流缓冲</td><td><code>stream_buffer.c</code></td><td>~1500</td><td>单生产者单消费者缓冲区</td></tr>
     <tr><td>链表</td><td><code>list.c</code></td><td>~500</td><td>双向链表（内核基础设施）</td></tr>
@@ -122,26 +120,32 @@ graph TD
 <section id="source" class="toc-link">
   <h2><span class="num">03</span> 源码结构</h2>
 
-  <div class="mermaid">
-graph TD
-    ROOT["FreeRTOS/"] --> SRC["Source/"]
-    ROOT --> PLUS["FreeRTOS-Plus/"]
-    ROOT --> DEMO["Demo/"]
-    SRC --> CORE["核心源文件<br>tasks.c · queue.c · timers.c<br>event_groups.c · list.c · stream_buffer.c"]
-    SRC --> INC["include/<br>FreeRTOS.h · task.h · queue.h<br>semphr.h · timers.h"]
-    SRC --> PORT["portable/<br>ARMClang · GCC · IAR · Keil<br>MemMang/heap_1~5.c"]
-    PLUS --> TCP["FreeRTOS-Plus-TCP/<br>TCP/IP 协议栈"]
-    PLUS --> CLI["FreeRTOS-Plus-CLI/<br>交互式命令行"]
-    PLUS --> TRACE["FreeRTOS-Plus-Trace/<br>运行时追踪"]
-    style SRC fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  <div class="mermaid">graph TD
+    ROOT["FreeRTOS/"] --> SRC["Source/<br>内核源码"]
+    ROOT --> PLUS["FreeRTOS-Plus/<br>中间件"]
+    ROOT --> DEMO["Demo/<br>示例程序"]
+    SRC --> CORE["核心源文件"]
+    SRC --> INC["include/<br>头文件"]
+    SRC --> PORT2["portable/<br>移植层"]
+    CORE --> T["tasks.c (8872行)<br>任务管理"]
+    CORE --> Q["queue.c (3389行)<br>队列/信号量/互斥锁"]
+    CORE --> TI["timers.c (1343行)<br>软件定时器"]
+    CORE --> EG["event_groups.c<br>事件组"]
+    CORE --> SB["stream_buffer.c<br>流/消息缓冲"]
+    CORE --> L["list.c<br>链表"]
+    PORT2 --> COMP["GCC/ARM_CM4F<br>IAR/RISC-V/MSVC"]
+    PORT2 --> MEM["MemMang/<br>heap_1~5"]
+    PLUS --> TCP2["Plus-TCP<br>TCP/IP"]
+    PLUS --> CLI2["Plus-CLI<br>命令行"]
+    PLUS --> FAT2["Plus-FAT<br>文件系统"]
     style CORE fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style T fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style Q fill:#ee673015,stroke:#ee6730,color:#c44d1a
   </div>
 </section>
 
 <section id="portable" class="toc-link">
   <h2><span class="num">04</span> 移植层</h2>
-
-  <p>FreeRTOS 通过 <code>portable/</code> 目录支持多种编译器和处理器架构。</p>
 
   <h3>支持的编译器</h3>
 
@@ -151,7 +155,6 @@ graph TD
     <tr><td>ARM Clang</td><td><code>portable/ARMClang/</code></td><td>ARMv8-M · Cortex-M</td></tr>
     <tr><td>IAR</td><td><code>portable/IAR/</code></td><td>ARM · RISC-V · RX · MSP430</td></tr>
     <tr><td>Keil</td><td><code>portable/Keil/</code></td><td>ARM_CM3/4F/7/AX</td></tr>
-    <tr><td>CCS</td><td><code>portable/CCS/</code></td><td>MSP430 · PRU</td></tr>
     <tr><td>MSVC</td><td><code>portable/MSVC-MingW/</code></td><td>Windows 模拟</td></tr>
   </table>
 
@@ -176,8 +179,6 @@ graph TD
 <section id="config" class="toc-link">
   <h2><span class="num">05</span> 配置系统</h2>
 
-  <p>FreeRTOS 通过 <code>FreeRTOSConfig.h</code> 进行编译时配置。</p>
-
   <h3>关键配置项</h3>
 
   <table>
@@ -190,8 +191,6 @@ graph TD
     <tr><td><code>configTOTAL_HEAP_SIZE</code></td><td>堆总大小（字节）</td><td>32768</td></tr>
     <tr><td><code>configUSE_TIMERS</code></td><td>启用软件定时器</td><td>1</td></tr>
     <tr><td><code>configUSE_MUTEXES</code></td><td>启用互斥锁</td><td>1</td></tr>
-    <tr><td><code>configUSE_COUNTING_SEMAPHORES</code></td><td>启用计数信号量</td><td>1</td></tr>
-    <tr><td><code>configUSE_CO_ROUTINES</code></td><td>启用协程</td><td>0</td></tr>
   </table>
 </section>
 
@@ -215,8 +214,7 @@ graph TD
 <section id="ecosystem" class="toc-link">
   <h2><span class="num">07</span> 生态系统</h2>
 
-  <div class="mermaid">
-graph TD
+  <div class="mermaid">graph TD
     RTOS["FreeRTOS 内核"] --> TCP2["Plus-TCP<br>TCP/IP 协议栈"]
     RTOS --> CLI2["Plus-CLI<br>交互式命令行"]
     RTOS --> FAT2["Plus-FAT<br>文件系统"]
@@ -224,7 +222,6 @@ graph TD
     RTOS --> AWS2["AWS IoT<br>设备 SDK"]
     RTOS --> CELL["Cellular Interface<br>蜂窝网络"]
     RTOS --> OTA["OTA 更新"]
-    RTOS --> SH["Shell / REPL"]
     style RTOS fill:#ee673015,stroke:#ee6730,color:#c44d1a
   </div>
 </section>
@@ -264,9 +261,9 @@ int main(void) {
 <div class="callout">
   <strong>阅读建议:</strong><br>
   <code>FreeRTOS/Source/tasks.c</code> 任务管理核心实现（8872行）。<br>
-  <code>FreeRTOS/Source/queue.c</code> 队列/信号量/互斥锁统一实现。<br>
-  <code>FreeRTOS/Source/include/FreeRTOS.h</code> 配置宏定义。<br>
-  <code>FreeRTOS/Source/include/task.h</code> 任务 API 定义。
+  <code>FreeRTOS/Source/queue.c</code> 队列/信号量/互斥锁统一实现（3389行）。<br>
+  <code>FreeRTOS/Source/include/FreeRTOS.h</code> 配置宏定义（3359行）。<br>
+  <code>FreeRTOS/Source/include/task.h</code> 任务 API 定义（3800行）。
 </div>
 
 </div>

@@ -10,38 +10,173 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS ARM Cortex-M 移植深度解析</h1><p class="subtitle">Cortex-M3/4F/7/M33 / PendSV / SysTick / MPU</p><span class="version">FreeRTOS Kernel · portable/GCC/ARM_CM*</span></div>
-<nav class="toc"><ul>
-<li><a href="#arch">Cortex-M 架构</a></li>
-<li><a href="#pendsv">PendSV 上下文切换</a></li>
-<li><a href="#systick">SysTick 定时器</a></li>
-</ul></nav>
+
+<div class="hero">
+  <h1>FreeRTOS ARM Cortex-M 移植深度解析</h1>
+  <p class="subtitle">Cortex-M3/4F/7/M33 / PendSV / SysTick / MPU / TrustZone / 源码分析</p>
+  <span class="version">FreeRTOS V11.1.0 · portable/GCC/ARM_CM*</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#arch">Cortex-M 架构</a></li>
+    <li><a href="#pendsv">PendSV 上下文切换</a></li>
+    <li><a href="#systick">SysTick 定时器</a></li>
+    <li><a href="#mpu-cm">MPU 支持</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
 <div class="container">
+
 <section id="arch" class="toc-link">
-<h2><span class="num">01</span> Cortex-M 架构</h2>
-<table><tr><th>特性</th><th>M3</th><th>M4F</th><th>M7</th><th>M33</th></tr>
-<tr><td>FPU</td><td>无</td><td>有</td><td>有</td><td>有</td></tr>
-<tr><td>TrustZone</td><td>无</td><td>无</td><td>无</td><td>有</td></tr></table>
+  <h2><span class="num">01</span> Cortex-M 架构</h2>
+
+  <table>
+    <tr><th>特性</th><th>Cortex-M3</th><th>Cortex-M4F</th><th>Cortex-M7</th><th>Cortex-M33</th></tr>
+    <tr><td>FPU</td><td>无</td><td>单精度</td><td>双精度</td><td>单精度</td></tr>
+    <tr><td>DSP</td><td>无</td><td>有</td><td>有</td><td>有</td></tr>
+    <tr><td>TrustZone</td><td>无</td><td>无</td><td>无</td><td>有</td></tr>
+    <tr><td>MPU</td><td>可选</td><td>可选</td><td>可选</td><td>可选</td></tr>
+    <tr><td>栈帧</td><td>8字节对齐</td><td>8字节对齐</td><td>8字节对齐</td><td>8字节对齐</td></tr>
+  </table>
 </section>
+
 <section id="pendsv" class="toc-link">
-<h2><span class="num">02</span> PendSV 上下文切换</h2>
-<pre><code class="language-c"><span class="cmt">// PendSV Handler</span>
-void xPortPendSVHandler(void) {
-    <span class="cmt">// 1. 保存当前任务寄存器</span>
-    <span class="cmt">// 2. 切换栈指针</span>
-    <span class="cmt">// 3. 恢复新任务寄存器</span>
+  <h2><span class="num">02</span> PendSV 上下文切换</h2>
+
+<pre><code class="language-c"><span class="cmt">// ARM Cortex-M4F PendSV Handler（汇编实现）</span>
+<span class="cmt">// portable/GCC/ARM_CM4F/port.c</span>
+
+void xPortPendSVHandler( void )
+{
+    <span class="cmt">// 1. 读取 PSP（进程栈指针）</span>
+    __asm volatile(
+        "mrs r0, psp                     \n"
+    );
+
+    <span class="cmt">// 2. 保存当前任务寄存器</span>
+    <span class="cmt">// r4-r11 是被调用者保存寄存器</span>
+    __asm volatile(
+        "stmdb r0!, {r4-r11, r14}        \n"
+    );
+
+    <span class="cmt">// 3. 保存栈顶到 TCB</span>
+    __asm volatile(
+        "ldr r3, pxCurrentTCB_const      \n"
+        "ldr r2, [r3]                    \n"
+        "str r0, [r2]                    \n"
+    );
+
+    <span class="cmt">// 4. 切换任务</span>
+    __asm volatile(
+        "bl vTaskSwitchContext           \n"
+    );
+
+    <span class="cmt">// 5. 加载新任务栈顶</span>
+    __asm volatile(
+        "ldr r3, pxCurrentTCB_const      \n"
+        "ldr r1, [r3]                    \n"
+        "ldr r0, [r1]                    \n"
+    );
+
+    <span class="cmt">// 6. 恢复新任务寄存器</span>
+    __asm volatile(
+        "ldmia r0!, {r4-r11, r14}        \n"
+    );
+
+    <span class="cmt">// 7. 设置 PSP 并返回</span>
+    __asm volatile(
+        "msr psp, r0                     \n"
+        "bx r14                          \n"
+    );
 }
-#define portYIELD() portNVIC_INT_CTRL_REG = portNVIC_PENDSVSET_BIT
 </code></pre>
 </section>
+
 <section id="systick" class="toc-link">
-<h2><span class="num">03</span> SysTick 定时器</h2>
-<pre><code class="language-c">void xPortSetupTimerInterrupt(void) {
-    portNVIC_SYSTICK_LOAD_REG = (configCPU_CLOCK_HZ / configTICK_RATE_HZ) - 1;
-    portNVIC_SYSTICK_CTRL_REG = portNVIC_SYSTICK_CLK | portNVIC_SYSTICK_INT | portNVIC_SYSTICK_ENABLE;
+  <h2><span class="num">03</span> SysTick 定时器</h2>
+
+<pre><code class="language-c"><span class="cmt">// SysTick 配置（port.c）</span>
+void xPortSetupTimerInterrupt( void )
+{
+    <span class="cmt">// 设置重载值 = 时钟频率 / tick 频率 - 1</span>
+    portNVIC_SYSTICK_LOAD_REG = ( configCPU_CLOCK_HZ / configTICK_RATE_HZ ) - 1UL;
+
+    <span class="cmt">// 启动 SysTick</span>
+    portNVIC_SYSTICK_CTRL_REG = portNVIC_SYSTICK_CLK |    <span class="cmt">// 使用处理器时钟</span>
+                                 portNVIC_SYSTICK_INT |    <span class="cmt">// 使能中断</span>
+                                 portNVIC_SYSTICK_ENABLE;  <span class="cmt">// 启动计数</span>
+}
+
+<span class="cmt">// SysTick Handler</span>
+void xPortSysTickHandler( void )
+{
+    <span class="cmt">// 递增 tick 计数并检查是否需要调度</span>
+    if( xTaskIncrementTick() != pdFALSE )
+    {
+        <span class="cmt">// 需要上下文切换</span>
+        portYIELD_WITHIN_API();
+    }
 }
 </code></pre>
 </section>
+
+<section id="mpu-cm" class="toc-link">
+  <h2><span class="num">04</span> MPU 支持</h2>
+
+<pre><code class="language-c"><span class="cmt">// ARM Cortex-M MPU 配置</span>
+<span class="cmt">// configENABLE_MPU = 1</span>
+
+<span class="cmt">// MPU 区域定义</span>
+<span class="cmt">// 每个任务可配置独立的内存区域</span>
+static const MemoryRegion_t xRegions[] = {
+    { 0x20000000, 0x10000, portMPU_REGION_READ_WRITE },                    <span class="cmt">// SRAM</span>
+    { 0x40000000, 0x10000, portMPU_REGION_READ_WRITE | portMPU_REGION_EXECUTE_NEVER }, <span class="cmt">// 外设</span>
+    { 0x00000000, 0x100000, portMPU_REGION_READ_ONLY | portMPU_REGION_EXECUTE_NEVER }, <span class="cmt">// Flash</span>
+    { 0, 0, 0 },  <span class="cmt">// 终止符</span>
+};
+</code></pre>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">05</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS Cortex-M4F 移植完整示例 =====</span>
+
+<span class="cmt">// FreeRTOSConfig.h（Cortex-M4F 配置）</span>
+#define configUSE_PREEMPTION        1
+#define configCPU_CLOCK_HZ          168000000
+#define configTICK_RATE_HZ          1000
+#define configMAX_PRIORITIES        56
+#define configMINIMAL_STACK_SIZE    128
+#define configTOTAL_HEAP_SIZE       32768
+#define configCHECK_FOR_STACK_OVERFLOW  2
+#define configUSE_IDLE_HOOK         1
+#define configUSE_TICK_HOOK         1
+#define configUSE_MUTEXES           1
+#define configUSE_COUNTING_SEMAPHORES 1
+#define configUSE_TIMERS            1
+#define configTIMER_TASK_PRIORITY   2
+#define configTIMER_TASK_STACK_DEPTH 256
+#define configTIMER_QUEUE_LENGTH    10
+
+<span class="cmt">// 中断优先级</span>
+#define configPRIO_BITS  4
+#define configLIBRARY_LOWEST_INTERRUPT_PRIORITY  15
+#define configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY  5
+#define configKERNEL_INTERRUPT_PRIORITY        ( configLIBRARY_LOWEST_INTERRUPT_PRIORITY &lt;&lt; (8 - configPRIO_BITS) )
+#define configMAX_SYSCALL_INTERRUPT_PRIORITY   ( configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY &lt;&lt; (8 - configPRIO_BITS) )
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c</code> Cortex-M4F 移植实现。<br>
+  <code>FreeRTOS/Source/portable/GCC/ARM_CM4F/portmacro.h</code> 移植宏定义。<br>
+  <code>FreeRTOS/Source/portable/GCC/ARM_CM7/r0p1/</code> Cortex-M7 移植。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

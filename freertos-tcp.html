@@ -10,35 +10,162 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS TCP/IP 深度解析</h1><p class="subtitle">BSD Socket / TCP / UDP / DHCP / DNS</p><span class="version">FreeRTOS-Plus-TCP</span></div>
-<nav class="toc"><ul>
-<li><a href="#overview">TCP 概览</a></li>
-<li><a href="#socket">Socket API</a></li>
-<li><a href="#dhcp">DHCP / DNS</a></li>
-</ul></nav>
+
+<div class="hero">
+  <h1>FreeRTOS TCP/IP 深度解析</h1>
+  <p class="subtitle">BSD Socket / TCP / UDP / DHCP / DNS / 网络接口 / 源码分析</p>
+  <span class="version">FreeRTOS-Plus-TCP</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">TCP 概览</a></li>
+    <li><a href="#socket">Socket API</a></li>
+    <li><a href="#dhcp">DHCP / DNS</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
 <div class="container">
+
 <section id="overview" class="toc-link">
-<h2><span class="num">01</span> TCP 概览</h2>
-<p>FreeRTOS-Plus-TCP 是专为 FreeRTOS 设计的 TCP/IP 协议栈。</p>
+  <h2><span class="num">01</span> TCP 概览</h2>
+
+  <p>FreeRTOS-Plus-TCP 是专为 FreeRTOS 设计的 TCP/IP 协议栈，支持 IPv4/IPv6、TCP/UDP、DHCP、DNS 等。</p>
+
+  <div class="mermaid">graph TD
+    A["应用层<br>HTTP / MQTT / CoAP"] --> B["Socket API<br>FreeRTOS_socket()"]
+    B --> C["TCP/UDP<br>传输层"]
+    C --> D["IP<br>网络层"]
+    D --> E["Ethernet / WiFi<br>链路层"]
+    E --> F["硬件<br>网卡驱动"]
+    style B fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
 </section>
+
 <section id="socket" class="toc-link">
-<h2><span class="num">02</span> Socket API</h2>
-<pre><code class="language-c">Socket_t xSocket = FreeRTOS_socket(
-    FREERTOS_AF_INET, FREERTOS_SOCK_STREAM, FREERTOS_IPPROTO_TCP);
-FreeRTOS_bind(xSocket, &amp;xAddress, sizeof(xAddress));
-FreeRTOS_listen(xSocket, 20);
-Socket_t xClient = FreeRTOS_accept(xSocket, NULL, NULL);
+  <h2><span class="num">02</span> Socket API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 创建 socket</span>
+Socket_t xSocket = FreeRTOS_socket( FREERTOS_AF_INET,
+                                     FREERTOS_SOCK_STREAM,
+                                     FREERTOS_IPPROTO_TCP );
+
+<span class="cmt">// 绑定</span>
+struct freertos_sockaddr xAddress;
+xAddress.sin_port = FreeRTOS_htons( 80 );
+FreeRTOS_bind( xSocket, &amp;xAddress, sizeof( xAddress ) );
+
+<span class="cmt">// 监听</span>
+FreeRTOS_listen( xSocket, 20 );
+
+<span class="cmt">// 接受连接</span>
+Socket_t xClientSocket = FreeRTOS_accept( xSocket, NULL, NULL );
+
+<span class="cmt">// 发送数据</span>
+FreeRTOS_send( xClientSocket, "Hello", 5, 0 );
+
+<span class="cmt">// 接收数据</span>
+char cBuffer[ 100 ];
+FreeRTOS_recv( xClientSocket, cBuffer, sizeof( cBuffer ), 0 );
 </code></pre>
 </section>
+
 <section id="dhcp" class="toc-link">
-<h2><span class="num">03</span> DHCP / DNS</h2>
-<pre><code class="language-c"><span class="cmt">// DHCP</span>
-FreeRTOS_IPInit(ucIP, ucMask, ucGW, ucDNS, usPort);
-<span class="cmt">// DNS</span>
-uint32_t ulIP;
-FreeRTOS_gethostbyname("example.com", &amp;ulIP);
+  <h2><span class="num">03</span> DHCP / DNS</h2>
+
+<pre><code class="language-c"><span class="cmt">// DHCP 客户端</span>
+<span class="cmt">// FreeRTOS_IPInit() 自动启动 DHCP</span>
+<span class="cmt">// 配置：</span>
+<span class="cmt">// #define configDHCP_DATA_SIZE 300</span>
+<span class="cmt">// #define configDHCP_RX_BUFSIZE 300</span>
+
+<span class="cmt">// DNS 解析</span>
+uint32_t ulIPAddress;
+FreeRTOS_gethostbyname( "example.com", &amp;ulIPAddress );
+
+<span class="cmt">// 网络初始化</span>
+BaseType_t FreeRTOS_IPInit( const uint8_t *ucIPAddress,
+                             const uint8_t *ucNetMask,
+                             const uint8_t *ucGatewayAddress,
+                             const uint8_t *ucDNSServerAddress,
+                             uint16_t usPort );
 </code></pre>
 </section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">04</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS TCP/IP 完整示例 =====</span>
+
+#include "FreeRTOS.h"
+#include "FreeRTOS_IP.h"
+#include "FreeRTOS_Sockets.h"
+#include &lt;stdio.h&gt;
+
+<span class="cmt">// HTTP 服务器任务</span>
+void vHTTPServerTask( void * pvParameters )
+{
+    Socket_t xServerSocket, xClientSocket;
+    struct freertos_sockaddr xAddress;
+
+    <span class="cmt">// 创建 socket</span>
+    xServerSocket = FreeRTOS_socket( FREERTOS_AF_INET,
+                                      FREERTOS_SOCK_STREAM,
+                                      FREERTOS_IPPROTO_TCP );
+
+    <span class="cmt">// 绑定</span>
+    xAddress.sin_port = FreeRTOS_htons( 80 );
+    FreeRTOS_bind( xServerSocket, &amp;xAddress, sizeof( xAddress ) );
+
+    <span class="cmt">// 监听</span>
+    FreeRTOS_listen( xServerSocket, 20 );
+
+    for ( ;; )
+    {
+        <span class="cmt">// 接受连接</span>
+        xClientSocket = FreeRTOS_accept( xServerSocket, NULL, NULL );
+
+        <span class="cmt">// 处理请求</span>
+        char cRequest[ 100 ];
+        FreeRTOS_recv( xClientSocket, cRequest, sizeof( cRequest ), 0 );
+
+        <span class="cmt">// 发送响应</span>
+        char *pcResponse = "HTTP/1.1 200 OK\\r\\nContent-Length: 13\\r\\n\\r\\nHello, World!";
+        FreeRTOS_send( xClientSocket, pcResponse, strlen( pcResponse ), 0 );
+
+        <span class="cmt">// 关闭连接</span>
+        FreeRTOS_closesocket( xClientSocket );
+    }
+}
+
+int main( void )
+{
+    <span class="cmt">// 初始化网络</span>
+    uint8_t ucIPAddress[ 4 ] = { 192, 168, 1, 100 };
+    uint8_t ucNetMask[ 4 ] = { 255, 255, 255, 0 };
+    uint8_t ucGateway[ 4 ] = { 192, 168, 1, 1 };
+    uint8_t ucDNS[ 4 ] = { 8, 8, 8, 8 };
+
+    FreeRTOS_IPInit( ucIPAddress, ucNetMask, ucGateway, ucDNS, 80 );
+
+    <span class="cmt">// 创建 HTTP 服务器任务</span>
+    xTaskCreate( vHTTPServerTask, "HTTP", 1024, NULL, 3, NULL );
+
+    vTaskStartScheduler();
+
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS-Plus/Source/FreeRTOS-Plus-TCP/source/FreeRTOS_Sockets.c</code> Socket 实现。<br>
+  <code>FreeRTOS-Plus/Source/FreeRTOS-Plus-TCP/source/FreeRTOS_IP.c</code> IP 层实现。<br>
+  <code>FreeRTOS-Plus/Source/FreeRTOS-Plus-TCP/source/FreeRTOS_TCP.c</code> TCP 实现。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

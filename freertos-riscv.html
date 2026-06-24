@@ -10,38 +10,128 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS RISC-V 移植深度解析</h1><p class="subtitle">RISC-V 架构 / 机器模式 / 中断 / PMP</p><span class="version">FreeRTOS Kernel · portable/GCC/RISC-V</span></div>
-<nav class="toc"><ul>
-<li><a href="#arch">RISC-V 架构</a></li>
-<li><a href="#interrupt">中断处理</a></li>
-<li><a href="#pmp">PMP 保护</a></li>
-</ul></nav>
+
+<div class="hero">
+  <h1>FreeRTOS RISC-V 移植深度解析</h1>
+  <p class="subtitle">RISC-V 架构 / 机器模式 / 中断 / PMP / 多核 / 源码分析</p>
+  <span class="version">FreeRTOS V11.1.0 · portable/GCC/RISC-V</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#arch">RISC-V 架构</a></li>
+    <li><a href="#interrupt">中断处理</a></li>
+    <li><a href="#pmp">PMP 保护</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
 <div class="container">
+
 <section id="arch" class="toc-link">
-<h2><span class="num">01</span> RISC-V 架构</h2>
-<p>RISC-V 是开源指令集架构，FreeRTOS 支持 32/64 位处理器。</p>
+  <h2><span class="num">01</span> RISC-V 架构</h2>
+
+  <p>RISC-V 是开源指令集架构，FreeRTOS 支持 32/64 位处理器。</p>
+
 <pre><code class="language-c"><span class="cmt">// RISC-V 特权级</span>
-<span class="cmt">// M 模式 — 最高特权（FreeRTOS 运行在此）</span>
-<span class="cmt">// S 模式 — 可选</span>
-<span class="cmt">// U 模式 — 最低特权</span>
+<span class="cmt">// M 模式（Machine）— 最高特权（FreeRTOS 运行在此）</span>
+<span class="cmt">// S 模式（Supervisor）— 可选</span>
+<span class="cmt">// U 模式（User）— 最低特权</span>
+
+<span class="cmt">// 关键寄存器</span>
+<span class="cmt">// mtvec — 机器模式异常向量</span>
+<span class="cmt">// mepc  — 异常返回地址</span>
+<span class="cmt">// mcause — 异常原因</span>
+<span class="cmt">// mie   — 机器中断使能</span>
+<span class="cmt">// mip   — 机器中断挂起</span>
+<span class="cmt">// mstatus — 机器状态</span>
 </code></pre>
 </section>
+
 <section id="interrupt" class="toc-link">
-<h2><span class="num">02</span> 中断处理</h2>
-<pre><code class="language-c"><span class="cmt">// mtvec — 异常向量</span>
-<span class="cmt">// mie — 中断使能</span>
-<span class="cmt">// mip — 中断挂起</span>
-<span class="cmt">// mepc — 异常返回地址</span>
+  <h2><span class="num">02</span> 中断处理</h2>
+
+<pre><code class="language-c"><span class="cmt">// RISC-V 中断处理流程</span>
+<span class="cmt">// 1. 中断/异常发生</span>
+<span class="cmt">// 2. CPU 自动保存上下文到 mepc, mcause</span>
+<span class="cmt">// 3. 跳转到 mtvec 指向的处理函数</span>
+<span class="cmt">// 4. 保存线程上下文到栈</span>
+<span class="cmt">// 5. 调用 C 处理函数</span>
+<span class="cmt">// 6. 恢复线程上下文</span>
+<span class="cmt">// 7. mret 返回</span>
+
+<span class="cmt">// 中断使能</span>
+<span class="cmt">// mie 寄存器：</span>
+<span class="cmt">// bit 3: MTIE（机器定时器中断使能）</span>
+<span class="cmt">// bit 7: MEIE（机器外部中断使能）</span>
+<span class="cmt">// bit 11: MSIE（机器软件中断使能）</span>
 </code></pre>
 </section>
+
 <section id="pmp" class="toc-link">
-<h2><span class="num">03</span> PMP 保护</h2>
+  <h2><span class="num">03</span> PMP 保护</h2>
+
 <pre><code class="language-c"><span class="cmt">// PMP（Physical Memory Protection）</span>
+<span class="cmt">// 类似 ARM MPU，但更简单</span>
 <span class="cmt">// 8 个 PMP 条目</span>
-<span class="cmt">// 类似 ARM MPU 但更简单</span>
-<span class="cmt">// 标志：PMP_R(读) PMP_W(写) PMP_X(执行)</span>
+
+<span class="cmt">// PMP 配置寄存器</span>
+<span class="cmt">// pmpcfg0-3: 配置每个条目的权限</span>
+<span class="cmt">// pmpaddr0-7: 地址匹配</span>
+
+<span class="cmt">// PMP 标志</span>
+<span class="cmt">// R: 读</span>
+<span class="cmt">// W: 写</span>
+<span class="cmt">// X: 执行</span>
+<span class="cmt">// A: 地址匹配模式</span>
+<span class="cmt">// L: 锁定（不可修改）</span>
+
+<span class="cmt">// 地址匹配模式</span>
+<span class="cmt">// OFF: 禁用</span>
+<span class="cmt">// TOR: Top of Range（地址范围）</span>
+<span class="cmt">// NA4: Naturally Aligned 4-byte</span>
+<span class="cmt">// NAPOT: Naturally Aligned Power of Two</span>
 </code></pre>
 </section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">04</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS RISC-V 移植完整示例 =====</span>
+
+<span class="cmt">// RISC-V 32 位移植</span>
+<span class="cmt">// portable/GCC/RISC-V/port.c</span>
+
+<span class="cmt">// 关键实现：</span>
+<span class="cmt">// 1. mtvec 设置异常向量</span>
+<span class="cmt">// 2. 保存/恢复 mepc, mstatus</span>
+<span class="cmt">// 3. 软件中断触发上下文切换</span>
+
+<span class="cmt">// 上下文切换</span>
+void xPortSwitchContext( void )
+{
+    <span class="cmt">// 设置 msoftware 中断挂起位</span>
+    __asm volatile( "csrs mip, %0" : : "r"( 1 &lt;&lt; 3 ) );
+}
+
+<span class="cmt">// 异常处理</span>
+void FreeRTOSVectorHandler( void )
+{
+    <span class="cmt">// 保存上下文</span>
+    <span class="cmt">// 检查 mcause</span>
+    <span class="cmt">// 调用相应处理函数</span>
+    <span class="cmt">// 恢复上下文</span>
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/portable/GCC/RISC-V/port.c</code> RISC-V 移植实现。<br>
+  <code>FreeRTOS/Source/portable/GCC/RISC-V/portmacro.h</code> 移植宏定义。<br>
+  <code>FreeRTOS/Source/portable/IAR/RISC-V/</code> IAR RISC-V 移植。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

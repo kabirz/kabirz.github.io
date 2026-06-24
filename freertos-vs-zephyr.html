@@ -10,45 +10,157 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS vs Zephyr 深度对比</h1><p class="subtitle">架构 / API / 生态 / 性能 / 选型指南</p><span class="version">FreeRTOS Kernel vs Zephyr RTOS</span></div>
-<nav class="toc"><ul>
-<li><a href="#overview">整体对比</a></li>
-<li><a href="#api-cmp">API 对比</a></li>
-<li><a href="#guide">选型指南</a></li>
-</ul></nav>
-<div class="container">
-<section id="overview" class="toc-link">
-<h2><span class="num">01</span> 整体对比</h2>
-<table><tr><th>维度</th><th>FreeRTOS</th><th>Zephyr</th></tr>
-<tr><td>许可证</td><td>MIT</td><td>Apache-2.0</td></tr>
-<tr><td>代码量</td><td>~9K 行</td><td>~50K 行</td></tr>
-<tr><td>ROM 最小</td><td>~6KB</td><td>~8KB</td></tr>
-<tr><td>优先级方向</td><td>数值大=高</td><td>数值小=高</td></tr>
-<tr><td>设备驱动</td><td>无统一框架</td><td>完整设备模型</td></tr>
-<tr><td>网络栈</td><td>Plus-TCP</td><td>内置完整栈</td></tr>
-<tr><td>蓝牙</td><td>需第三方</td><td>内置完整栈</td></tr></table>
-</section>
-<section id="api-cmp" class="toc-link">
-<h2><span class="num">02</span> API 对比</h2>
-<table><tr><th>功能</th><th>FreeRTOS</th><th>Zephyr</th></tr>
-<tr><td>创建任务</td><td>xTaskCreate()</td><td>k_thread_create()</td></tr>
-<tr><td>延时</td><td>vTaskDelay()</td><td>k_sleep()</td></tr>
-<tr><td>队列</td><td>xQueueCreate()</td><td>k_msgq_create()</td></tr>
-<tr><td>信号量</td><td>xSemaphoreCreateBinary()</td><td>k_sem_init()</td></tr>
-<tr><td>互斥锁</td><td>xSemaphoreCreateMutex()</td><td>k_mutex_init()</td></tr>
-<tr><td>定时器</td><td>xTimerCreate()</td><td>K_TIMER_DEFINE()</td></tr></table>
-</section>
-<section id="guide" class="toc-link">
-<h2><span class="num">03</span> 选型指南</h2>
-<div class="mermaid">graph TD
-    Q1{"需要蓝牙/WiFi?"} -->|"是"| Z["选 Zephyr"]
-    Q1 -->|"否"| Q2{"资源极受限?"}
-    Q2 -->|"是 (<10KB ROM)"| F["选 FreeRTOS"]
-    Q2 -->|"否"| Q3{"需要 AWS IoT?"}
-    Q3 -->|"是"| F2["选 FreeRTOS"]
-    Q3 -->|"否"| OK["两者都可"]
+
+<div class="hero">
+  <h1>FreeRTOS vs Zephyr 深度对比</h1>
+  <p class="subtitle">架构 / API / 生态 / 性能 / 内存占用 / 选型指南</p>
+  <span class="version">FreeRTOS V11.1.0 vs Zephyr 4.x</span>
 </div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">整体对比</a></li>
+    <li><a href="#api-cmp">API 对比</a></li>
+    <li><a href="#eco">生态对比</a></li>
+    <li><a href="#perf">性能对比</a></li>
+    <li><a href="#guide">选型指南</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 整体对比</h2>
+
+  <table>
+    <tr><th>维度</th><th>FreeRTOS</th><th>Zephyr</th></tr>
+    <tr><td>许可证</td><td>MIT（商业免费）</td><td>Apache-2.0</td></tr>
+    <tr><td>代码量</td><td>~9K 行（内核）</td><td>~50K 行（内核）</td></tr>
+    <tr><td>ROM 最小</td><td>~6KB</td><td>~8KB</td></tr>
+    <tr><td>RAM 最小</td><td>~1KB</td><td>~2KB</td></tr>
+    <tr><td>优先级方向</td><td>数值越大越重要</td><td>数值越小越重要</td></tr>
+    <tr><td>调度器</td><td>抢占/协作/时间片</td><td>抢占/协作/EDF/时间片</td></tr>
+    <tr><td>SMP</td><td>FreeRTOS SMP（较新）</td><td>成熟 SMP 支持</td></tr>
+    <tr><td>设备驱动</td><td>无统一框架</td><td>完整设备模型 + 设备树</td></tr>
+    <tr><td>构建系统</td><td>Makefile/CMake</td><td>CMake + Kconfig + West</td></tr>
+    <tr><td>网络栈</td><td>Plus-TCP</td><td>内置完整栈</td></tr>
+    <tr><td>蓝牙</td><td>需第三方</td><td>内置完整栈</td></tr>
+    <tr><td>USB</td><td>需第三方</td><td>内置完整栈</td></tr>
+    <tr><td>文件系统</td><td>Plus-FAT</td><td>内置多个</td></tr>
+    <tr><td>Shell</td><td>Plus-CLI</td><td>内置 Shell</td></tr>
+    <tr><td>追踪</td><td>Plus-Trace</td><td>内置 Tracing</td></tr>
+  </table>
 </section>
+
+<section id="api-cmp" class="toc-link">
+  <h2><span class="num">02</span> API 对比</h2>
+
+  <table>
+    <tr><th>功能</th><th>FreeRTOS</th><th>Zephyr</th></tr>
+    <tr><td>创建任务</td><td>xTaskCreate()</td><td>k_thread_create()</td></tr>
+    <tr><td>删除任务</td><td>vTaskDelete()</td><td>k_thread_abort()</td></tr>
+    <tr><td>延时</td><td>vTaskDelay()</td><td>k_sleep()</td></tr>
+    <tr><td>队列</td><td>xQueueCreate()</td><td>k_msgq_create()</td></tr>
+    <tr><td>信号量</td><td>xSemaphoreCreateBinary()</td><td>k_sem_init()</td></tr>
+    <tr><td>互斥锁</td><td>xSemaphoreCreateMutex()</td><td>k_mutex_init()</td></tr>
+    <tr><td>事件组</td><td>xEventGroupCreate()</td><td>K_EVENT_DEFINE()</td></tr>
+    <tr><td>定时器</td><td>xTimerCreate()</td><td>K_TIMER_DEFINE()</td></tr>
+    <tr><td>内存分配</td><td>pvPortMalloc()</td><td>k_malloc()</td></tr>
+    <tr><td>获取 tick</td><td>xTaskGetTickCount()</td><td>k_uptime_get_32()</td></tr>
+  </table>
+</section>
+
+<section id="eco" class="toc-link">
+  <h2><span class="num">03</span> 生态对比</h2>
+
+  <div class="mermaid">graph LR
+    subgraph FreeRTOS["FreeRTOS 生态"]
+        F1["AWS IoT SDK"]
+        F2["Plus-TCP"]
+        F3["Plus-CLI"]
+        F4["Plus-FAT"]
+        F5["Plus-Trace"]
+        F6["Cellular"]
+    end
+    subgraph Zephyr["Zephyr 生态"]
+        Z1["蓝牙协议栈"]
+        Z2["网络栈"]
+        Z3["USB 栈"]
+        Z4["设备树"]
+        Z5["Shell"]
+        Z6["Tracing"]
+    end
+  </div>
+
+  <h3>生态特点</h3>
+
+  <table>
+    <tr><th>方面</th><th>FreeRTOS</th><th>Zephyr</th></tr>
+    <tr><td>云连接</td><td>AWS IoT（强）</td><td>LwM2M、MQTT</td></tr>
+    <tr><td>蓝牙</td><td>需第三方库</td><td>内置完整栈</td></tr>
+    <tr><td>网络</td><td>Plus-TCP（轻量）</td><td>内置完整栈</td></tr>
+    <tr><td>社区</td><td>Amazon 维护</td><td>Linux 基金会</td></tr>
+    <tr><td>文档</td><td>官方文档+示例</td><td>完整文档+示例</td></tr>
+    <tr><td>第三方库</td><td>大量</td><td>较多</td></tr>
+  </table>
+</section>
+
+<section id="perf" class="toc-link">
+  <h2><span class="num">04</span> 性能对比</h2>
+
+  <table>
+    <tr><th>指标</th><th>FreeRTOS</th><th>Zephyr</th></tr>
+    <tr><td>上下文切换</td><td>~1us（Cortex-M4）</td><td>~1.5us（Cortex-M4）</td></tr>
+    <tr><td>中断延迟</td><td>&lt;1us</td><td>&lt;1.5us</td></tr>
+    <tr><td>代码大小</td><td>~6KB ROM</td><td>~8KB ROM</td></tr>
+    <tr><td>RAM 使用</td><td>~1KB</td><td>~2KB</td></tr>
+    <tr><td>定时器精度</td><td>1 tick</td><td>1 tick / 高精度</td></tr>
+    <tr><td>队列性能</td><td>高（简单实现）</td><td>中（功能丰富）</td></tr>
+  </table>
+</section>
+
+<section id="guide" class="toc-link">
+  <h2><span class="num">05</span> 选型指南</h2>
+
+  <div class="mermaid">graph TD
+    Q1{"需要蓝牙/WiFi?"} -->|"是"| Z1["选 Zephyr"]
+    Q1 -->|"否"| Q2{"需要设备树?"}
+    Q2 -->|"是"| Z2["选 Zephyr"]
+    Q2 -->|"否"| Q3{"资源极受限?"}
+    Q3 -->|"是 (<10KB ROM)"| F1["选 FreeRTOS"]
+    Q3 -->|"否"| Q4{"需要 AWS IoT?"}
+    Q4 -->|"是"| F2["选 FreeRTOS"]
+    Q4 -->|"否"| Q5{"需要完整网络栈?"}
+    Q5 -->|"是"| Z3["选 Zephyr"]
+    Q5 -->|"否"| OK["两者都可"]
+    style Z1 fill:#1769aa15,stroke:#1769aa,color:#1e40af
+    style Z2 fill:#1769aa15,stroke:#1769aa,color:#1e40af
+    style Z3 fill:#1769aa15,stroke:#1769aa,color:#1e40af
+    style F1 fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style F2 fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
+
+  <h3>选型建议</h3>
+
+  <table>
+    <tr><th>场景</th><th>推荐</th><th>原因</th></tr>
+    <tr><td>MCU + AWS IoT</td><td>FreeRTOS</td><td>AWS 原生支持</td></tr>
+    <tr><td>MCU + 蓝牙</td><td>Zephyr</td><td>内置完整蓝牙栈</td></tr>
+    <tr><td>资源极受限</td><td>FreeRTOS</td><td>更小的 ROM/RAM 占用</td></tr>
+    <tr><td>需要设备驱动框架</td><td>Zephyr</td><td>完整设备模型 + 设备树</td></tr>
+    <tr><td>需要完整网络栈</td><td>Zephyr</td><td>内置 TCP/IP + TLS</td></tr>
+    <tr><td>需要快速原型</td><td>Zephyr</td><td>丰富的示例和工具</td></tr>
+    <tr><td>已有 FreeRTOS 代码</td><td>FreeRTOS</td><td>迁移成本低</td></tr>
+  </table>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/tasks.c</code> FreeRTOS 任务管理实现。<br>
+  <code>zephyr/kernel/sched.c</code> Zephyr 调度器实现。<br>
+  <code>FreeRTOS/README.md</code> FreeRTOS 官方文档。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

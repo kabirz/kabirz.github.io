@@ -10,42 +10,90 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS 内核配置深度解析</h1><p class="subtitle">FreeRTOSConfig.h / 配置宏 / 裁剪 / 最小配置</p><span class="version">FreeRTOS Kernel · FreeRTOSConfig.h</span></div>
-<nav class="toc"><ul>
-<li><a href="#overview">配置概览</a></li>
-<li><a href="#core">核心配置</a></li>
-<li><a href="#memory">内存配置</a></li>
-<li><a href="#feature">功能配置</a></li>
-<li><a href="#minimal">最小配置</a></li>
-</ul></nav>
+
+<div class="hero">
+  <h1>FreeRTOS 内核配置深度解析</h1>
+  <p class="subtitle">FreeRTOSConfig.h / 配置宏 / 裁剪 / 最小配置 / 完整配置</p>
+  <span class="version">FreeRTOS Kernel · FreeRTOSConfig.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">配置概览</a></li>
+    <li><a href="#core">核心配置</a></li>
+    <li><a href="#memory">内存配置</a></li>
+    <li><a href="#feature">功能配置</a></li>
+    <li><a href="#minimal">最小配置</a></li>
+    <li><a href="#full">完整配置</a></li>
+  </ul>
+</nav>
+
 <div class="container">
+
 <section id="overview" class="toc-link">
-<h2><span class="num">01</span> 配置概览</h2>
-<p>FreeRTOS 通过 <code>FreeRTOSConfig.h</code> 进行编译时配置，每个项目必须提供此文件。</p>
+  <h2><span class="num">01</span> 配置概览</h2>
+
+  <p>FreeRTOS 通过 <code>FreeRTOSConfig.h</code> 进行编译时配置，每个项目必须提供此文件。</p>
+
+  <div class="mermaid">graph TD
+    A["FreeRTOSConfig.h"] --> B["内核配置"]
+    A --> C["内存配置"]
+    A --> D["功能配置"]
+    A --> E["钩子配置"]
+    A --> F["调试配置"]
+    style A fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
 </section>
+
 <section id="core" class="toc-link">
-<h2><span class="num">02</span> 核心配置</h2>
-<pre><code class="language-c">#define configUSE_PREEMPTION        1
-#define configCPU_CLOCK_HZ         72000000
-#define configTICK_RATE_HZ         1000
-#define configMAX_PRIORITIES        56
-#define configMINIMAL_STACK_SIZE    128
-#define configTOTAL_HEAP_SIZE       32768
-#define configUSE_IDLE_HOOK         0
-#define configUSE_TICK_HOOK         0
+  <h2><span class="num">02</span> 核心配置</h2>
+
+<pre><code class="language-c"><span class="cmt">// FreeRTOSConfig.h 核心配置</span>
+
+<span class="cmt">// ===== 调度器 =====</span>
+#define configUSE_PREEMPTION            1   <span class="cmt">// 1=抢占式, 0=协作式</span>
+#define configUSE_TIME_SLICING          1   <span class="cmt">// 1=时间片轮转</span>
+#define configUSE_PORT_OPTIMISED_TASK_SELECTION  0  <span class="cmt">// 1=硬件加速选择</span>
+
+<span class="cmt">// ===== 时钟 =====</span>
+#define configCPU_CLOCK_HZ             72000000  <span class="cmt">// CPU 时钟频率</span>
+#define configTICK_RATE_HZ             1000      <span class="cmt">// tick 频率（1ms）</span>
+
+<span class="cmt">// ===== 任务 =====</span>
+#define configMAX_PRIORITIES           56        <span class="cmt">// 最大优先级数</span>
+#define configMINIMAL_STACK_SIZE       128       <span class="cmt">// 最小栈大小（字）</span>
+#define configMAX_TASK_NAME_LEN        16        <span class="cmt">// 最大任务名长度</span>
+#define configTOTAL_HEAP_SIZE          32768     <span class="cmt">// 堆总大小（字节）</span>
+
+<span class="cmt">// ===== 钩子 =====</span>
+#define configUSE_IDLE_HOOK            0
+#define configUSE_TICK_HOOK            0
+#define configUSE_MALLOC_FAILED_HOOK   0
+#define configCHECK_FOR_STACK_OVERFLOW 0
 </code></pre>
 </section>
+
 <section id="memory" class="toc-link">
-<h2><span class="num">03</span> 内存配置</h2>
-<pre><code class="language-c">#define configSUPPORT_STATIC_ALLOCATION  0
+  <h2><span class="num">03</span> 内存配置</h2>
+
+<pre><code class="language-c"><span class="cmt">// 内存分配配置</span>
+#define configSUPPORT_STATIC_ALLOCATION  0
 #define configSUPPORT_DYNAMIC_ALLOCATION 1
 #define configTOTAL_HEAP_SIZE            32768
 #define configAPPLICATION_ALLOCATED_HEAP 0
+#define configHEAP_CLEAR_MEMORY_ON_FREE  0
+
+<span class="cmt">// MPU 配置</span>
+#define configENABLE_MPU                 0
+#define configENABLE_ACCESS_CONTROL_LIST 0
 </code></pre>
 </section>
+
 <section id="feature" class="toc-link">
-<h2><span class="num">04</span> 功能配置</h2>
-<pre><code class="language-c">#define configUSE_TIMERS              1
+  <h2><span class="num">04</span> 功能配置</h2>
+
+<pre><code class="language-c"><span class="cmt">// 功能模块配置</span>
+#define configUSE_TIMERS              1
 #define configUSE_MUTEXES             1
 #define configUSE_COUNTING_SEMAPHORES 1
 #define configUSE_RECURSIVE_MUTEXES   0
@@ -53,24 +101,91 @@
 #define configUSE_TASK_NOTIFICATIONS  1
 #define configUSE_TRACE_FACILITY      0
 #define configUSE_STATS_FORMATTING_FUNCTIONS 0
+
+<span class="cmt">// 定时器配置</span>
+#define configTIMER_TASK_PRIORITY     2
+#define configTIMER_TASK_STACK_DEPTH  256
+#define configTIMER_QUEUE_LENGTH      10
 </code></pre>
 </section>
+
 <section id="minimal" class="toc-link">
-<h2><span class="num">05</span> 最小配置</h2>
+  <h2><span class="num">05</span> 最小配置</h2>
+
 <pre><code class="language-c"><span class="cmt">// 最小 FreeRTOS 配置</span>
-#define configUSE_PREEMPTION        1
-#define configCPU_CLOCK_HZ         72000000
-#define configTICK_RATE_HZ         1000
-#define configMAX_PRIORITIES        5
-#define configMINIMAL_STACK_SIZE    128
-#define configTOTAL_HEAP_SIZE       10240
-#define configUSE_IDLE_HOOK         0
-#define configUSE_TICK_HOOK         0
-#define configUSE_TIMERS            0
-#define configUSE_MUTEXES           0
-#define configUSE_COUNTING_SEMAPHORES 0
+<span class="cmt">// 适用于资源极度受限的 MCU</span>
+
+#define configUSE_PREEMPTION            1
+#define configCPU_CLOCK_HZ              72000000
+#define configTICK_RATE_HZ              1000
+#define configMAX_PRIORITIES            5
+#define configMINIMAL_STACK_SIZE        128
+#define configTOTAL_HEAP_SIZE           10240
+#define configUSE_IDLE_HOOK             0
+#define configUSE_TICK_HOOK             0
+#define configUSE_TIMERS                0
+#define configUSE_MUTEXES               0
+#define configUSE_COUNTING_SEMAPHORES   0
+#define configUSE_TASK_NOTIFICATIONS    0
+#define configCHECK_FOR_STACK_OVERFLOW  0
 </code></pre>
 </section>
+
+<section id="full" class="toc-link">
+  <h2><span class="num">06</span> 完整配置</h2>
+
+<pre><code class="language-c"><span class="cmt">// 完整 FreeRTOS 配置</span>
+<span class="cmt">// 适用于功能丰富的 MCU</span>
+
+<span class="cmt">// 调度器</span>
+#define configUSE_PREEMPTION            1
+#define configUSE_TIME_SLICING          1
+#define configUSE_PORT_OPTIMISED_TASK_SELECTION  1
+
+<span class="cmt">// 时钟</span>
+#define configCPU_CLOCK_HZ              168000000
+#define configTICK_RATE_HZ              1000
+
+<span class="cmt">// 任务</span>
+#define configMAX_PRIORITIES            56
+#define configMINIMAL_STACK_SIZE        256
+#define configMAX_TASK_NAME_LEN         16
+#define configTOTAL_HEAP_SIZE           65536
+
+<span class="cmt">// 钩子</span>
+#define configUSE_IDLE_HOOK             1
+#define configUSE_TICK_HOOK             1
+#define configUSE_MALLOC_FAILED_HOOK    1
+#define configCHECK_FOR_STACK_OVERFLOW  2
+
+<span class="cmt">// 功能</span>
+#define configUSE_TIMERS                1
+#define configUSE_MUTEXES               1
+#define configUSE_COUNTING_SEMAPHORES   1
+#define configUSE_RECURSIVE_MUTEXES     1
+#define configUSE_TASK_NOTIFICATIONS    1
+#define configUSE_TRACE_FACILITY        1
+#define configUSE_STATS_FORMATTING_FUNCTIONS 1
+
+<span class="cmt">// 定时器</span>
+#define configTIMER_TASK_PRIORITY       2
+#define configTIMER_TASK_STACK_DEPTH    256
+#define configTIMER_QUEUE_LENGTH        10
+
+<span class="cmt">// SMP</span>
+#define configNUMBER_OF_CORES           1
+
+<span class="cmt">// MPU</span>
+#define configENABLE_MPU                0
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/include/FreeRTOS.h</code> 所有配置宏的默认值定义（3359行）。<br>
+  <code>FreeRTOS/Demo/</code> 各平台的 FreeRTOSConfig.h 示例。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

@@ -10,61 +10,195 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS 常见问题与最佳实践深度解析</h1><p class="subtitle">栈溢出 / 优先级反转 / 内存碎片 / 性能优化</p><span class="version">FreeRTOS Kernel</span></div>
-<nav class="toc"><ul>
-<li><a href="#stack-overflow">栈溢出</a></li>
-<li><a href="#priority-inversion">优先级反转</a></li>
-<li><a href="#memory-fragmentation">内存碎片</a></li>
-<li><a href="#best-practices">最佳实践</a></li>
-</ul></nav>
-<div class="container">
-<section id="stack-overflow" class="toc-link">
-<h2><span class="num">01</span> 栈溢出</h2>
-<pre><code class="language-c"><span class="cmt">// 启用栈溢出检测</span>
-#define configCHECK_FOR_STACK_OVERFLOW 2
 
-<span class="cmt">// 栈溢出钩子</span>
-void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
-    <span class="cmt">// 处理栈溢出</span>
+<div class="hero">
+  <h1>FreeRTOS 常见问题与最佳实践深度解析</h1>
+  <p class="subtitle">栈溢出 / 优先级反转 / 内存碎片 / 性能优化 / 调试技巧</p>
+  <span class="version">FreeRTOS Kernel</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#stack-overflow">栈溢出</a></li>
+    <li><a href="#priority-inversion">优先级反转</a></li>
+    <li><a href="#memory-fragmentation">内存碎片</a></li>
+    <li><a href="#performance">性能优化</a></li>
+    <li><a href="#debugging">调试技巧</a></li>
+    <li><a href="#best-practices">最佳实践</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="stack-overflow" class="toc-link">
+  <h2><span class="num">01</span> 栈溢出</h2>
+
+<pre><code class="language-c"><span class="cmt">// 问题：栈空间不足导致数据损坏</span>
+
+<span class="cmt">// 解决方案 1：启用栈溢出检测</span>
+#define configCHECK_FOR_STACK_OVERFLOW  2
+
+<span class="cmt">// 解决方案 2：增加栈大小</span>
+<span class="cmt">// 使用 uxTaskGetStackHighWaterMark() 检查栈使用情况</span>
+UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark( xTask );
+<span class="cmt">// 返回值 = 栈剩余的最小字数</span>
+<span class="cmt">// 如果返回值很小（如 &lt; 20），说明栈快溢出了</span>
+
+<span class="cmt">// 解决方案 3：使用静态分配（更可预测）</span>
+StaticTask_t xTaskBuffer;
+StackType_t xStack[ 256 ];  <span class="cmt">// 增加栈大小</span>
+xTaskCreateStatic( ..., xStack, &amp;xTaskBuffer );
+</code></pre>
+
+  <h3>栈溢出检测原理</h3>
+
+  <div class="mermaid">graph TD
+    A["栈溢出检测"] --> B{"configCHECK_FOR_STACK_OVERFLOW"}
+    B -->|"1"| C["检查栈指针是否超出范围"]
+    B -->|"2"| D["检查栈末尾魔数 0xa5"]
+    C --> E{"超出?"}
+    D --> F{"魔数被覆盖?"}
+    E -->|"是"| G["触发栈溢出钩子"]
+    F -->|"是"| G
+    style G fill:#fee2e2,stroke:#ef4444,color:#991b1b
+  </div>
+</section>
+
+<section id="priority-inversion" class="toc-link">
+  <h2><span class="num">02</span> 优先级反转</h2>
+
+<pre><code class="language-c"><span class="cmt">// 问题：高优先级任务被低优先级任务间接阻塞</span>
+
+<span class="cmt">// 错误示例：使用二值信号量做互斥（无优先级继承）</span>
+<span class="cmt">// SemaphoreHandle_t xSem = xSemaphoreCreateBinary();</span>
+<span class="cmt">// xSemaphoreTake(xSem, ...);  // 高优先级任务等待</span>
+<span class="cmt">// xSemaphoreGive(xSem);       // 低优先级任务释放</span>
+<span class="cmt">// 问题：低优先级任务不会被提升优先级</span>
+
+<span class="cmt">// 正确示例：使用互斥锁（自动优先级继承）</span>
+SemaphoreHandle_t xMutex = xSemaphoreCreateMutex();
+xSemaphoreTake( xMutex, portMAX_DELAY );   <span class="cmt">// 高优先级任务等待</span>
+xSemaphoreGive( xMutex );                   <span class="cmt">// 低优先级任务释放</span>
+<span class="cmt">// 优点：低优先级任务的优先级会临时提升</span>
+</code></pre>
+
+  <h3>优先级反转问题</h3>
+
+  <div class="mermaid">graph TD
+    H["高优先级 P5"] -->|"等待 Mutex"| L["低优先级 P1<br>持有 Mutex"]
+    L -->|"优先级提升到 P5"| L2["低优先级 P5<br>临时提升"]
+    L2 -->|"释放 Mutex"| L3["低优先级 P1<br>恢复原始优先级"]
+    M["中优先级 P3"] -->|"被阻塞（无法抢占）"| L2
+    style H fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style L fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style M fill:#fef3c7,stroke:#f59e0b,color:#92400e
+  </div>
+</section>
+
+<section id="memory-fragmentation" class="toc-link">
+  <h2><span class="num">03</span> 内存碎片</h2>
+
+<pre><code class="language-c"><span class="cmt">// 问题：频繁分配/释放不同大小的块导致碎片</span>
+
+<span class="cmt">// 解决方案 1：使用 heap_4（合并相邻空闲块）</span>
+<span class="cmt">// FreeRTOSConfig.h 中：</span>
+<span class="cmt">// #include "portable/MemMang/heap_4.c"</span>
+
+<span class="cmt">// 解决方案 2：使用静态分配</span>
+<span class="cmt">// 所有资源在编译时分配，不使用堆</span>
+
+<span class="cmt">// 解决方案 3：预分配所有资源</span>
+<span class="cmt">// 避免运行时 malloc/free</span>
+
+<span class="cmt">// 解决方案 4：使用内存池</span>
+<span class="cmt">// 对于频繁分配的固定大小对象，使用内存池</span>
+</code></pre>
+</section>
+
+<section id="performance" class="toc-link">
+  <h2><span class="num">04</span> 性能优化</h2>
+
+<pre><code class="language-c"><span class="cmt">// 优化 1：使用任务通知（最轻量的 IPC）</span>
+<span class="cmt">// 比队列/信号量更快</span>
+xTaskNotify( xTaskHandle, ulValue, eSetBits );
+xTaskNotifyWait( 0, 0, &amp;ulValue, timeout );
+
+<span class="cmt">// 优化 2：使用 vTaskDelayUntil 实现精确周期</span>
+<span class="cmt">// vTaskDelay() 会补偿执行时间，不够精确</span>
+TickType_t xLastWakeTime = xTaskGetTickCount();
+while ( 1 ) {
+    vTaskDelayUntil( &amp;xLastWakeTime, pdMS_TO_TICKS( 10 ) );
+    <span class="cmt">// 精确每 10ms 执行一次</span>
 }
 
-<span class="cmt">// 查看栈使用情况</span>
-UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark(xTask);
-<span class="cmt">// 返回值 = 栈剩余的最小字数</span>
+<span class="cmt">// 优化 3：减少临界区时间</span>
+<span class="cmt">// 临界区越短，系统响应性越好</span>
+
+<span class="cmt">// 优化 4：使用适当的优先级</span>
+<span class="cmt">// 时间关键任务使用高优先级</span>
+<span class="cmt">// 后台任务使用低优先级</span>
 </code></pre>
 </section>
-<section id="priority-inversion" class="toc-link">
-<h2><span class="num">02</span> 优先级反转</h2>
-<div class="mermaid">graph TD
-    H["高优先级 P5"] -->|"等待 Mutex"| L["低优先级 P1"]
-    L -->|"优先级提升到 5"| L2["低优先级 P5"]
-    M["中优先级 P3"] -->|"被阻塞"| L2
-</div>
-<pre><code class="language-c"><span class="cmt">// 使用互斥锁（自动优先级继承）</span>
-SemaphoreHandle_t xMutex = xSemaphoreCreateMutex();
-<span class="cmt">// 不要用二值信号量做互斥（无优先级继承）</span>
+
+<section id="debugging" class="toc-link">
+  <h2><span class="num">05</span> 调试技巧</h2>
+
+<pre><code class="language-c"><span class="cmt">// 技巧 1：启用 configASSERT</span>
+#define configASSERT( x ) if( ( x ) == 0 ) vAssertCalled( __FILE__, __LINE__ );
+
+<span class="cmt">// 技巧 2：使用 vTaskList() 查看任务状态</span>
+char pcWriteBuffer[ 512 ];
+vTaskList( pcWriteBuffer );
+printf( "%s", pcWriteBuffer );
+
+<span class="cmt">// 技巧 3：使用 uxTaskGetStackHighWaterMark() 检查栈</span>
+UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark( xTask );
+printf( "Task %s: stack high water mark = %lu\\n", pcTaskName, uxHighWaterMark );
+
+<span class="cmt">// 技巧 4：使用 Tracealyzer 可视化</span>
+<span class="cmt">// configUSE_TRACE_FACILITY = 1</span>
+<span class="cmt">// configUSE_STATS_FORMATTING_FUNCTIONS = 1</span>
 </code></pre>
 </section>
-<section id="memory-fragmentation" class="toc-link">
-<h2><span class="num">03</span> 内存碎片</h2>
-<pre><code class="language-c"><span class="cmt">// 推荐方案：</span>
-<span class="cmt">// 1. 使用 heap_4（合并相邻空闲块）</span>
-<span class="cmt">// 2. 使用静态分配</span>
-<span class="cmt">// 3. 避免频繁 malloc/free 不同大小的块</span>
-<span class="cmt">// 4. 预分配所有需要的资源</span>
-</code></pre>
-</section>
+
 <section id="best-practices" class="toc-link">
-<h2><span class="num">04</span> 最佳实践</h2>
-<p>1. 启用 configASSERT 验证配置<br>
-2. 使用静态分配避免堆问题<br>
-3. 启用栈溢出检测<br>
-4. 优先使用任务通知（最轻量）<br>
-5. ISR 中使用 FromISR API<br>
-6. 限制中断禁用时间<br>
-7. 使用 vTaskDelayUntil 实现周期任务<br>
-8. 优先使用互斥锁（非信号量）做同步</p>
+  <h2><span class="num">06</span> 最佳实践</h2>
+
+  <h3>编码规范</h3>
+
+  <table>
+    <tr><th>实践</th><th>说明</th></tr>
+    <tr><td>启用 configASSERT</td><td>验证配置和运行时状态</td></tr>
+    <tr><td>使用静态分配</td><td>避免堆碎片和分配失败</td></tr>
+    <tr><td>启用栈溢出检测</td><td>configCHECK_FOR_STACK_OVERFLOW = 2</td></tr>
+    <tr><td>优先使用任务通知</td><td>最轻量的 IPC 机制</td></tr>
+    <tr><td>ISR 中使用 FromISR API</td><td>避免在 ISR 中使用阻塞 API</td></tr>
+    <tr><td>限制中断禁用时间</td><td>保持系统响应性</td></tr>
+    <tr><td>使用 vTaskDelayUntil</td><td>实现精确周期任务</td></tr>
+    <tr><td>优先使用互斥锁</td><td>避免优先级反转</td></tr>
+    <tr><td>检查栈使用情况</td><td>定期使用 uxTaskGetStackHighWaterMark()</td></tr>
+    <tr><td>使用适当的优先级</td><td>时间关键任务使用高优先级</td></tr>
+  </table>
+
+  <h3>常见错误</h3>
+
+  <table>
+    <tr><th>错误</th><th>后果</th><th>解决方案</th></tr>
+    <tr><td>ISR 中调用阻塞 API</td><td>系统崩溃</td><td>使用 FromISR 版本</td></tr>
+    <tr><td>栈大小不足</td><td>栈溢出</td><td>增加栈大小或使用静态分配</td></tr>
+    <tr><td>使用二值信号量做互斥</td><td>优先级反转</td><td>使用互斥锁</td></tr>
+    <tr><td>临界区过长</td><td>系统响应性差</td><td>缩短临界区</td></tr>
+    <tr><td>删除正在运行的任务</td><td>系统崩溃</td><td>先挂起再删除</td></tr>
+  </table>
 </section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/tasks.c</code> 任务管理实现，重点看 vTaskDelete、uxTaskGetStackHighWaterMark。<br>
+  <code>FreeRTOS/Source/include/FreeRTOS.h</code> configASSERT 定义。<br>
+  <code>FreeRTOS/FreeRTOS/Demo/</code> 官方示例代码。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

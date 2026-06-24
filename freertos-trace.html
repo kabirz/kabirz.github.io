@@ -10,33 +10,155 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS 追踪与调试深度解析</h1><p class="subtitle">运行时统计 / 调试钩子 / Tracealyzer / SystemView</p><span class="version">FreeRTOS Kernel</span></div>
-<nav class="toc"><ul>
-<li><a href="#stats">运行时统计</a></li>
-<li><a href="#hooks">调试钩子</a></li>
-</ul></nav>
+
+<div class="hero">
+  <h1>FreeRTOS 追踪与调试深度解析</h1>
+  <p class="subtitle">运行时统计 / 调试钩子 / Tracealyzer / SystemView / 源码分析</p>
+  <span class="version">FreeRTOS Kernel</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#stats">运行时统计</a></li>
+    <li><a href="#hooks">调试钩子</a></li>
+    <li><a href="#trace">追踪工具</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
 <div class="container">
+
 <section id="stats" class="toc-link">
-<h2><span class="num">01</span> 运行时统计</h2>
-<pre><code class="language-c">TaskStatus_t *pxArray;
-UBaseType_t uxSize = uxTaskGetNumberOfTasks();
-pxArray = pvPortMalloc(uxSize * sizeof(TaskStatus_t));
-uxTaskGetSystemState(pxArray, uxSize, &amp;ulRunTime);
-vTaskList(pcWriteBuffer);  <span class="cmt">// 打印任务列表</span>
+  <h2><span class="num">01</span> 运行时统计</h2>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 中的运行时统计</span>
+
+<span class="cmt">// 获取系统状态</span>
+TaskStatus_t *pxTaskStatusArray;
+UBaseType_t uxArraySize = uxTaskGetNumberOfTasks();
+pxTaskStatusArray = pvPortMalloc( uxArraySize * sizeof( TaskStatus_t ) );
+
+uint32_t ulTotalRunTime;
+uxTaskGetSystemState( pxTaskStatusArray, uxArraySize, &amp;ulTotalRunTime );
+
+<span class="cmt">// 打印任务列表</span>
+vTaskList( pcWriteBuffer );
+
+<span class="cmt">// 打印运行时间统计</span>
+vTaskGetRunTimeStats( pcWriteBuffer );
+</code></pre>
+
+  <h3>TaskStatus_t 结构体</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/task.h</span>
+typedef struct xTASK_STATUS
+{
+    TaskHandle_t xHandle;            <span class="cmt">// 任务句柄</span>
+    const char *pcTaskName;          <span class="cmt">// 任务名</span>
+    UBaseType_t xTaskNumber;         <span class="cmt">// 任务编号</span>
+    eTaskState eCurrentState;        <span class="cmt">// 当前状态</span>
+    UBaseType_t uxCurrentPriority;   <span class="cmt">// 当前优先级</span>
+    UBaseType_t uxBasePriority;      <span class="cmt">// 基础优先级</span>
+    uint32_t ulRunTimeCounter;       <span class="cmt">// CPU 运行时间</span>
+    StackType_t *pxStackBase;        <span class="cmt">// 栈基地址</span>
+    configSTACK_DEPTH_TYPE usStackDepth; <span class="cmt">// 栈深度</span>
+} TaskStatus_t;
 </code></pre>
 </section>
+
 <section id="hooks" class="toc-link">
-<h2><span class="num">02</span> 调试钩子</h2>
-<pre><code class="language-c"><span class="cmt">// 栈溢出钩子</span>
-void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName);
-<span class="cmt">// Malloc 失败钩子</span>
-void vApplicationMallocFailedHook(void);
-<span class="cmt">// 空闲钩子</span>
-void vApplicationIdleHook(void);
-<span class="cmt">// Tick 钩子</span>
-void vApplicationTickHook(void);
+  <h2><span class="num">02</span> 调试钩子</h2>
+
+<pre><code class="language-c"><span class="cmt">// FreeRTOS 支持 4 种调试钩子</span>
+
+<span class="cmt">// 1. 栈溢出钩子（configCHECK_FOR_STACK_OVERFLOW &gt; 0）</span>
+void vApplicationStackOverflowHook( TaskHandle_t xTask, char * pcTaskName )
+{
+    <span class="cmt">// 处理栈溢出</span>
+}
+
+<span class="cmt">// 2. Malloc 失败钩子（configUSE_MALLOC_FAILED_HOOK = 1）</span>
+void vApplicationMallocFailedHook( void )
+{
+    <span class="cmt">// 处理内存分配失败</span>
+}
+
+<span class="cmt">// 3. 空闲钩子（configUSE_IDLE_HOOK = 1）</span>
+void vApplicationIdleHook( void )
+{
+    <span class="cmt">// 在空闲任务中执行</span>
+}
+
+<span class="cmt">// 4. Tick 钩子（configUSE_TICK_HOOK = 1）</span>
+void vApplicationTickHook( void )
+{
+    <span class="cmt">// 每次 tick 中断调用</span>
+}
 </code></pre>
 </section>
+
+<section id="trace" class="toc-link">
+  <h2><span class="num">03</span> 追踪工具</h2>
+
+  <table>
+    <tr><th>工具</th><th>说明</th><th>配置</th></tr>
+    <tr><td>Tracealyzer</td><td>Percepio 商业追踪工具</td><td>configUSE_TRACE_FACILITY = 1</td></tr>
+    <tr><td>SystemView</td><td>SEGGER 免费追踪工具</td><td>需 SEGGER RTT 库</td></tr>
+    <tr><td>uxTaskGetSystemState</td><td>内置状态查询</td><td>configUSE_TRACE_FACILITY = 1</td></tr>
+    <tr><td>vTaskList</td><td>内置任务列表</td><td>configUSE_TRACE_FACILITY = 1</td></tr>
+  </table>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">04</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS 追踪完整示例 =====</span>
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include &lt;stdio.h&gt;
+
+<span class="cmt">// 配置</span>
+<span class="cmt">// configUSE_TRACE_FACILITY = 1</span>
+<span class="cmt">// configUSE_STATS_FORMATTING_FUNCTIONS = 1</span>
+
+<span class="cmt">// 统计任务</span>
+void vStatsTask( void * pvParameters )
+{
+    char pcWriteBuffer[ 512 ];
+
+    for ( ;; )
+    {
+        <span class="cmt">// 每 5 秒打印一次统计</span>
+        vTaskDelay( pdMS_TO_TICKS( 5000 ) );
+
+        <span class="cmt">// 打印任务列表</span>
+        vTaskList( pcWriteBuffer );
+        printf( "Task Name  State  Prio  Stack  Num\\n%s", pcWriteBuffer );
+
+        <span class="cmt">// 打印运行时间统计</span>
+        vTaskGetRunTimeStats( pcWriteBuffer );
+        printf( "Task Name  Run Time  %%\\n%s", pcWriteBuffer );
+    }
+}
+
+int main( void )
+{
+    xTaskCreate( vStatsTask, "Stats", 512, NULL, 1, NULL );
+
+    vTaskStartScheduler();
+
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/tasks.c</code> 运行时统计实现，重点看 uxTaskGetSystemState、vTaskList。<br>
+  <code>FreeRTOS-Plus/Source/FreeRTOS-Plus-Trace/</code> Tracealyzer 集成。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

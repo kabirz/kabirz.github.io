@@ -10,35 +10,127 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS 安全与认证深度解析</h1><p class="subtitle">MISRA C / 功能安全 / 认证 / 安全机制</p><span class="version">FreeRTOS Kernel</span></div>
-<nav class="toc"><ul>
-<li><a href="#overview">安全概览</a></li>
-<li><a href="#misra">MISRA C</a></li>
-<li><a href="#safety">功能安全</a></li>
-</ul></nav>
+
+<div class="hero">
+  <h1>FreeRTOS 安全与认证深度解析</h1>
+  <p class="subtitle">MISRA C / 功能安全 / 认证 / 安全机制 / 最佳实践</p>
+  <span class="version">FreeRTOS Kernel · MISRA.md</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">安全概览</a></li>
+    <li><a href="#misra">MISRA C</a></li>
+    <li><a href="#safety">功能安全</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
 <div class="container">
+
 <section id="overview" class="toc-link">
-<h2><span class="num">01</span> 安全概览</h2>
-<p>FreeRTOS 遵循 MISRA C 规范，支持功能安全认证。</p>
+  <h2><span class="num">01</span> 安全概览</h2>
+
+  <p>FreeRTOS 提供多种安全机制，支持 MISRA C 合规和功能安全认证。</p>
+
+  <div class="mermaid">graph LR
+    A["FreeRTOS 内核"] --> B["MISRA C:2012"]
+    A --> C["IEC 61508 SIL 3"]
+    A --> D["ISO 26262 ASIL D"]
+    A --> E["IEC 62304"]
+    A --> F["EN 50128"]
+    style A fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
 </section>
+
 <section id="misra" class="toc-link">
-<h2><span class="num">02</span> MISRA C</h2>
-<pre><code class="language-c"><span class="cmt">// FreeRTOS 遵循 MISRA C:2012</span>
+  <h2><span class="num">02</span> MISRA C</h2>
+
+<pre><code class="language-c"><span class="cmt">// FreeRTOS 遵循 MISRA C:2012 规范</span>
+<span class="cmt">// MISRA.md 文件列出了所有合规例外</span>
+
 <span class="cmt">// 关键规则：</span>
-<span class="cmt">// - 禁止隐式类型转换</span>
-<span class="cmt">// - 禁止递归调用</span>
-<span class="cmt">// - 所有路径必须有返回值</span>
+<span class="cmt">// - 规则 1.3: 禁止未定义行为</span>
+<span class="cmt">// - 规则 8.4: 所有函数必须有声明</span>
+<span class="cmt">// - 规则 11.3: 禁止指针类型转换</span>
+<span class="cmt">// - 规则 14.2: for 循环计数器必须是整数</span>
+<span class="cmt">// - 规则 15.7: 所有 if/else 必须有 else</span>
+
+<span class="cmt">// FreeRTOS 的例外：</span>
+<span class="cmt">// - 使用了 goto（在特定场景）</span>
+<span class="cmt">// - 使用了可变参数函数</span>
+<span class="cmt">// - 某些指针转换（为了性能）</span>
 </code></pre>
 </section>
+
 <section id="safety" class="toc-link">
-<h2><span class="num">03</span> 功能安全</h2>
-<div class="mermaid">graph LR
-    A["FreeRTOS"] --> B["IEC 61508 SIL 3"]
-    A --> C["ISO 26262 ASIL D"]
-    A --> D["IEC 62304"]
-</div>
-<p>安全机制：MPU + 栈检测 + configASSERT</p>
+  <h2><span class="num">03</span> 功能安全</h2>
+
+<pre><code class="language-c"><span class="cmt">// FreeRTOS 支持以下功能安全标准：</span>
+<span class="cmt">// - IEC 61508 (SIL 3) — 工业安全</span>
+<span class="cmt">// - ISO 26262 (ASIL D) — 汽车安全</span>
+<span class="cmt">// - IEC 62304 — 医疗设备</span>
+<span class="cmt">// - EN 50128 — 铁路</span>
+
+<span class="cmt">// 安全机制：</span>
+<span class="cmt">// - MPU 内存保护</span>
+<span class="cmt">// - 栈溢出检测</span>
+<span class="cmt">// - configASSERT 断言</span>
+<span class="cmt">// - 优先级继承</span>
+<span class="cmt">// - 中断优先级管理</span>
+<span class="cmt">// - 看门狗集成</span>
+
+<span class="cmt">// 安全最佳实践：</span>
+<span class="cmt">// 1. 启用 MPU 保护</span>
+<span class="cmt">// 2. 使用静态分配避免堆碎片</span>
+<span class="cmt">// 3. 启用栈溢出检测</span>
+<span class="cmt">// 4. 使用 configASSERT 验证</span>
+<span class="cmt">// 5. 限制中断禁用时间</span>
+<span class="cmt">// 6. 使用优先级继承</span>
+</code></pre>
 </section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">04</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS 安全配置完整示例 =====</span>
+
+<span class="cmt">// FreeRTOSConfig.h（安全配置）</span>
+#define configASSERT( x ) if( ( x ) == 0 ) vAssertCalled( __FILE__, __LINE__ )
+#define configCHECK_FOR_STACK_OVERFLOW  2
+#define configUSE_MALLOC_FAILED_HOOK    1
+#define configUSE_IDLE_HOOK             1
+#define configUSE_TICK_HOOK             1
+
+<span class="cmt">// 断言回调</span>
+void vAssertCalled( const char * pcFile, uint32_t ulLine )
+{
+    printf( "ASSERT: %s:%lu\\n", pcFile, ulLine );
+    for ( ;; ) {}
+}
+
+<span class="cmt">// 栈溢出回调</span>
+void vApplicationStackOverflowHook( TaskHandle_t xTask, char * pcTaskName )
+{
+    printf( "Stack overflow: %s\\n", pcTaskName );
+    for ( ;; ) {}
+}
+
+<span class="cmt">// Malloc 失败回调</span>
+void vApplicationMallocFailedHook( void )
+{
+    printf( "Malloc failed!\\n" );
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/MISRA.md</code> MISRA C 合规说明。<br>
+  <code>FreeRTOS/Source/include/FreeRTOS.h</code> configASSERT 定义。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

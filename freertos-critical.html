@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 临界区与中断管理深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>FreeRTOS 临界区与中断管理深度解析</h1>
+  <p class="subtitle">临界区实现 / 中断屏蔽 / 优先级 / 嵌套 / ISR 通信 / 源码分析</p>
+  <span class="version">FreeRTOS V11.1.0 · tasks.c · port.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#critical">临界区实现</a></li>
+    <li><a href="#interrupt">中断管理</a></li>
+    <li><a href="#priority">中断优先级</a></li>
+    <li><a href="#nested">嵌套临界区</a></li>
+    <li><a href="#isr">ISR 中通信</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="critical" class="toc-link">
+  <h2><span class="num">01</span> 临界区实现</h2>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 中的临界区实现</span>
+
+<span class="cmt">// 方法 1：taskENTER_CRITICAL / taskEXIT_CRITICAL</span>
+<span class="cmt">// 禁止中断 + 禁止调度</span>
+
+void vPortEnterCritical( void )
+{
+    portDISABLE_INTERRUPTS();
+    uxSavedCriticalNesting++;
+    __asm volatile( "dsb" ::: "memory" );
+    __asm volatile( "isb" );
+}
+
+void vPortExitCritical( void )
+{
+    configASSERT( uxSavedCriticalNesting > 0 );
+    --uxSavedCriticalNesting;
+    if( uxSavedCriticalNesting == 0 )
+    {
+        portENABLE_INTERRUPTS();
+    }
+}
+
+<span class="cmt">// 方法 2：ISR 中使用</span>
+BaseType_t taskENTER_CRITICAL_FROM_ISR( void )
+{
+    UBaseType_t uxSavedInterruptStatus = portSET_INTERRUPT_MASK_FROM_ISR();
+    uxSavedCriticalNesting++;
+    return uxSavedInterruptStatus;
+}
+
+void taskEXIT_CRITICAL_FROM_ISR( UBaseType_t uxSavedInterruptStatus )
+{
+    --uxSavedCriticalNesting;
+    if( uxSavedCriticalNesting == 0 )
+    {
+        portCLEAR_INTERRUPT_MASK_FROM_ISR( uxSavedInterruptStatus );
+    }
+}
+</code></pre>
+
+  <h3>临界区类型对比</h3>
+
+  <table>
+    <tr><th>方法</th><th>中断</th><th>调度</th><th>ISR 可用</th><th>嵌套</th></tr>
+    <tr><td>taskENTER_CRITICAL</td><td>禁止</td><td>禁止</td><td>❌</td><td>✅</td></tr>
+    <tr><td>taskDISABLE_INTERRUPTS</td><td>禁止</td><td>禁止</td><td>✅</td><td>❌</td></tr>
+    <tr><td>taskENTER_CRITICAL_FROM_ISR</td><td>禁止</td><td>禁止</td><td>✅</td><td>✅</td></tr>
+  </table>
+</section>
+
+<section id="interrupt" class="toc-link">
+  <h2><span class="num">02</span> 中断管理</h2>
+
+<pre><code class="language-c"><span class="cmt">// 中断使能/禁止</span>
+taskDISABLE_INTERRUPTS();  <span class="cmt">// 禁止所有中断</span>
+taskENABLE_INTERRUPTS();   <span class="cmt">// 恢复中断</span>
+
+<span class="cmt">// 注意：仅影响优先级低于</span>
+<span class="cmt">// configMAX_SYSCALL_INTERRUPT_PRIORITY 的中断</span>
+<span class="cmt">// 高优先级中断不受影响</span>
+</code></pre>
+
+  <h3>中断优先级架构</h3>
+
+  <div class="mermaid">graph TD
+    subgraph P0["优先级 0-4<br>不受 FreeRTOS 管理"]
+        I0["高优先级中断<br>用于时间关键操作"]
+    end
+    subgraph P1["优先级 5-15<br>可安全调用 FromISR API"]
+        I1["普通中断<br>可使用 FreeRTOS API"]
+    end
+    style P0 fill:#fee2e215,stroke:#ef4444,color:#991b1b
+    style P1 fill:#22c55e15,stroke:#22c55e,color:#166534
+  </div>
+</section>
+
+<section id="priority" class="toc-link">
+  <h2><span class="num">03</span> 中断优先级</h2>
+
+<pre><code class="language-c"><span class="cmt">// ARM Cortex-M 中断优先级配置</span>
+<span class="cmt">// FreeRTOSConfig.h</span>
+
+<span class="cmt">// NVIC 优先级位数</span>
+#define configPRIO_BITS  4
+
+<span class="cmt">// 最低中断优先级（数值最大）</span>
+#define configLIBRARY_LOWEST_INTERRUPT_PRIORITY  15
+
+<span class="cmt">// 可调用 FromISR API 的最高优先级</span>
+#define configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY  5
+
+<span class="cmt">// 实际中断优先级</span>
+#define configKERNEL_INTERRUPT_PRIORITY        ( configLIBRARY_LOWEST_INTERRUPT_PRIORITY &lt;&lt; (8 - configPRIO_BITS) )
+#define configMAX_SYSCALL_INTERRUPT_PRIORITY   ( configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY &lt;&lt; (8 - configPRIO_BITS) )
+
+<span class="cmt">// 示例：</span>
+<span class="cmt">// 优先级 0-4：不受 FreeRTOS 管理（不能调用 FreeRTOS API）</span>
+<span class="cmt">// 优先级 5-15：可安全调用 FromISR API</span>
+</code></pre>
+</section>
+
+<section id="nested" class="toc-link">
+  <h2><span class="num">04</span> 嵌套临界区</h2>
+
+<pre><code class="language-c"><span class="cmt">// 临界区可以嵌套</span>
+<span class="cmt">// 使用 uxSavedCriticalNesting 计数器跟踪嵌套深度</span>
+
+<span class="cmt">// 嵌套示例</span>
+taskENTER_CRITICAL();   <span class="cmt">// uxSavedCriticalNesting = 1</span>
+    <span class="cmt">// 临界区代码</span>
+    taskENTER_CRITICAL();   <span class="cmt">// uxSavedCriticalNesting = 2</span>
+        <span class="cmt">// 嵌套临界区代码</span>
+    taskEXIT_CRITICAL();    <span class="cmt">// uxSavedCriticalNesting = 1</span>
+taskEXIT_CRITICAL();    <span class="cmt">// uxSavedCriticalNesting = 0（真正退出）</span>
+</code></pre>
+</section>
+
+<section id="isr" class="toc-link">
+  <h2><span class="num">05</span> ISR 中通信</h2>
+
+<pre><code class="language-c"><span class="cmt">// ISR 中使用 FromISR 版本的 API</span>
+void vISR Handler( void )
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    uint32_t ulValue = 42;
+
+    <span class="cmt">// 发送队列</span>
+    xQueueSendFromISR( xQueue, &amp;ulValue, &amp;xHigherPriorityTaskWoken );
+
+    <span class="cmt">// 释放信号量</span>
+    xSemaphoreGiveFromISR( xSemaphore, &amp;xHigherPriorityTaskWoken );
+
+    <span class="cmt">// 设置事件位</span>
+    xEventGroupSetBitsFromISR( xEventGroup, BIT_0, &amp;xHigherPriorityTaskWoken );
+
+    <span class="cmt">// 发送任务通知</span>
+    xTaskNotifyFromISR( xTaskHandle, ulValue, eSetValueWithOverwrite, &amp;xHigherPriorityTaskWoken );
+
+    <span class="cmt">// 必须调用此宏触发上下文切换</span>
+    portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+}
+</code></pre>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">06</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS 临界区完整示例 =====</span>
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include &lt;stdio.h&gt;
+
+<span class="cmt">// 共享资源</span>
+volatile uint32_t ulSharedCounter = 0;
+QueueHandle_t xISRQueue;
+
+<span class="cmt">// ISR：按键中断</span>
+void EXTI0_IRQHandler( void )
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    <span class="cmt">// 清除中断标志</span>
+    <span class="cmt">// EXTI->PR = BIT_0;</span>
+
+    <span class="cmt">// 发送按键值到队列</span>
+    uint32_t ulButton = 1;
+    xQueueSendFromISR( xISRQueue, &amp;ulButton, &amp;xHigherPriorityTaskWoken );
+
+    <span class="cmt">// 触发上下文切换</span>
+    portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+}
+
+<span class="cmt">// 任务：处理按键</span>
+void vButtonTask( void * pvParameters )
+{
+    uint32_t ulButton;
+
+    for ( ;; )
+    {
+        <span class="cmt">// 等待 ISR 发送的消息</span>
+        if( xQueueReceive( xISRQueue, &amp;ulButton, portMAX_DELAY ) == pdTRUE )
+        {
+            <span class="cmt">// 在临界区中更新共享资源</span>
+            taskENTER_CRITICAL();
+            ulSharedCounter++;
+            taskEXIT_CRITICAL();
+
+            printf( "Button pressed, counter: %lu\\n", ulSharedCounter );
+        }
+    }
+}
+
+<span class="cmt">// 任务：读取共享资源</span>
+void vReaderTask( void * pvParameters )
+{
+    for ( ;; )
+    {
+        <span class="cmt">// 在临界区中读取共享资源</span>
+        taskENTER_CRITICAL();
+        uint32_t ulValue = ulSharedCounter;
+        taskEXIT_CRITICAL();
+
+        printf( "Counter value: %lu\\n", ulValue );
+        vTaskDelay( pdMS_TO_TICKS( 1000 ) );
+    }
+}
+
+int main( void )
+{
+    <span class="cmt">// 创建 ISR 通信队列</span>
+    xISRQueue = xQueueCreate( 10, sizeof( uint32_t ) );
+
+    <span class="cmt">// 创建任务</span>
+    xTaskCreate( vButtonTask, "Button", 128, NULL, 3, NULL );
+    xTaskCreate( vReaderTask, "Reader", 128, NULL, 1, NULL );
+
+    vTaskStartScheduler();
+
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/tasks.c</code> 临界区实现，重点看 vPortEnterCritical、vPortExitCritical。<br>
+  <code>FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c</code> ARM Cortex-M4F 移植中的中断管理。<br>
+  <code>FreeRTOS/Source/include/task.h</code> 临界区 API 定义。
+</div>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

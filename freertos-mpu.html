@@ -10,42 +10,145 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS MPU 内存保护深度解析</h1><p class="subtitle">MPU 配置 / 特权级 / 用户态 / 访问控制</p><span class="version">FreeRTOS Kernel · mpu_wrappers.h</span></div>
-<nav class="toc"><ul>
-<li><a href="#overview">MPU 概览</a></li>
-<li><a href="#config">MPU 配置</a></li>
-<li><a href="#privilege">特权级管理</a></li>
-</ul></nav>
+
+<div class="hero">
+  <h1>FreeRTOS MPU 内存保护深度解析</h1>
+  <p class="p-subtitle">MPU 配置 / 特权级管理 / 访问控制 / 安全机制 / 源码分析</p>
+  <span class="version">FreeRTOS V11.1.0 · include/mpu_wrappers.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">MPU 概览</a></li>
+    <li><a href="#config">MPU 配置</a></li>
+    <li><a href="#privilege">特权级管理</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
 <div class="container">
+
 <section id="overview" class="toc-link">
-<h2><span class="num">01</span> MPU 概览</h2>
-<div class="mermaid">graph TD
+  <h2><span class="num">01</span> MPU 概览</h2>
+
+  <div class="mermaid">graph TD
     subgraph P["特权级 Privileged"]
         K["内核代码"] --> M["MPU 寄存器"]
     end
     subgraph U["用户级 Unprivileged"]
         APP["应用代码"] -->|"受限访问"| M
     end
-</div>
+    style P fill:#22c55e15,stroke:#22c55e,color:#166534
+    style U fill:#fee2e215,stroke:#ef4444,color:#991b1b
+  </div>
 </section>
+
 <section id="config" class="toc-link">
-<h2><span class="num">02</span> MPU 配置</h2>
-<pre><code class="language-c"><span class="cmt">// configENABLE_MPU = 1</span>
+  <h2><span class="num">02</span> MPU 配置</h2>
+
+<pre><code class="language-c"><span class="cmt">// FreeRTOS MPU 配置</span>
+<span class="cmt">// configENABLE_MPU = 1</span>
+<span class="cmt">// configENABLE_ACCESS_CONTROL_LIST = 1</span>
+
+<span class="cmt">// MPU 区域定义</span>
 static const MemoryRegion_t xRegions[] = {
-    { 0x20000000, 0x10000, portMPU_REGION_READ_WRITE },
-    { 0x40000000, 0x10000, portMPU_REGION_READ_WRITE | portMPU_REGION_EXECUTE_NEVER },
-    { 0, 0, 0 },
+    { 0x20000000, 0x10000, portMPU_REGION_READ_WRITE },  <span class="cmt">// SRAM</span>
+    { 0x40000000, 0x10000, portMPU_REGION_READ_WRITE | portMPU_REGION_EXECUTE_NEVER },  <span class="cmt">// 外设</span>
+    { 0, 0, 0 },  <span class="cmt">// 终止符</span>
 };
+
+<span class="cmt">// MPU 区域参数</span>
+<span class="cmt">// tskMPU_REGION_READ_ONLY     — 只读</span>
+<span class="cmt">// tskMPU_REGION_READ_WRITE    — 读写</span>
+<span class="cmt">// tskMPU_REGION_EXECUTE_NEVER — 不可执行</span>
+<span class="cmt">// tskMPU_REGION_NORMAL_MEMORY — 普通内存</span>
+<span class="cmt">// tskMPU_REGION_DEVICE_MEMORY — 设备内存</span>
 </code></pre>
 </section>
+
 <section id="privilege" class="toc-link">
-<h2><span class="num">03</span> 特权级管理</h2>
+  <h2><span class="num">03</span> 特权级管理</h2>
+
 <pre><code class="language-c"><span class="cmt">// MPU 任务默认运行在用户级</span>
 <span class="cmt">// 通过系统调用访问内核服务</span>
+
 <span class="cmt">// 静态创建特权任务</span>
-xTaskCreateStaticPrivileged(...)
+TaskHandle_t xTaskCreateStaticPrivileged(
+    TaskFunction_t pxTaskCode,
+    const char * const pcName,
+    configSTACK_DEPTH_TYPE usStackDepth,
+    void * const pvParameters,
+    UBaseType_t uxPriority,
+    StackType_t * const puxStackBuffer,
+    StaticTask_t * const pxTaskBuffer
+);
+
+<span class="cmt">// 动态创建受限任务</span>
+TaskHandle_t xTaskCreateRestricted(
+    const TaskParameters_t * const pxTaskDefinition,
+    TaskHandle_t * const pxCreatedTask
+);
 </code></pre>
 </section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">04</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS MPU 完整示例 =====</span>
+
+#include "FreeRTOS.h"
+#include "task.h"
+
+<span class="cmt">// MPU 配置</span>
+<span class="cmt">// configENABLE_MPU = 1</span>
+<span class="cmt">// configENABLE_ACCESS_CONTROL_LIST = 1</span>
+
+<span class="cmt">// 特权任务（可访问所有资源）</span>
+void vPrivilegedTask( void * pvParameters )
+{
+    <span class="cmt">// 可以访问内核数据结构</span>
+    <span class="cmt">// 可以调用所有 API</span>
+    for ( ;; )
+    {
+        vTaskDelay( pdMS_TO_TICKS( 1000 ) );
+    }
+}
+
+<span class="cmt">// 用户级任务（受限访问）</span>
+void vUserTask( void * pvParameters )
+{
+    <span class="cmt">// 只能访问自己的内存区域</span>
+    <span class="cmt">// 通过系统调用访问内核服务</span>
+    for ( ;; )
+    {
+        vTaskDelay( pdMS_TO_TICKS( 2000 ) );
+    }
+}
+
+int main( void )
+{
+    <span class="cmt">// 创建特权任务</span>
+    StaticTask_t xTaskBuffer;
+    StackType_t xStack[ 128 ];
+    xTaskCreateStaticPrivileged( vPrivilegedTask, "Priv", 128, NULL, 2, xStack, &amp;xTaskBuffer );
+
+    <span class="cmt">// 创建用户级任务</span>
+    xTaskCreate( vUserTask, "User", 128, NULL, 1, NULL );
+
+    vTaskStartScheduler();
+
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/include/mpu_wrappers.h</code> MPU 包装器定义。<br>
+  <code>FreeRTOS/Source/include/mpu_prototypes.h</code> MPU 原型定义。<br>
+  <code>FreeRTOS/Source/portable/GCC/ARM_CM4F_MPU/</code> MPU 移植示例。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>

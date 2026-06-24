@@ -10,38 +10,161 @@
 </head>
 <body>
 <button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
-<div class="hero"><h1>FreeRTOS CLI 深度解析</h1><p class="subtitle">交互式命令行 / 命令注册 / Shell 集成</p><span class="version">FreeRTOS-Plus-CLI</span></div>
-<nav class="toc"><ul>
-<li><a href="#overview">CLI 概览</a></li>
-<li><a href="#register">命令注册</a></li>
-<li><a href="#api">CLI API</a></li>
-</ul></nav>
+
+<div class="hero">
+  <h1>FreeRTOS CLI 深度解析</h1>
+  <p class="subtitle">交互式命令行 / 命令注册 / 参数解析 / Shell 集成 / 源码分析</p>
+  <span class="version">FreeRTOS-Plus-CLI</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">CLI 概览</a></li>
+    <li><a href="#register">命令注册</a></li>
+    <li><a href="#process">命令处理</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
 <div class="container">
+
 <section id="overview" class="toc-link">
-<h2><span class="num">01</span> CLI 概览</h2>
-<p>FreeRTOS-Plus-CLI 提供交互式命令行接口，支持命令注册和参数解析。</p>
+  <h2><span class="num">01</span> CLI 概览</h2>
+
+  <p>FreeRTOS-Plus-CLI 提供交互式命令行接口，支持命令注册、参数解析和历史记录。</p>
+
+  <div class="mermaid">graph TD
+    A["串口输入"] --> B["CLI 解析器"]
+    B --> C{"匹配命令?"}
+    C -->|"是"| D["执行命令回调"]
+    C -->|"否"| E["显示帮助"]
+    D --> F["输出结果"]
+    style B fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
 </section>
+
 <section id="register" class="toc-link">
-<h2><span class="num">02</span> 命令注册</h2>
-<pre><code class="language-c">static BaseType_t vCommand(char *pcWriteBuffer,
-    size_t xWriteBufferLen, const char *pcCommandString) {
-    strcpy(pcWriteBuffer, "Hello!\r\n");
+  <h2><span class="num">02</span> 命令注册</h2>
+
+<pre><code class="language-c"><span class="cmt">// 定义命令</span>
+static BaseType_t vCommand( char *pcWriteBuffer,
+                             size_t xWriteBufferLen,
+                             const char *pcCommandString )
+{
+    <span class="cmt">// pcCommandString 包含完整命令行</span>
+    <span class="cmt">// pcWriteBuffer 用于输出结果</span>
+    <span class="cmt">// 返回 pdFALSE 表示输出完成</span>
+
+    strcpy( pcWriteBuffer, "Hello from command!\\r\\n" );
     return pdFALSE;
 }
 
-static const CLI_CommandDefinition_t xCommand = {
-    "hello", "hello: Print greeting\r\n",
-    vCommand, -1
+<span class="cmt">// 注册命令</span>
+static const CLI_CommandDefinition_t xCommand =
+{
+    "hello",                          <span class="cmt">// 命令字符串</span>
+    "hello\\r\\n  Print a greeting\\r\\n", <span class="cmt">// 帮助文本</span>
+    vCommand,                         <span class="cmt">// 回调函数</span>
+    -1                                <span class="cmt">// 参数数量（-1 = 无限制）</span>
 };
-FreeRTOS_CLIRegisterCommand(&amp;xCommand);
+
+<span class="cmt">// 在 main 中注册</span>
+FreeRTOS_CLIRegisterCommand( &amp;xCommand );
 </code></pre>
 </section>
-<section id="api" class="toc-link">
-<h2><span class="num">03</span> CLI API</h2>
-<pre><code class="language-c">BaseType_t FreeRTOS_CLIRegisterCommand(const CLI_CommandDefinition_t *);
-BaseType_t FreeRTOS_CLIProcess(char *pcInput, char *pcOutput, size_t xLen);
+
+<section id="process" class="toc-link">
+  <h2><span class="num">03</span> 命令处理</h2>
+
+<pre><code class="language-c"><span class="cmt">// 初始化 CLI</span>
+FreeRTOS_CLIInit();
+
+<span class="cmt">// 主循环处理输入</span>
+char cInputBuffer[ 50 ];
+char cOutputBuffer[ 200 ];
+
+while ( 1 )
+{
+    <span class="cmt">// 从串口读取一行</span>
+    if( xSerialGetChar( &amp;cInputBuffer[ strlen( cInputBuffer ) ] ) )
+    {
+        <span class="cmt">// 处理命令</span>
+        while( FreeRTOS_CLIProcess( cInputBuffer, cOutputBuffer, 200 ) != pdFALSE )
+        {
+            <span class="cmt">// 输出多行结果</span>
+            printf( "%s", cOutputBuffer );
+        }
+    }
+}
 </code></pre>
 </section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">04</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS CLI 完整示例 =====</span>
+
+#include "FreeRTOS.h"
+#include "FreeRTOS_CLI.h"
+#include &lt;stdio.h&gt;
+
+<span class="cmt">// help 命令</span>
+static BaseType_t vHelpCommand( char *pcWriteBuffer,
+                                 size_t xWriteBufferLen,
+                                 const char *pcCommandString )
+{
+    int i;
+    for( i = 0; i &lt; FreeRTOS_CLICommandRegistered(); i++ )
+    {
+        const CLI_CommandDefinition_t *pxCommand = FreeRTOS_CLIGetCommandDefinition( i );
+        strcat( pcWriteBuffer, pxCommand->pcCommandString );
+        strcat( pcWriteBuffer, "\\r\\n" );
+    }
+    return pdFALSE;
+}
+
+<span class="cmt">// status 命令</span>
+static BaseType_t vStatusCommand( char *pcWriteBuffer,
+                                   size_t xWriteBufferLen,
+                                   const char *pcCommandString )
+{
+    sprintf( pcWriteBuffer, "Tasks: %lu\\r\\nFree heap: %lu\\r\\n",
+             uxTaskGetNumberOfTasks(), xPortGetFreeHeapSize() );
+    return pdFALSE;
+}
+
+int main( void )
+{
+    <span class="cmt">// 注册命令</span>
+    const CLI_CommandDefinition_t xHelpCommand = {
+        "help", "help: List all commands\\r\\n", vHelpCommand, -1
+    };
+    const CLI_CommandDefinition_t xStatusCommand = {
+        "status", "status: Show system status\\r\\n", vStatusCommand, -1
+    };
+
+    FreeRTOS_CLIRegisterCommand( &amp;xHelpCommand );
+    FreeRTOS_CLIRegisterCommand( &amp;xStatusCommand );
+
+    <span class="cmt">// 初始化 CLI</span>
+    FreeRTOS_CLIInit();
+
+    <span class="cmt">// 创建 CLI 任务</span>
+    xTaskCreate( vCLITask, "CLI", 512, NULL, 2, NULL );
+
+    vTaskStartScheduler();
+
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS-Plus/Source/FreeRTOS-Plus-CLI/FreeRTOS_CLI.c</code> CLI 核心实现。<br>
+  <code>FreeRTOS-Plus/Source/FreeRTOS-Plus-CLI/FreeRTOS_CLI.h</code> CLI API 定义。
+</div>
+
 </div>
 <script src="common.js"></script>
 </body>
