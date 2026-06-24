@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 统计子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 统计子系统深度解析</h1>
+  <p class="subtitle">计数器 / 网络统计 / 内存统计 / 自定义统计 / Shell 集成</p>
+  <span class="version">Zephyr 4.x · subsys/stats/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">统计子系统概览</a></li>
+    <li><a href="#counter">计数器统计</a></li>
+    <li><a href="#net-stats">网络统计</a></li>
+    <li><a href="#mem-stats">内存统计</a></li>
+    <li><a href="#custom">自定义统计</a></li>
+    <li><a href="#shell">Shell 集成</a></li>
+    <li><a href="#obj-core">ObjCore 统计</a></li>
+    <li><a href="#api">统计 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 统计子系统概览</h2>
+
+  <p>Zephyr 统计子系统提供运行时数据收集和分析能力。</p>
+
+  <h3>统计类型</h3>
+
+  <table>
+    <tr><th>类型</th><th>说明</th></tr>
+    <tr><td>计数器统计</td><td>简单事件计数</td></tr>
+    <tr><td>网络统计</td><td>收发包计数、错误计数</td></tr>
+    <tr><td>内存统计</td><td>分配/释放/使用率</td></tr>
+    <tr><td>自定义统计</td><td>应用层自定义指标</td></tr>
+  </table>
+</section>
+
+<section id="counter" class="toc-link">
+  <h2><span class="num">02</span> 计数器统计</h2>
+
+<pre><code class="language-c"><span class="cmt">// 计数器统计</span>
+<span class="cmt">#include &lt;zephyr/stats/stats.h&gt;</span>
+
+<span class="cmt">// 定义统计结构</span>
+STATS_SECT_START(my_stats)
+    STATS_SECT_ENTRY(packet_count)
+    STATS_SECT_ENTRY(error_count)
+    STATS_SECT_ENTRY(byte_count)
+STATS_SECT_END;
+
+STATS_SECT_DECL(my_stats) my_stats;
+
+<span class="cmt">// 注册统计</span>
+STATS_INIT(my_stats, packet_count, 0);
+
+<span class="cmt">// 更新计数</span>
+STATS_INC(my_stats, packet_count);
+STATS_ADD(my_stats, byte_count, 1024);
+
+<span class="cmt">// 获取值</span>
+printk("数据包数: %d\n", my_stats.packet_count);
+printk("错误数: %d\n", my_stats.error_count);
+printk("字节数: %d\n", my_stats.byte_count);
+</code></pre>
+</section>
+
+<section id="net-stats" class="toc-link">
+  <h2><span class="num">03</span> 网络统计</h2>
+
+<pre><code class="language-c"><span class="cmt">// 网络接口统计</span>
+struct net_stats stats;
+net_mgmt(NET_REQUEST_STATS_GET, iface, &amp;stats, sizeof(stats));
+
+<span class="cmt">// 统计项</span>
+printk("接收包: %d\n", stats.rx.pkts);
+printk("发送包: %d\n", stats.tx.pkts);
+printk("接收字节: %d\n", stats.rx.bytes);
+printk("发送字节: %d\n", stats.tx.bytes);
+printk("接收错误: %d\n", stats.rx.error);
+printk("发送错误: %d\n", stats.tx.error);
+printk("丢弃包: %d\n", stats.rx.drop);
+</code></pre>
+</section>
+
+<section id="mem-stats" class="toc-link">
+  <h2><span class="num">04</span> 内存统计</h2>
+
+<pre><code class="language-c"><span class="cmt">// 内存统计</span>
+<span class="cmt">// CONFIG_MEM_STATS=y</span>
+
+<span class="cmt">// 堆统计</span>
+struct sys_memory_stats heap_stats;
+k_heap_stats(&amp;my_heap, &amp;heap_stats);
+
+printk("总大小: %d\n", heap_stats.total_bytes);
+printk("已分配: %d\n", heap_stats.allocated_bytes);
+printk("最大分配: %d\n", heap_stats.max_allocated_bytes);
+printk("空闲: %d\n", heap_stats.free_bytes);
+
+<span class="cmt">// Slab 统计</span>
+printk("Slab 块数: %d\n", my_slab.info.num_blocks);
+printk("Slab 已用: %d\n", my_slab.info.num_used);
+printk("Slab 最大: %d\n", my_slab.info.max_used);
+</code></pre>
+</section>
+
+<section id="custom" class="toc-link">
+  <h2><span class="num">05</span> 自定义统计</h2>
+
+<pre><code class="language-c"><span class="cmt">// 自定义统计指标</span>
+STATS_SECT_START(app_stats)
+    STATS_SECT_ENTRY(api_calls)
+    STATS_SECT_ENTRY(api_errors)
+    STATS_SECT_ENTRY(latency_sum)
+    STATS_SECT_ENTRY(latency_max)
+STATS_SECT_END;
+
+<span class="cmt">// 记录延迟</span>
+timing_t start = timing_counter_get();
+do_api_call();
+timing_t end = timing_counter_get();
+uint32_t latency = timing_cycles_to_ns(end - start);
+
+STATS_INC(app_stats, api_calls);
+STATS_ADD(app_stats, latency_sum, latency);
+if (latency > app_stats.latency_max) {
+    app_stats.latency_max = latency;
+}
+</code></pre>
+</section>
+
+<section id="shell" class="toc-link">
+  <h2><span class="num">06</span> Shell 集成</h2>
+
+<pre><code class="language-c"><span class="cmt">// 统计 Shell 命令</span>
+<span class="cmt">// CONFIG_STATS_SHELL=y</span>
+
+<span class="cmt">// Shell 命令：</span>
+<span class="cmt">// stats list           - 列出所有统计模块</span>
+<span class="cmt">// stats print &lt;module&gt; - 打印统计信息</span>
+<span class="cmt">// stats reset &lt;module&gt; - 重置统计</span>
+
+<span class="cmt">// uart:~$ stats list</span>
+<span class="cmt">// my_stats</span>
+<span class="cmt">// net_stats</span>
+
+<span class="cmt">// uart:~$ stats print my_stats</span>
+<span class="cmt">// packet_count: 1024</span>
+<span class="cmt">// error_count: 3</span>
+<span class="cmt">// byte_count: 65536</span>
+</code></pre>
+</section>
+
+<section id="obj-core" class="toc-link">
+  <h2><span class="num">07</span> ObjCore 统计</h2>
+
+<pre><code class="language-c"><span class="cmt">// ObjCore 提供统一的对象统计框架</span>
+<span class="cmt">// CONFIG_OBJ_CORE=y</span>
+
+<span class="cmt">// 支持 ObjCore 的对象类型：</span>
+<span class="cmt">// - Thread（线程）</span>
+<span class="cmt">// - Mutex（互斥锁）</span>
+<span class="cmt">// - Semaphore（信号量）</span>
+<span class="cmt">// - Memory Slab</span>
+<span class="cmt">// - Device（设备）</span>
+
+<span class="cmt">// 查询对象统计</span>
+struct k_thread_runtime_stats stats;
+k_thread_runtime_stats_get(thread, &amp;stats);
+printk("线程运行时间: %d cycles\n", stats.execution_cycles);
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 统计 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 统计宏</span>
+STATS_SECT_START(name)
+STATS_SECT_ENTRY(name)
+STATS_SECT_END
+
+STATS_INIT(name, field, flags)
+STATS_INC(name, field)
+STATS_ADD(name, field, value)
+STATS_DEC(name, field)
+
+<span class="cmt">// 网络统计</span>
+int net_mgmt(NET_REQUEST_STATS_GET, struct net_if *iface, void *data, size_t len);
+
+<span class="cmt">// 内存统计</span>
+int k_heap_stats(struct k_heap *heap, struct sys_memory_stats *stats);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/stats/stats.c</code> 统计子系统核心。<br>
+  <code>subsys/stats/stats_shell.c</code> Shell 命令集成。<br>
+  <code>include/zephyr/stats/stats.h</code> 统计 API 定义。<br>
+  <code>subsys/net/ip/net_stats.c</code> 网络统计实现。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

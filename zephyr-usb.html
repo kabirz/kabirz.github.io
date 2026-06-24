@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr USB 子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr USB 子系统深度解析</h1>
+  <p class="subtitle">USB Device / USB Host / CDC-ACM / MSC / DFU / USB-C</p>
+  <span class="version">Zephyr 4.x · subsys/usb/ · drivers/usb/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">USB 子系统概览</a></li>
+    <li><a href="#device">USB Device 协议栈</a></li>
+    <li><a href="#classes">USB 类驱动</a></li>
+    <li><a href="#host">USB Host</a></li>
+    <li><a href="#usb-c">USB-C</a></li>
+    <li><a href="#udc">UDC 驱动</a></li>
+    <li><a href="#transfer">传输管理</a></li>
+    <li><a href="#api">USB API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> USB 子系统概览</h2>
+
+  <p>Zephyr 提供完整的 USB 协议栈，支持 USB Device 和 USB Host 模式。</p>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>USB Device API · USB Host API</small>"]
+    L1["USB 类驱动<br><small>CDC-ACM · MSC · DFU · HID · Audio · Video</small>"]
+    L0 --> L1
+    L2["USB 核心层<br><small>usb_device.c · usb_transfer.c · descriptor.c</small>"]
+    L1 --> L2
+    L3["UDC/UHC 驱动层<br><small>usb_dc_nrfx · usb_dc_stm32 · usb_dc_mcux</small>"]
+    L2 --> L3
+    L4["硬件<br><small>USB 2.0 FS/HS 控制器</small>"]
+    L3 --> L4
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+
+  <h3>支持的 USB 功能</h3>
+
+  <table>
+    <tr><th>功能</th><th>说明</th></tr>
+    <tr><td>CDC-ACM</td><td>虚拟串口（最常用）</td></tr>
+    <tr><td>MSC</td><td>大容量存储（U 盘）</td></tr>
+    <tr><td>HID</td><td>人机接口设备（键盘、鼠标）</td></tr>
+    <tr><td>DFU</td><td>设备固件升级</td></tr>
+    <tr><td>Audio</td><td>USB 音频</td></tr>
+    <tr><td>Video</td><td>USB 视频（UVC）</td></tr>
+    <tr><td>USB-C</td><td>USB Type-C 和 PD</td></tr>
+  </table>
+</section>
+
+<section id="device" class="toc-link">
+  <h2><span class="num">02</span> USB Device 协议栈</h2>
+
+<pre><code class="language-c"><span class="cmt">// USB Device 初始化</span>
+#include &lt;zephyr/usb/usb_device.h&gt;
+
+<span class="cmt">// 启动 USB 设备</span>
+int ret = usb_enable(NULL);
+if (ret) {
+    printk("USB 启用失败: %d\n", ret);
+}
+
+<span class="cmt">// USB 描述符</span>
+<span class="cmt">// 通过设备树或代码定义</span>
+
+<span class="cmt">// CDC-ACM 虚拟串口</span>
+<span class="cmt">// CONFIG_USB_DEVICE_STACK=y</span>
+<span class="cmt">// CONFIG_USBD_CDC_ACM_CLASS=y</span>
+
+<span class="cmt">// 获取 CDC-ACM 设备</span>
+const struct device *cdc_dev = DEVICE_DT_GET(DT_NODELABEL(zephyr_cdc_acm_uart));
+</code></pre>
+</section>
+
+<section id="classes" class="toc-link">
+  <h2><span class="num">03</span> USB 类驱动</h2>
+
+  <h3>CDC-ACM（虚拟串口）</h3>
+
+<pre><code class="language-c"><span class="cmt">// CDC-ACM 使用</span>
+const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(zephyr_cdc_acm_uart));
+
+<span class="cmt">// 配置波特率</span>
+struct uart_config cfg = { .baudrate = 115200 };
+uart_configure(uart_dev, &amp;cfg);
+
+<span class="cmt">// 发送数据</span>
+uart_tx(uart_dev, "Hello USB\n", 10, K_FOREVER);
+
+<span class="cmt">// 接收数据</span>
+uint8_t rx_buf[64];
+uart_rx_enable(uart_dev, rx_buf, sizeof(rx_buf), K_FOREVER);
+</code></pre>
+
+  <h3>MSC（大容量存储）</h3>
+
+<pre><code class="language-c"><span class="cmt">// USB MSC - U 盘功能</span>
+<span class="cmt">// CONFIG_USBD_MSC_CLASS=y</span>
+<span class="cmt">// CONFIG_DISK_ACCESS=y</span>
+
+<span class="cmt">// 将 Flash 暴露为 USB 存储</span>
+<span class="cmt">// 1. 配置 Flash 磁盘访问</span>
+<span class="cmt">// 2. 注册 MSC 类</span>
+<span class="cmt">// 3. 主机可读写 Flash 数据</span>
+</code></pre>
+
+  <h3>HID（人机接口）</h3>
+
+<pre><code class="language-c"><span class="cmt">// USB HID - 键盘/鼠标</span>
+<span class="cmt">// CONFIG_USBD_HID_CLASS=y</span>
+
+<span class="cmt">// 发送 HID 报告</span>
+uint8_t report[] = {0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00}; <span class="cmt">// 'a' 键</span>
+usbd_send_hid_report(cdc_dev, report, sizeof(report));
+</code></pre>
+</section>
+
+<section id="host" class="toc-link">
+  <h2><span class="num">04</span> USB Host</h2>
+
+<pre><code class="language-c"><span class="cmt">// USB Host 协议栈</span>
+<span class="cmt">// CONFIG_USB_HOST_STACK=y</span>
+
+<span class="cmt">// UHC (USB Host Controller) 驱动</span>
+<span class="cmt">// drivers/usb/uhc/</span>
+
+<span class="cmt">// USB Host 功能：</span>
+<span class="cmt">// - 枚举 USB 设备</span>
+<span class="cmt">// - 加载类驱动</span>
+<span class="cmt">// - 数据传输</span>
+<span class="cmt">// - 设备管理</span>
+
+<span class="cmt">// 支持的 Host 功能</span>
+<span class="cmt">// - HID Host（键盘、鼠标）</span>
+<span class="cmt">// - MSC Host（U 盘读写）</span>
+<span class="cmt">// - CDC-ACM Host（虚拟串口）</span>
+</code></pre>
+</section>
+
+<section id="usb-c" class="toc-link">
+  <h2><span class="num">05</span> USB-C</h2>
+
+<pre><code class="language-c"><span class="cmt">// USB Type-C 和 Power Delivery</span>
+<span class="cmt">// CONFIG_USB_C=y</span>
+<span class="cmt">// CONFIG_USBC_PDO=y</span>
+
+<span class="cmt">// USB-C 功能：</span>
+<span class="cmt">// - Type-C 接口检测</span>
+<span class="cmt">// - 电源协商（PD）</span>
+<span class="cmt">// - 替代模式（Alt Mode）</span>
+<span class="cmt">// - VBUS 管理</span>
+
+<span class="cmt">// USB-C PD 通信</span>
+<span class="cmt">// subsys/usb/usb_c/</span>
+</code></pre>
+</section>
+
+<section id="udc" class="toc-link">
+  <h2><span class="num">06</span> UDC 驱动</h2>
+
+  <p>UDC（USB Device Controller）是 USB Device 的硬件抽象层。</p>
+
+  <table>
+    <tr><th>驱动</th><th>SoC</th><th>说明</th></tr>
+    <tr><td>usb_dc_nrfx</td><td>nRF52/53/91</td><td>Nordic USB 控制器</td></tr>
+    <tr><td>usb_dc_stm32</td><td>STM32</td><td>ST USB OTG</td></tr>
+    <tr><td>usb_dc_mcux</td><td>NXP i.MX RT</td><td>NXP USB 控制器</td></tr>
+    <tr><td>usb_dc_entopic</td><td>Entopic</td><td>虚拟 USB</td></tr>
+  </table>
+</section>
+
+<section id="transfer" class="toc-link">
+  <h2><span class="num">07</span> 传输管理</h2>
+
+<pre><code class="language-c"><span class="cmt">// USB 传输类型</span>
+<span class="cmt">// 1. 控制传输 - 设备枚举、配置</span>
+<span class="cmt">// 2. 批量传输 - 大量数据（MSC）</span>
+<span class="cmt">// 3. 中断传输 - 低延迟（HID）</span>
+<span class="cmt">// 4. 同步传输 - 等时数据（Audio/Video）</span>
+
+<span class="cmt">// 传输回调</span>
+static void transfer_cb(struct usbd_transfer *transfer, int err)
+{
+    if (err) {
+        printk("传输失败: %d\n", err);
+        return;
+    }
+    <span class="cmt">// 处理传输完成</span>
+}
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> USB API</h2>
+
+<pre><code class="language-c"><span class="cmt">// USB Device</span>
+int usb_enable(const struct usb_cfg_data *cfg);
+int usb_disable(void);
+
+<span class="cmt">// UDC</span>
+int udc_enable(const struct device *dev);
+int udc_disable(const struct device *dev);
+
+<span class="cmt">// USB 描述符</span>
+int usb_get_desc(struct usb_setup_packet *setup, uint8_t **desc, uint16_t *len);
+
+<span class="cmt">// 传输</span>
+int usbd_transfer(const struct device *dev, struct usbd_transfer *transfer);
+
+<span class="cmt">// USB-C</span>
+int usb_c_enable(const struct device *dev);
+int usb_c_disable(const struct device *dev);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/usb/device/usb_device.c</code> USB Device 核心。<br>
+  <code>subsys/usb/device/class/</code> USB 类驱动（CDC-ACM、MSC、HID）。<br>
+  <code>drivers/usb/udc/</code> UDC 硬件驱动。<br>
+  <code>subsys/usb/usb_c/</code> USB-C 和 PD 实现。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

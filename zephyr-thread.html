@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 线程模型深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 线程模型深度解析</h1>
+  <p class="subtitle">k_thread 结构 / 线程创建 / 协作式与抢占式 / 用户态线程 / 线程栈</p>
+  <span class="version">Zephyr 4.x · thread.c · kthread.h · userspace/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#struct">k_thread 结构体</a></li>
+    <li><a href="#create">线程创建</a></li>
+    <li><a href="#coop-preempt">协作式 vs 抢占式</a></li>
+    <li><a href="#stack">线程栈</a></li>
+    <li><a href="#lifecycle">生命周期管理</a></li>
+    <li><a href="#userspace">用户态线程</a></li>
+    <li><a href="#static">静态线程</a></li>
+    <li><a href="#api">线程 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="struct" class="toc-link">
+  <h2><span class="num">01</span> k_thread 结构体</h2>
+
+  <p><code>struct k_thread</code> 是 Zephyr 内核中最重要的数据结构之一，代表一个内核线程的所有状态信息。</p>
+
+  <h3>核心字段</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/zephyr/kernel_structs.h</span>
+struct k_thread {
+    <span class="cmt">// 架构相关上下文（必须在偏移量 0）</span>
+    struct _thread_arch arch;
+
+    <span class="cmt">// 内核管理字段</span>
+    struct {
+        <span class="cmt">// 线程状态位图</span>
+        uint8_t thread_state;
+
+        <span class="cmt">// 优先级（数值越小优先级越高）</span>
+        int8_t prio;
+
+        <span class="cmt">// 调度锁计数（0=解锁，负数=锁定）</span>
+        int8_t sched_locked;
+
+        <span class="cmt">// 线程选项（_THREAD_* 标志位）</span>
+        uint8_t options;
+
+<span class="cmt">#ifdef CONFIG_THREAD_NAME</span>
+        <span class="cmt">// 线程名（调试用）</span>
+        char name[CONFIG_THREAD_MAX_NAME_LEN];
+<span class="cmt">#endif</span>
+
+        <span class="cmt">// 线程栈指针</span>
+        void *stack_ptr;
+
+        <span class="cmt">// 线程栈大小</span>
+        uint32_t stack_size;
+
+        <span class="cmt">// 用户态线程的栈边界</span>
+        k_thread_stack_t *stack_obj;
+
+        <span class="cmt">// 超时节点（用于 sleep/timeout）</span>
+        struct _timeout timeout;
+
+        <span class="cmt">// 就绪队列节点</span>
+        struct _priq_rb *priq;
+
+        <span class="cmt">// 红黑树节点</span>
+        struct rbnode qnode_rb;
+
+        <span class="cmt">// 时间片计数</span>
+        uint32_t slice_count;
+
+        <span class="cmt">// 时间片到期标志</span>
+        bool slice_expired;
+
+<span class="cmt">#ifdef CONFIG_SMP</span>
+        <span class="cmt">// CPU 亲和性掩码</span>
+        uint32_t cpu_mask;
+<span class="cmt">#endif</span>
+
+<span class="cmt">#ifdef CONFIG_USERSPACE</span>
+        <span class="cmt">// 线程权限</span>
+        uint32_t permissions;
+<span class="cmt">#endif</span>
+    } base;
+
+    <span class="cmt">// 等待队列链表（用于 poll 事件）</span>
+    sys_dlist_t poll_events;
+
+    <span class="cmt">// 对象核心（可选，用于 ObjCore 统计）</span>
+<span class="cmt">#ifdef CONFIG_OBJ_CORE_THREAD</span>
+    struct k_obj_core obj_core;
+<span class="cmt">#endif</span>
+};
+</code></pre>
+
+  <h3>线程状态位图</h3>
+
+  <table>
+    <tr><th>位</th><th>宏</th><th>含义</th></tr>
+    <tr><td>bit 0</td><td><code>_THREAD_PENDING</code></td><td>线程在等待队列中</td></tr>
+    <tr><td>bit 1</td><td><code>_THREAD_PRESTART</code></td><td>线程已创建但未启动</td></tr>
+    <tr><td>bit 2</td><td><code>_THREAD_SUSPENDED</code></td><td>线程被挂起</td></tr>
+    <tr><td>bit 3</td><td><code>_THREAD_ABORTING</code></td><td>线程正在被中止</td></tr>
+    <tr><td>bit 4</td><td><code>_THREAD_DEAD</code></td><td>线程已终止</td></tr>
+    <tr><td>bit 5</td><td><code>_THREAD_QUEUED</code></td><td>线程在就绪队列中</td></tr>
+  </table>
+</section>
+
+<section id="create" class="toc-link">
+  <h2><span class="num">02</span> 线程创建</h2>
+
+  <p>Zephyr 支持<strong>动态创建</strong>和<strong>静态定义</strong>两种线程创建方式。</p>
+
+  <h3>动态创建</h3>
+
+<pre><code class="language-c"><span class="cmt">// 动态创建线程</span>
+K_THREAD_DEFINE(thread_id,        <span class="cmt">// 线程 ID（宏生成的变量名）</span>
+                STACK_SIZE,       <span class="cmt">// 栈大小</span>
+                thread_entry,     <span class="cmt">// 入口函数</span>
+                p1, p2, p3,       <span class="cmt">// 入口参数</span>
+                PRIORITY,         <span class="cmt">// 优先级</span>
+                OPTIONS,          <span class="cmt">// 选项（K_USER | K_ESSENTIAL）</span>
+                START_DELAY);     <span class="cmt">// 启动延迟</span>
+
+<span class="cmt">// 或者使用 API 动态创建</span>
+struct k_thread my_thread;
+K_THREAD_STACK_DEFINE(my_stack, STACK_SIZE);
+
+k_tid_t tid = k_thread_create(
+    &my_thread,              <span class="cmt">// 线程结构体</span>
+    my_stack,                <span class="cmt">// 栈内存</span>
+    STACK_SIZE,              <span class="cmt">// 栈大小</span>
+    thread_entry,            <span class="cmt">// 入口函数</span>
+    p1, p2, p3,              <span class="cmt">// 参数</span>
+    PRIORITY,                <span class="cmt">// 优先级</span>
+    OPTIONS,                 <span class="cmt">// 选项</span>
+    K_NO_WAIT                <span class="cmt">// 超时（立即创建）</span>
+);
+</code></pre>
+
+  <h3>线程创建内部流程</h3>
+
+<pre><code class="language-c"><span class="cmt">// kernel/thread.c - k_thread_create 核心实现</span>
+k_tid_t z_impl_k_thread_create(struct k_thread *new_thread,
+                               k_thread_stack_t *stack,
+                               size_t stack_size,
+                               k_thread_entry_t entry,
+                               void *p1, void *p2, void *p3,
+                               int prio, uint32_t options,
+                               k_timeout_t start_delay)
+{
+    <span class="cmt">// 1. 参数验证</span>
+    CHECKIF(new_thread == NULL || stack == NULL || entry == NULL) {
+        return NULL;
+    }
+
+    <span class="cmt">// 2. 初始化线程结构体</span>
+    (void)memset(new_thread, 0, sizeof(*new_thread));
+
+    <span class="cmt">// 3. 设置栈</span>
+    new_thread->base.stack_ptr = stack;
+    new_thread->base.stack_size = stack_size;
+    new_thread->base.stack_obj = stack;
+
+    <span class="cmt">// 4. 设置优先级和选项</span>
+    new_thread->base.prio = prio;
+    new_thread->base.options = options;
+
+    <span class="cmt">// 5. 初始化架构上下文</span>
+    z_new_thread(new_thread, stack, stack_size, entry, p1, p2, p3, prio, options);
+
+    <span class="cmt">// 6. 初始化等待队列</span>
+    z_waitq_init(&new_thread->base.wait_q);
+
+    <span class="cmt">// 7. 设置超时（延迟启动）</span>
+    z_init_timeout(&new_thread->base.timeout);
+    if (!K_TIMEOUT_EQ(start_delay, K_NO_WAIT)) {
+        z_add_timeout(&new_thread->base.timeout, z_thread_timeout, start_delay);
+    } else {
+        <span class="cmt">// 立即加入就绪队列</span>
+        z_ready_thread(new_thread);
+    }
+
+    return new_thread;
+}
+</code></pre>
+</section>
+
+<section id="coop-preempt" class="toc-link">
+  <h2><span class="num">03</span> 协作式 vs 抢占式</h2>
+
+  <p>Zephyr 支持两种线程调度模式，通过优先级和选项控制。</p>
+
+  <h3>协作线程</h3>
+
+<pre><code class="language-c"><span class="cmt">// 协作线程：优先级为负数，不会被同/低优先级线程抢占</span>
+K_THREAD_DEFINE(coop_thread, 1024,
+                coop_entry, NULL, NULL, NULL,
+                -1,             <span class="cmt">// 负优先级 → 协作式</span>
+                0, K_NO_WAIT);
+
+void coop_entry(void *p1, void *p2, void *p3)
+{
+    while (1) {
+        <span class="cmt">// 处理任务...</span>
+
+        <span class="cmt">// 主动让出 CPU</span>
+        k_yield();
+
+        <span class="cmt">// 或者休眠一段时间</span>
+        k_msleep(10);
+    }
+}
+</code></pre>
+
+  <h3>抢占线程</h3>
+
+<pre><code class="language-c"><span class="cmt">// 抢占线程：优先级为非负数，可被更高优先级线程抢占</span>
+K_THREAD_DEFINE(preempt_thread, 1024,
+                preempt_entry, NULL, NULL, NULL,
+                5,              <span class="cmt">// 非负优先级 → 抢占式</span>
+                0, K_NO_WAIT);
+
+void preempt_entry(void *p1, void *p2, void *p3)
+{
+    <span class="cmt">// 高优先级线程可以随时抢占此线程</span>
+    while (1) {
+        <span class="cmt">// 处理任务（不主动让出）</span>
+        process_data();
+    }
+}
+</code></pre>
+
+  <h3>对比</h3>
+
+  <table>
+    <tr><th>特性</th><th>协作线程</th><th>抢占线程</th></tr>
+    <tr><td>优先级范围</td><td><code>-N ~ -1</code></td><td><code>0 ~ N-1</code></td></tr>
+    <tr><td>可被抢占</td><td>仅被更高优先级抢占</td><td>可被更高优先级抢占</td></tr>
+    <tr><td>CPU 使用</td><td>直到主动让出</td><td>被时间片或抢占中断</td></tr>
+    <tr><td>适用场景</td><td>关键实时任务</td><td>一般应用逻辑</td></tr>
+    <tr><td>响应延迟</td><td>取决于协作点</td><td>取决于优先级</td></tr>
+  </table>
+</section>
+
+<section id="stack" class="toc-link">
+  <h2><span class="num">04</span> 线程栈</h2>
+
+  <p>每个线程需要独立的栈空间，用于函数调用、局部变量和中断上下文。</p>
+
+  <h3>栈定义方式</h3>
+
+<pre><code class="language-c"><span class="cmt">// 方式 1：静态定义栈（编译时分配）</span>
+K_THREAD_STACK_DEFINE(my_stack, 1024);
+
+<span class="cmt">// 方式 2：栈数组（用于动态线程）</span>
+K_THREAD_STACK_ARRAY_DEFINE(stack_array, NUM_THREADS, STACK_SIZE);
+
+<span class="cmt">// 方式 3：动态分配（运行时分配）</span>
+<span class="cmt">// 注意：需要 ARCH_STACK_PTR_ALIGN 对齐</span>
+void *stack = k_thread_stack_alloc(STACK_SIZE, K_NO_WAIT);
+</code></pre>
+
+  <h3>栈内存布局</h3>
+
+  <div class="mermaid">
+graph BT
+    BOT["📌 低地址 ← 栈底<br><small>stack + stack_size</small>"] --> SEC["🟧 保留区域<br><small>溢出检测标记</small>"]
+    SEC --> CAN["🟨 栈金丝雀<br><small>CONFIG_STACK_CANARIES</small>"]
+    CAN --> DOT["⬜ ..."]
+    DOT --> FN["🟦 函数调用栈帧<br><small>局部变量、返回地址</small>"]
+    FN --> ISR["🟪 保留区域<br><small>中断/异常帧</small>"]
+    ISR --> TOP["📌 高地址 ← 栈顶<br><small>stack_ptr</small>"]
+
+    style BOT fill:#f0f0f0,stroke:#999,color:#333
+    style TOP fill:#f0f0f0,stroke:#999,color:#333
+    style SEC fill:#fff7ed,stroke:#f97316,color:#9a3412
+    style CAN fill:#fefce8,stroke:#eab308,color:#854d0e
+    style DOT fill:#f9fafb,stroke:#d1d5db,color:#6b7280
+    style FN fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style ISR fill:#f3e8ff,stroke:#a855f7,color:#6b21a8
+  </div>
+
+  <h3>栈溢出检测</h3>
+
+<pre><code class="language-c"><span class="cmt">// 栈金丝雀（CONFIG_STACK_CANARIES）</span>
+<span class="cmt">// 在栈底写入魔数，定期检查是否被覆盖</span>
+
+<span class="cmt">// MPU 栈保护（CONFIG_THREAD_STACK_INFO）</span>
+<span class="cmt">// 使用 MPU 硬件检测栈溢出</span>
+
+<span class="cmt">// 栈使用统计</span>
+<span class="cmt">// CONFIG_THREAD_STACK_STATS 启用栈使用率统计</span>
+struct k_thread_stack_info {
+    size_t size;       <span class="cmt">// 栈总大小</span>
+    size_t used;       <span class="cmt">// 已使用大小</span>
+};
+</code></pre>
+</section>
+
+<section id="lifecycle" class="toc-link">
+  <h2><span class="num">05</span> 生命周期管理</h2>
+
+  <h3>线程状态转换</h3>
+
+<pre><code class="language-c"><span class="cmt">// 线程启动</span>
+int k_thread_start(k_tid_t thread)
+{
+    <span class="cmt">// 将线程从 PRESTART 状态转为 READY</span>
+    z_ready_thread(thread);
+    z_reschedule_unlocked();
+    return 0;
+}
+
+<span class="cmt">// 线程中止</span>
+int k_thread_abort(k_tid_t thread)
+{
+    k_spinlock_key_t key = k_spin_lock(&_sched_spinlock);
+
+    <span class="cmt">// 标记线程为 ABORTING</span>
+    thread->base.thread_state |= _THREAD_ABORTING;
+
+    <span class="cmt">// 如果线程在等待队列中，移除</span>
+    if (z_is_thread_pending(thread)) {
+        z_unready_thread(thread);
+    }
+
+    <span class="cmt">// 触发线程清理</span>
+    z_thread_abort(thread);
+
+    k_spin_unlock(&_sched_spinlock, key);
+    return 0;
+}
+
+<span class="cmt">// 线程挂起</span>
+int k_thread_suspend(k_tid_t thread)
+{
+    <span class="cmt">// 标记为 SUSPENDED，从就绪队列移除</span>
+    z_suspend_thread(thread);
+    z_reschedule_unlocked();
+    return 0;
+}
+
+<span class="cmt">// 线程恢复</span>
+int k_thread_resume(k_tid_t thread)
+{
+    <span class="cmt">// 清除 SUSPENDED 标志，重新加入就绪队列</span>
+    z_ready_thread(thread);
+    z_reschedule_unlocked();
+    return 0;
+}
+</code></pre>
+</section>
+
+<section id="userspace" class="toc-link">
+  <h2><span class="num">06</span> 用户态线程</h2>
+
+  <p>Zephyr 支持用户态/内核态隔离，用户态线程通过系统调用访问内核服务。</p>
+
+<pre><code class="language-c"><span class="cmt">// 启用用户态（CONFIG_USERSPACE + CONFIG_STACKProtection）</span>
+<span class="cmt">// 用户态线程使用 K_USER 选项创建</span>
+
+<span class="cmt">// 内核侧定义</span>
+K_THREAD_DEFINE(user_thread, STACK_SIZE,
+                user_entry, NULL, NULL, NULL,
+                K_PRIO_PREEMPT(5),
+                K_USER,         <span class="cmt">// 用户态标志</span>
+                K_NO_WAIT);
+
+<span class="cmt">// 用户态线程限制：</span>
+<span class="cmt">// 1. 不能直接访问内核数据结构</span>
+<span class="cmt">// 2. 通过系统调用访问内核 API</span>
+<span class="cmt">// 3. 受 MPU/MMU 保护</span>
+<span class="cmt">// 4. 栈空间独立且受保护</span>
+</code></pre>
+
+  <h3>系统调用机制</h3>
+
+<div class="mermaid">
+sequenceDiagram
+    participant U as 用户态线程
+    participant S as syscall 桩代码
+    participant K as 内核
+    U->>S: k_mutex_lock()
+    S->>S: 权限检查 + 参数验证
+    S->>K: SVC 中断（模式切换）
+    K->>K: z_impl_k_mutex_lock()
+    K-->>U: 返回结果
+</div>
+</section>
+
+<section id="static" class="toc-link">
+  <h2><span class="num">07</span> 静态线程</h2>
+
+  <p>静态线程在编译时定义，不需要运行时创建开销，适合嵌入式系统。</p>
+
+<pre><code class="language-c"><span class="cmt">// 静态线程定义（最常用方式）</span>
+<span class="cmt">// K_THREAD_DEFINE 宏同时定义线程结构体和栈</span>
+
+<span class="cmt">// 定义线程</span>
+#define STACK_SIZE 1024
+#define THREAD_PRIO K_PRIO_PREEMPT(5)
+
+K_THREAD_DEFINE(sensor_tid, STACK_SIZE,
+                sensor_thread,      <span class="cmt">// 入口函数</span>
+                NULL, NULL, NULL,   <span class="cmt">// 参数</span>
+                THREAD_PRIO,        <span class="cmt">// 优先级</span>
+                0,                  <span class="cmt">// 选项</span>
+                K_NO_WAIT);         <span class="cmt">// 延迟</span>
+
+<span class="cmt">// 实际展开为：</span>
+<span class="cmt">// static struct k_thread __k_thread sensor_tid;</span>
+<span class="cmt">// static K_THREAD_STACK_DEFINE(__k_stack sensor_tid, STACK_SIZE);</span>
+<span class="cmt">// __attribute__((constructor)) static void ___init(void) {</span>
+<span class="cmt">//     k_thread_create(&sensor_tid, __k_stack, STACK_SIZE, ...);</span>
+<span class="cmt">// }</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 线程 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 线程创建与管理</span>
+k_tid_t k_thread_create(struct k_thread *new_thread,
+                        k_thread_stack_t *stack,
+                        size_t stack_size,
+                        k_thread_entry_t entry,
+                        void *p1, void *p2, void *p3,
+                        int prio, uint32_t options,
+                        k_timeout_t start_delay);
+
+<span class="cmt">// 线程生命周期</span>
+int k_thread_start(k_tid_t thread);
+int k_thread_abort(k_tid_t thread);
+int k_thread_suspend(k_tid_t thread);
+int k_thread_resume(k_tid_t thread);
+
+<span class="cmt">// 优先级管理</span>
+int k_thread_priority_get(k_tid_t thread);
+void k_thread_priority_set(k_tid_t thread, int prio);
+
+<span class="cmt">// 栈管理</span>
+void *k_thread_stack_alloc(size_t size, k_timeout_t timeout);
+int k_thread_stack_free(void *stack);
+
+<span class="cmt">// 线程信息查询</span>
+const char *k_thread_name_get(k_tid_t thread);
+int k_thread_name_set(k_tid_t thread, const char *name);
+bool k_thread_is_aborted(k_tid_t thread);
+bool k_thread_is_suspended(k_tid_t thread);
+
+<span class="cmt">// 当前线程</span>
+k_tid_t k_sched_current_thread_query(void);
+bool k_is_in_isr(void);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>kernel/thread.c</code> 线程创建和生命周期管理核心实现。<br>
+  <code>kernel/include/kthread.h</code> 线程内部数据结构定义。<br>
+  <code>include/zephyr/kernel_structs.h</code> k_thread 结构体定义。<br>
+  <code>kernel/userspace/</code> 用户态系统调用实现。<br>
+  <code>arch/arm/core/aarch32/thread.c</code> ARM Cortex-M 线程上下文初始化示例。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

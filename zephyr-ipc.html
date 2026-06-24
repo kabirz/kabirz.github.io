@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 进程间通信深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 进程间通信深度解析</h1>
+  <p class="subtitle">FIFO / LIFO / 消息队列 / 邮箱 / 管道 / Poll / zbus</p>
+  <span class="version">Zephyr 4.x · queue.c · msg_q.c · mailbox.c · pipe.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">IPC 概览</a></li>
+    <li><a href="#fifo-lifo">FIFO / LIFO 队列</a></li>
+    <li><a href="#msgq">消息队列 (k_msgq)</a></li>
+    <li><a href="#mbox">邮箱 (k_mbox)</a></li>
+    <li><a href="#pipe">管道 (k_pipe)</a></li>
+    <li><a href="#poll">Poll 事件多路复用</a></li>
+    <li><a href="#zbus">zbus 消息总线</a></li>
+    <li><a href="#compare">选型对比</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> IPC 概览</h2>
+
+  <p>Zephyr 提供多种线程间通信机制，从轻量级队列到发布-订阅总线。</p>
+
+  <table>
+    <tr><th>机制</th><th>核心文件</th><th>数据类型</th><th>特点</th></tr>
+    <tr><td>k_fifo</td><td><code>queue.c</code></td><td>指针</td><td>FIFO，ISR 可用</td></tr>
+    <tr><td>k_lifo</td><td><code>queue.c</code></td><td>指针</td><td>LIFO，ISR 可用</td></tr>
+    <tr><td>k_msgq</td><td><code>msg_q.c</code></td><td>固定大小消息</td><td>拷贝语义，类型安全</td></tr>
+    <tr><td>k_mbox</td><td><code>mailbox.c</code></td><td>任意大小</td><td>异步，支持超时</td></tr>
+    <tr><td>k_pipe</td><td><code>pipe.c</code></td><td>字节流</td><td>类似 Unix 管道</td></tr>
+    <tr><td>k_poll</td><td><code>poll.c</code></td><td>事件</td><td>多路复用等待</td></tr>
+    <tr><td>zbus</td><td><code>subsys/zbus/</code></td><td>通道消息</td><td>发布-订阅模式</td></tr>
+  </table>
+</section>
+
+<section id="fifo-lifo" class="toc-link">
+  <h2><span class="num">02</span> FIFO / LIFO 队列</h2>
+
+  <p>FIFO 和 LIFO 是最简单的 IPC 机制，传递数据<strong>指针</strong>而非数据本身。</p>
+
+  <h3>数据结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// FIFO 本质是双向链表</span>
+<span class="cmt">// include/zephyr/kernel.h</span>
+struct k_fifo {
+    struct k_wait_q wait_q;    <span class="cmt">// 等待队列（消费者等待）</span>
+    struct _dlist list;        <span class="cmt">// 数据链表</span>
+};
+</code></pre>
+
+  <h3>使用示例</h3>
+
+<pre><code class="language-c"><span class="cmt">// 定义 FIFO</span>
+K_FIFO_DEFINE(my_fifo);
+
+<span class="cmt">// 数据结构（必须包含 sys_dnode_t 节点）</span>
+struct data_item {
+    sys_dnode_t node;          <span class="cmt">// 链表节点</span>
+    uint32_t value;
+    char payload[32];
+};
+
+<span class="cmt">// 生产者（线程或 ISR）</span>
+void producer(void)
+{
+    struct data_item *item = k_malloc(sizeof(*item));
+    item->value = 42;
+
+    k_fifo_put(&my_fifo, item);  <span class="cmt">// 放入 FIFO</span>
+    <span class="cmt">// ISR 中也可调用 k_fifo_put()</span>
+}
+
+<span class="cmt">// 消费者</span>
+void consumer(void)
+{
+    struct data_item *item = k_fifo_get(&my_fifo, K_FOREVER);
+    <span class="cmt">// 处理 item...</span>
+    k_free(item);
+}
+</code></pre>
+
+  <h3>ISR 安全性</h3>
+
+<pre><code class="language-c"><span class="cmt">// FIFO/LIFO 是 ISR 安全的：</span>
+<span class="cmt">// k_fifo_put() / k_lifo_put() 可在 ISR 中调用</span>
+<span class="cmt">// 如果有线程在等待，ISR 会唤醒它</span>
+
+<span class="cmt">// ISR 中使用</span>
+void my_isr(void *arg, void *arg2)
+{
+    struct data_item *item = ...;
+    k_fifo_put(&my_fifo, item);
+    <span class="cmt">// ISR 返回后，被唤醒的线程继续执行</span>
+}
+</code></pre>
+</section>
+
+<section id="msgq" class="toc-link">
+  <h2><span class="num">03</span> 消息队列 (k_msgq)</h2>
+
+  <p>消息队列传递<strong>固定大小的消息</strong>，使用拷贝语义，无需动态内存分配。</p>
+
+  <h3>数据结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/zephyr/kernel.h</span>
+struct k_msgq {
+    struct k_wait_q wait_q;    <span class="cmt">// 等待队列</span>
+    char *buffer;              <span class="cmt">// 消息缓冲区</span>
+    size_t msg_size;           <span class="cmt">// 每条消息大小</span>
+    uint32_t max_msgs;         <span class="cmt">// 最大消息数</span>
+    uint32_t head;             <span class="cmt">// 写入位置</span>
+    uint32_t tail;             <span class="cmt">// 读取位置</span>
+    uint32_t used_msgs;        <span class="cmt">// 当前消息数</span>
+};
+</code></pre>
+
+  <h3>使用示例</h3>
+
+<pre><code class="language-c"><span class="cmt">// 定义消息队列（16 条消息，每条 64 字节）</span>
+K_MSGQ_DEFINE(my_msgq, 64, 16, 4);
+
+<span class="cmt">// 发送消息</span>
+struct sensor_data {
+    uint32_t timestamp;
+    int32_t temperature;
+};
+
+struct sensor_data data = { .timestamp = 1000, .temperature = 25 };
+k_msgq_put(&my_msgq, &data, K_FOREVER);
+
+<span class="cmt">// 接收消息</span>
+struct sensor_data rx_data;
+k_msgq_get(&my_msgq, &rx_data, K_FOREVER);
+
+<span class="cmt">// 非阻塞收发</span>
+int ret = k_msgq_put(&my_msgq, &data, K_NO_WAIT);
+if (ret == -EAGAIN) {
+    <span class="cmt">// 队列满</span>
+}
+
+ret = k_msgq_get(&my_msgq, &rx_data, K_NO_WAIT);
+if (ret == -EAGAIN) {
+    <span class="cmt">// 队列空</span>
+}
+</code></pre>
+
+  <h3>实现原理</h3>
+
+<pre><code class="language-c"><span class="cmt">// kernel/msg_q.c</span>
+
+int z_impl_k_msgq_put(struct k_msgq *msgq, const void *data, k_timeout_t timeout)
+{
+    k_spinlock_key_t key = k_spin_lock(&lock);
+
+    <span class="cmt">// 1. 队列未满，直接写入</span>
+    if (msgq->used_msgs < msgq->max_msgs) {
+        memcpy(msgq->buffer + (msgq->head * msgq->size), data, msgq->size);
+        msgq->head = (msgq->head + 1) % msgq->max_msgs;
+        msgq->used_msgs++;
+
+        <span class="cmt">// 如果有消费者在等待，唤醒它</span>
+        struct k_thread *pending = z_waitq_head(&msgq->wait_q);
+        if (pending != NULL) {
+            <span class="cmt">// 直接将消息拷贝给消费者</span>
+            memcpy(pending->base.swap_data, data, msgq->size);
+            z_thread_return_value(pending, 0);
+            z_unready_thread(pending);
+            msgq->used_msgs--;  <span class="cmt">// 消费者取走了一条</span>
+        }
+
+        k_spin_unlock(&lock, key);
+        return 0;
+    }
+
+    <span class="cmt">// 2. 队列满，等待</span>
+    int ret = z_pend_curr(&lock, key, &msgq->wait_q, timeout);
+    return ret;
+}
+</code></pre>
+</section>
+
+<section id="mbox" class="toc-link">
+  <h2><span class="num">04</span> 邮箱 (k_mbox)</h2>
+
+  <p>邮箱支持<strong>任意大小</strong>的异步消息传递，使用描述符管理数据传输。</p>
+
+<pre><code class="language-c"><span class="cmt">// 定义邮箱</span>
+K_MBOX_DEFINE(my_mbox);
+
+<span class="cmt">// 发送消息（异步）</span>
+struct k_mbox_msg send_msg;
+send_msg.info = 0;
+send_msg.size = sizeof(data);
+send_msg.rx_source_thread = k_current_get();
+send_msg.tx_target_thread = target_tid;
+send_msg.tx_block.data = &data;
+send_msg.tx_block.size = sizeof(data);
+
+k_mbox_async_put(&my_mbox, &send_msg, &sem);
+
+<span class="cmt">// 接收消息</span>
+struct k_mbox_msg recv_msg;
+recv_msg.rx_block.data = buffer;
+recv_msg.rx_block.size = sizeof(buffer);
+k_mbox_get(&my_mbox, &recv_msg, K_FOREVER);
+</code></pre>
+</section>
+
+<section id="pipe" class="toc-link">
+  <h2><span class="num">05</span> 管道 (k_pipe)</h2>
+
+  <p>管道提供<strong>字节流</strong>通信，类似 Unix 管道，支持部分读写。</p>
+
+<pre><code class="language-c"><span class="cmt">// 定义管道（环形缓冲区）</span>
+K_PIPE_DEFINE(my_pipe, 256);  <span class="cmt">// 256 字节缓冲区</span>
+
+<span class="cmt">// 写入</span>
+size_t bytes_written;
+k_pipe_put(&my_pipe, data, sizeof(data), &bytes_written, sizeof(data), K_FOREVER);
+
+<span class="cmt">// 读取</span>
+size_t bytes_read;
+k_pipe_get(&my_pipe, buffer, sizeof(buffer), &bytes_read, 1, K_FOREVER);
+<span class="cmt">// 至少读取 1 字节，最多 sizeof(buffer) 字节</span>
+
+<span class="cmt">// 管道特点：</span>
+<span class="cmt">// 1. 字节流，无消息边界</span>
+<span class="cmt">// 2. 支持部分读写</span>
+<span class="cmt">// 3. 内部使用环形缓冲区</span>
+<span class="cmt">// 4. 支持等待最小字节数</span>
+</code></pre>
+</section>
+
+<section id="poll" class="toc-link">
+  <h2><span class="num">06</span> Poll 事件多路复用</h2>
+
+  <p><code>k_poll</code> 允许线程同时等待多个同步对象，类似 Linux 的 poll/select。</p>
+
+<pre><code class="language-c"><span class="cmt">// 定义事件数组</span>
+struct k_poll_event events[3] = {
+    K_POLL_EVENT_INITIALIZER(K_POLL_TYPE_SEM_AVAILABLE,
+                              K_POLL_MODE_NOTIFY_ONLY, &sem1),
+    K_POLL_EVENT_INITIALIZER(K_POLL_TYPE_FIFO_DATA_AVAILABLE,
+                              K_POLL_MODE_NOTIFY_ONLY, &fifo),
+    K_POLL_EVENT_INITIALIZER(K_POLL_TYPE_STATE,
+                              K_POLL_MODE_NOTIFY_ONLY, &state),
+};
+
+<span class="cmt">// 等待任一事件</span>
+int ret = k_poll(events, 3, K_FOREVER);
+
+<span class="cmt">// 检查哪个事件就绪</span>
+for (int i = 0; i < 3; i++) {
+    if (events[i].state == K_POLL_STATE_READY) {
+        <span class="cmt">// 处理事件 i</span>
+        events[i].state = K_POLL_STATE_NOT_READY;
+    }
+}
+
+<span class="cmt">// 支持的事件类型：</span>
+<span class="cmt">// K_POLL_TYPE_SEM_AVAILABLE       - 信号量可用</span>
+<span class="cmt">// K_POLL_TYPE_FIFO_DATA_AVAILABLE - FIFO 有数据</span>
+<span class="cmt">// K_POLL_TYPE_STATE              - 状态变化</span>
+<span class="cmt">// K_POLL_TYPE_SIGNAL             - 信号触发</span>
+</code></pre>
+</section>
+
+<section id="zbus" class="toc-link">
+  <h2><span class="num">07</span> zbus 消息总线</h2>
+
+  <p>zbus 是 Zephyr 的发布-订阅消息总线，实现松耦合的线程间通信。</p>
+
+<pre><code class="language-c"><span class="cmt">// 定义通道</span>
+ZBUS_CHAN_DEFINE accel_chan,
+    ZBUS_CHAN_NAME("accel"),
+    ZBUS_MSG_INIT(0),
+    &accel_data,
+    NULL,  <span class="cmt">// 无用户态访问</span>
+    ZBUS_OBSERVERS_EMPTY,
+    ZBUS_CHAN_PREPARE_INIT(0)
+);
+
+<span class="cmt">// 定义观察者</span>
+static void accel_handler(const struct zbus_channel *chan)
+{
+    <span class="cmt">// 处理加速度数据</span>
+}
+
+ZBUS_OBS_DEFINE(accel_handler);
+ZBUS_CHAN_ADD_OBS(accel_chan, accel_handler, 1);
+
+<span class="cmt">// 发布消息</span>
+struct accel_data data = { .x = 10, .y = 20, .z = 30 };
+zbus_chan_pub(&accel_chan, &data, K_FOREVER);
+
+<span class="cmt">// zbus 优势：</span>
+<span class="cmt">// 1. 发布-订阅模式，松耦合</span>
+<span class="cmt">// 2. 编译时构建，零运行时开销</span>
+<span class="cmt">// 3. 支持观察者优先级</span>
+<span class="cmt">// 4. 支持远程代理（跨设备通信）</span>
+</code></pre>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">08</span> 选型对比</h2>
+
+  <table>
+    <tr><th>场景</th><th>推荐机制</th><th>原因</th></tr>
+    <tr><td>ISR 通知线程</td><td>k_fifo_put()</td><td>ISR 安全，O(1) 操作</td></tr>
+    <tr><td>传递固定大小消息</td><td>k_msgq</td><td>拷贝语义，无需动态分配</td></tr>
+    <tr><td>传递大块数据</td><td>k_mbox</td><td>支持任意大小，异步</td></tr>
+    <tr><td>字节流通信</td><td>k_pipe</td><td>类似 Unix 管道</td></tr>
+    <tr><td>等待多个事件</td><td>k_poll</td><td>多路复用</td></tr>
+    <tr><td>松耦合通信</td><td>zbus</td><td>发布-订阅，编译时构建</td></tr>
+    <tr><td>简单生产者-消费者</td><td>k_fifo</td><td>最简单，ISR 可用</td></tr>
+  </table>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>kernel/queue.c</code> FIFO/LIFO 队列实现。<br>
+  <code>kernel/msg_q.c</code> 消息队列实现。<br>
+  <code>kernel/mailbox.c</code> 邮箱实现。<br>
+  <code>kernel/pipe.c</code> 管道实现。<br>
+  <code>kernel/poll.c</code> Poll 事件多路复用实现。<br>
+  <code>subsys/zbus/zbus.c</code> zbus 消息总线实现。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

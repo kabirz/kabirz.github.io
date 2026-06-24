@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 定时器与时间管理深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 定时器与时间管理深度解析</h1>
+  <p class="subtitle">系统时钟 / 软件定时器 / 超时队列 / Tickless / 高精度计时</p>
+  <span class="version">Zephyr 4.x · timer.c · timeout.c · sys_clock</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">时间子系统概览</a></li>
+    <li><a href="#sys-clock">系统时钟</a></li>
+    <li><a href="#timer">软件定时器</a></li>
+    <li><a href="#timeout">超时队列</a></li>
+    <li><a href="#tickless">Tickless 模式</a></li>
+    <li><a href="#hrtimer">高精度计时</a></li>
+    <li><a href="#busy-wait">忙等待</a></li>
+    <li><a href="#api">时间 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 时间子系统概览</h2>
+
+  <p>Zephyr 时间子系统管理所有与时间相关的功能，从硬件定时器中断到软件定时器回调。</p>
+
+  <h3>时间层次</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>k_timer_start() · k_sleep() · k_uptime_get()</small>"]
+    L1["软件定时器层<br><small>k_timer · 超时队列 · 时间点计算</small>"]
+    L0 --> L1
+    L2["系统时钟层<br><small>sys_clock · tick 计数 · tickless 管理</small>"]
+    L1 --> L2
+    L3["硬件定时器层<br><small>arch_timer · 系统 tick 中断 · 比较/捕获寄存器</small>"]
+    L2 --> L3
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="sys-clock" class="toc-link">
+  <h2><span class="num">02</span> 系统时钟</h2>
+
+  <p>系统时钟是 Zephyr 时间管理的基础，由硬件定时器驱动，提供全局 tick 计数。</p>
+
+  <h3>时钟源</h3>
+
+<pre><code class="language-c"><span class="cmt">// 系统时钟配置</span>
+<span class="cmt">// CONFIG_SYS_CLOCK_TICKS_PER_SEC = 1000（默认 1ms/tick）</span>
+<span class="cmt">// CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC = 硬件时钟频率</span>
+
+<span class="cmt">// 全局 tick 计数</span>
+<span class="cmt">// volatile uint64_t sys_clock_ticks;  // 内核内部</span>
+
+<span class="cmt">// 获取当前 tick 数</span>
+int64_t k_uptime_ticks(void);
+
+<span class="cmt">// 获取当前毫秒数</span>
+int64_t k_uptime_ms(void);
+
+<span class="cmt">// 获取当前秒数</span>
+int64_t k_uptime_seconds(void);
+</code></pre>
+
+  <h3>Tick 模式</h3>
+
+  <table>
+    <tr><th>模式</th><th>Kconfig</th><th>说明</th></tr>
+    <tr><td>周期 Tick</td><td>默认</td><td>固定频率中断（如 1kHz）</td></tr>
+    <tr><td>Tickless</td><td><code>CONFIG_TICKLESS_KERNEL</code></td><td>按需中断，省电</td></tr>
+    <tr><td>高精度</td><td><code>CONFIG_TIMER_HAS_64BIT_CYCLE_COUNTER</code></td><td>64 位硬件计数器</td></tr>
+  </table>
+</section>
+
+<section id="timer" class="toc-link">
+  <h2><span class="num">03</span> 软件定时器</h2>
+
+  <p>软件定时器在指定时间后执行回调函数，支持单次和周期性模式。</p>
+
+  <h3>数据结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/zephyr/kernel.h</span>
+struct k_timer {
+    struct _timeout timeout;         <span class="cmt">// 超时节点</span>
+    k_timer_handler_t handler;       <span class="cmt">// 回调函数（ISR 上下文）</span>
+    void *user_data;                 <span class="cmt">// 用户数据</span>
+    struct k_work_delayable work;    <span class="cmt">// 可选：与 workqueue 集成</span>
+};
+</code></pre>
+
+  <h3>使用示例</h3>
+
+<pre><code class="language-c"><span class="cmt">// 定时器回调（在 ISR 上下文中执行）</span>
+void my_timer_handler(struct k_timer *timer)
+{
+    <span class="cmt">// 不能调用阻塞 API！</span>
+    led_toggle(led_dev);
+}
+
+<span class="cmt">// 定义定时器</span>
+K_TIMER_DEFINE(my_timer, my_timer_handler, NULL);
+
+<span class="cmt">// 启动定时器（100ms 后首次触发，之后每 500ms 周期触发）</span>
+k_timer_start(&my_timer, K_MSEC(100), K_MSEC(500));
+
+<span class="cmt">// 停止定时器</span>
+k_timer_stop(&my_timer);
+
+<span class="cmt">// 单次定时器</span>
+K_TIMER_DEFINE(one_shot_timer, one_shot_handler, NULL);
+k_timer_start(&one_shot_timer, K_MSEC(1000), K_FOREVER);
+<span class="cmt">// K_FOREVER 表示不周期触发</span>
+</code></pre>
+
+  <h3>定时器回调上下文</h3>
+
+  <div class="mermaid">
+graph TD
+    A["硬件定时器中断触发"] --> B["z_timer_handler() 被调用"]
+    B --> C["遍历超时队列"]
+    C --> D["找到到期的定时器"]
+    D --> E["调用定时器回调函数"]
+    E --> F["回调在 ISR 上下文执行"]
+    style A fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style B fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style C fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style D fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style E fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style F fill:#ff6b6b15,stroke:#ff6b6b,color:#1f2328
+</div>
+</section>
+
+<section id="timeout" class="toc-link">
+  <h2><span class="num">04</span> 超时队列</h2>
+
+  <p>超时队列管理所有基于时间的事件，包括定时器、sleep、超时等待等。</p>
+
+<pre><code class="language-c"><span class="cmt">// 超时队列内部结构（kernel/include/timeout_q.h）</span>
+struct _timeout {
+    struct rbnode node;            <span class="cmt">// 红黑树节点（按截止时间排序）</span>
+    z_timer_handler_t fn;          <span class="cmt">// 到期回调</span>
+    void *handle;                  <span class="cmt">// 回调参数</span>
+    uint32_t start;                <span class="cmt">// 启动时的 tick</span>
+    uint32_t duration;             <span class="cmt">// 超时时长（tick）</span>
+};
+
+<span class="cmt">// 超时队列使用红黑树按到期时间排序</span>
+<span class="cmt">// 插入/删除 O(log n)，查找最近超时 O(1)</span>
+
+<span class="cmt">// 核心操作</span>
+void z_add_timeout(struct _timeout *t, z_timer_handler_t fn, k_timeout_t timeout);
+void z_abort_timeout(struct _timeout *t);
+void z_remove_timeout(struct _timeout *t);
+
+<span class="cmt">// 时间点计算</span>
+k_timepoint_t sys_timepoint_calc(k_timeout_t timeout);
+bool sys_timepoint_expired(k_timepoint_t timepoint);
+</code></pre>
+
+  <h3>超时队列工作流程</h3>
+
+<pre><code class="language-c"><span class="cmt">// 系统时钟中断处理</span>
+void z_timer_handler(void)
+{
+    <span class="cmt">// 1. 更新 tick 计数</span>
+    sys_clock_ticks++;
+
+    <span class="cmt">// 2. 检查超时队列</span>
+    while (!RB_EMPTY(&timeout_tree)) {
+        struct _timeout *t = RB_MIN(&timeout_tree);
+        if (t->start + t->duration > sys_clock_ticks) {
+            break;  <span class="cmt">// 还没到期</span>
+        }
+
+        <span class="cmt">// 3. 移除超时节点</span>
+        RB_REMOVE(&timeout_tree, t);
+
+        <span class="cmt">// 4. 调用回调</span>
+        t->fn(t->handle);
+    }
+
+    <span class="cmt">// 5. 检查是否需要切换线程</span>
+    z_sched_expire();
+}
+</code></pre>
+</section>
+
+<section id="tickless" class="toc-link">
+  <h2><span class="num">05</span> Tickless 模式</h2>
+
+  <p>Tickless 模式（<code>CONFIG_TICKLESS_KERNEL</code>）允许系统在空闲时停止周期性 tick 中断，按需唤醒，显著降低功耗。</p>
+
+  <h3>工作原理</h3>
+
+  <div class="mermaid">
+graph LR
+    subgraph 周期Tick["周期 Tick（默认）"]
+        T1["1ms"] --> T2["1ms"] --> T3["1ms"] --> T4["1ms"]
+    end
+    subgraph Tickless["Tickless 省电"]
+        E1["事件"] -->|"200ms 空闲"| E2["下一事件"]
+    end
+    style 周期Tick fill:#ff6b6b08,stroke:#ff6b6b
+    style Tickless fill:#50fa7b08,stroke:#50fa7b
+</div>
+
+  <h3>实现</h3>
+
+<pre><code class="language-c"><span class="cmt">// Tickless 核心逻辑</span>
+<span class="cmt">// 当系统空闲时：</span>
+<span class="cmt">// 1. 查找下一个超时事件</span>
+<span class="cmt">// 2. 计算需要等待的时间</span>
+<span class="cmt">// 3. 设置硬件定时器在该时间点唤醒</span>
+<span class="cmt">// 4. 进入深度休眠（如 WFI/WFE）</span>
+
+<span class="cmt">// 当有新事件插入超时队列时：</span>
+<span class="cmt">// 1. 如果新事件比当前定时器更早</span>
+<span class="cmt">// 2. 重新编程硬件定时器</span>
+
+<span class="cmt">// Kconfig 配置</span>
+<span class="cmt">// CONFIG_TICKLESS_KERNEL=y</span>
+<span class="cmt">// CONFIG_TICKLESS_LOW_POWER=y          ← 低功耗模式</span>
+<span class="cmt">// CONFIG_SYS_CLOCK_MIN_SLEEP_CHARS=10  ← 最小睡眠时间</span>
+</code></pre>
+</section>
+
+<section id="hrtimer" class="toc-link">
+  <h2><span class="num">06</span> 高精度计时</h2>
+
+  <p>Zephyr 支持高精度计时（<code>timing/</code>），用于性能测量和微秒级延迟。</p>
+
+<pre><code class="language-c"><span class="cmt">// 高精度计时 API</span>
+#include &lt;zephyr/timing/timing.h&gt;
+
+<span class="cmt">// 读取硬件周期计数器</span>
+timing_t start = timing_counter_get();
+
+<span class="cmt">// 执行操作...</span>
+do_something();
+
+timing_t end = timing_counter_get();
+
+<span class="cmt">// 计算时间差</span>
+timing_t delta = timing_cycles_get(&start, &end);
+
+<span class="cmt">// 转换为纳秒</span>
+uint64_t ns = timing_cycles_to_ns(delta);
+
+<span class="cmt">// 忙等待指定微秒数</span>
+k_busy_wait(10);  <span class="cmt">// 等待 10 微秒</span>
+
+<span class="cmt">// 精确忙等待</span>
+timing_t target = timing_counter_get() + timing_ns_to_cycles(100);
+while (timing_counter_get() < target) {
+    <span class="cmt">// 忙等待</span>
+}
+</code></pre>
+</section>
+
+<section id="busy-wait" class="toc-link">
+  <h2><span class="num">07</span> 忙等待</h2>
+
+<pre><code class="language-c"><span class="cmt">// k_busy_wait：忙等待（不释放 CPU）</span>
+k_busy_wait(100);  <span class="cmt">// 等待 100 微秒</span>
+
+<span class="cmt">// k_sleep：休眠（释放 CPU）</span>
+k_sleep(K_MSEC(1));  <span class="cmt">// 休眠 1 毫秒</span>
+
+<span class="cmt">// k_msleep：毫秒休眠</span>
+k_msleep(10);
+
+<span class="cmt">// k_usleep：微秒休眠</span>
+k_usleep(100);
+
+<span class="cmt">// 选择指南：</span>
+<span class="cmt">// 等待 < 1ms → k_busy_wait()</span>
+<span class="cmt">// 等待 >= 1ms → k_sleep()</span>
+<span class="cmt">// 需要精确延时 → k_busy_wait()（但占用 CPU）</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 时间 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 时间获取</span>
+int64_t k_uptime_ms(void);
+int64_t k_uptime_ticks(void);
+int64_t k_uptime_seconds(void);
+
+<span class="cmt">// 定时器</span>
+void k_timer_start(struct k_timer *timer, k_timeout_t duration, k_timeout_t period);
+void k_timer_stop(struct k_timer *timer);
+bool k_timer_status_get(struct k_timer *timer);
+int32_t k_timer_remaining_ms(struct k_timer *timer);
+
+<span class="cmt">// 休眠</span>
+void k_sleep(k_timeout_t timeout);
+void k_msleep(int ms);
+void k_usleep(int us);
+void k_busy_wait(uint32_t usec);
+
+<span class="cmt">// 时间点计算</span>
+k_timepoint_t sys_timepoint_calc(k_timeout_t timeout);
+bool sys_timepoint_expired(k_timepoint_t timepoint);
+k_timeout_t sys_timepoint_timeout(k_timepoint_t timepoint);
+
+<span class="cmt">// 超时宏</span>
+K_MSEC(ms)           <span class="cmt">// 毫秒转超时</span>
+K_SECONDS(sec)       <span class="cmt">// 秒转超时</span>
+K_MINUTES(min)       <span class="cmt">// 分钟转超时</span>
+K_HOURS(hour)        <span class="cmt">// 小时转超时</span>
+K_TICKS(ticks)       <span class="cmt">// tick 转超时</span>
+K_FOREVER            <span class="cmt">// 永远等待</span>
+K_NO_WAIT            <span class="cmt">// 不等待</span>
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>kernel/timer.c</code> 软件定时器实现。<br>
+  <code>kernel/timeout.c</code> 超时队列管理。<br>
+  <code>include/zephyr/sys_clock.h</code> 系统时钟接口。<br>
+  <code>kernel/idle.c</code> 空闲管理和 tickless 实现。<br>
+  <code>drivers/timer/</code> 硬件定时器驱动。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

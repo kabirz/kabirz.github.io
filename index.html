@@ -360,6 +360,49 @@ const DOCS = [
   { t:"Python 性能优化", f:"python-performance.html", d:"profiling (cProfile/py-spy)、Cython、Numba JIT、多进程/异步、内存优化", i:"red", tags:["Python","性能","Cython","Numba","profile"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
   { t:"NumPy 数据可视化", f:"python-numpy-charts.html", d:"NumPy 数据生成、Matplotlib 11种图表、折线/柱状/散点/直方/饼图/箱线/热力/等高线/3D/面积/子图", i:"blue", tags:["Python","NumPy","Matplotlib","可视化","图表"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
   { t:"torchvision 测试图形生成", f:"python-torchvision-patterns.html", d:"torchvision.utils、张量图像基础、色彩/空间测试模式、噪声生成、变换流水线、测试套件实战", i:"green", tags:["Python","PyTorch","torchvision","测试图形","合成图像"], top:"python", topLabel:"Python 开发", cat:"python", catLabel:"Python 开发" },
+
+  // ── Zephyr RTOS ──
+  { t:"Zephyr RTOS 整体架构", f:"zephyr-overview.html", d:"内核架构、子系统全景、构建系统、多平台支持、安全模型", i:"blue", tags:["Zephyr","RTOS","架构","嵌入式"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr 内核调度器", f:"zephyr-scheduler.html", d:"优先级调度、时间片轮转、EDF 截止期限、ECFS、SMP 调度", i:"blue", tags:["Zephyr","调度器","EDF","时间片","SMP"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr 线程模型", f:"zephyr-thread.html", d:"k_thread 结构、协作式/抢占式、用户态线程、栈管理", i:"blue", tags:["Zephyr","线程","k_thread","用户态"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr 内存管理", f:"zephyr-memory.html", d:"堆分配器、内存 Slab、内存池、内存域、MMU 支持", i:"blue", tags:["Zephyr","内存","k_heap","Slab","MMU"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr 同步原语", f:"zephyr-synchronization.html", d:"互斥锁、信号量、事件、条件变量、Futex、Spinlock", i:"blue", tags:["Zephyr","mutex","sem","事件","Spinlock"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr 进程间通信", f:"zephyr-ipc.html", d:"FIFO/LIFO、消息队列、邮箱、管道、Poll、zbus", i:"blue", tags:["Zephyr","IPC","FIFO","消息队列","zbus"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr 定时器与时间管理", f:"zephyr-timer.html", d:"系统时钟、软件定时器、超时队列、Tickless、高精度计时", i:"blue", tags:["Zephyr","定时器","Tickless","超时"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr 中断与异常处理", f:"zephyr-interrupt.html", d:"中断控制器、ISR 注册、中断上下文、嵌套中断、致命异常", i:"blue", tags:["Zephyr","中断","ISR","异常","NVIC"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr 设备模型", f:"zephyr-device-model.html", d:"device 结构体、设备定义宏、初始化流程、设备树绑定", i:"blue", tags:["Zephyr","device","设备模型","驱动框架"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-driver", catLabel:"驱动与硬件" },
+  { t:"Zephyr 设备树", f:"zephyr-device-tree.html", d:"DTS 语法、bindings、overlay、宏系统、编译时代码生成", i:"blue", tags:["Zephyr","Devicetree","DTS","overlay"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-driver", catLabel:"驱动与硬件" },
+  { t:"Zephyr 驱动框架", f:"zephyr-driver-framework.html", d:"GPIO、SPI、I2C、UART、传感器、ADC、DMA 驱动", i:"blue", tags:["Zephyr","驱动","GPIO","SPI","I2C","UART"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-driver", catLabel:"驱动与硬件" },
+  { t:"Zephyr 电源管理", f:"zephyr-power-management.html", d:"PM 框架、休眠状态、PM 策略、设备 PM、Tickless 省电", i:"blue", tags:["Zephyr","电源管理","PM","低功耗","Tickless"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr 网络栈", f:"zephyr-networking.html", d:"BSD Socket、TCP/UDP、IPv4/IPv6、net_if、LwM2M", i:"blue", tags:["Zephyr","网络","Socket","TCP","UDP"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr 蓝牙协议栈", f:"zephyr-bluetooth.html", d:"BLE Host、Controller、HCI、GATT、SMP、Mesh", i:"blue", tags:["Zephyr","蓝牙","BLE","GATT","Mesh"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr 构建系统", f:"zephyr-build-system.html", d:"West、CMake、Kconfig、Devicetree 编译器、交叉编译", i:"blue", tags:["Zephyr","构建","CMake","Kconfig","West"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-toolchain", catLabel:"工具链" },
+  { t:"Zephyr 追踪与调试", f:"zephyr-tracing.html", d:"Logging、Shell、Tracing、SystemView、CTF、硬件调试", i:"blue", tags:["Zephyr","调试","日志","Shell","追踪"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-toolchain", catLabel:"工具链" },
+  { t:"Zephyr 安全机制", f:"zephyr-security.html", d:"MPU/MMU、用户态隔离、加密、PSA、MCUboot、栈保护", i:"blue", tags:["Zephyr","安全","MPU","PSA","MCUboot"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr zbus 消息总线", f:"zephyr-zbus.html", d:"发布-订阅、通道、观察者、远程代理、编译时构建", i:"blue", tags:["Zephyr","zbus","发布订阅","消息总线"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr SMP 多核支持", f:"zephyr-smp.html", d:"对称多处理、CPU 亲和性、IPI、负载均衡、多核同步", i:"blue", tags:["Zephyr","SMP","多核","IPI","CPU亲和性"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr 文件系统", f:"zephyr-filesystem.html", d:"VFS、FAT、LittleFS、ext2、NFS、文件操作 API", i:"blue", tags:["Zephyr","文件系统","FAT","LittleFS","VFS"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+
+  // ── Zephyr RTOS 扩展 ──
+  { t:"Zephyr 工作队列", f:"zephyr-workqueue.html", d:"k_work 延迟执行、k_work_delayable、flush/cancel、ISR 延迟处理", i:"blue", tags:["Zephyr","workqueue","k_work","延迟执行"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr USB 子系统", f:"zephyr-usb.html", d:"USB Device/Host、CDC-ACM、MSC、HID、DFU、USB-C", i:"blue", tags:["Zephyr","USB","CDC-ACM","HID","DFU"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr LLEXT 可加载扩展", f:"zephyr-llext.html", d:"ELF 加载、符号解析、内存管理、运行时模块、Shell 集成", i:"blue", tags:["Zephyr","LLEXT","ELF","动态加载"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr MCU 管理器 (mcumgr)", f:"zephyr-mcumgr.html", d:"OTA 升级、OS 管理、SMP 协议、镜像管理、Shell 远程", i:"blue", tags:["Zephyr","mcumgr","OTA","SMP","升级"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr Modem 子系统", f:"zephyr-modem.html", d:"AT 命令、CMUX、PPP、Pipe、Chat、蜂窝 Modem 管理", i:"blue", tags:["Zephyr","Modem","AT","CMUX","PPP"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr 设备固件升级 (DFU)", f:"zephyr-dfu.html", d:"MCUboot 集成、镜像管理、OTA 流程、回滚保护、安全启动", i:"blue", tags:["Zephyr","DFU","MCUboot","OTA","升级"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr 传感量子系统", f:"zephyr-sensing.html", d:"Sensing 框架、传感器 API、RTIO 异步 I/O、多传感器融合", i:"blue", tags:["Zephyr","传感器","Sensing","RTIO"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-driver", catLabel:"驱动与硬件" },
+  { t:"Zephyr CAN 总线", f:"zephyr-can.html", d:"CAN/CAN-FD、ISO-TP、过滤器、工业通信", i:"blue", tags:["Zephyr","CAN","ISO-TP","CAN-FD"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-driver", catLabel:"驱动与硬件" },
+  { t:"Zephyr LoRaWAN", f:"zephyr-lorawan.html", d:"LPWAN 低功耗广域网、OTAA/ABP 入网、Class A/B/C", i:"blue", tags:["Zephyr","LoRaWAN","LPWAN","IoT"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr Modbus 协议", f:"zephyr-modbus.html", d:"Modbus RTU/TCP、客户端/服务器、功能码、工业通信", i:"blue", tags:["Zephyr","Modbus","RTU","TCP","工业"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr RTIO 异步 I/O", f:"zephyr-rtio.html", d:"SQ/CQ、执行器、零拷贝、传感器批量采集", i:"blue", tags:["Zephyr","RTIO","异步","零拷贝"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-core", catLabel:"内核核心" },
+  { t:"Zephyr POSIX 兼容层", f:"zephyr-posix.html", d:"pthread、mutex、condvar、信号、POSIX API 子集、CMSIS-RTOS", i:"blue", tags:["Zephyr","POSIX","pthread","CMSIS"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr 输入子系统", f:"zephyr-input.html", d:"输入事件、按键映射、触摸屏、编码器、长按/双击检测", i:"blue", tags:["Zephyr","输入","按键","触摸","编码器"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-driver", catLabel:"驱动与硬件" },
+  { t:"Zephyr 统计子系统", f:"zephyr-stats.html", d:"计数器统计、网络统计、内存统计、自定义统计、Shell 集成", i:"blue", tags:["Zephyr","统计","计数器","性能"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr Settings 持久化", f:"zephyr-settings.html", d:"键值对存储、Flash/NVS 后端、运行时加载、配置持久化", i:"blue", tags:["Zephyr","Settings","持久化","配置"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr 随机数子系统", f:"zephyr-random.html", d:"硬件 RNG、软件 PRNG、CTR-DRBG、熵源", i:"blue", tags:["Zephyr","随机数","RNG","CSPRNG","熵"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr Retention 掉电保留", f:"zephyr-retention.html", d:"跨重启状态、Flash/RAM 保留区、Bootloader 通信", i:"blue", tags:["Zephyr","Retention","掉电保留","跨重启"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+  { t:"Zephyr 任务看门狗", f:"zephyr-task-wdt.html", d:"多级监控、软件/硬件看门狗链、超时处理", i:"blue", tags:["Zephyr","看门狗","WDT","超时","监控"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-driver", catLabel:"驱动与硬件" },
+  { t:"Zephyr 网络管理", f:"zephyr-net-management.html", d:"net_mgmt 事件、连接管理器、L2 管理、网络事件", i:"blue", tags:["Zephyr","网络管理","conn_mgr","net_mgmt"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
 ];
 
 const ICON_MAP = {
@@ -367,6 +410,7 @@ const ICON_MAP = {
   net: { emoji: "🌐", color: "#0969da" },
   fs: { emoji: "📁", color: "#1a7f37" },
   driver: { emoji: "🔌", color: "#8250df" },
+  zephyr: { emoji: "⚡", color: "#1769aa" },
   windows: { emoji: "🪟", color: "#0078d4" },
   rust: { emoji: "🦀", color: "#dea584" },
   docker: { emoji: "🐳", color: "#2496ed" },
@@ -388,7 +432,7 @@ function renderSidebar() {
   });
 
   let html = '';
-  var SIDEBAR_ORDER = ['linux', 'net', 'docker', 'rust', 'python', 'windows', 'vision', 'go'];
+  var SIDEBAR_ORDER = ['linux', 'net', 'zephyr', 'docker', 'rust', 'python', 'windows', 'vision', 'go'];
   var sorted = Object.keys(tops).sort(function(a,b){ return SIDEBAR_ORDER.indexOf(a) - SIDEBAR_ORDER.indexOf(b); });
   for (var i = 0; i < sorted.length; i++) { var key = sorted[i]; var top = tops[key];
     const info = ICON_MAP[key] || ICON_MAP.other;

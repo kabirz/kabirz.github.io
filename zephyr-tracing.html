@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 追踪与调试深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 追踪与调试深度解析</h1>
+  <p class="subtitle">Logging / Shell / Tracing / SysView / CTF / 硬件调试</p>
+  <span class="version">Zephyr 4.x · logging · shell · tracing/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">调试工具概览</a></li>
+    <li><a href="#logging">日志系统</a></li>
+    <li><a href="#shell">Shell 子系统</a></li>
+    <li><a href="#tracing">系统追踪</a></li>
+    <li><a href="#sysview">SystemView</a></li>
+    <li><a href="#ctf">CTF 追踪</a></li>
+    <li><a href="#debugger">硬件调试</a></li>
+    <li><a href="#api">调试 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 调试工具概览</h2>
+
+  <p>Zephyr 提供丰富的调试工具，从日志输出到系统级追踪。</p>
+
+  <table>
+    <tr><th>工具</th><th>目录</th><th>用途</th></tr>
+    <tr><td>Logging</td><td><code>subsys/logging/</code></td><td>分级日志输出</td></tr>
+    <tr><td>Shell</td><td><code>subsys/shell/</code></td><td>交互式命令行</td></tr>
+    <tr><td>Tracing</td><td><code>subsys/tracing/</code></td><td>系统级事件追踪</td></tr>
+    <tr><td>Stats</td><td><code>subsys/stats/</code></td><td>统计计数器</td></tr>
+    <tr><td>Debug</td><td><code>subsys/debug/</code></td><td>调试支持</td></tr>
+    <tr><td>GDB</td><td><code>scripts/</code></td><td>GDB 调试脚本</td></tr>
+  </table>
+</section>
+
+<section id="logging" class="toc-link">
+  <h2><span class="num">02</span> 日志系统</h2>
+
+  <p>Zephyr 日志系统支持多后端、多级别、编译时裁剪。</p>
+
+  <h3>日志级别</h3>
+
+  <table>
+    <tr><th>级别</th><th>宏</th><th>说明</th></tr>
+    <tr><td>OFF</td><td><code>LOG_LEVEL_OFF</code></td><td>禁用日志</td></tr>
+    <tr><td>ERR</td><td><code>LOG_ERR</code></td><td>错误</td></tr>
+    <tr><td>WRN</td><td><code>LOG_WRN</code></td><td>警告</td></tr>
+    <tr><td>INF</td><td><code>LOG_INF</code></td><td>信息</td></tr>
+    <tr><td>DBG</td><td><code>LOG_DBG</code></td><td>调试</td></tr>
+  </table>
+
+<pre><code class="language-c"><span class="cmt">// 日志使用</span>
+<span class="cmt">#include &lt;zephyr/logging/log.h&gt;</span>
+LOG_MODULE_DECLARE(my_module, LOG_LEVEL_DBG);
+
+void my_function(void)
+{
+    LOG_ERR("错误: %d", error_code);
+    LOG_WRN("警告: 状态异常");
+    LOG_INF("信息: 初始化完成");
+    LOG_DBG("调试: 值 = %x", value);
+}
+</code></pre>
+
+  <h3>日志后端</h3>
+
+  <table>
+    <tr><th>后端</th><th>Kconfig</th><th>说明</th></tr>
+    <tr><td>UART</td><td><code>CONFIG_LOG_BACKEND_UART=y</code></td><td>串口输出</td></tr>
+    <tr><td>RAM</td><td><code>CONFIG_LOG_BACKEND_RAM=y</code></td><td>内存缓冲</td></tr>
+    <tr><td>RTT</td><td><code>CONFIG_LOG_BACKEND_RTT=y</code></td><td>SEGGER RTT</td></tr>
+    <tr><td>FS</td><td><code>CONFIG_LOG_BACKEND_FS=y</code></td><td>文件系统</td></tr>
+    <tr><td>Net</td><td><code>CONFIG_LOG_BACKEND_NET=y</code></td><td>网络输出</td></tr>
+  </table>
+
+  <h3>日志过滤</h3>
+
+<pre><code class="language-c"><span class="cmt">// 编译时过滤（零开销）</span>
+LOG_MODULE_REGISTER(my_module, LOG_LEVEL_WRN);
+
+<span class="cmt">// 运行时过滤</span>
+log_filter_set(NULL, 0, my_module_id, LOG_LEVEL_DBG);
+
+<span class="cmt">// 日志延迟处理</span>
+<span class="cmt">// CONFIG_LOG_DEFERRED=y</span>
+<span class="cmt">// 日志在后台线程中处理，减少 ISR 延迟</span>
+</code></pre>
+</section>
+
+<section id="shell" class="toc-link">
+  <h2><span class="num">03</span> Shell 子系统</h2>
+
+  <p>Zephyr Shell 提供交互式命令行接口，支持自定义命令。</p>
+
+<pre><code class="language-c"><span class="cmt">// Shell 命令定义</span>
+<span class="cmt">#include &lt;zephyr/shell/shell.h&gt;</span>
+
+<span class="cmt">// 命令处理函数</span>
+static int cmd_hello(const struct shell *sh, size_t argc, char **argv)
+{
+    shell_print(sh, "Hello, %s!", argv[1] ? argv[1] : "World");
+    return 0;
+}
+
+<span class="cmt">// 命令定义</span>
+SHELL_CMD_REGISTER(hello, NULL, "Say hello", cmd_hello);
+
+<span class="cmt">// 命令组</span>
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_sensor,
+    SHELL_CMD(temperature, NULL, "Read temperature", cmd_temp),
+    SHELL_CMD(humidity, NULL, "Read humidity", cmd_humidity),
+    SHELL_SUBCMD_SET_END
+);
+SHELL_CMD_REGISTER(sensor, &sub_sensor, "Sensor commands", NULL);
+
+<span class="cmt">// 使用</span>
+<span class="cmt">// uart:~$ hello Zephyr</span>
+<span class="cmt">// Hello, Zephyr!</span>
+<span class="cmt">// uart:~$ sensor temperature</span>
+<span class="cmt">// Temperature: 25.5°C</span>
+</code></pre>
+</section>
+
+<section id="tracing" class="toc-link">
+  <h2><span class="num">04</span> 系统追踪</h2>
+
+  <p>Zephyr 追踪子系统记录内核事件，用于性能分析和调试。</p>
+
+  <h3>追踪事件</h3>
+
+  <table>
+    <tr><th>事件</th><th>说明</th></tr>
+    <tr><td>线程切换</td><td>上下文切换时间戳</td></tr>
+    <tr><td>中断</td><td>中断进入/退出</td></tr>
+    <tr><td>信号量</td><td>give/take 操作</td></tr>
+    <tr><td>互斥锁</td><td>lock/unlock 操作</td></tr>
+    <tr><td>定时器</td><td>定时器启动/停止/到期</td></tr>
+    <tr><td>内存</td><td>分配/释放</td></tr>
+  </table>
+
+<pre><code class="language-c"><span class="cmt">// 追踪配置</span>
+<span class="cmt">// CONFIG_TRACING=y</span>
+<span class="cmt">// CONFIG_TRACING_NESTED=y</span>
+
+<span class="cmt">// 追踪后端</span>
+<span class="cmt">// CONFIG_TRACING_BACKEND_UART=y</span>
+<span class="cmt">// CONFIG_TRACING_BACKEND_RAM=y</span>
+<span class="cmt">// CONFIG_TRACING_BACKEND_POSIX=y</span>
+
+<span class="cmt">// 自定义追踪事件</span>
+<span class="cmt">#include &lt;zephyr/tracing/tracing.h&gt;</span>
+
+SYS_PORT_TRACING_FUNC(thread, create);
+SYS_PORT_TRACING_FUNC(k_thread, sched_lock);
+</code></pre>
+</section>
+
+<section id="sysview" class="toc-link">
+  <h2><span class="num">05</span> SystemView</h2>
+
+  <p>SEGGER SystemView 是实时可视化追踪工具，显示线程调度和中断时序。</p>
+
+<pre><code class="language-c"><span class="cmt">// SystemView 配置</span>
+<span class="cmt">// CONFIG_SEGGER_SYSTEMVIEW=y</span>
+<span class="cmt">// CONFIG_TRACING_BACKEND_RTT=y</span>
+
+<span class="cmt">// 功能：</span>
+<span class="cmt">// - 实时线程调度可视化</span>
+<span class="cmt">// - 中断时序显示</span>
+<span class="cmt">// - CPU 负载分析</span>
+<span class="cmt">// - 用户自定义事件</span>
+
+<span class="cmt">// 使用：</span>
+<span class="cmt">// 1. 固件启用 SystemView</span>
+<span class="cmt">// 2. J-Link 连接目标板</span>
+<span class="cmt">// 3. 打开 SEGGER SystemView 软件</span>
+<span class="cmt">// 4. 实时查看追踪数据</span>
+</code></pre>
+</section>
+
+<section id="ctf" class="toc-link">
+  <h2><span class="num">06</span> CTF 追踪</h2>
+
+  <p>CTF（Common Trace Format）是标准追踪格式，可用 Babeltrace 分析。</p>
+
+<pre><code class="language-c"><span class="cmt">// CTF 配置</span>
+<span class="cmt">// CONFIG_TRACING_CTF=y</span>
+
+<span class="cmt">// CTF 输出格式：</span>
+<span class="cmt">// - 线程事件</span>
+<span class="cmt">// - 中断事件</span>
+<span class="cmt">// - 内核对象事件</span>
+<span class="cmt">// - 自定义事件</span>
+
+<span class="cmt">// 分析：</span>
+<span class="cmt">// babeltrace trace.ctf | head -20</span>
+<span class="cmt">// 或导入 TraceCompass 可视化</span>
+</code></pre>
+</section>
+
+<section id="debugger" class="toc-link">
+  <h2><span class="num">07</span> 硬件调试</h2>
+
+  <h3>GDB 调试</h3>
+
+<pre><code class="language-bash"><span class="cmt"># GDB 调试</span>
+west debug
+
+<span class="cmt"># 或手动启动 GDB</span>
+arm-zephyr-eabi-gdb build/zephyr/zephyr.elf
+(gdb) target remote :3333
+(gdb) break main
+(gdb) continue
+(gdb) bt  <span class="cmt"># 查看调用栈</span>
+
+<span class="cmt"># OpenOCD 调试</span>
+west debug --runner openocd
+
+<span class="cmt"># J-Link 调试</span>
+west debug --runner jlink
+</code></pre>
+
+  <h3>断言与调试宏</h3>
+
+<pre><code class="language-c"><span class="cmt">// 断言</span>
+__ASSERT(condition, "message");
+__ASSERT_NO_MSG(condition);
+
+<span class="cmt">// 调试打印</span>
+<span class="cmt">#include &lt;zephyr/sys/__assert.h&gt;</span>
+
+<span class="cmt">// CONFIG_ASSERT=y 启用断言</span>
+<span class="cmt"># CONFIG_ASSERT_NO_FILE_INFO=y  ← 不打印文件信息</span>
+<span class="cmt"># CONFIG_ASSERT_NO_MESSAGE_INFO=y ← 不打印消息</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 调试 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 日志</span>
+LOG_MODULE_REGISTER(name, level);
+LOG_ERR(fmt, ...);
+LOG_WRN(fmt, ...);
+LOG_INF(fmt, ...);
+LOG_DBG(fmt, ...);
+
+<span class="cmt">// Shell</span>
+SHELL_CMD_REGISTER(name, subcmds, help, handler);
+shell_print(sh, fmt, ...);
+shell_error(sh, fmt, ...);
+
+<span class="cmt">// 断言</span>
+__ASSERT(expr, fmt, ...);
+__ASSERT_NO_MSG(expr);
+
+<span class="cmt">// 追踪</span>
+SYS_PORT_TRACING_FUNC(obj, func);
+SYS_PORT_TRACING_OBJFunc(obj, func, ret);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/logging/</code> 日志系统实现。<br>
+  <code>subsys/shell/</code> Shell 子系统实现。<br>
+  <code>subsys/tracing/</code> 追踪子系统实现。<br>
+  <code>subsys/tracing/sysview/</code> SystemView 后端。<br>
+  <code>subsys/tracing/ctf/</code> CTF 追踪后端。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

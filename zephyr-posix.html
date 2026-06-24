@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr POSIX 兼容层深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr POSIX 兼容层深度解析</h1>
+  <p class="subtitle">pthread / mmap / 信号 / POSIX API 子集 / 跨 RTOS 移植</p>
+  <span class="version">Zephyr 4.x · subsys/portability/posix/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">POSIX 概览</a></li>
+    <li><a href="#pthread">pthread 线程</a></li>
+    <li><a href="#mutex">pthread_mutex</a></li>
+    <li><a href="#condvar">pthread_cond</a></li>
+    <li><a href="#signal">信号</a></li>
+    <li><a href="#timer-posix">POSIX 定时器</a></li>
+    <li><a href="#cmsis">CMSIS-RTOS</a></li>
+    <li><a href="#api">POSIX API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> POSIX 概览</h2>
+
+  <p>Zephyr 提供 POSIX 兼容层，允许使用 POSIX API 编写的应用代码迁移到 Zephyr。</p>
+
+  <h3>POSIX 支持程度</h3>
+
+  <table>
+    <tr><th>API</th><th>支持</th><th>说明</th></tr>
+    <tr><td>pthread</td><td>✅ 完整</td><td>创建/退出/join/detach</td></tr>
+    <tr><td>pthread_mutex</td><td>✅ 完整</td><td>互斥锁（含属性）</td></tr>
+    <tr><td>pthread_cond</td><td>✅ 完整</td><td>条件变量</td></tr>
+    <tr><td>pthread_rwlock</td><td>✅ 完整</td><td>读写锁</td></tr>
+    <tr><td>semaphore</td><td>✅ 完整</td><td>POSIX 信号量</td></tr>
+    <tr><td>signal</td><td>⚠️ 部分</td><td>基础信号支持</td></tr>
+    <tr><td>mmap</td><td>⚠️ 部分</td><td>内存映射</td></tr>
+    <tr><td>timer</td><td>✅ 完整</td><td>POSIX 定时器</td></tr>
+    <tr><td>mqueue</td><td>✅ 完整</td><td>消息队列</td></tr>
+  </table>
+</section>
+
+<section id="pthread" class="toc-link">
+  <h2><span class="num">02</span> pthread 线程</h2>
+
+<pre><code class="language-c"><span class="cmt">// POSIX pthread 在 Zephyr 上运行</span>
+#include &lt;pthread.h&gt;
+
+<span class="cmt">// 创建线程</span>
+pthread_t thread;
+pthread_attr_t attr;
+pthread_attr_init(&amp;attr);
+pthread_attr_setstacksize(&amp;attr, 2048);
+pthread_attr_setschedpolicy(&amp;attr, SCHED_RR);
+
+struct sched_param param = { .sched_priority = 5 };
+pthread_attr_setschedparam(&amp;attr, &amp;param);
+
+pthread_create(&amp;thread, &amp;attr, thread_func, NULL);
+
+<span class="cmt">// 等待线程结束</span>
+pthread_join(thread, NULL);
+
+<span class="cmt">// 分离线程</span>
+pthread_detach(thread);
+</code></pre>
+</section>
+
+<section id="mutex" class="toc-link">
+  <h2><span class="num">03</span> pthread_mutex</h2>
+
+<pre><code class="language-c"><span class="cmt">// POSIX mutex</span>
+pthread_mutex_t mutex;
+pthread_mutex_init(&amp;mutex, NULL);
+
+pthread_mutex_lock(&amp;mutex);
+<span class="cmt">// 临界区</span>
+pthread_mutex_unlock(&amp;mutex);
+
+pthread_mutex_destroy(&amp;mutex);
+
+<span class="cmt">// 属性 mutex（递归锁等）</span>
+pthread_mutexattr_t attr;
+pthread_mutexattr_init(&amp;attr);
+pthread_mutexattr_settype(&amp;attr, PTHREAD_MUTEX_RECURSIVE);
+pthread_mutex_init(&amp;mutex, &amp;attr);
+</code></pre>
+</section>
+
+<section id="condvar" class="toc-link">
+  <h2><span class="num">04</span> pthread_cond</h2>
+
+<pre><code class="language-c"><span class="cmt">// POSIX 条件变量</span>
+pthread_cond_t cond;
+pthread_cond_init(&amp;cond, NULL);
+
+<span class="cmt">// 等待条件</span>
+pthread_mutex_lock(&amp;mutex);
+while (!condition) {
+    pthread_cond_wait(&amp;cond, &amp;mutex);
+}
+pthread_mutex_unlock(&amp;mutex);
+
+<span class="cmt">// 通知</span>
+pthread_cond_signal(&amp;cond);    <span class="cmt">// 唤醒一个</span>
+pthread_cond_broadcast(&amp;cond); <span class="cmt">// 唤醒所有</span>
+
+pthread_cond_destroy(&amp;cond);
+</code></pre>
+</section>
+
+<section id="signal" class="toc-link">
+  <h2><span class="num">05</span> 信号</h2>
+
+<pre><code class="language-c"><span class="cmt">// POSIX 信号（部分支持）</span>
+#include &lt;signal.h&gt;
+
+<span class="cmt">// 注册信号处理</span>
+void handler(int sig) {
+    printk("信号 %d 收到\n", sig);
+}
+
+signal(SIGUSR1, handler);
+
+<span class="cmt">// 发送信号</span>
+raise(SIGUSR1);
+
+<span class="cmt">// 注意：Zephyr 信号支持有限</span>
+<span class="cmt">// 不支持所有 POSIX 信号语义</span>
+</code></pre>
+</section>
+
+<section id="timer-posix" class="toc-link">
+  <h2><span class="num">06</span> POSIX 定时器</h2>
+
+<pre><code class="language-c"><span class="cmt">// POSIX 定时器</span>
+timer_t timerid;
+struct sigevent sev;
+struct itimerspec its;
+
+sev.sigev_notify = SIGEV_THREAD;
+sev.sigev_notify_function = timer_handler;
+
+timer_create(CLOCK_REALTIME, &amp;sev, &amp;timerid);
+
+its.it_value.tv_sec = 1;
+its.it_interval.tv_sec = 1;
+timer_settime(timerid, 0, &amp;its, NULL);
+
+<span class="cmt">// 回调</span>
+void timer_handler(union sigval val) {
+    printk("定时器触发\n");
+}
+</code></pre>
+</section>
+
+<section id="cmsis" class="toc-link">
+  <h2><span class="num">07</span> CMSIS-RTOS</h2>
+
+  <p>CMSIS-RTOS 是 ARM 定义的 RTOS 抽象层，方便跨 RTOS 移植。</p>
+
+<pre><code class="language-c"><span class="cmt">// CMSIS-RTOS v2（subsys/portability/cmsis_rtos_v2/）</span>
+<span class="cmt">// CONFIG_CMSIS_RTOS_V2=y</span>
+
+<span class="cmt">// CMSIS-RTOS API</span>
+osThreadId_t tid = osThreadNew(thread_func, NULL, &amp;attr);
+osDelay(1000);
+osSignalSet(tid, 0x01);
+osMutexAcquire(mutex, osWaitForever);
+osSemaphoreAcquire(sem, osWaitForever);
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> POSIX API</h2>
+
+<pre><code class="language-c"><span class="cmt">// pthread</span>
+int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+                   void *(*start_routine)(void*), void *arg);
+int pthread_join(pthread_t thread, void **retval);
+int pthread_detach(pthread_t thread);
+int pthread_cancel(pthread_t thread);
+
+<span class="cmt">// mutex</span>
+int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr);
+int pthread_mutex_lock(pthread_mutex_t *mutex);
+int pthread_mutex_unlock(pthread_mutex_t *mutex);
+int pthread_mutex_trylock(pthread_mutex_t *mutex);
+int pthread_mutex_destroy(pthread_mutex_t *mutex);
+
+<span class="cmt">// condvar</span>
+int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex);
+int pthread_cond_signal(pthread_cond_t *cond);
+int pthread_cond_broadcast(pthread_cond_t *cond);
+
+<span class="cmt">// semaphore</span>
+int sem_init(sem_t *sem, int pshared, unsigned int value);
+int sem_wait(sem_t *sem);
+int sem_post(sem_t *sem);
+int sem_trywait(sem_t *sem);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/portability/posix/</code> POSIX 兼容层实现。<br>
+  <code>subsys/portability/cmsis_rtos_v2/</code> CMSIS-RTOS v2 实现。<br>
+  <code>include/zephyr/posix/</code> POSIX API 定义。<br>
+  <code>samples/posix/</code> POSIX 示例。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

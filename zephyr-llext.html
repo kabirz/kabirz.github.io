@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr LLEXT 可加载扩展深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr LLEXT 可加载扩展深度解析</h1>
+  <p class="subtitle">ELF 加载 / 符号解析 / 内存管理 / 运行时模块 / Shell 集成</p>
+  <span class="version">Zephyr 4.x · subsys/llext/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">LLEXT 概览</a></li>
+    <li><a href="#arch">架构设计</a></li>
+    <li><a href="#loader">ELF 加载器</a></li>
+    <li><a href="#memory">内存管理</a></li>
+    <li><a href="#symbols">符号解析</a></li>
+    <li><a href="#shell">Shell 集成</a></li>
+    <li><a href="#use-cases">应用场景</a></li>
+    <li><a href="#api">LLEXT API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> LLEXT 概览</h2>
+
+  <p>LLEXT（Loadable ELF Extension）是 Zephyr 的运行时模块加载框架，允许在运行时动态加载 ELF 格式的代码模块。</p>
+
+  <h3>核心价值</h3>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>运行时加载</td><td>无需重新编译整个固件</td></tr>
+    <tr><td>ELF 格式</td><td>标准 ELF 文件，可用 GCC 编译</td></tr>
+    <tr><td>符号解析</td><td>自动解析内核 API 符号</td></tr>
+    <tr><td>内存管理</td><td>支持 Flash/内存加载</td></tr>
+    <tr><td>Shell 集成</td><td>通过 Shell 命令加载/卸载</td></tr>
+  </table>
+
+  <h3>架构</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>llext_load() · llext_call() · shell 命令</small>"]
+    L1["LLEXT 核心层<br><small>llext.c · ELF 解析 · 符号表 · 重定位</small>"]
+    L0 --> L1
+    L2["加载器层<br><small>buf_loader · fs_loader · mem_loader</small>"]
+    L1 --> L2
+    L3["内存管理层<br><small>llext_mem.c · llext_memblk.c · kheap 集成</small>"]
+    L2 --> L3
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构设计</h2>
+
+<pre><code class="language-c"><span class="cmt">// LLEXT 核心数据结构</span>
+struct llext {
+    sys_snode_t node;            <span class="cmt">// 全局链表节点</span>
+    const char *name;            <span class="cmt">// 扩展名称</span>
+    struct llext_loader *ldr;    <span class="cmt">// 加载器</span>
+
+    <span class="cmt">// ELF 段信息</span>
+    elf_shdr_t *sect_hdrs;       <span class="cmt">// 段头表</span>
+    size_t sect_cnt;             <span class="cmt">// 段数量</span>
+
+    <span class="cmt">// 段内存布局</span>
+    void *mem;                   <span class="cmt">// 分配的内存</span>
+    size_t mem_size;             <span class="cmt">// 内存大小</span>
+
+    <span class="cmt">// 符号表</span>
+    const char *sym_tab;         <span class="cmt">// 符号名表</span>
+    Elf_Sym *sym_tab_data;       <span class="cmt">// 符号数据</span>
+    size_t sym_cnt;              <span class="cmt">// 符号数量</span>
+};
+</code></pre>
+</section>
+
+<section id="loader" class="toc-link">
+  <h2><span class="num">03</span> ELF 加载器</h2>
+
+  <p>LLEXT 支持多种加载源：内存缓冲区、文件系统。</p>
+
+<pre><code class="language-c"><span class="cmt">// 从内存缓冲区加载</span>
+#include &lt;zephyr/llext/llext.h&gt;
+#include &lt;zephyr/llext/buf_loader.h&gt;
+
+<span class="cmt">// ELF 文件数据</span>
+extern char _binary_my_ext_start[];
+extern char _binary_my_ext_end[];
+
+struct llext_buf_loader buf_loader = {
+    .buf = _binary_my_ext_start,
+    .len = _binary_my_ext_end - _binary_my_ext_start,
+};
+
+struct llext *ext;
+int ret = llext_load(&amp;buf_loader.loader, "my_ext", &amp;ext, NULL);
+
+<span class="cmt">// 从文件系统加载</span>
+#include &lt;zephyr/llext/fs_loader.h&gt;
+
+struct llext_fs_loader fs_loader;
+llext_fs_loader_init(&amp;fs_loader, "/littlefs/ext.bin");
+
+ret = llext_load(&amp;fs_loader.loader, "ext", &amp;ext, NULL);
+</code></pre>
+</section>
+
+<section id="memory" class="toc-link">
+  <h2><span class="num">04</span> 内存管理</h2>
+
+<pre><code class="language-c"><span class="cmt">// LLEXT 内存管理（subsys/llext/llext_mem.c）</span>
+<span class="cmt">// 支持三种内存分配方式：</span>
+
+<span class="cmt">// 1. k_heap 堆分配（默认）</span>
+<span class="cmt">// CONFIG_LLEXT_HEAP=y</span>
+
+<span class="cmt">// 2. 固定内存池</span>
+<span class="cmt">// CONFIG_LLEXT_MEM_POOL=y</span>
+
+<span class="cmt">// 3. 内存块分配</span>
+<span class="cmt">// CONFIG_LLEXT_MEM_BLK=y</span>
+
+<span class="cmt">// 内存布局：</span>
+<span class="cmt">// .text   - 代码段（可执行）</span>
+<span class="cmt">// .rodata - 只读数据</span>
+<span class="cmt">// .data   - 已初始化数据</span>
+<span class="cmt">// .bss    - 未初始化数据</span>
+</code></pre>
+</section>
+
+<section id="symbols" class="toc-link">
+  <h2><span class="num">05</span> 符号解析</h2>
+
+<pre><code class="language-c"><span class="cmt">// LLEXT 自动解析内核 API 符号</span>
+<span class="cmt">// 扩展代码可直接调用 k_sem_give()、printk() 等</span>
+
+<span class="cmt">// 导出符号到扩展</span>
+<span class="cmt">// 在内核侧定义符号</span>
+<span my_exported_func>
+void my_exported_func(int arg) { ... }
+</span>
+<span class="cmt">// 使用 STRUCT_SECTION_ITERABLE 导出</span>
+
+<span class="cmt">// 扩展代码中使用</span>
+<span class="cmt">// ext.c（编译为 ELF 扩展）</span>
+extern void my_exported_func(int arg);
+void ext_entry(void) {
+    my_exported_func(42);
+}
+</code></pre>
+</section>
+
+<section id="shell" class="toc-link">
+  <h2><span class="num">06</span> Shell 集成</h2>
+
+<pre><code class="language-c"><span class="cmt">// LLEXT Shell 命令</span>
+<span class="cmt">// CONFIG_LLEXT_SHELL=y</span>
+
+<span class="cmt">// 加载扩展</span>
+<span class="cmt">// uart:~$ llext load /littlefs/ext.bin</span>
+
+<span class="cmt">// 卸载扩展</span>
+<span class="cmt">// uart:~$ llext unload ext</span>
+
+<span class="cmt">// 列出已加载扩展</span>
+<span class="cmt">// uart:~$ llext list</span>
+
+<span class="cmt">// 调用扩展函数</span>
+<span class="cmt">// uart:~$ llext call ext entry_func</span>
+</code></pre>
+</section>
+
+<section id="use-cases" class="toc-link">
+  <h2><span class="num">07</span> 应用场景</h2>
+
+  <table>
+    <tr><th>场景</th><th>说明</th></tr>
+    <tr><td>插件系统</td><td>运行时加载功能模块</td></tr>
+    <tr><td>OTA 升级</td><td>只更新扩展，不更新整个固件</td></tr>
+    <tr><td>算法热更新</td><td>更新 DSP/信号处理算法</td></tr>
+    <tr><td>测试框架</td><td>动态加载测试用例</td></tr>
+    <tr><td>驱动插件</td><td>运行时加载设备驱动</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> LLEXT API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 加载/卸载</span>
+int llext_load(struct llext_loader *loader, const char *name,
+               struct llext **ext, const struct llext_load_sym *sym);
+int llext_unload(struct llext *ext);
+
+<span class="cmt">// 符号查找</span>
+void *llext_find_sym(struct llext *ext, const char *sym_name);
+
+<span class="cmt">// 函数调用</span>
+int llext_call(struct llext *ext, const char *fn_name, ...);
+
+<span class="cmt">// 加载器初始化</span>
+<span class="cmt">// buf_loader: 结构体初始化</span>
+<span class="cmt">// fs_loader: llext_fs_loader_init()</span>
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/llext/llext.c</code> LLEXT 核心实现（411行）。<br>
+  <code>subsys/llext/llext_load.c</code> ELF 加载逻辑。<br>
+  <code>subsys/llext/llext_mem.c</code> 内存管理。<br>
+  <code>include/zephyr/llext/llext.h</code> LLEXT API 定义。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

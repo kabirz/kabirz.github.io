@@ -224,8 +224,47 @@
     { t:"NumPy 数据可视化", f:"python-numpy-charts.html", top:"python" },
     { t:"vivid TPG 测试图形", f:"linux-vivid-patterns.html", top:"python" },
     { t:"torchvision 测试图形生成", f:"python-torchvision-patterns.html", top:"python" },
+    { t:"Zephyr RTOS 整体架构", f:"zephyr-overview.html", top:"zephyr" },
+    { t:"Zephyr 内核调度器", f:"zephyr-scheduler.html", top:"zephyr" },
+    { t:"Zephyr 线程模型", f:"zephyr-thread.html", top:"zephyr" },
+    { t:"Zephyr 内存管理", f:"zephyr-memory.html", top:"zephyr" },
+    { t:"Zephyr 同步原语", f:"zephyr-synchronization.html", top:"zephyr" },
+    { t:"Zephyr 进程间通信", f:"zephyr-ipc.html", top:"zephyr" },
+    { t:"Zephyr 定时器与时间管理", f:"zephyr-timer.html", top:"zephyr" },
+    { t:"Zephyr 中断与异常处理", f:"zephyr-interrupt.html", top:"zephyr" },
+    { t:"Zephyr 设备模型", f:"zephyr-device-model.html", top:"zephyr" },
+    { t:"Zephyr 设备树", f:"zephyr-device-tree.html", top:"zephyr" },
+    { t:"Zephyr 驱动框架", f:"zephyr-driver-framework.html", top:"zephyr" },
+    { t:"Zephyr 电源管理", f:"zephyr-power-management.html", top:"zephyr" },
+    { t:"Zephyr 网络栈", f:"zephyr-networking.html", top:"zephyr" },
+    { t:"Zephyr 蓝牙协议栈", f:"zephyr-bluetooth.html", top:"zephyr" },
+    { t:"Zephyr 构建系统", f:"zephyr-build-system.html", top:"zephyr" },
+    { t:"Zephyr 追踪与调试", f:"zephyr-tracing.html", top:"zephyr" },
+    { t:"Zephyr 安全机制", f:"zephyr-security.html", top:"zephyr" },
+    { t:"Zephyr zbus 消息总线", f:"zephyr-zbus.html", top:"zephyr" },
+    { t:"Zephyr SMP 多核支持", f:"zephyr-smp.html", top:"zephyr" },
+    { t:"Zephyr 文件系统", f:"zephyr-filesystem.html", top:"zephyr" },
+    { t:"Zephyr 工作队列", f:"zephyr-workqueue.html", top:"zephyr" },
+    { t:"Zephyr USB 子系统", f:"zephyr-usb.html", top:"zephyr" },
+    { t:"Zephyr LLEXT 可加载扩展", f:"zephyr-llext.html", top:"zephyr" },
+    { t:"Zephyr MCU 管理器", f:"zephyr-mcumgr.html", top:"zephyr" },
+    { t:"Zephyr Modem 子系统", f:"zephyr-modem.html", top:"zephyr" },
+    { t:"Zephyr 设备固件升级", f:"zephyr-dfu.html", top:"zephyr" },
+    { t:"Zephyr 传感量子系统", f:"zephyr-sensing.html", top:"zephyr" },
+    { t:"Zephyr CAN 总线", f:"zephyr-can.html", top:"zephyr" },
+    { t:"Zephyr LoRaWAN", f:"zephyr-lorawan.html", top:"zephyr" },
+    { t:"Zephyr Modbus 协议", f:"zephyr-modbus.html", top:"zephyr" },
+    { t:"Zephyr RTIO 异步 I/O", f:"zephyr-rtio.html", top:"zephyr" },
+    { t:"Zephyr POSIX 兼容层", f:"zephyr-posix.html", top:"zephyr" },
+    { t:"Zephyr 输入子系统", f:"zephyr-input.html", top:"zephyr" },
+    { t:"Zephyr 统计子系统", f:"zephyr-stats.html", top:"zephyr" },
+    { t:"Zephyr Settings 持久化", f:"zephyr-settings.html", top:"zephyr" },
+    { t:"Zephyr 随机数子系统", f:"zephyr-random.html", top:"zephyr" },
+    { t:"Zephyr Retention 掉电保留", f:"zephyr-retention.html", top:"zephyr" },
+    { t:"Zephyr 任务看门狗", f:"zephyr-task-wdt.html", top:"zephyr" },
+    { t:"Zephyr 网络管理", f:"zephyr-net-management.html", top:"zephyr" },
   ];
-  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"Linux 网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", python:"Python 开发", other:"硬件与平台" };
+  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"Linux 网络", zephyr:"Zephyr RTOS", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", python:"Python 开发", other:"硬件与平台" };
 
   // 主题切换
   var STORAGE_KEY = 'kernel-docs-theme';
@@ -310,7 +349,7 @@
     var html = '<div class="doc-sidebar-hdr"><a class="back" href="index.html">← 导航页</a><div class="btns"><button class="hdr-btn" id="sb-collapse" title="收起">‹</button></div></div>';
     html += '<div class="sidebar-search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input type="text" id="sb-search-input" placeholder="搜索文档..."></div>';
     html += '<nav class="doc-sidebar-nav">';
-    var SIDEBAR_ORDER = ['linux', 'net', 'docker', 'rust', 'python', 'windows', 'vision', 'go'];
+    var SIDEBAR_ORDER = ['linux', 'net', 'zephyr', 'docker', 'rust', 'python', 'windows', 'vision', 'go'];
     Object.keys(tops).sort(function(a,b){ return SIDEBAR_ORDER.indexOf(a) - SIDEBAR_ORDER.indexOf(b); }).forEach(function(top) {
       var cat = tops[top];
       if (!cat || !cat.items || !cat.items.length) return;
@@ -541,4 +580,15 @@
     document.body.appendChild(s);
   }
   loadNext(0);
+
+  // Mermaid 初始化
+  if (typeof mermaid !== 'undefined') {
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default',
+      themeVariables: {
+        darkMode: document.documentElement.getAttribute('data-theme') === 'dark'
+      }
+    });
+  }
 })();

@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr RTOS 整体架构深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr RTOS 整体架构深度解析</h1>
+  <p class="subtitle">内核架构 / 子系统全景 / 构建系统 / 多平台支持 / 安全模型</p>
+  <span class="version">Zephyr 4.x · Apache-2.0 · 实时操作系统 · 嵌入式</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#arch">架构全景</a></li>
+    <li><a href="#kernel">内核层</a></li>
+    <li><a href="#subsys">子系统层</a></li>
+    <li><a href="#hal">HAL 与 BSP</a></li>
+    <li><a href="#build">构建系统</a></li>
+    <li><a href="#security">安全模型</a></li>
+    <li><a href="#platform">多平台支持</a></li>
+    <li><a href="#vs-linux">与 Linux 对比</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">01</span> 架构全景</h2>
+
+  <p>Zephyr 是一个面向资源受限设备的<strong>实时操作系统（RTOS）</strong>，由 Linux 基金会托管，支持从 8-bit MCU 到 64-bit SoC 的广泛硬件平台。其架构采用分层设计，从底层硬件抽象到上层应用框架，每一层都有明确的职责边界。</p>
+
+  <h3>整体分层架构</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层 (Application)<br><small>main.c · 子系统 API · Shell 命令 · 日志 · 追踪</small>"]
+    L1["子系统层 (Subsystems)<br><small>网络 · 蓝牙 · 文件系统 · USB · 电源管理 · DFU · 安全</small>"]
+    L0 --> L1
+    L2["内核层 (Kernel)<br><small>调度器 · 线程 · 同步原语 · 内存管理 · 定时器 · IPC</small>"]
+    L1 --> L2
+    L3["驱动框架 (Drivers)<br><small>设备模型 · 设备树 · GPIO/SPI/I2C/UART · 传感器</small>"]
+    L2 --> L3
+    L4["HAL / BSP (Hardware Abstraction)<br><small>arch/ (ARM/RISC-V/x86/ARC) · SoC · Board 支持</small>"]
+    L3 --> L4
+    L5["硬件 (Hardware)<br><small>Cortex-M/A/R · RISC-V · x86 · ARC · Xtensa · MIPS</small>"]
+    L4 --> L5
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L5 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+
+  <h3>源码目录结构</h3>
+
+  <div class="mermaid">
+graph TD
+    Z["zephyr/"] --> K["kernel/<br>内核核心"]
+    Z --> A["arch/<br>架构移植"]
+    Z --> D["drivers/<br>设备驱动"]
+    Z --> S["subsys/<br>子系统"]
+    Z --> I["include/<br>公共头文件"]
+    Z --> L["lib/<br>库"]
+    Z --> B["boards/<br>板级支持"]
+    Z --> DT["dts/<br>设备树绑定"]
+    Z --> C["cmake/<br>CMake 构建"]
+    Z --> SC["scripts/<br>构建脚本"]
+    Z --> SA["samples/<br>示例程序"]
+    Z --> T["tests/<br>测试套件"]
+    Z --> M["modules/<br>外部模块"]
+    style Z fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+  <h3>关键设计哲学</h3>
+
+  <table>
+    <tr><th>原则</th><th>说明</th><th>实现</th></tr>
+    <tr><td>可裁剪</td><td>只编译需要的功能</td><td>Kconfig 配置系统，最小配置可低至 8KB RAM</td></tr>
+    <tr><td>可移植</td><td>架构无关的内核设计</td><td>arch/ 抽象层，14 种处理器架构</td></tr>
+    <tr><td>实时性</td><td>确定性响应</td><td>优先级抢占、零中断延迟、时间片轮转</td></tr>
+    <tr><td>安全优先</td><td>内存保护 + 特权隔离</td><td>用户态、MPU/MMU 支持、栈保护</td></tr>
+    <tr><td>零开销抽象</td><td>编译时决策替代运行时</td><td>static_key、编译时设备树解析</td></tr>
+  </table>
+</section>
+
+<section id="kernel" class="toc-link">
+  <h2><span class="num">02</span> 内核层</h2>
+
+  <p>Zephyr 内核是整个系统的核心，提供线程管理、调度、同步、内存管理和时间管理等基础服务。内核代码位于 <code>kernel/</code> 目录，约 50 个源文件。</p>
+
+  <h3>内核模块一览</h3>
+
+  <table>
+    <tr><th>模块</th><th>源文件</th><th>功能</th></tr>
+    <tr><td>调度器</td><td><code>sched.c</code> / <code>scheduler.c</code></td><td>优先级调度、时间片、EDF</td></tr>
+    <tr><td>线程</td><td><code>thread.c</code></td><td>线程创建/删除/生命周期管理</td></tr>
+    <tr><td>互斥锁</td><td><code>mutex.c</code></td><td>优先级继承互斥锁</td></tr>
+    <tr><td>信号量</td><td><code>sem.c</code></td><td>计数信号量</td></tr>
+    <tr><td>事件</td><td><code>events.c</code></td><td>位掩码事件标志</td></tr>
+    <tr><td>消息队列</td><td><code>msg_q.c</code></td><td>固定大小消息队列</td></tr>
+    <tr><td>管道</td><td><code>pipe.c</code></td><td>字节流管道</td></tr>
+    <tr><td>邮箱</td><td><code>mailbox.c</code></td><td>异步消息传递</td></tr>
+    <tr><td>FIFO/LIFO</td><td><code>queue.c</code></td><td>先进先出/后进先出队列</td></tr>
+    <tr><td>内存池</td><td><code>mempool.c</code></td><td>固定大小块内存池</td></tr>
+    <tr><td>内存分配</td><td><code>kheap.c</code></td><td>动态堆内存分配</td></tr>
+    <tr><td>内存 Slab</td><td><code>mem_slab.c</code></td><td>固定大小对象分配器</td></tr>
+    <tr><td>定时器</td><td><code>timer.c</code></td><td>软件定时器</td></tr>
+    <tr><td>超时</td><td><code>timeout.c</code></td><td>超时队列管理</td></tr>
+    <tr><td>空闲</td><td><code>idle.c</code></td><td>CPU 空闲管理</td></tr>
+    <tr><td>致命错误</td><td><code>fatal.c</code></td><td>内核异常处理</td></tr>
+    <tr><td>设备</td><td><code>device.c</code></td><td>设备初始化框架</td></tr>
+    <tr><td>SMP</td><td><code>smp/</code></td><td>对称多处理支持</td></tr>
+  </table>
+
+  <h3>内核启动流程</h3>
+
+<pre><code class="language-c"><span class="cmt">// 内核初始化入口（arch/xxx/head.S → start_kernel）</span>
+void z_cstart(void)
+{
+    <span class="cmt">// 1. 关中断，初始化架构</span>
+    z_irq_lock();
+    z_arch_kernel_init();
+
+    <span class="cmt">// 2. 初始化内核数据结构</span>
+    z_sched_init();        <span class="cmt">// 调度器初始化</span>
+    k_mem_heap_init();     <span class="cmt">// 堆初始化</span>
+    z_timeout_init();      <span class="cmt">// 超时队列初始化</span>
+
+    <span class="cmt">// 3. 执行 SYS_INIT 钩子（PRE_KERNEL_1/2）</span>
+    z_sys_init_run_level(SYS_INIT_EARLIEST);
+    z_sys_init_run_level(SYS_INIT_PRE_KERNEL_1);
+    z_sys_init_run_level(SYS_INIT_PRE_KERNEL_2);
+
+    <span class="cmt">// 4. 创建 main 线程</span>
+    z_prepare_multithreading();
+
+    <span class="cmt">// 5. 执行 POST_KERNEL 钩子</span>
+    z_sys_init_run_level(SYS_INIT_POST_KERNEL);
+
+    <span class="cmt">// 6. 启动调度器，永不返回</span>
+    z_swap_unlocked();
+}
+</code></pre>
+
+  <h3>调度优先级体系</h3>
+
+  <p>Zephyr 使用<strong>数值越小优先级越高</strong>的模型，分为协作式和抢占式两大类：</p>
+
+<pre><code class="language-c"><span class="cmt">// 优先级定义（include/zephyr/kernel.h）</span>
+<span class="cmt">// 协作线程：负数优先级（-N ~ -1）</span>
+#define K_PRIO_COOP(x)    (-(CONFIG_NUM_COOP_PRIORITIES - (x)))
+
+<span class="cmt">// 抢占线程：非负优先级（0 ~ N-1）</span>
+#define K_PRIO_PREEMPT(x) (x)
+
+<span class="cmt">// 最高/最低优先级</span>
+#define K_HIGHEST_THREAD_PRIO  (-CONFIG_NUM_COOP_PRIORITIES)
+#define K_LOWEST_THREAD_PRIO   CONFIG_NUM_PREEMPT_PRIORITIES
+#define K_IDLE_PRIO            K_LOWEST_THREAD_PRIO
+</code></pre>
+
+  <table>
+    <tr><th>优先级范围</th><th>类型</th><th>特点</th></tr>
+    <tr><td><code>-CONFIG_NUM_COOP_PRIORITIES</code> ~ <code>-1</code></td><td>协作式</td><td>不可被抢占，主动让出 CPU</td></tr>
+    <tr><td><code>0</code> ~ <code>CONFIG_NUM_PREEMPT_PRIORITIES-1</code></td><td>抢占式</td><td>可被更高优先级线程抢占</td></tr>
+    <tr><td><code>K_LOWEST_THREAD_PRIO</code></td><td>空闲线程</td><td>最低优先级，执行 idle 回调</td></tr>
+  </table>
+</section>
+
+<section id="subsys" class="toc-link">
+  <h2><span class="num">03</span> 子系统层</h2>
+
+  <p>Zephyr 的子系统层位于 <code>subsys/</code> 目录，提供丰富的中间件和功能模块，涵盖通信、存储、安全等多个领域。</p>
+
+  <h3>子系统全景</h3>
+
+  <table>
+    <tr><th>类别</th><th>子系统</th><th>说明</th></tr>
+    <tr><td rowspan="3">通信</td><td>蓝牙（bluetooth/）</td><td>BLE Host + Controller，支持 Mesh、Audio</td></tr>
+    <tr><td>网络（net/）</td><td>BSD Socket API、TCP/UDP/IP、LwM2M、MQTT</td></tr>
+    <tr><td>zbus</td><td>发布-订阅消息总线</td></tr>
+    <tr><td rowspan="3">存储</td><td>文件系统（fs/）</td><td>FAT、LittleFS、ext2、NFS</td></tr>
+    <tr><td>Flash（flash/）</td><td>Flash 存储管理</td></tr>
+    <tr><td>Settings</td><td>键值对持久化存储</td></tr>
+    <tr><td rowspan="2">安全</td><td>安全存储（secure_storage/）</td><td>PSA 加密存储</td></tr>
+    <tr><td>认证（authentication/）</td><td>设备认证框架</td></tr>
+    <tr><td rowspan="2">设备管理</td><td>DFU</td><td>设备固件升级</td></tr>
+    <tr><td>Modem（modem/）</td><td>蜂窝 modem 管理</td></tr>
+    <tr><td rowspan="2">调试</td><td>Shell</td><td>交互式命令行</td></tr>
+    <tr><td>Logging</td><td>分级日志系统</td></tr>
+    <tr><td>电源</td><td>PM（pm/）</td><td>电源管理策略、设备休眠</td></tr>
+    <tr><td>其他</td><td>Tracing</td><td>系统级追踪（SystemView/CTF）</td></tr>
+  </table>
+
+  <h3>子系统依赖关系</h3>
+
+  <div class="mermaid">
+graph TD
+    APP["应用层"] --> BT["蓝牙 → Host → HCI → 驱动"]
+    APP --> NET["网络 → TCP/IP → net_if → 驱动"]
+    APP --> ZB["zbus → 内核 IPC → 消息队列"]
+    APP --> FS["文件系统 → VFS → Flash 驱动"]
+    APP --> SH["Shell → UART 驱动"]
+    APP --> LOG["日志 → 后端"]
+    APP --> PM["PM → 设备 PM → 架构 PM"]
+    style APP fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+</section>
+
+<section id="hal" class="toc-link">
+  <h2><span class="num">04</span> HAL 与 BSP</h2>
+
+  <p>硬件抽象层（HAL）和板级支持包（BSP）是 Zephyr 多平台支持的基石。HAL 定义了架构相关的接口，BSP 则封装了具体硬件的配置。</p>
+
+  <h3>架构抽象层（arch/）</h3>
+
+  <p>Zephyr 支持 14 种处理器架构，每种架构在 <code>arch/</code> 下有独立的实现：</p>
+
+  <table>
+    <tr><th>架构</th><th>目录</th><th>支持的 SoC</th></tr>
+    <tr><td>ARM Cortex-M</td><td><code>arm/</code></td><td>STM32、NXP、Nordic、TI</td></tr>
+    <tr><td>ARM Cortex-A/R</td><td><code>arm64/</code></td><td>i.MX 8、RPi 4</td></tr>
+    <tr><td>RISC-V</td><td><code>riscv/</code></td><td>ESP32、GD32、SiFive</td></tr>
+    <tr><td>x86</td><td><code>x86/</code></td><td>IA-32、x86_64</td></tr>
+    <tr><td>ARC</td><td><code>arc/</code></td><td>Synopsys ARC EM/HS</td></tr>
+    <tr><td>Xtensa</td><td><code>xtensa/</code></td><td>ESP32 系列</td></tr>
+  </table>
+
+  <h3>架构接口定义</h3>
+
+  <p>每个架构必须实现以下核心接口（定义在 <code>include/zephyr/arch/</code>）：</p>
+
+<pre><code class="language-c"><span class="cmt">// 架构必须实现的接口</span>
+void z_arch_kernel_init(void);           <span class="cmt">// 架构初始化</span>
+void z_arch_switch(void *switch_to, void **switch_from);
+                                         <span class="cmt">// 上下文切换</span>
+void z_arch_isr_install(int irq, void (*routine)(void *), void *arg);
+                                         <span class="cmt">// 中断安装</span>
+void z_irq_lock(unsigned int *flags);    <span class="cmt">// 中断屏蔽</span>
+void z_irq_unlock(unsigned int flags);   <span class="cmt">// 中断恢复</span>
+</code></pre>
+
+  <h3>Board 与 SoC 定义</h3>
+
+  <p>板级支持通过设备树和 Kconfig 定义，位于 <code>boards/</code> 目录：</p>
+
+<pre><code class="language-c"><span class="cmt">// 典型的 board 目录结构</span>
+boards/arm/stm32f4_disco/
+├── stm32f4_disco.dts        <span class="cmt">// 设备树源文件</span>
+├── stm32f4_disco_defconfig  <span class="cmt">// 默认 Kconfig 配置</span>
+├── board.cmake               <span class="cmt">// CMake 板级配置</span>
+├── pins.yaml                 <span class="cmt">// 引脚配置</span>
+└── README.rst                <span class="cmt">// 板级说明</span>
+</code></pre>
+</section>
+
+<section id="build" class="toc-link">
+  <h2><span class="num">05</span> 构建系统</h2>
+
+  <p>Zephyr 使用 <strong>CMake + Kconfig + West</strong> 三层构建系统，提供灵活的配置和构建能力。</p>
+
+  <h3>构建工具链</h3>
+
+  <table>
+    <tr><th>工具</th><th>作用</th><th>说明</th></tr>
+    <tr><td>West</td><td>元工具</td><td>管理多仓库、构建、调试的统一入口</td></tr>
+    <tr><td>CMake</td><td>构建系统</td><td>生成 Ninja/Make 构建文件</td></tr>
+    <tr><td>Kconfig</td><td>配置系统</td><td>内核功能裁剪（menuconfig）</td></tr>
+    <tr><td>Devicetree</td><td>硬件描述</td><td>硬件拓扑的编译时描述</td></tr>
+  </table>
+
+  <h3>构建流程</h3>
+
+<pre><code class="language-bash"><span class="cmt"># 1. 基本构建命令</span>
+west build -b stm32f4_disco samples/basic/blinky
+
+<span class="cmt"># 2. 配置（menuconfig）</span>
+west build -b stm32f4_disco samples/basic/blinky -t menuconfig
+
+<span class="cmt"># 3. 闪存</span>
+west flash
+
+<span class="cmt"># 4. 调试</span>
+west debug
+</code></pre>
+
+  <h3>Kconfig 配置层次</h3>
+
+<pre><code class="language-bash"><span class="cmt"># 配置优先级（从高到低）：</span>
+<span class="cmt"># 1. application/prj.conf          ← 用户配置</span>
+<span class="cmt"># 2. boards/&lt;board&gt;_defconfig      ← 板级默认</span>
+<span class="cmt"># 3. arch/&lt;arch&gt;/Kconfig           ← 架构配置</span>
+<span class="cmt"># 4. subsys/Kconfig, drivers/Kconfig ← 子系统默认</span>
+<span class="cmt"># 5. Kconfig.zephyr                ← 内核默认</span>
+</code></pre>
+
+  <h3>编译时优化</h3>
+
+  <p>Zephyr 大量使用编译时决策来避免运行时开销：</p>
+
+<pre><code class="language-c"><span class="cmt">// 1. 编译时设备树访问（零开销）</span>
+#define DT_ALIAS(x) DT_NODELABEL(DT_ALIAS(x))
+<span class="cmt">// 编译时解析，生成常量地址</span>
+<span class="cmt">// DT_REG_ADDR(DT_NODELABEL(spi1)) → 0x40013000</span>
+
+<span class="cmt">// 2. 条件编译（CONFIG_XXX）</span>
+#ifdef CONFIG_USERSPACE
+    <span class="cmt">// 仅在启用用户态时编译</span>
+#endif
+
+<span class="cmt">// 3. 迭代器段（可变数组，编译时构建）</span>
+STRUCT_SECTION_FOREACH(device, dev) {
+    <span class="cmt">// 遍历所有已注册设备</span>
+}
+</code></pre>
+</section>
+
+<section id="security" class="toc-link">
+  <h2><span class="num">06</span> 安全模型</h2>
+
+  <p>Zephyr 提供多层安全机制，从内存保护到加密支持，适用于 IoT 安全场景。</p>
+
+  <h3>安全层次</h3>
+
+  <table>
+    <tr><th>层次</th><th>机制</th><th>说明</th></tr>
+    <tr><td>内存保护</td><td>MPU/MMU</td><td>用户态/内核态隔离、栈溢出检测</td></tr>
+    <tr><td>用户态</td><td>CONFIG_USERSPACE</td><td>系统调用过滤、权限控制</td></tr>
+    <tr><td>栈保护</td><td>CONFIG_STACK_CANARIES</td><td>栈金丝雀溢出检测</td></tr>
+    <tr><td>加密</td><td>PSA Crypto</td><td>TinyCrypt、Mbed TLS、硬件加密</td></tr>
+    <tr><td>安全启动</td><td>MCUboot</td><td>签名验证、回滚保护</td></tr>
+    <tr><td>安全存储</td><td>secure_storage</td><td>PSA 加密密钥存储</td></tr>
+  </table>
+
+  <h3>用户态与内核态</h3>
+
+<pre><code class="language-c"><span class="cmt">// 用户态线程通过系统调用访问内核服务</span>
+<span class="cmt">// 编译时生成 syscall 桩代码</span>
+
+<span class="cmt">// 内核侧（kernel/mutex.c）</span>
+int z_impl_k_mutex_lock(struct k_mutex *mutex, k_timeout_t timeout)
+{
+    <span class="cmt">// 实际实现</span>
+}
+
+<span class="cmt">// 用户态桩（自动生成）</span>
+static inline int z_vrfy_k_mutex_lock(struct k_mutex *mutex, k_timeout_t timeout)
+{
+    K_OOPS(K_SYSCALL_OBJ(mutex, K_OBJ_MUTEX));
+    return z_impl_k_mutex_lock(mutex, timeout);
+}
+#include &lt;zephyr/syscalls/k_mutex_lock_mrsh.c&gt;
+</code></pre>
+</section>
+
+<section id="platform" class="toc-link">
+  <h2><span class="num">07</span> 多平台支持</h2>
+
+  <p>Zephyr 的核心优势之一是广泛的硬件支持，从几 KB RAM 的 MCU 到多核 SoC 都能运行。</p>
+
+  <h3>支持的硬件平台</h3>
+
+  <table>
+    <tr><th>厂商</th><th>系列</th><th>架构</th></tr>
+    <tr><td>Nordic</td><td>nRF52/53/91</td><td>ARM Cortex-M33/M4</td></tr>
+    <tr><td>ST</td><td>STM32L4/F4/H7</td><td>ARM Cortex-M4/M7</td></tr>
+    <tr><td>NXP</td><td>i.MX RT/LPC</td><td>ARM Cortex-M7/M33</td></tr>
+    <tr><td>Espressif</td><td>ESP32 系列</td><td>Xtensa/RISC-V</td></tr>
+    <tr><td>TI</td><td>CC1352/CC2652</td><td>ARM Cortex-M4F</td></tr>
+    <tr><td>GD32</td><td>GD32VF103</td><td>RISC-V</td></tr>
+    <tr><td>Intel</td><td>x86/x86_64</td><td>IA-32/x86_64</td></tr>
+  </table>
+
+  <h3>资源占用范围</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["Zephyr 资源占用范围<br><small>&nbsp;</small>"]
+    L1["最小配置：<br><small>RAM：8 KB（Cortex-M0+ 最小系统）ROM：4 KB（仅内核 + 一个线程）典型 IoT 节点：RAM：32-256 KBROM：128-512 </small>"]
+    L0 --> L1
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="vs-linux" class="toc-link">
+  <h2><span class="num">08</span> 与 Linux 对比</h2>
+
+  <p>Zephyr 和 Linux 虽然都源自嵌入式领域，但设计目标和架构有本质区别：</p>
+
+  <table>
+    <tr><th>维度</th><th>Zephyr</th><th>Linux</th></tr>
+    <tr><td>定位</td><td>资源受限 MCU/RTOS</td><td>通用 OS / 服务器</td></tr>
+    <tr><td>内存需求</td><td>最低 8 KB RAM</td><td>最低 4 MB RAM</td></tr>
+    <tr><td>进程模型</td><td>无进程，仅线程</td><td>进程 + 线程</td></tr>
+    <tr><td>调度</td><td>优先级抢占 + 协作</td><td>CFS/EEVDF 抢占式</td></tr>
+    <tr><td>虚拟内存</td><td>可选（MPU/MMU）</td><td>必需（虚拟地址空间）</td></tr>
+    <tr><td>设备模型</td><td>编译时静态注册</td><td>运行时动态发现</td></tr>
+    <tr><td>构建系统</td><td>CMake + Kconfig</td><td>Kbuild + Kconfig</td></tr>
+    <tr><td>驱动框架</td><td>轻量级 API</td><td>完整子系统</td></tr>
+    <tr><td>用户态</td><td>可选（系统调用）</td><td>必需</td></tr>
+    <tr><td>实时性</td><td>硬实时</td><td>软实时（PREEMPT_RT）</td></tr>
+  </table>
+
+  <h3>关键差异</h3>
+
+  <p><strong>设备注册方式</strong>：Linux 在运行时通过总线枚举动态注册设备，Zephyr 在编译时通过设备树静态定义设备。这使得 Zephyr 的设备初始化开销为零，但不支持热插拔。</p>
+
+<pre><code class="language-c"><span class="cmt">// Zephyr：编译时设备定义</span>
+DEVICE_DT_INST_DEFINE(n, init_fn, pm, &data, &config, POST_KERNEL,
+                      CONFIG_GPIO_INIT_PRIORITY, &api);
+
+<span class="cmt">// Linux：运行时动态注册（platform_device_register）</span>
+platform_device_register(&pdev);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>kernel/sched.c</code> 调度器核心实现。<br>
+  <code>kernel/thread.c</code> 线程生命周期管理。<br>
+  <code>include/zephyr/kernel.h</code> 内核公共 API 定义。<br>
+  <code>include/zephyr/device.h</code> 设备模型核心数据结构。<br>
+  <code>Kconfig.zephyr</code> 内核配置选项全集。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

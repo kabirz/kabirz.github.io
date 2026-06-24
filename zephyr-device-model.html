@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 设备模型深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 设备模型深度解析</h1>
+  <p class="subtitle">device 结构体 / 设备定义宏 / 初始化流程 / 设备树绑定 / 驱动 API</p>
+  <span class="version">Zephyr 4.x · device.h · init.h · devicetree.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">设备模型概览</a></li>
+    <li><a href="#device-struct">device 结构体</a></li>
+    <li><a href="#device-def">设备定义宏</a></li>
+    <li><a href="#init">初始化流程</a></li>
+    <li><a href="#dt">设备树绑定</a></li>
+    <li><a href="#api">驱动 API</a></li>
+    <li><a href="#example">GPIO 驱动示例</a></li>
+    <li><a href="#best">最佳实践</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 设备模型概览</h2>
+
+  <p>Zephyr 的设备模型提供统一的硬件抽象，通过设备树（Devicetree）描述硬件拓扑，编译时生成设备实例。</p>
+
+  <h3>设备模型层次</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>device_get_binding('gpio0') →</small>"]
+    L1["设备抽象层<br><small>device.h — struct device · device_is_ready() · 获取设备</small>"]
+    L0 --> L1
+    L2["驱动 API 层<br><small>drivers/gpio.h 等 — gpio_pin_configure() · spi_transceive()</small>"]
+    L1 --> L2
+    L3["设备树层<br><small>devicetree.h — DT_NODELABEL() · DT_PROP() · DT_REG_ADDR()</small>"]
+    L2 --> L3
+    L4["硬件层<br><small>寄存器地址 · 中断号 · 时钟 · 引脚</small>"]
+    L3 --> L4
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+</section>
+
+<section id="device-struct" class="toc-link">
+  <h2><span class="num">02</span> device 结构体</h2>
+
+<pre><code class="language-c"><span class="cmt">// include/zephyr/device.h</span>
+struct device {
+    const char *name;              <span class="cmt">// 设备名称</span>
+    const void *config;            <span class="cmt">// 编译时常量配置（来自设备树）</span>
+    const void *api;               <span class="cmt">// 驱动 API 函数表</span>
+    void *data;                    <span class="cmt">// 驱动运行时数据</span>
+    int state;                     <span class="cmt">// 设备状态</span>
+
+    <span class="cmt">// 依赖设备句柄（编译时构建）</span>
+    device_handle_t *deps;
+    int8_t num_deps;
+
+<span class="cmt">#ifdef CONFIG_PM_DEVICE</span>
+    struct pm_device *pm;          <span class="cmt">// 电源管理</span>
+<span class="cmt">#endif</span>
+
+<span class="cmt">#ifdef CONFIG_OBJ_CORE_DEVICE</span>
+    struct k_obj_core obj_core;    <span class="cmt">// 对象核心</span>
+<span class="cmt">#endif</span>
+};
+
+<span class="cmt">// 设备句柄（紧凑表示）</span>
+typedef int16_t device_handle_t;
+</code></pre>
+
+  <h3>设备状态</h3>
+
+  <table>
+    <tr><th>状态</th><th>宏</th><th>含义</th></tr>
+    <tr><td>未初始化</td><td><code>DEVICE_STATE_UNINITIALIZED</code></td><td>设备尚未初始化</td></tr>
+    <tr><td>就绪</td><td><code>DEVICE_STATE_READY</code></td><td>设备已初始化，可用</td></tr>
+  </table>
+</section>
+
+<section id="device-def" class="toc-link">
+  <h2><span class="num">03</span> 设备定义宏</h2>
+
+<pre><code class="language-c"><span class="cmt">// 方式 1：基于设备树节点定义（推荐）</span>
+#define DT_DRV_COMPAT vendor_compatible_name
+DEVICE_DT_INST_DEFINE(n, init_fn, pm_ops, &data, &config,
+                      POST_KERNEL, CONFIG_GPIO_INIT_PRIORITY, &api);
+
+<span class="cmt">// 方式 2：静态定义</span>
+DEVICE_DEFINE(dev_name, "DEV_NAME", init_fn, pm_ops, &data, &config,
+              level, prio, &api);
+
+<span class="cmt">// 方式 3：动态注册</span>
+<span class="cmt">// 不推荐：Zephyr 主要使用编译时定义</span>
+</code></pre>
+
+  <h3>宏展开示例</h3>
+
+<pre><code class="language-c"><span class="cmt">// DEVICE_DT_INST_DEFINE 展开为：</span>
+<span class="cmt">// 1. 定义 config 结构体（从设备树提取）</span>
+<span class="cmt">// 2. 定义 data 结构体（驱动私有数据）</span>
+<span class="cmt">// 3. 定义 device 结构体</span>
+<span class="cmt">// 4. 注册到 .devconfig 段</span>
+<span class="cmt">// 5. 添加初始化钩子到 SYS_INIT</span>
+
+<span class="cmt">// 实际展开：</span>
+<span class="cmt">// static const struct gpio_config _dev_config_n = {</span>
+<span class="cmt">//     .base = DT_INST_REG_ADDR(n),</span>
+<span class="cmt">//     .irq = DT_INST_IRQN(n),</span>
+<span class="cmt">// };</span>
+<span class="cmt">// static struct gpio_data _dev_data_n;</span>
+<span class="cmt">// DEVICE_INST(n) = {</span>
+<span class="cmt">//     .name = DT_INST_LABEL(n),</span>
+<span class="cmt">//     .config = &_dev_config_n,</span>
+<span class="cmt">//     .api = &gpio_api,</span>
+<span class="cmt">//     .data = &_dev_data_n,</span>
+<span class="cmt">// };</span>
+</code></pre>
+</section>
+
+<section id="init" class="toc-link">
+  <h2><span class="num">04</span> 初始化流程</h2>
+
+  <h3>SYS_INIT 钩子</h3>
+
+<pre><code class="language-c"><span class="cmt">// 初始化级别（include/zephyr/init.h）</span>
+<span class="cmt">// SYS_INIT_EARLIEST  = -32768</span>
+<span class="cmt">// SYS_INIT_PRE_KERNEL_1 = -1000</span>
+<span class="cmt">// SYS_INIT_PRE_KERNEL_2 = -100</span>
+<span class="cmt">// SYS_INIT_POST_KERNEL = 0</span>
+<span class="cmt">// SYS_INIT_APPLICATION = 100</span>
+<span class="cmt">// SYS_INIT_LATE = 200</span>
+
+<span class="cmt">// 设备初始化级别：</span>
+<span class="cmt">// PRE_KERNEL_1: 架构初始化后，内核初始化前</span>
+<span class="cmt">// PRE_KERNEL_2: 内核初始化后，调度器启动前</span>
+<span class="cmt">// POST_KERNEL: 调度器启动后</span>
+<span class="cmt">// APPLICATION: 应用代码执行前</span>
+<span class="cmt">// LATE: 所有初始化完成后</span>
+</code></pre>
+
+  <h3>设备初始化顺序</h3>
+
+  <div class="mermaid">
+graph TD
+    P1["PRE_KERNEL_1<br>基础硬件初始化（时钟、中断控制器）"] --> P2["PRE_KERNEL_2<br>设备驱动初始化（GPIO、UART、SPI）"]
+    P2 --> P3["POST_KERNEL<br>需要调度器的设备（网络、蓝牙）"]
+    P3 --> P4["APPLICATION<br>应用代码初始化"]
+    P4 --> P5["LATE<br>最后初始化的设备"]
+    style P1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style P2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style P3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style P4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style P5 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+  <h3>依赖解析</h3>
+
+<pre><code class="language-c"><span class="cmt">// 设备依赖通过设备树自动推断</span>
+<span class="cmt">// 如果设备 A 依赖设备 B（通过 phandle 引用）</span>
+<span class="cmt">// 则 B 会在 A 之前初始化</span>
+
+<span class="cmt">// 例如：</span>
+<span class="cmt">// spi1: spi@40013000 { ... };</span>
+<span class="cmt">// sensor: sensor@0 {</span>
+<span class="cmt">//     spi-device = <&spi1>;  ← 依赖 spi1</span>
+<span class="cmt">// };</span>
+<span class="cmt">// → spi1 在 sensor 之前初始化</span>
+</code></pre>
+</section>
+
+<section id="dt" class="toc-link">
+  <h2><span class="num">05</span> 设备树绑定</h2>
+
+  <p>设备树（Devicetree）在编译时描述硬件拓扑，生成常量配置数据。</p>
+
+  <h3>设备树宏</h3>
+
+<pre><code class="language-c"><span class="cmt">// 设备树访问宏（include/zephyr/devicetree.h）</span>
+
+<span class="cmt">// 节点标识</span>
+DT_NODELABEL(uart0)              <span class="cmt">// 按标签引用</span>
+DT_ALIAS(gpio0)                  <span class="cmt">// 按别名引用</span>
+DT_INST(n, vendor_compatible)    <span class="cmt">// 按 compatible 实例引用</span>
+
+<span class="cmt">// 寄存器</span>
+DT_REG_ADDR(node_id)             <span class="cmt">// 基地址</span>
+DT_REG_SIZE(node_id)             <span class="cmt">// 地址范围大小</span>
+
+<span class="cmt">// 属性</span>
+DT_PROP(node_id, prop_name)      <span class="cmt">// 属性值</span>
+DT_NODE_HAS_PROP(node_id, prop)  <span class="cmt">// 是否有属性</span>
+DT_PROP_LEN(node_id, prop)       <span class="cmt">// 数组属性长度</span>
+
+<span class="cmt">// 中断</span>
+DT_INST_IRQN(n)                  <span class="cmt">// 中断号</span>
+DT_INST_IRQ(n, idx)              <span class="cmt">// 中断规格</span>
+
+<span class="cmt">// GPIO</span>
+DT_INST_GPIO_PIN(n, gpios, pin)  <span class="cmt">// GPIO 引脚</span>
+DT_INST_GPIO_FLAGS(n, gpios, pin)<span class="cmt">// GPIO 标志</span>
+</code></pre>
+
+  <h3>设备树示例</h3>
+
+<pre><code class="language-c"><span class="cmt">// DTS 源文件（.dts）</span>
+/ {
+    chosen {
+        zephyr,console = &uart0;
+    };
+
+    gpio0: gpio@50000000 {
+        compatible = "nordic,nrf-gpio";
+        reg = <0x50000000 0x1000>;
+        #gpio-cells = <2>;
+    };
+
+    i2c0: i2c@40003000 {
+        compatible = "nordic,nrf-twi";
+        reg = <0x40003000 0x1000>;
+        interrupts = <3 0>;
+        clock-frequency = <I2C_BITRATE_FAST>;
+
+        bme280: bme280@76 {
+            compatible = "bosch,bme280";
+            reg = <0x76>;
+        };
+    };
+};
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">06</span> 驱动 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 设备管理 API</span>
+const struct device *device_get_binding(const char *name);
+bool device_is_ready(const struct device *dev);
+int device_init(const struct device *dev);
+
+<span class="cmt">// GPIO API（drivers/gpio.h）</span>
+int gpio_pin_configure(const struct device *dev, gpio_pin_t pin, gpio_flags_t flags);
+int gpio_pin_set(const struct device *dev, gpio_pin_t pin, int value);
+int gpio_pin_get(const struct device *dev, gpio_pin_t pin);
+int gpio_pin_interrupt_configure(const struct device *dev, gpio_pin_t pin, gpio_flags_t flags);
+
+<span class="cmt">// SPI API（drivers/spi.h）</span>
+int spi_transceive(const struct device *dev, const struct spi_config *config,
+                   const struct spi_buf_set *tx_bufs, const struct spi_buf_set *rx_bufs);
+int spi_read(const struct device *dev, const struct spi_config *config,
+             const struct spi_buf_set *rx_bufs);
+int spi_write(const struct device *dev, const struct spi_config *config,
+              const struct spi_buf_set *tx_bufs);
+
+<span class="cmt">// I2C API（drivers/i2c.h）</span>
+int i2c_read(const struct device *dev, uint8_t *buf, uint32_t num_bytes, uint16_t addr);
+int i2c_write(const struct device *dev, const uint8_t *buf, uint32_t num_bytes, uint16_t addr);
+int i2c_transfer(const struct device *dev, struct i2c_msg *msgs, int num_msgs, uint16_t addr);
+
+<span class="cmt">// UART API（drivers/serial.h）</span>
+int uart_tx(const struct device *dev, const uint8_t *buf, size_t len, k_timeout_t timeout);
+int uart_rx_enable(const struct device *dev, uint8_t *buf, size_t len, k_timeout_t timeout);
+</code></pre>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">07</span> GPIO 驱动示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// GPIO 驱动注册（简化版）</span>
+
+<span class="cmt">// 1. 定义驱动配置（从设备树提取）</span>
+struct gpio_nrf_config {
+    uint32_t base;
+    int irq;
+};
+
+<span class="cmt">// 2. 定义驱动数据</span>
+struct gpio_nrf_data {
+    gpio_callback_t cb;
+};
+
+<span class="cmt">// 3. 驱动 API 实现</span>
+static const struct gpio_driver_api gpio_nrf_api = {
+    .pin_configure = gpio_nrf_pin_configure,
+    .pin_set = gpio_nrf_pin_set,
+    .pin_get = gpio_nrf_pin_get,
+    .pin_interrupt_configure = gpio_nrf_pin_interrupt_configure,
+};
+
+<span class="cmt">// 4. 设备树绑定宏</span>
+#define GPIO_NRF_INIT(n) \
+    static struct gpio_nrf_data gpio_nrf_data_##n; \
+    DEVICE_DT_INST_DEFINE(n, gpio_nrf_init, NULL, \
+                          &gpio_nrf_data_##n, \
+                          &gpio_nrf_config_##n, \
+                          POST_KERNEL, \
+                          CONFIG_GPIO_INIT_PRIORITY, \
+                          &gpio_nrf_api);
+
+<span class="cmt">// 5. 为每个设备树实例生成代码</span>
+DT_INST_FOREACH_STATUS_OKAY(GPIO_NRF_INIT);
+</code></pre>
+</section>
+
+<section id="best" class="toc-link">
+  <h2><span class="num">08</span> 最佳实践</h2>
+
+  <table>
+    <tr><th>实践</th><th>说明</th></tr>
+    <tr><td>使用设备树</td><td>硬件配置通过设备树定义，不要硬编码</td></tr>
+    <tr><td>DEVICE_DT_INST_DEFINE</td><td>基于设备树实例定义设备，支持多实例</td></tr>
+    <tr><td>设备就绪检查</td><td>使用 device_is_ready() 检查设备状态</td></tr>
+    <tr><td>初始化级别</td><td>选择正确的初始化级别，避免循环依赖</td></tr>
+    <tr><td>错误处理</td><td>检查所有 API 返回值</td></tr>
+    <tr><td>ISR 安全</td><td>检查 API 是否可在 ISR 中使用</td></tr>
+  </table>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>include/zephyr/device.h</code> 设备模型核心定义。<br>
+  <code>kernel/device.c</code> 设备初始化框架。<br>
+  <code>include/zephyr/devicetree.h</code> 设备树访问宏。<br>
+  <code>drivers/gpio/</code> GPIO 驱动实现示例。<br>
+  <code>include/zephyr/drivers/gpio.h</code> GPIO 驱动 API。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

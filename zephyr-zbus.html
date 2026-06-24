@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr zbus 消息总线深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr zbus 消息总线深度解析</h1>
+  <p class="subtitle">发布-订阅 / 通道 / 观察者 / 远程代理 / 编译时构建</p>
+  <span class="version">Zephyr 4.x · subsys/zbus/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">zbus 概览</a></li>
+    <li><a href="#channel">通道 (Channel)</a></li>
+    <li><a href="#observer">观察者 (Observer)</a></li>
+    <li><a href="#publish">发布与订阅</a></li>
+    <li><a href="#proxy">远程代理</a></li>
+    <li><a href="#internals">内部实现</a></li>
+    <li><a href="#compare">zbus vs 其他 IPC</a></li>
+    <li><a href="#api">zbus API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> zbus 概览</h2>
+
+  <p>zbus 是 Zephyr 的<strong>发布-订阅消息总线</strong>，实现松耦合的线程间通信，编译时构建，零运行时开销。</p>
+
+  <h3>核心概念</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>zbus_chan_pub() · zbus_chan_sub()</small>"]
+    L1["zbus 核心层（subsys/zbus/zbus.c）<br><small>通道管理 · 观察者通知 · 迭代器段</small>"]
+    L0 --> L1
+    L2["远程代理层（subsys/zbus/proxy_agent/）<br><small>跨设备通信 · UART/网络传输</small>"]
+    L1 --> L2
+    L3["内核 IPC 层<br><small>信号量 · 消息队列 · 工作队列</small>"]
+    L2 --> L3
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+
+  <h3>设计优势</h3>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>编译时构建</td><td>通道和观察者在编译时静态定义</td></tr>
+    <tr><td>零运行时开销</td><td>不使用动态内存分配</td></tr>
+    <tr><td>松耦合</td><td>发布者和订阅者无需直接引用</td></tr>
+    <tr><td>类型安全</td><td>通道消息类型在编译时检查</td></tr>
+    <tr><td>远程代理</td><td>支持跨设备通信</td></tr>
+  </table>
+</section>
+
+<section id="channel" class="toc-link">
+  <h2><span class="num">02</span> 通道 (Channel)</h2>
+
+  <p>通道是 zbus 的核心抽象，代表一个消息主题。</p>
+
+  <h3>定义通道</h3>
+
+<pre><code class="language-c"><span class="cmt">// 包含 zbus 头文件</span>
+#include &lt;zephyr/zbus/zbus.h&gt;
+
+<span class="cmt">// 定义消息类型</span>
+struct sensor_msg {
+    uint32_t timestamp;
+    int32_t temperature;
+    int32_t humidity;
+};
+
+<span class="cmt">// 定义通道</span>
+ZBUS_CHAN_DEFINE(sensor_chan,
+    ZBUS_CHAN_NAME("sensor"),     <span class="cmt">// 通道名</span>
+    ZBUS_MSG_INIT(0),             <span class="cmt">// 初始消息</span>
+    &amp;sensor_data,                 <span class="cmt">// 消息数据</span>
+    NULL,                         <span class="cmt">// 无用户态访问</span>
+    ZBUS_OBSERVERS_EMPTY,         <span class="cmt">// 初始无观察者</span>
+    ZBUS_CHAN_PREPARE_INIT(0)
+);
+
+<span class="cmt">// 或使用便利宏</span>
+ZBUS_CHAN_DEFINE_WITH_NAME(struct sensor_msg, sensor_chan,
+                           "sensor", &amp;sensor_data);
+</code></pre>
+
+  <h3>通道属性</h3>
+
+  <table>
+    <tr><th>属性</th><th>说明</th></tr>
+    <tr><td>名称</td><td>通道字符串标识</td></tr>
+    <tr><td>消息类型</td><td>编译时类型检查</td></tr>
+    <tr><td>观察者列表</td><td>订阅该通道的观察者</td></tr>
+    <tr><td>访问控制</td><td>用户态/内核态权限</td></tr>
+  </table>
+</section>
+
+<section id="observer" class="toc-link">
+  <h2><span class="num">03</span> 观察者 (Observer)</h2>
+
+  <p>观察者是通道消息的消费者，当通道有新消息时被通知。</p>
+
+<pre><code class="language-c"><span class="cmt">// 定义观察者处理函数</span>
+static void sensor_handler(const struct zbus_channel *chan)
+{
+    <span class="cmt">// 获取通道消息</span>
+    const struct sensor_msg *msg = zbus_chan_const_msg(chan);
+
+    <span class="cmt">// 处理数据</span>
+    printk("温度: %d°C, 湿度: %d%%\n",
+           msg-&gt;temperature, msg-&gt;humidity);
+}
+
+<span class="cmt">// 注册观察者</span>
+ZBUS_OBS_DEFINE(sensor_handler);
+ZBUS_CHAN_ADD_OBS(sensor_chan, sensor_handler, 1);
+<span class="cmt">// 参数：通道, 观察者, 优先级（0 最高）</span>
+</code></pre>
+
+  <h3>观察者优先级</h3>
+
+<pre><code class="language-c"><span class="cmt">// 观察者按优先级排序执行</span>
+<span class="cmt">// 优先级 0：最先执行</span>
+<span class="cmt">// 优先级 1：次之</span>
+<span class="cmt">// ...</span>
+
+ZBUS_CHAN_ADD_OBS(sensor_chan, high_prio_observer, 0);  <span class="cmt">// 最高优先级</span>
+ZBUS_CHAN_ADD_OBS(sensor_chan, low_prio_observer, 5);   <span class="cmt">// 较低优先级</span>
+</code></pre>
+</section>
+
+<section id="publish" class="toc-link">
+  <h2><span class="num">04</span> 发布与订阅</h2>
+
+  <h3>发布消息</h3>
+
+<pre><code class="language-c"><span class="cmt">// 发布消息到通道</span>
+struct sensor_msg data = {
+    .timestamp = k_uptime_ms(),
+    .temperature = 25,
+    .humidity = 60,
+};
+
+<span class="cmt">// 同步发布（等待所有观察者完成）</span>
+zbus_chan_pub(&amp;sensor_chan, &amp;data, K_FOREVER);
+
+<span class="cmt">// 异步发布（立即返回）</span>
+zbus_chan_pub(&amp;sensor_chan, &amp;data, K_NO_WAIT);
+
+<span class="cmt">// ISR 中发布</span>
+zbus_chan_pub(&amp;sensor_chan, &amp;data, K_NO_WAIT);
+</code></pre>
+
+  <h3>订阅消息</h3>
+
+<pre><code class="language-c"><span class="cmt">// 方式 1：观察者回调（推荐）</span>
+ZBUS_OBS_DEFINE(my_observer);
+ZBUS_CHAN_ADD_OBS(sensor_chan, my_observer, 1);
+
+<span class="cmt">// 方式 2：主动读取</span>
+struct sensor_msg msg;
+zbus_chan_read(&amp;sensor_chan, &amp;msg, K_FOREVER);
+
+<span class="cmt">// 方式 3：使用信号量等待</span>
+K_SEM_DEFINE(sensor_sem, 0, 1);
+
+<span class="cmt">// 观察者中通知</span>
+static void sensor_notify(const struct zbus_channel *chan)
+{
+    k_sem_give(&amp;sensor_sem);
+}
+
+<span class="cmt">// 线程中等待</span>
+void worker_thread(void)
+{
+    while (1) {
+        k_sem_take(&amp;sensor_sem, K_FOREVER);
+        zbus_chan_read(&amp;sensor_chan, &amp;msg, K_NO_WAIT);
+        <span class="cmt">// 处理消息...</span>
+    }
+}
+</code></pre>
+</section>
+
+<section id="proxy" class="toc-link">
+  <h2><span class="num">05</span> 远程代理</h2>
+
+  <p>zbus 远程代理支持跨设备通信，通过 UART 或网络传输通道消息。</p>
+
+<pre><code class="language-c"><span class="cmt">// 远程代理配置</span>
+<span class="cmt">// CONFIG_ZBUS_PROXY_AGENT=y</span>
+
+<span class="cmt">// 代理通道</span>
+ZBUS_CHAN_DEFINE(remote_chan,
+    ZBUS_CHAN_NAME("remote"),
+    ZBUS_MSG_INIT(0),
+    &amp;remote_data,
+    NULL,
+    ZBUS_OBSERVERS(remote_proxy),
+    ZBUS_CHAN_PREPARE_INIT(0)
+);
+
+<span class="cmt">// 代理观察者（通过 UART 传输）</span>
+<span class="cmt">// 在远端设备上解包并分发到本地通道</span>
+</code></pre>
+</section>
+
+<section id="internals" class="toc-link">
+  <h2><span class="num">06</span> 内部实现</h2>
+
+<pre><code class="language-c"><span class="cmt">// zbus 内部使用迭代器段（ITERABLE_SECTION）</span>
+<span class="cmt">// 通道和观察者在编译时链接到特殊段</span>
+<span class="cmt">// 运行时通过段遍历访问</span>
+
+<span class="cmt">// 核心数据结构（subsys/zbus/zbus.c）</span>
+struct zbus_channel {
+    const char *name;
+    void *data;
+    size_t data_size;
+    struct zbus_observer_obs_desc *observers;
+    uint8_t num_observers;
+};
+
+<span class="cmt">// 发布流程：</span>
+<span class="cmt">// 1. 拷贝消息数据到通道</span>
+<span class="cmt">// 2. 遍历观察者段</span>
+<span class="cmt">// 3. 按优先级调用观察者回调</span>
+<span class="cmt">// 4. 观察者可读取通道消息</span>
+</code></pre>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">07</span> zbus vs 其他 IPC</h2>
+
+  <table>
+    <tr><th>特性</th><th>zbus</th><th>k_fifo</th><th>k_msgq</th></tr>
+    <tr><td>通信模式</td><td>发布-订阅</td><td>点对点</td><td>点对点</td></tr>
+    <tr><td>解耦程度</td><td>高</td><td>低</td><td>低</td></tr>
+    <tr><td>多消费者</td><td>支持</td><td>不支持</td><td>不支持</td></tr>
+    <tr><td>类型安全</td><td>编译时</td><td>运行时</td><td>编译时</td></tr>
+    <tr><td>运行时开销</td><td>零</td><td>低</td><td>低</td></tr>
+    <tr><td>远程通信</td><td>支持</td><td>不支持</td><td>不支持</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> zbus API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 通道操作</span>
+int zbus_chan_pub(const struct zbus_channel *chan, const void *data, k_timeout_t timeout);
+int zbus_chan_read(const struct zbus_channel *chan, void *data, k_timeout_t timeout);
+int zbus_chan_claim(const struct zbus_channel *chan, k_timeout_t timeout);
+int zbus_chan_finish(const struct zbus_channel *chan);
+
+<span class="cmt">// 通道信息</span>
+const void *zbus_chan_const_msg(const struct zbus_channel *chan);
+void *zbus_chan_msg(const struct zbus_channel *chan);
+
+<span class="cmt">// 观察者管理</span>
+int zbus_chan_add_obs(const struct zbus_channel *chan, const struct zbus_observer *obs, int priority);
+int zbus_chan_rm_obs(const struct zbus_channel *chan, const struct zbus_observer *obs);
+
+<span class="cmt">// 宏定义</span>
+ZBUS_CHAN_DEFINE(name, ...)
+ZBUS_OBS_DEFINE(name)
+ZBUS_CHAN_ADD_OBS(channel, observer, priority)
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/zbus/zbus.c</code> zbus 核心实现。<br>
+  <code>include/zephyr/zbus/zbus.h</code> zbus API 定义。<br>
+  <code>subsys/zbus/proxy_agent/</code> 远程代理实现。<br>
+  <code>tests/subsys/zbus/</code> zbus 测试用例。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

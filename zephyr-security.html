@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 安全机制深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 安全机制深度解析</h1>
+  <p class="subtitle">MPU / MMU / 用户态 / 加密 / PSA / MCUboot / 安全启动</p>
+  <span class="version">Zephyr 4.x · secure_storage · authentication</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">安全机制概览</a></li>
+    <li><a href="#mpu-mmu">MPU / MMU 内存保护</a></li>
+    <li><a href="#userspace">用户态隔离</a></li>
+    <li><a href="#crypto">加密服务</a></li>
+    <li><a href="#psa">PSA 认证</a></li>
+    <li><a href="#mcuboot">MCUboot 安全启动</a></li>
+    <li><a href="#stack-protect">栈保护</a></li>
+    <li><a href="#api">安全 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 安全机制概览</h2>
+
+  <p>Zephyr 提供多层安全机制，从硬件内存保护到软件加密，适用于 IoT 安全场景。</p>
+
+  <h3>安全层次</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用安全<br><small>加密存储 · 安全通信 · 设备认证</small>"]
+    L1["软件安全<br><small>PSA Crypto · TLS · DTLS · IPSec</small>"]
+    L0 --> L1
+    L2["系统安全<br><small>用户态隔离 · 栈保护 · 系统调用过滤</small>"]
+    L1 --> L2
+    L3["硬件安全<br><small>MPU / MMU · TrustZone · HSM · 安全启动</small>"]
+    L2 --> L3
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="mpu-mmu" class="toc-link">
+  <h2><span class="num">02</span> MPU / MMU 内存保护</h2>
+
+  <p>MPU（Memory Protection Unit）和 MMU（Memory Management Unit）提供硬件级内存保护。</p>
+
+  <h3>MPU（Cortex-M）</h3>
+
+<pre><code class="language-c"><span class="cmt">// MPU 配置</span>
+<span class="cmt">// CONFIG_HW_STACK_PROTECTION=y     ← 栈溢出检测</span>
+<span class="cmt">// CONFIG_USERSPACE=y               ← 用户态支持</span>
+<span class="cmt">// CONFIG_MPU_REQUIRES_POWER_OF_TWO_ALIGNMENT=y</span>
+
+<span class="cmt">// MPU 保护区域</span>
+<span class="cmt">// - 线程栈：读写，用户态可访问</span>
+<span class="cmt">// - 内核数据：读写，仅内核可访问</span>
+<span class="cmt">// - 外设寄存器：读写，仅驱动可访问</span>
+<span class="cmt">// - Flash：只读，所有代码可执行</span>
+
+<span class="cmt">// MPU 区域限制</span>
+<span class="cmt">// Cortex-M0+: 0 个区域（无 MPU）</span>
+<span class="cmt">// Cortex-M3/M4: 8 个区域</span>
+<span class="cmt">// Cortex-M7: 8 或 16 个区域</span>
+<span class="cmt">// Cortex-M33: 16 个区域</span>
+</code></pre>
+
+  <h3>MMU（Cortex-A / x86）</h3>
+
+<pre><code class="language-c"><span class="cmt">// MMU 提供更灵活的内存保护</span>
+<span class="cmt">// CONFIG_MMU=y</span>
+
+<span class="cmt">// 虚拟内存映射</span>
+<span class="cmt">// - 页表保护</span>
+<span class="cmt">// - 按需分页</span>
+<span class="cmt">// - 写时复制（COW）</span>
+<span class="cmt">// - 虚拟地址空间隔离</span>
+</code></pre>
+</section>
+
+<section id="userspace" class="toc-link">
+  <h2><span class="num">03</span> 用户态隔离</h2>
+
+  <p>用户态线程通过系统调用访问内核服务，实现内核/用户态隔离。</p>
+
+<pre><code class="language-c"><span class="cmt">// 启用用户态</span>
+<span class="cmt">// CONFIG_USERSPACE=y</span>
+<span class="cmt">// CONFIG_STACK_PROTECTION=y</span>
+
+<span class="cmt">// 用户态线程创建</span>
+K_THREAD_DEFINE(user_tid, STACK_SIZE,
+                user_entry, NULL, NULL, NULL,
+                K_PRIO_PREEMPT(5),
+                K_USER,         <span class="cmt">// 用户态标志</span>
+                K_NO_WAIT);
+
+<span class="cmt">// 系统调用机制</span>
+<span class="cmt">// 1. 用户态调用 API</span>
+<span class="cmt">// 2. 编译时生成的桩代码检查权限</span>
+<span class="cmt">// 3. SVC 中断切换到内核态</span>
+<span class="cmt">// 4. 内核执行实际操作</span>
+<span class="cmt">// 5. 返回用户态</span>
+
+<span class="cmt">// 权限控制</span>
+<span class="cmt">// - 线程只能访问自己内存域中的对象</span>
+<span class="cmt">// - 设备访问通过权限位图控制</span>
+<span class="cmt">// - 内核对象通过权限掩码保护</span>
+</code></pre>
+</section>
+
+<section id="crypto" class="toc-link">
+  <h2><span class="num">04</span> 加密服务</h2>
+
+  <p>Zephyr 支持多种加密后端，从软件实现到硬件加速。</p>
+
+  <h3>加密后端</h3>
+
+  <table>
+    <tr><th>后端</th><th>Kconfig</th><th>说明</th></tr>
+    <tr><td>TinyCrypt</td><td><code>CONFIG_TINYCRYPT=y</code></td><td>轻量级软件加密</td></tr>
+    <tr><td>Mbed TLS</td><td><code>CONFIG_MBEDTLS=y</code></td><td>完整 TLS 库</td></tr>
+    <tr><td>PSA Crypto</td><td><code>CONFIG_PSA_CRYPTO=y</code></td><td>PSA 认证加密 API</td></tr>
+    <tr><td>硬件加密</td><td>SoC 特定</td><td>ARM CryptoCell、nRF CC310</td></tr>
+  </table>
+
+<pre><code class="language-c"><span class="cmt">// TinyCrypt 使用示例</span>
+#include &lt;zephyr/crypto/random.h&gt;
+
+<span class="cmt">// 生成随机数</span>
+uint8_t random_bytes[32];
+sys_rand_get(random_bytes, sizeof(random_bytes));
+
+<span class="cmt">// AES 加密</span>
+#include &lt;zephyr/crypto/cipher.h&gt;
+
+<span class="cmt">// Mbed TLS 使用示例</span>
+<span class="cmt">// TLS 客户端连接</span>
+<span class="cmt">// CONFIG_MBEDTLS=y</span>
+<span class="cmt">// CONFIG_NET_SOCKETS_SOCKOPT_TLS=y</span>
+</code></pre>
+</section>
+
+<section id="psa" class="toc-link">
+  <h2><span class="num">05</span> PSA 认证</h2>
+
+  <p>PSA（Platform Security Architecture）提供标准化的安全 API。</p>
+
+<pre><code class="language-c"><span class="cmt">// PSA Crypto API</span>
+<span class="cmt">// CONFIG_PSA_CRYPTO=y</span>
+
+<span class="cmt">// 密钥管理</span>
+psa_key_attributes_t attrs = PSA_KEY_ATTRIBUTES_INIT;
+psa_set_key_type(&attrs, PSA_KEY_TYPE_AES);
+psa_set_key_bits(&attrs, 128);
+psa_set_key_usage_flags(&attrs, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+
+psa_key_handle_t key_handle;
+psa_generate_key(&attrs, &key_handle);
+
+<span class="cmt">// 加密</span>
+size_t output_len;
+psa_cipher_encrypt(key_handle, PSA_ALG_CBC_PKCS7,
+                   plaintext, plaintext_len,
+                   ciphertext, ciphertext_size, &output_len);
+
+<span class="cmt">// PSA 认证存储</span>
+<span class="cmt">// CONFIG_SECURE_STORAGE=y</span>
+<span class="cmt">// 使用 PSA API 安全存储密钥和数据</span>
+</code></pre>
+</section>
+
+<section id="mcuboot" class="toc-link">
+  <h2><span class="num">06</span> MCUboot 安全启动</h2>
+
+  <p>MCUboot 提供安全启动、固件签名验证和回滚保护。</p>
+
+  <h3>MCUboot 功能</h3>
+
+  <table>
+    <tr><th>功能</th><th>说明</th></tr>
+    <tr><td>安全启动</td><td>验证固件签名后再执行</td></tr>
+    <tr><td>固件升级</td><td>支持 OTA 安全升级</td></tr>
+    <tr><td>回滚保护</td><td>升级失败自动回退</td></tr>
+    <tr><td>加密存储</td><td>加密固件镜像</td></tr>
+  </table>
+
+<pre><code class="language-c"><span class="cmt">// MCUboot 配置</span>
+<span class="cmt">// CONFIG_BOOTLOADER_MCUBOOT=y</span>
+<span class="cmt">// CONFIG_MCUBOOT_SIGNATURE=y          ← 签名验证</span>
+<span class="cmt">// CONFIG_MCUBOOT_ENCRYPTION=y         ← 加密固件</span>
+<span class="cmt">// CONFIG_IMG_MANAGER=y                ← 镜像管理</span>
+<span class="cmt">// CONFIG_STREAM_FLASH=y               ← 流式 Flash 写入</span>
+
+<span class="cmt">// 固件签名</span>
+<span class="cmt">// 使用 imgtool 生成签名密钥</span>
+<span class="cmt">// imgtool keygen -k signing-key.pem -t RSA-2048</span>
+<span class="cmt">// imgtool sign --key signing-key.pem firmware.bin signed.bin</span>
+</code></pre>
+</section>
+
+<section id="stack-protect" class="toc-link">
+  <h2><span class="num">07</span> 栈保护</h2>
+
+  <h3>栈金丝雀</h3>
+
+<pre><code class="language-c"><span class="cmt">// 栈金丝雀（CONFIG_STACK_CANARIES=y）</span>
+<span class="cmt">// 在栈底写入随机魔数</span>
+<span class="cmt">// 函数返回时检查魔数是否被覆盖</span>
+<span class="cmt">// 如果被覆盖 → 栈溢出 → 致命异常</span>
+
+<span class="cmt">// MPU 栈保护</span>
+<span class="cmt">// CONFIG_HW_STACK_PROTECTION=y</span>
+<span class="cmt">// 使用 MPU 硬件检测栈溢出</span>
+<span class="cmt">// 栈溢出触发 MemManage 异常</span>
+
+<span class="cmt">// 线程栈信息</span>
+<span class="cmt">// CONFIG_THREAD_STACK_INFO=y</span>
+<span class="cmt">// 可查询每个线程的栈使用率</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 安全 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 随机数</span>
+int sys_rand_get(void *buf, size_t len);
+
+<span class="cmt">// PSA Crypto</span>
+psa_status_t psa_generate_random(uint8_t *output, size_t output_size);
+psa_status_t psa_hash_compute(psa_algorithm_t alg, const uint8_t *input,
+                              size_t input_length, uint8_t *hash,
+                              size_t hash_size, size_t *hash_length);
+
+<span class="cmt">// 栈保护</span>
+<span class="cmt">// CONFIG_STACK_CANARIES=y</span>
+<span class="cmt">// CONFIG_HW_STACK_PROTECTION=y</span>
+
+<span class="cmt">// 用户态</span>
+<span class="cmt">// CONFIG_USERSPACE=y</span>
+<span class="cmt">// CONFIG_MEMORY_PROTECTION=y</span>
+
+<span class="cmt">// 安全启动</span>
+<span class="cmt">// CONFIG_BOOTLOADER_MCUBOOT=y</span>
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/secure_storage/</code> 安全存储实现。<br>
+  <code>subsys/random/</code> 随机数生成。<br>
+  <code>include/zephyr/mgmt/mcumgr/</code> MCU 管理器。<br>
+  <code>arch/arm/core/mpu/</code> ARM MPU 实现。<br>
+  <code>lib/os/</code> 安全相关库函数。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

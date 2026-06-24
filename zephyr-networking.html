@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 网络栈深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 网络栈深度解析</h1>
+  <p class="subtitle">BSD Socket / TCP / UDP / IPv4/IPv6 / net_if / net_pkt / LwM2M</p>
+  <span class="version">Zephyr 4.x · subsys/net/ · ip/ · l2/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">网络栈概览</a></li>
+    <li><a href="#arch">网络架构</a></li>
+    <li><a href="#net-if">网络接口 (net_if)</a></li>
+    <li><a href="#net-pkt">网络包 (net_pkt)</a></li>
+    <li><a href="#bsd-socket">BSD Socket API</a></li>
+    <li><a href="#tcp-udp">TCP / UDP</a></li>
+    <li><a href="#ipv4-ipv6">IPv4 / IPv6</a></li>
+    <li><a href="#protocols">高层协议</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 网络栈概览</h2>
+
+  <p>Zephyr 内置完整的 TCP/IP 网络栈，支持 BSD Socket API、多种 L2 协议和高层应用协议。</p>
+
+  <h3>支持的协议</h3>
+
+  <table>
+    <tr><th>层次</th><th>协议</th><th>说明</th></tr>
+    <tr><td>L2</td><td>Ethernet / Wi-Fi / BLE</td><td>链路层</td></tr>
+    <tr><td>L2</td><td>IEEE 802.15.4 / LoRa</td><td>低功耗无线</td></tr>
+    <tr><td>L3</td><td>IPv4 / IPv6</td><td>网络层</td></tr>
+    <tr><td>L4</td><td>TCP / UDP / ICMP</td><td>传输层</td></tr>
+    <tr><td>应用</td><td>MQTT / CoAP / HTTP / LwM2M</td><td>应用协议</td></tr>
+    <tr><td>安全</td><td>TLS / DTLS / IPSec</td><td>安全传输</td></tr>
+  </table>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 网络架构</h2>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>BSD Socket API · MQTT · CoAP · HTTP</small>"]
+    L1["传输层<br><small>TCP · UDP · ICMPv4/v6</small>"]
+    L0 --> L1
+    L2["网络层<br><small>IPv4 · IPv6 · 路由 · 邻居管理</small>"]
+    L1 --> L2
+    L3["L2 适配层<br><small>Ethernet · Wi-Fi · IEEE 802.15.4 · BLE · 6LoWPAN</small>"]
+    L2 --> L3
+    L4["网络接口层<br><small>net_if · net_pkt · 网络管理</small>"]
+    L3 --> L4
+    L5["驱动层<br><small>eth_mcux · wpa_supplicant · nrf5_ieee802154</small>"]
+    L4 --> L5
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L5 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="net-if" class="toc-link">
+  <h2><span class="num">03</span> 网络接口 (net_if)</h2>
+
+  <p><code>net_if</code> 是 Zephyr 网络栈的核心抽象，代表一个网络接口。</p>
+
+<pre><code class="language-c"><span class="cmt">// 网络接口结构体（简化）</span>
+struct net_if {
+    const struct net_if_api *if_dev;   <span class="cmt">// 接口 API</span>
+    struct net_if_config *config;      <span class="cmt">// 接口配置</span>
+    struct net_l2 *l2;                 <span class="cmt">// L2 层</span>
+    struct net_if_addr *ipv4;          <span class="cmt">// IPv4 地址</span>
+    struct net_if_addr *ipv6;          <span class="cmt">// IPv6 地址</span>
+    <span class="cmt">// ...</span>
+};
+
+<span class="cmt">// 获取网络接口</span>
+struct net_if *net_if_get_default(void);
+struct net_if *net_if_get_by_index(int index);
+
+<span class="cmt">// 接口管理</span>
+int net_if_up(struct net_if *iface);
+int net_if_down(struct net_if *iface);
+</code></pre>
+</section>
+
+<section id="net-pkt" class="toc-link">
+  <h2><span class="num">04</span> 网络包 (net_pkt)</h2>
+
+  <p><code>net_pkt</code> 是网络栈中数据包的表示，管理多层协议头和数据。</p>
+
+<pre><code class="language-c"><span class="cmt">// 网络包结构</span>
+struct net_pkt {
+    struct net_buf *buffer;        <span class="cmt">// 数据缓冲区</span>
+    struct net_if *iface;          <span class="cmt">// 关联的网络接口</span>
+    uint16_t len;                  <span class="cmt">// 总长度</span>
+    <span class="cmt">// 各层偏移量（用于零拷贝协议头处理）</span>
+    uint16_t l2_offset;
+    uint16_t l3_offset;
+    uint16_t l4_offset;
+    <span class="cmt">// ...</span>
+};
+
+<span class="cmt">// 分配和释放</span>
+struct net_pkt *net_pkt_alloc(struct net_if *iface);
+void net_pkt_unref(struct net_pkt *pkt);
+
+<span class="cmt">// 数据访问</span>
+uint8_t *net_pkt_data(struct net_pkt *pkt);
+int net_pkt_get_len(struct net_pkt *pkt);
+</code></pre>
+</section>
+
+<section id="bsd-socket" class="toc-link">
+  <h2><span class="num">05</span> BSD Socket API</h2>
+
+  <p>Zephyr 提供兼容 POSIX 的 BSD Socket API，简化网络应用开发。</p>
+
+<pre><code class="language-c"><span class="cmt">// 标准 BSD Socket API</span>
+#include &lt;zephyr/net/socket.h&gt;
+
+<span class="cmt">// TCP 客户端示例</span>
+int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+struct sockaddr_in addr;
+addr.sin_family = AF_INET;
+addr.sin_port = htons(8080);
+inet_pton(AF_INET, "192.168.1.100", &addr.sin_addr);
+
+connect(sock, (struct sockaddr *)&addr, sizeof(addr));
+
+char request[] = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
+send(sock, request, sizeof(request), 0);
+
+char response[512];
+recv(sock, response, sizeof(response), 0);
+
+close(sock);
+
+<span class="cmt">// UDP 示例</span>
+int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+bind(sock, (struct sockaddr *)&addr, sizeof(addr));
+sendto(sock, data, len, 0, &dest_addr, sizeof(dest_addr));
+recvfrom(sock, buffer, sizeof(buffer), 0, &src_addr, &addr_len);
+</code></pre>
+
+  <h3>Socket 选项</h3>
+
+<pre><code class="language-c"><span class="cmt">// 常用 Socket 选项</span>
+int opt = 1;
+setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+<span class="cmt">// Zephyr 特有选项</span>
+<span class="cmt">// SO_RCVTIMEO - 接收超时</span>
+<span class="cmt">// SO_SNDTIMEO - 发送超时</span>
+<span class="cmt">// SO_BINDTODEVICE - 绑定到特定接口</span>
+</code></pre>
+</section>
+
+<section id="tcp-udp" class="toc-link">
+  <h2><span class="num">06</span> TCP / UDP</h2>
+
+  <h3>TCP 实现</h3>
+
+<pre><code class="language-c"><span class="cmt">// Zephyr TCP 特点：</span>
+<span class="cmt">// 1. 完整的 TCP 状态机</span>
+<span class="cmt">// 2. 拥塞控制（可配置）</span>
+<span class="cmt">// 3. 重传机制</span>
+<span class="cmt">// 4. 滑动窗口</span>
+
+<span class="cmt">// TCP 连接管理</span>
+<span class="cmt">// subsys/net/ip/tcp.c</span>
+<span class="cmt">// - TCP 连接建立（三次握手）</span>
+<span class="cmt">// - 数据传输</span>
+<span class="cmt">// - 连接关闭（四次挥手）</span>
+<span class="cmt">// - 超时重传</span>
+
+<span class="cmt">// Kconfig 配置</span>
+<span class="cmt">// CONFIG_NET_TCP=y</span>
+<span class="cmt">// CONFIG_NET_TCP_CONGESTION_CUBIC=y</span>
+<span class="cmt">// CONFIG_NET_TCP_RETRY_COUNT=9</span>
+</code></pre>
+
+  <h3>UDP 实现</h3>
+
+<pre><code class="language-c"><span class="cmt">// UDP 特点：</span>
+<span class="cmt">// 1. 无连接</span>
+<span class="cmt">// 2. 轻量级</span>
+<span class="cmt">// 3. 支持广播/多播</span>
+
+<span class="cmt">// UDP 多播</span>
+struct ip_mreq mreq;
+mreq.imr_multiaddr.s_addr = inet_addr("239.255.0.1");
+mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
+</code></pre>
+</section>
+
+<section id="ipv4-ipv6" class="toc-link">
+  <h2><span class="num">07</span> IPv4 / IPv6</h2>
+
+  <h3>IPv4 特性</h3>
+
+<pre><code class="language-c"><span class="cmt">// IPv4 支持</span>
+<span class="cmt">// - 静态/DHCP 地址配置</span>
+<span class="cmt">// - ICMPv4 (ping)</span>
+<span class="cmt">// - ARP</span>
+<span class="cmt">// - IGMP 组播</span>
+
+<span class="cmt">// DHCPv4 客户端</span>
+<span class="cmt">// CONFIG_NET_DHCPV4=y</span>
+net_dhcpv4_start(iface);
+</code></pre>
+
+  <h3>IPv6 特性</h3>
+
+<pre><code class="language-c"><span class="cmt">// IPv6 支持</span>
+<span class="cmt">// - SLAAC（无状态地址自动配置）</span>
+<span class="cmt">// - DHCPv6</span>
+<span class="cmt">// - 邻居发现（NDP）</span>
+<span class="cmt">// - 6LoWPAN（低功耗无线适配）</span>
+<span class="cmt">// - 多播</span>
+
+<span class="cmt">// IPv6 地址</span>
+struct in6_addr addr;
+inet_pton(AF_INET6, "fe80::1", &addr);
+</code></pre>
+</section>
+
+<section id="protocols" class="toc-link">
+  <h2><span class="num">08</span> 高层协议</h2>
+
+  <table>
+    <tr><th>协议</th><th>目录</th><th>说明</th></tr>
+    <tr><td>MQTT</td><td><code>subsys/net/lib/mqtt/</code></td><td>轻量级物联网消息协议</td></tr>
+    <tr><td>CoAP</td><td><code>subsys/net/lib/coap/</code></td><td>受限应用协议（RESTful）</td></tr>
+    <tr><td>HTTP</td><td><code>subsys/net/lib/http/</code></td><td>HTTP 客户端/服务器</td></tr>
+    <tr><td>LwM2M</td><td><code>subsys/net/lib/lwm2m/</code></td><td>设备管理协议</td></tr>
+    <tr><td>WebSocket</td><td><code>subsys/net/lib/websocket/</code></td><td>WebSocket 客户端</td></tr>
+    <tr><td>mDNS</td><td><code>subsys/net/lib/dns/</code></td><td>多播 DNS</td></tr>
+  </table>
+
+<pre><code class="language-c"><span class="cmt">// MQTT 客户端示例</span>
+#include &lt;zephyr/net/mqtt.h&gt;
+
+struct mqtt_client client;
+mqtt_client_init(&client);
+
+client.broker.type = MQTT_SOCKET_TCP;
+client.broker.family = AF_INET;
+inet_pton(AF_INET, "192.168.1.100", &client.broker.addr.ipv4);
+client.broker.port = 1883;
+
+client.rx_buf = rx_buffer;
+client.rx_buf_size = sizeof(rx_buffer);
+client.tx_buf = tx_buffer;
+client.tx_buf_size = sizeof(tx_buffer);
+
+mqtt_connect(&client);
+
+<span class="cmt">// 订阅主题</span>
+struct mqtt_topic topics[] = {
+    { .topic = { .topic = "sensors/temp", .len = 11 }, .qos = MQTT_QOS_0_AT_MOST_ONCE }
+};
+mqtt_subscribe(&client, topics, 1);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/net/ip/net_core.c</code> 网络栈核心初始化。<br>
+  <code>subsys/net/ip/tcp.c</code> TCP 协议实现。<br>
+  <code>subsys/net/ip/udp.c</code> UDP 协议实现。<br>
+  <code>subsys/net/ip/net_if.c</code> 网络接口管理。<br>
+  <code>subsys/net/lib/sockets/</code> BSD Socket 实现。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

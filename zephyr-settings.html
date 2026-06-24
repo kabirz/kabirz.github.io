@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr Settings 持久化存储深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr Settings 持久化存储深度解析</h1>
+  <p class="subtitle">键值对 / Flash 后端 / 运行时加载 / 配置持久化</p>
+  <span class="version">Zephyr 4.x · subsys/settings/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">Settings 概览</a></li>
+    <li><a href="#arch">架构设计</a></li>
+    <li><a href="#backend">存储后端</a></li>
+    <li><a href="#handler">Handler 注册</a></li>
+    <li><a href="#runtime">运行时操作</a></li>
+    <li><a href="#boot">启动加载</a></li>
+    <li><a href="#shell">Shell 集成</a></li>
+    <li><a href="#api">Settings API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> Settings 概览</h2>
+
+  <p>Settings 子系统提供键值对持久化存储，适用于配置保存和跨重启状态传递。</p>
+
+  <h3>核心特性</h3>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>键值对</td><td>类似文件系统的层级键名</td></tr>
+    <tr><td>多后端</td><td>Flash、NVS、文件系统、FD</td></tr>
+    <tr><td>运行时加载</td><td>启动时自动加载所有配置</td></tr>
+    <tr><td>异步保存</td><td>延迟写入减少 Flash 磨损</td></tr>
+  </table>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构设计</h2>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>settings_save_one() · settings_load_one()</small>"]
+    L1["Settings 核心层<br><small>settings.c · handler 注册 · 键名分发</small>"]
+    L0 --> L1
+    L2["存储后端<br><small>settings_flash · settings_nvs · settings_fs</small>"]
+    L1 --> L2
+    L3["存储层<br><small>Flash · NVS · 文件系统</small>"]
+    L2 --> L3
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="backend" class="toc-link">
+  <h2><span class="num">03</span> 存储后端</h2>
+
+  <table>
+    <tr><th>后端</th><th>Kconfig</th><th>说明</th></tr>
+    <tr><td>Flash</td><td><code>CONFIG_SETTINGS_FS=y</code></td><td>直接写入 Flash 分区</td></tr>
+    <tr><td>NVS</td><td><code>CONFIG_SETTINGS_NVS=y</code></td><td>使用 NVS（磨损均衡）</td></tr>
+    <tr><td>文件系统</td><td><code>CONFIG_SETTINGS_FS=y</code></td><td>写入文件系统</td></tr>
+    <tr><td>FD</td><td><code>CONFIG_SETTINGS_FD=y</code></td><td>文件描述符后端</td></tr>
+    <tr><td>模拟</td><td><code>CONFIG_SETTINGS_SIM=y</code></td><td>模拟后端（测试用）</td></tr>
+  </table>
+</section>
+
+<section id="handler" class="toc-link">
+  <h2><span class="num">04</span> Handler 注册</h2>
+
+<pre><code class="language-c"><span class="cmt">// 注册 Settings Handler</span>
+<span class="cmt">#include &lt;zephyr/settings/settings.h&gt;</span>
+
+<span class="cmt">// 设置回调</span>
+static int my_settings_set(const char *key, size_t len,
+                           settings_read_cb read_cb, void *cb_arg)
+{
+    if (!strcmp(key, "device_name")) {
+        read_cb(cb_arg, device_name, sizeof(device_name));
+        printk("加载设备名: %s\n", device_name);
+    } else if (!strcmp(key, "baudrate")) {
+        read_cb(cb_arg, &amp;baudrate, sizeof(baudrate));
+        printk("加载波特率: %d\n", baudrate);
+    }
+    return 0;
+}
+
+<span class="cmt">// 注册 Handler</span>
+SETTINGS_STATIC_HANDLER_DEFINE(my_module, "my_module",
+                               NULL, my_settings_set, NULL, NULL);
+<span class="cmt">// 参数：name, subtree, load, set, save, commit</span>
+</code></pre>
+</section>
+
+<section id="runtime" class="toc-link">
+  <h2><span class="num">05</span> 运行时操作</h2>
+
+<pre><code class="language-c"><span class="cmt">// 保存值</span>
+settings_save_one("my_module/device_name", "sensor_01", 11);
+
+int baudrate = 115200;
+settings_save_one("my_module/baudrate", &amp;baudrate, sizeof(baudrate));
+
+<span class="cmt">// 加载值</span>
+char name[32];
+size_t len = sizeof(name);
+settings_load_one("my_module/device_name", name, &amp;len);
+
+<span class="cmt">// 加载所有配置</span>
+settings_load();
+
+<span class="cmt">// 删除值</span>
+settings_delete("my_module/device_name");
+
+<span class="cmt">// 持久化所有脏数据</span>
+settings_save();
+</code></pre>
+</section>
+
+<section id="boot" class="toc-link">
+  <h2><span class="num">06</span> 启动加载</h2>
+
+<pre><code class="language-c"><span class="cmt">// 启动时自动加载</span>
+<span class="cmt">// 1. Settings 核心初始化</span>
+<span class="cmt">// 2. 遍历存储后端</span>
+<span class="cmt">// 3. 对每个键调用注册的 handler</span>
+<span class="cmt">// 4. 应用配置生效</span>
+
+<span class="cmt">// 初始化顺序</span>
+<span class="cmt">// SYS_INIT(settings_init, POST_KERNEL, CONFIG_SETTINGS_INIT_PRIORITY)</span>
+</code></pre>
+</section>
+
+<section id="shell" class="toc-link">
+  <h2><span class="num">07</span> Shell 集成</h2>
+
+<pre><code class="language-c"><span class="cmt">// Settings Shell 命令</span>
+<span class="cmt">// CONFIG_SETTINGS_SHELL=y</span>
+
+<span class="cmt">// uart:~$ settings list</span>
+<span class="cmt">// my_module/device_name = sensor_01</span>
+<span class="cmt">// my_module/baudrate = 115200</span>
+
+<span class="cmt">// uart:~$ settings read my_module/device_name</span>
+<span class="cmt">// sensor_01</span>
+
+<span class="cmt">// uart:~$ settings write my_module/device_name sensor_02</span>
+
+<span class="cmt">// uart:~$ settings save</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> Settings API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 初始化</span>
+int settings_init(void);
+
+<span class="cmt">// 保存</span>
+int settings_save(void);
+int settings_save_one(const char *name, const void *value, size_t len);
+
+<span class="cmt">// 加载</span>
+int settings_load(void);
+int settings_load_one(const char *name, void *result, size_t *result_len);
+
+<span class="cmt">// 删除</span>
+int settings_delete(const char *name);
+
+<span class="cmt">// Handler 注册</span>
+int settings_register(const struct settings_handler *ch);
+int settings_unregister(const struct settings_handler *ch);
+
+<span class="cmt">// 名称查找</span>
+int settings_name_get(const char *name, char *ln);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/settings/settings.c</code> Settings 核心实现。<br>
+  <code>subsys/settings/settings_fs.c</code> Flash/文件系统后端。<br>
+  <code>include/zephyr/settings/settings.h</code> Settings API 定义。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

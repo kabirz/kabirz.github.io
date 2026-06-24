@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr SMP 多核支持深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr SMP 多核支持深度解析</h1>
+  <p class="subtitle">对称多处理 / CPU 亲和性 / IPI / 负载均衡 / 多核同步</p>
+  <span class="version">Zephyr 4.x · kernel/smp/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">SMP 概览</a></li>
+    <li><a href="#arch">SMP 架构</a></li>
+    <li><a href="#scheduler">SMP 调度</a></li>
+    <li><a href="#affinity">CPU 亲和性</a></li>
+    <li><a href="#ipi">处理器间中断 (IPI)</a></li>
+    <li><a href="#lock">多核同步</a></li>
+    <li><a href="#config">SMP 配置</a></li>
+    <li><a href="#api">SMP API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> SMP 概览</h2>
+
+  <p>Zephyr SMP（Symmetric Multi-Processing）支持在多核处理器上运行，每个 CPU 维护独立的就绪队列。</p>
+
+  <h3>SMP 支持架构</h3>
+
+  <table>
+    <tr><th>架构</th><th>SoC</th><th>核心数</th></tr>
+    <tr><td>ARM Cortex-M</td><td>STM32H7</td><td>双核（M7+M4）</td></tr>
+    <tr><td>ARM Cortex-M</td><td>nRF5340</td><td>双核（M33+M33）</td></tr>
+    <tr><td>ARM Cortex-A</td><td>i.MX 8</td><td>多核</td></tr>
+    <tr><td>x86</td><td>多核 x86</td><td>多核</td></tr>
+    <tr><td>ARC</td><td>ARC HS</td><td>多核</td></tr>
+  </table>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> SMP 架构</h2>
+
+  <div class="mermaid">
+graph TD
+    L0["CPU 0<br><small>CPU 1</small>"]
+    L1["就绪队列 0 (runq.runq)
+      当前线程 (_current)<br><small>就绪队列 1 (runq.runq)       当前线程 (_current)       空闲线程</small>"]
+    L0 --> L1
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="scheduler" class="toc-link">
+  <h2><span class="num">03</span> SMP 调度</h2>
+
+<pre><code class="language-c"><span class="cmt">// SMP 调度核心逻辑（kernel/smp/）</span>
+
+<span class="cmt">// 1. 每 CPU 独立就绪队列</span>
+_kernel.cpus[cpu_id].ready_q.runq;
+
+<span class="cmt">// 2. 调度决策（kernel/sched.c next_up）</span>
+static ALWAYS_INLINE struct k_thread *next_up(void)
+{
+<span class="cmt">#ifdef CONFIG_SMP</span>
+    <span class="cmt">// 处理当前线程挂起/中止</span>
+    if (z_is_thread_halting(_current)) {
+        halt_thread(_current, ...);
+    }
+<span class="cmt">#endif</span>
+
+    <span class="cmt">// 从本 CPU 就绪队列选择最高优先级线程</span>
+    struct k_thread *thread = runq_best();
+
+    <span class="cmt">// 元 IRQ 抢占恢复</span>
+    thread = metairq_preempt_recover(thread);
+
+<span class="cmt">#ifndef CONFIG_SMP</span>
+    <span class="cmt">// 单核：如果当前线程仍在队列中，不切换</span>
+    if (thread == _current) {
+        return thread;
+    }
+<span class="cmt">#endif</span>
+
+    return thread;
+}
+</code></pre>
+
+  <h3>SMP 线程选择</h3>
+
+<pre><code class="language-c"><span class="cmt">// SMP 模式下的线程选择</span>
+<span class="cmt">// 1. 新线程创建时，选择最空闲的 CPU</span>
+<span class="cmt">// 2. 线程唤醒时，选择最优 CPU</span>
+<span class="cmt">// 3. 线程可以绑定到特定 CPU</span>
+
+<span class="cmt">// 最优 CPU 选择</span>
+<span class="cmt">// 考虑因素：</span>
+<span class="cmt">// - CPU 亲和性掩码</span>
+<span class="cmt">// - 当前负载</span>
+<span class="cmt">// - 线程优先级</span>
+</code></pre>
+</section>
+
+<section id="affinity" class="toc-link">
+  <h2><span class="num">04</span> CPU 亲和性</h2>
+
+<pre><code class="language-c"><span class="cmt">// 设置线程 CPU 亲和性</span>
+k_thread_cpu_mask_clear(thread);
+k_thread_cpu_mask_set(thread, 0);  <span class="cmt">// 绑定到 CPU 0</span>
+
+<span class="cmt">// 允许在 CPU 0 和 CPU 1 上运行</span>
+k_thread_cpu_mask_clear(thread);
+k_thread_cpu_mask_set(thread, 0);
+k_thread_cpu_mask_set(thread, 1);
+
+<span class="cmt">// 查询线程 CPU 亲和性</span>
+uint32_t mask;
+k_thread_cpu_mask_get(thread, &amp;mask);
+
+<span class="cmt">// 注意：</span>
+<span class="cmt">// CONFIG_SCHED_CPU_MASK_PIN_ONLY=y</span>
+<span class="cmt">// 仅允许绑定到单个 CPU（简化调度）</span>
+</code></pre>
+</section>
+
+<section id="ipi" class="toc-link">
+  <h2><span class="num">05</span> 处理器间中断 (IPI)</h2>
+
+  <p>IPI 用于 CPU 间通信，通知其他 CPU 重新调度。</p>
+
+<pre><code class="language-c"><span class="cmt">// IPI 触发场景</span>
+<span class="cmt">// 1. 高优先级线程就绪 → 通知其他 CPU</span>
+<span class="cmt">// 2. 线程状态改变 → 通知相关 CPU</span>
+<span class="cmt">// 3. 负载均衡 → 通知空闲 CPU</span>
+
+<span class="cmt">// IPI 实现（kernel/smp/ipi.c）</span>
+void z_sched_ipi(void)
+{
+    <span class="cmt">// 检查本 CPU 是否需要重新调度</span>
+    z_reschedule_unlocked();
+}
+
+<span class="cmt">// 发送 IPI</span>
+void arch_sched_ipi(void)
+{
+    <span class="cmt">// 架构相关 IPI 发送</span>
+    <span class="cmt">// ARM: SGI (Software Generated Interrupt)</span>
+    <span class="cmt">// x86: APIC IPI</span>
+}
+</code></pre>
+</section>
+
+<section id="lock" class="toc-link">
+  <h2><span class="num">06</span> 多核同步</h2>
+
+  <h3>SMP 锁</h3>
+
+<pre><code class="language-c"><span class="cmt">// 全局调度锁</span>
+<span class="cmt">// _sched_spinlock 保护所有调度相关数据结构</span>
+
+<span class="cmt">// 获取调度锁</span>
+k_spinlock_key_t key = k_spin_lock(&_sched_spinlock);
+
+<span class="cmt">// 临界区</span>
+<span class="cmt">// ...</span>
+
+<span class="cmt">// 释放调度锁</span>
+k_spin_unlock(&_sched_spinlock, key);
+</code></pre>
+
+  <h3>内存屏障</h3>
+
+<pre><code class="language-c"><span class="cmt">// SMP 模式需要内存屏障确保一致性</span>
+<span class="cmt">// barrier_dmem_fence_full() - 数据内存屏障</span>
+<span class="cmt">// barrier_isync_fence_full() - 指令同步屏障</span>
+
+<span class="cmt">// 线程状态更新时</span>
+thread->base.thread_state |= _THREAD_ABORTING;
+barrier_dmem_fence_full();  <span class="cmt">// 确保其他 CPU 可见</span>
+</code></pre>
+</section>
+
+<section id="config" class="toc-link">
+  <h2><span class="num">07</span> SMP 配置</h2>
+
+  <h3>Kconfig 选项</h3>
+
+  <table>
+    <tr><th>Kconfig</th><th>说明</th></tr>
+    <tr><td><code>CONFIG_SMP=y</code></td><td>启用 SMP</td></tr>
+    <tr><td><code>CONFIG_MP_MAX_NUM_CPUS=2</code></td><td>最大 CPU 数</td></tr>
+    <tr><td><code>CONFIG_SCHED_CPU_MASK_PIN_ONLY=y</code></td><td>仅允许绑定单 CPU</td></tr>
+    <tr><td><code>CONFIG_IPI_HAS_UNIQUE_IRQ=y</code></td><td>IPI 使用独立中断</td></tr>
+  </table>
+
+  <h3>每 CPU 数据</h3>
+
+<pre><code class="language-c"><span class="cmt">// 每 CPU 数据（kernel/include/ksched.h）</span>
+struct z_kernel {
+    struct {
+        struct _priq_run runq;  <span class="cmt">// 本 CPU 就绪队列</span>
+    } cpus[CONFIG_MP_MAX_NUM_CPUS];
+
+    struct k_thread *current;  <span class="cmt">// 本 CPU 当前线程</span>
+    struct k_thread *idle;     <span class="cmt">// 本 CPU 空闲线程</span>
+};
+
+<span class="cmt">// 获取当前 CPU</span>
+int arch_curr_cpu_id(void);
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> SMP API</h2>
+
+<pre><code class="language-c"><span class="cmt">// CPU 亲和性</span>
+int k_thread_cpu_mask_clear(k_tid_t thread);
+int k_thread_cpu_mask_set(k_tid_t thread, int cpu);
+int k_thread_cpu_mask_get(k_tid_t thread, uint32_t *mask);
+
+<span class="cmt">// CPU 信息</span>
+int arch_curr_cpu_id(void);
+int arch_num_cpus(void);
+
+<span class="cmt">// IPI</span>
+void arch_sched_ipi(void);
+
+<span class="cmt">// 每 CPU 数据</span>
+<span class="cmt">// CONFIG_SMP=y 时可用</span>
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>kernel/smp/</code> SMP 核心实现。<br>
+  <code>kernel/sched.c</code> 调度器 SMP 扩展。<br>
+  <code>kernel/smp/ipi.c</code> 处理器间中断实现。<br>
+  <code>include/zephyr/kernel_structs.h</code> 每 CPU 数据结构。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

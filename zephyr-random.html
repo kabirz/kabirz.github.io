@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 随机数子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 随机数子系统深度解析</h1>
+  <p class="subtitle">硬件 RNG / 软件 PRNG / CTR-DRBG / CSPRNG</p>
+  <span class="version">Zephyr 4.x · subsys/random/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">随机数概览</a></li>
+    <li><a href="#hw-rng">硬件 RNG</a></li>
+    <li><a href="#sw-prng">软件 PRNG</a></li>
+    <li><a href="#ctr-drbg">CTR-DRBG</a></li>
+    <li><a href="#entropy">熵源</a></li>
+    <li><a href="#crypto">加密随机数</a></li>
+    <li><a href="#use-cases">应用场景</a></li>
+    <li><a href="#api">随机数 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 随机数概览</h2>
+
+  <p>Zephyr 提供多种随机数生成方案，从硬件 RNG 到软件伪随机数。</p>
+
+  <h3>随机数源</h3>
+
+  <table>
+    <tr><th>类型</th><th>Kconfig</th><th>说明</th></tr>
+    <tr><td>硬件 RNG</td><td><code>CONFIG_ENTROPY_HAS_DRIVER=y</code></td><td>真随机数（硬件熵源）</td></tr>
+    <tr><td>软件 PRNG</td><td><code>CONFIG_RANDOM_HAS_DRIVER=y</code></td><td>伪随机数（Xorshift）</td></tr>
+    <tr><td>CTR-DRBG</td><td><code>CONFIG_CTR_DRBG_CSPRNG=y</code></td><td>NIST 推荐的 CSPRNG</td></tr>
+    <tr><td>Mbed TLS</td><td><code>CONFIG_MBEDTLS_CTR_DRBG_C=y</code></td><td>Mbed TLS 随机数</td></tr>
+  </table>
+</section>
+
+<section id="hw-rng" class="toc-link">
+  <h2><span class="num">02</span> 硬件 RNG</h2>
+
+<pre><code class="language-c"><span class="cmt">// 硬件随机数生成器</span>
+<span class="cmt">#include &lt;zephyr/random/random.h&gt;</span>
+
+<span class="cmt">// 获取随机字节</span>
+uint8_t random_buf[32];
+int ret = sys_rand_get(random_buf, sizeof(random_buf));
+
+<span class="cmt">// 硬件熵源</span>
+<span class="cmt">// nRF52: AES-CTR-DRBG (基于热噪声)</span>
+<span class="cmt">// STM32: RNG 外设（硬件真随机）</span>
+<span class="cmt">// ESP32: eFuse 随机数</span>
+</code></pre>
+</section>
+
+<section id="sw-prng" class="toc-link">
+  <h2><span class="num">03</span> 软件 PRNG</h2>
+
+<pre><code class="language-c"><span class="cmt">// 软件伪随机数生成器（Xorshift）</span>
+<span class="cmt">// CONFIG_XORSHIFT_RANDOM=y</span>
+
+<span class="cmt">// 初始化种子</span>
+<span class="cmt">// 使用硬件 RNG 或固定种子</span>
+
+<span class="cmt">// 注意：软件 PRNG 不是密码学安全的</span>
+<span class="cmt">// 适用于非安全场景（模拟、测试）</span>
+</code></pre>
+</section>
+
+<section id="ctr-drbg" class="toc-link">
+  <h2><span class="num">04</span> CTR-DRBG</h2>
+
+<pre><code class="language-c"><span class="cmt">// CTR-DRBG（Counter DRBG）</span>
+<span class="cmt">// NIST SP 800-90A 推荐的 CSPRNG</span>
+<span class="cmt">// CONFIG_CTR_DRBG_CSPRNG=y</span>
+
+<span class="cmt">// 使用 AES-CTR 模式生成随机数</span>
+<span class="cmt">// 基于硬件熵源重新播种</span>
+
+<span class="cmt">// 特点：</span>
+<span class="cmt">// - 密码学安全</span>
+<span class="cmt">// - 可预测性：否</span>
+<span class="cmt">// - 性能：中等</span>
+</code></pre>
+</section>
+
+<section id="entropy" class="toc-link">
+  <h2><span class="num">05</span> 熵源</h2>
+
+<pre><code class="language-c"><span class="cmt">// 熵源（Entropy Source）</span>
+<span class="cmt">// CONFIG_ENTROPY_HAS_DRIVER=y</span>
+
+<span class="cmt">// 熵设备</span>
+const struct device *entropy_dev = DEVICE_DT_GET(DT_NODELABEL(rng));
+
+<span class="cmt">// 获取熵</span>
+uint8_t entropy_buf[32];
+int ret = entropy_get_reader(entropy_dev, entropy_buf, sizeof(entropy_buf));
+
+<span class="cmt">// 熵质量</span>
+<span class="cmt">// - 硬件 RNG：高（真随机）</span>
+<span class="cmt">// - 软件 PRNG：低（伪随机）</span>
+<span class="cmt">// - CTR-DRBG：高（基于硬件熵）</span>
+</code></pre>
+</section>
+
+<section id="crypto" class="toc-link">
+  <h2><span class="num">06</span> 加密随机数</h2>
+
+<pre><code class="language-c"><span class="cmt">// PSA Crypto 随机数</span>
+<span class="cmt">// CONFIG_PSA_CRYPTO=y</span>
+
+<span class="cmt">// 生成随机数</span>
+uint8_t random[32];
+psa_status_t status = psa_generate_random(random, sizeof(random));
+
+<span class="cmt">// Mbed TLS 随机数</span>
+<span class="cmt">// CONFIG_MBEDTLS_CTR_DRBG_C=y</span>
+mbedtls_ctr_drbg_random(&amp;ctr_drbg, random, sizeof(random));
+</code></pre>
+</section>
+
+<section id="use-cases" class="toc-link">
+  <h2><span class="num">07</span> 应用场景</h2>
+
+  <table>
+    <tr><th>场景</th><th>需求</th><th>推荐方案</th></tr>
+    <tr><td>加密密钥生成</td><td>CSPRNG</td><td>硬件 RNG + CTR-DRBG</td></tr>
+    <tr><td>随机延迟</td><td>伪随机</td><td>软件 PRNG</td></tr>
+    <tr><td>会话 ID</td><td>CSPRNG</td><td>硬件 RNG</td></tr>
+    <tr><td>栈金丝雀</td><td>CSPRNG</td><td>硬件 RNG</td></tr>
+    <tr><td>模拟/测试</td><td>伪随机</td><td>软件 PRNG（固定种子）</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 随机数 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 基础随机数</span>
+int sys_rand_get(void *buf, size_t len);
+
+<span class="cmt">// 熵源</span>
+int entropy_get_reader(const struct device *dev, uint8_t *buf, size_t len);
+
+<span class="cmt">// PSA Crypto</span>
+psa_status_t psa_generate_random(uint8_t *output, size_t output_size);
+
+<span class="cmt">// 32位随机数</span>
+uint32_t sys_rand32_get(void);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/random/</code> 随机数子系统实现。<br>
+  <code>drivers/entropy/</code> 硬件熵驱动。<br>
+  <code>include/zephyr/random/random.h</code> 随机数 API 定义。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 驱动框架深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 驱动框架深度解析</h1>
+  <p class="subtitle">GPIO / SPI / I2C / UART / 传感器 / ADC / DMA</p>
+  <span class="version">Zephyr 4.x · drivers/ · include/zephyr/drivers/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">驱动框架概览</a></li>
+    <li><a href="#gpio">GPIO 驱动</a></li>
+    <li><a href="#spi">SPI 驱动</a></li>
+    <li><a href="#i2c">I2C 驱动</a></li>
+    <li><a href="#uart">UART 驱动</a></li>
+    <li><a href="#sensor">传感器驱动</a></li>
+    <li><a href="#dma">DMA 驱动</a></li>
+    <li><a href="#write">编写驱动</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 驱动框架概览</h2>
+
+  <p>Zephyr 驱动框架提供统一的 API 抽象，支持 100+ 驱动子系统。</p>
+
+  <h3>驱动分类</h3>
+
+  <table>
+    <tr><th>类别</th><th>驱动</th><th>说明</th></tr>
+    <tr><td rowspan="4">通信</td><td>GPIO</td><td>通用输入输出</td></tr>
+    <tr><td>SPI</td><td>串行外设接口</td></tr>
+    <tr><td>I2C</td><td>Inter-Integrated Circuit</td></tr>
+    <tr><td>UART</td><td>通用异步收发器</td></tr>
+    <tr><td rowspan="3">存储</td><td>Flash</td><td>Flash 存储器</td></tr>
+    <tr><td>EEPROM</td><td>电可擦除存储器</td></tr>
+    <tr><td>SD</td><td>SD 卡</td></tr>
+    <tr><td rowspan="3">传感器</td><td>ADC</td><td>模数转换器</td></tr>
+    <tr><td>Sensor</td><td>通用传感器接口</td></tr>
+    <tr><td>Counter</td><td>计数器</td></tr>
+    <tr><td rowspan="2">其他</td><td>DMA</td><td>直接内存访问</td></tr>
+    <tr><td>Watchdog</td><td>看门狗</td></tr>
+  </table>
+</section>
+
+<section id="gpio" class="toc-link">
+  <h2><span class="num">02</span> GPIO 驱动</h2>
+
+  <p>GPIO 是最基础的外设接口，用于数字输入输出和中断。</p>
+
+  <h3>GPIO API</h3>
+
+<pre><code class="language-c"><span class="cmt">// GPIO API（include/zephyr/drivers/gpio.h）</span>
+
+<span class="cmt">// 获取 GPIO 设备</span>
+const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+
+<span class="cmt">// 配置引脚</span>
+gpio_pin_configure(gpio_dev, 5, GPIO_OUTPUT | GPIO_ACTIVE_HIGH);
+
+<span class="cmt">// 设置输出值</span>
+gpio_pin_set(gpio_dev, 5, 1);  <span class="cmt">// 高电平</span>
+gpio_pin_set(gpio_dev, 5, 0);  <span class="cmt">// 低电平</span>
+
+<span class="cmt">// 读取输入值</span>
+int value = gpio_pin_get(gpio_dev, 5);
+
+<span class="cmt">// 中断配置</span>
+gpio_pin_interrupt_configure(gpio_dev, 5, GPIO_INT_EDGE_TOACTIVE);
+gpio_init_callback(&amp;button_cb, button_handler, BIT(5));
+gpio_add_callback(gpio_dev, &amp;button_cb);
+</code></pre>
+
+  <h3>GPIO 中断</h3>
+
+<pre><code class="language-c"><span class="cmt">// GPIO 中断处理</span>
+static void button_handler(const struct device *dev, struct gpio_callback *cb,
+                           uint32_t pins)
+{
+    printk("Button pressed!\n");
+}
+
+K_GPIO(button_pin, DT_GPIO_PIN(DT_NODELABEL(button), gpios),
+       DT_GPIO_FLAGS(DT_NODELABEL(button), gpios));
+
+void button_isr(void)
+{
+    int value = gpio_pin_get_dt(&amp;button_pin);
+    printk("Button state: %d\n", value);
+}
+</code></pre>
+</section>
+
+<section id="spi" class="toc-link">
+  <h2><span class="num">03</span> SPI 驱动</h2>
+
+  <p>SPI（Serial Peripheral Interface）是高速同步串行接口。</p>
+
+<pre><code class="language-c"><span class="cmt">// SPI API（include/zephyr/drivers/spi.h）</span>
+
+<span class="cmt">// SPI 配置</span>
+const struct device *spi_dev = DEVICE_DT_GET(DT_NODELABEL(spi1));
+
+struct spi_config spi_cfg = {
+    .frequency = 1000000,  <span class="cmt">// 1MHz</span>
+    .operation = SPI_WORD_SET(8) | SPI_OP_MODE_MASTER,
+    .slave = 0,
+    .cs = SPI_CS_CONTROL_PTR_DT(DT_NODELABEL(spi1), 0),
+};
+
+<span class="cmt">// SPI 传输</span>
+uint8_t tx_buf[] = {0x01, 0x02, 0x03};
+uint8_t rx_buf[3];
+
+struct spi_buf tx_spi_buf = {
+    .buf = tx_buf,
+    .len = sizeof(tx_buf),
+};
+
+struct spi_buf_set tx_bufs = {
+    .buffers = &amp;tx_spi_buf,
+    .count = 1,
+};
+
+struct spi_buf rx_spi_buf = {
+    .buf = rx_buf,
+    .len = sizeof(rx_buf),
+};
+
+struct spi_buf_set rx_bufs = {
+    .buffers = &amp;rx_spi_buf,
+    .count = 1,
+};
+
+spi_transceive(spi_dev, &amp;spi_cfg, &amp;tx_bufs, &amp;rx_bufs);
+</code></pre>
+</section>
+
+<section id="i2c" class="toc-link">
+  <h2><span class="num">04</span> I2C 驱动</h2>
+
+<pre><code class="language-c"><span class="cmt">// I2C API（include/zephyr/drivers/i2c.h）</span>
+
+const struct device *i2c_dev = DEVICE_DT_GET(DT_NODELABEL(i2c0));
+
+<span class="cmt">// I2C 读取</span>
+uint8_t reg = 0x00;
+uint8_t data[6];
+i2c_burst_read(i2c_dev, 0x76, reg, data, sizeof(data));
+
+<span class="cmt">// I2C 写入</span>
+uint8_t config[] = {0x24, 0x00};
+i2c_burst_write(i2c_dev, 0x76, config[0], &amp;config[1], 1);
+
+<span class="cmt">// I2C 消息传输</span>
+struct i2c_msg msgs[2];
+msgs[0].buf = &amp;reg;
+msgs[0].len = 1;
+msgs[0].flags = I2C_MSG_WRITE;
+
+msgs[1].buf = data;
+msgs[1].len = sizeof(data);
+msgs[1].flags = I2C_MSG_READ | I2C_MSG_RESTART;
+
+i2c_transfer(i2c_dev, msgs, 2, 0x76);
+</code></pre>
+</section>
+
+<section id="uart" class="toc-link">
+  <h2><span class="num">05</span> UART 驱动</h2>
+
+<pre><code class="language-c"><span class="cmt">// UART API（include/zephyr/drivers/serial.h）</span>
+
+const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
+
+<span class="cmt">// UART 配置</span>
+struct uart_config uart_cfg = {
+    .baudrate = 115200,
+    .parity = UART_CFG_PARITY_NONE,
+    .stop_bits = UART_CFG_STOP_BITS_1,
+    .data_bits = UART_CFG_DATA_BITS_8,
+    .flow_ctrl = UART_CFG_FLOW_CTRL_NONE,
+};
+uart_configure(uart_dev, &amp;uart_cfg);
+
+<span class="cmt">// 发送数据</span>
+char tx_buf[] = "Hello, UART!\n";
+uart_tx(uart_dev, tx_buf, sizeof(tx_buf), K_FOREVER);
+
+<span class="cmt">// 接收数据</span>
+uint8_t rx_buf[32];
+uart_rx_enable(uart_dev, rx_buf, sizeof(rx_buf), K_FOREVER);
+
+<span class="cmt">// UART 中断回调</span>
+static void uart_isr(const struct device *dev, void *user_data)
+{
+    uint8_t buf[32];
+    int len = uart_fifo_read(dev, buf, sizeof(buf));
+    uart_tx(dev, buf, len, K_FOREVER);  <span class="cmt">// 回显</span>
+}
+</code></pre>
+</section>
+
+<section id="sensor" class="toc-link">
+  <h2><span class="num">06</span> 传感器驱动</h2>
+
+  <p>Zephyr 传感器 API 提供统一的传感器接口。</p>
+
+<pre><code class="language-c"><span class="cmt">// 传感器 API（include/zephyr/drivers/sensor.h）</span>
+
+const struct device *sensor_dev = DEVICE_DT_GET(DT_NODELABEL(bme280));
+
+<span class="cmt">// 读取传感器数据</span>
+struct sensor_value temp, humidity, pressure;
+
+sensor_sample_fetch(sensor_dev);
+sensor_channel_get(sensor_dev, SENSOR_CHAN_AMBIENT_TEMP, &amp;temp);
+sensor_channel_get(sensor_dev, SENSOR_CHAN_HUMIDITY, &amp;humidity);
+sensor_channel_get(sensor_dev, SENSOR_CHAN_PRESS, &amp;pressure);
+
+printk("温度: %.2f°C, 湿度: %.2f%%, 气压: %.2f hPa\n",
+       sensor_value_to_double(&amp;temp),
+       sensor_value_to_double(&amp;humidity),
+       sensor_value_to_double(&amp;pressure) / 100.0);
+
+<span class="cmt">// 传感器触发（中断模式）</span>
+sensor_trigger_set(sensor_dev,
+                   SENSOR_TRIG_THRESHOLD,
+                   &amp;trigger_handler);
+</code></pre>
+</section>
+
+<section id="dma" class="toc-link">
+  <h2><span class="num">07</span> DMA 驱动</h2>
+
+<pre><code class="language-c"><span class="cmt">// DMA API（include/zephyr/drivers/dma.h）</span>
+
+const struct device *dma_dev = DEVICE_DT_GET(DT_NODELABEL(dma0));
+
+<span class="cmt">// DMA 传输配置</span>
+struct dma_config dma_cfg = {
+    .channel_direction = PERIPHERAL_TO_MEMORY,
+    .dma_callback = dma_callback,
+    .block_count = 1,
+    .head_block = &amp;dma_block,
+};
+
+<span class="cmt">// 启动 DMA 传输</span>
+dma_config(dma_dev, channel, &amp;dma_cfg);
+dma_start(dma_dev, channel);
+
+<span class="cmt">// DMA 回调</span>
+static void dma_callback(const struct device *dev, void *user_data,
+                         uint32_t channel, int status)
+{
+    printk("DMA transfer complete: %d\n", status);
+}
+</code></pre>
+</section>
+
+<section id="write" class="toc-link">
+  <h2><span class="num">08</span> 编写驱动</h2>
+
+  <h3>驱动编写步骤</h3>
+
+  <div class="mermaid">
+graph TD
+    S1["1. 定义驱动 API 结构体<br>static const struct my_driver_api"] --> S2["2. 定义驱动配置<br>从设备树提取 struct my_config"]
+    S2 --> S3["3. 定义驱动数据<br>struct my_data"]
+    S3 --> S4["4. 实现初始化函数<br>static int my_init()"]
+    S4 --> S5["5. DEVICE_DT_INST_DEFINE 宏<br>DT_INST_FOREACH_STATUS_OKAY"]
+    style S1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style S2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style S3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style S4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style S5 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+  <h3>驱动目录结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// drivers/my_driver/</span>
+<span class="cmt">// ├── Kconfig                  ← 配置选项</span>
+<span class="cmt">// ├── CMakeLists.txt           ← 构建规则</span>
+<span class="cmt">// ├── my_driver.c              ← 驱动实现</span>
+<span class="cmt">// ├── my_driver.h              ← 驱动头文件（可选）</span>
+<span class="cmt">// └── dts/bindings/            ← 设备树绑定</span>
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>drivers/gpio/</code> GPIO 驱动实现示例。<br>
+  <code>drivers/spi/</code> SPI 驱动实现示例。<br>
+  <code>drivers/i2c/</code> I2C 驱动实现示例。<br>
+  <code>drivers/serial/</code> UART 驱动实现示例。<br>
+  <code>include/zephyr/drivers/gpio.h</code> GPIO API 定义。<br>
+  <code>include/zephyr/drivers/spi.h</code> SPI API 定义。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

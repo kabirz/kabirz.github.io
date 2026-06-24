@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 工作队列 (k_work) 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 工作队列 (k_work) 深度解析</h1>
+  <p class="subtitle">延迟执行 / k_work / k_work_delayable / flush / cancel / ISR 延迟处理</p>
+  <span class="version">Zephyr 4.x · kernel/work.c · 1320 行</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">工作队列概览</a></li>
+    <li><a href="#work">k_work 基础</a></li>
+    <li><a href="#delayable">可延迟工作</a></li>
+    <li><a href="#queue">工作队列线程</a></li>
+    <li><a href="#flush">Flush 与 Cancel</a></li>
+    <li><a href="#flags">工作状态标志</a></li>
+    <li><a href="#isr">ISR 中使用</a></li>
+    <li><a href="#api">Work API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 工作队列概览</h2>
+
+  <p>工作队列（Work Queue）是 Zephyr 中最重要的<strong>延迟执行框架</strong>，用于将任务从 ISR 或高优先级上下文延迟到线程上下文执行。</p>
+
+  <h3>核心价值</h3>
+
+  <table>
+    <tr><th>场景</th><th>问题</th><th>workqueue 解决</th></tr>
+    <tr><td>ISR 中需要耗时操作</td><td>ISR 不能阻塞</td><td>提交 work 到队列，ISR 返回后执行</td></tr>
+    <tr><td>定时重试</td><td>需要定时器+线程</td><td>k_work_schedule 一步完成</td></tr>
+    <tr><td>解耦生产者/消费者</td><td>直接调用阻塞</td><td>work 异步执行</td></tr>
+    <tr><td>批量处理</td><td>逐个处理开销大</td><td>coalesce 合并多次请求</td></tr>
+  </table>
+
+  <h3>工作项类型</h3>
+
+  <table>
+    <tr><th>类型</th><th>宏</th><th>说明</th></tr>
+    <tr><td>静态工作</td><td><code>K_WORK_DEFINE</code></td><td>编译时定义，无延迟</td></tr>
+    <tr><td>可延迟工作</td><td><code>K_WORK_DELAYABLE_DEFINE</code></td><td>支持 schedule 延迟执行</td></tr>
+    <tr><td>用户工作</td><td><code>k_work_user_init</code></td><td>用户态可用</td></tr>
+  </table>
+</section>
+
+<section id="work" class="toc-link">
+  <h2><span class="num">02</span> k_work 基础</h2>
+
+  <h3>数据结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/zephyr/kernel.h</span>
+struct k_work {
+    struct k_work_q *queue;    <span class="cmt">// 关联的工作队列</span>
+    k_work_handler_t handler;  <span class="cmt">// 工作处理函数</span>
+    atomic_t flags;            <span class="cmt">// 状态标志</span>
+    <span class="cmt">// 内部链表节点...</span>
+};
+</code></pre>
+
+  <h3>基本用法</h3>
+
+<pre><code class="language-c"><span class="cmt">// 1. 定义工作处理函数</span>
+static void my_work_handler(struct k_work *work)
+{
+    <span class="cmt">// 在线程上下文中执行（非 ISR）</span>
+    printk("工作执行中...\n");
+    process_sensor_data();
+}
+
+<span class="cmt">// 2. 定义工作项</span>
+K_WORK_DEFINE(my_work, my_work_handler);
+
+<span class="cmt">// 3. 提交工作</span>
+k_work_submit(&amp;my_work);
+
+<span class="cmt">// 4. 提交到特定工作队列</span>
+k_work_submit_to_queue(&amp;my_work_q, &amp;my_work);
+
+<span class="cmt">// 5. ISR 中提交</span>
+void my_isr(void *arg, void *arg2)
+{
+    k_work_submit(&amp;my_work);  <span class="cmt">// ISR 安全</span>
+}
+</code></pre>
+</section>
+
+<section id="delayable" class="toc-link">
+  <h2><span class="num">03</span> 可延迟工作</h2>
+
+<pre><code class="language-c"><span class="cmt">// 可延迟工作（支持 schedule）</span>
+K_WORK_DELAYABLE_DEFINE(my_delayable_work, my_work_handler);
+
+<span class="cmt">// 延迟 100ms 执行</span>
+k_work_schedule(&amp;my_delayable_work, K_MSEC(100));
+
+<span class="cmt">// 周期性执行（每 500ms）</span>
+k_work_reschedule(&amp;my_delayable_work, K_MSEC(500));
+
+<span class="cmt">// 取消调度</span>
+k_work_cancel_delayable(&amp;my_delayable_work);
+
+<span class="cmt">// 典型场景：传感器定期采样</span>
+static void sensor_read_handler(struct k_work *work)
+{
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+
+    <span class="cmt">// 读取传感器</span>
+    read_sensor();
+
+    <span class="cmt">// 重新调度（周期性）</span>
+    k_work_reschedule(dwork, K_MSEC(1000));
+}
+
+K_WORK_DELAYABLE_DEFINE(sensor_work, sensor_read_handler);
+
+<span class="cmt">// 启动周期采样</span>
+k_work_schedule(&amp;sensor_work, K_MSEC(1000));
+</code></pre>
+</section>
+
+<section id="queue" class="toc-link">
+  <h2><span class="num">04</span> 工作队列线程</h2>
+
+<pre><code class="language-c"><span class="cmt">// 工作队列结构</span>
+struct k_work_q {
+    struct k_thread thread;   <span class="cmt">// 工作线程</span>
+    sys_slist_t pending;      <span class="cmt">// 待处理工作链表</span>
+};
+
+<span class="cmt">// 静态定义工作队列</span>
+K_THREAD_STACK_DEFINE(my_work_stack, 2048);
+struct k_work_q my_work_q;
+
+<span class="cmt">// 初始化工作队列</span>
+k_work_queue_init(&amp;my_work_q);
+k_work_queue_start(&amp;my_work_q, my_work_stack, 2048,
+                   K_PRIO_PREEMPT(5), NULL);
+
+<span class="cmt">// 默认工作队列</span>
+<span class="cmt">// Zephyr 内置 system_workq（CONFIG_SYSTEM_WORKQUEUE_PRIORITY）</span>
+k_work_submit_to_queue(&amp;system_workq, &amp;my_work);
+
+<span class="cmt">// 工作队列配置</span>
+<span class="cmt">// CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=2048</span>
+<span class="cmt">// CONFIG_SYSTEM_WORKQUEUE_PRIORITY=-1  ← 协作式</span>
+</code></pre>
+
+  <h3>多工作队列</h3>
+
+<pre><code class="language-c"><span class="cmt">// 可定义多个工作队列，不同优先级</span>
+<span class="cmt">// 高优先级队列：紧急任务</span>
+<span class="cmt">// 低优先级队列：后台任务</span>
+
+K_THREAD_STACK_DEFINE(low_pri_stack, 2048);
+struct k_work_q low_pri_work_q;
+
+k_work_queue_start(&amp;low_pri_work_q, low_pri_stack, 2048,
+                   K_PRIO_PREEMPT(10), NULL);
+</code></pre>
+</section>
+
+<section id="flush" class="toc-link">
+  <h2><span class="num">05</span> Flush 与 Cancel</h2>
+
+<pre><code class="language-c"><span class="cmt">// Flush：等待工作完成</span>
+<span class="cmt">// 阻塞直到当前提交的工作执行完毕</span>
+k_work_flush(&amp;my_work, &amp;flusher, K_FOREVER);
+
+<span class="cmt">// 或非阻塞检查</span>
+int ret = k_work_flush(&amp;my_work, &amp;flusher, K_NO_WAIT);
+
+<span class="cmt">// Cancel：取消工作</span>
+<span class="cmt">// 如果工作正在执行，等待执行完成</span>
+<span class="cmt">// 如果工作在队列中等待，移除</span>
+k_work_cancel(&amp;my_work);
+
+<span class="cmt">// Cancel + 等待完成</span>
+k_work_cancel_sync(&amp;my_work, &amp;cancel_sync);
+
+<span class="cmt">// 延迟工作取消</span>
+k_work_cancel_delayable(&amp;my_delayable_work);
+k_work_cancel_delayable_sync(&amp;my_delayable_work, &amp;cancel_sync);
+
+<span class="cmt">// 典型场景：系统关闭前确保所有工作完成</span>
+void system_shutdown(void)
+{
+    k_work_cancel_delayable_sync(&amp;sensor_work, &amp;cancel_sync);
+    k_work_cancel_sync(&amp;data_work, &amp;cancel_sync);
+    printk("所有工作已完成\n");
+}
+</code></pre>
+</section>
+
+<section id="flags" class="toc-link">
+  <h2><span class="num">06</span> 工作状态标志</h2>
+
+<pre><code class="language-c"><span class="cmt">// 工作状态位（内部 flags 字段）</span>
+<span class="cmt">// K_WORK_QUEUED_BIT  - 已加入队列</span>
+<span class="cmt">// K_WORK_RUNNING_BIT - 正在执行</span>
+<span class="cmt">// K_WORK_CANCELING_BIT - 正在取消</span>
+<span class="cmt">// K_WORK_FLUSHING_BIT - 正在 flush</span>
+
+<span class="cmt">// 查询工作状态</span>
+bool k_work_is_pending(const struct k_work *work);
+int k_work_busy_get(const struct k_work *work);
+
+<span class="cmt">// 位掩码</span>
+<span class="cmt">// K_WORK_BUSY_ANY   - 任何忙碌状态</span>
+<span class="cmt">// K_WORK_BUSY_QUEUED - 已在队列</span>
+<span class="cmt">// K_WORK_BUSY_RUNNING - 正在运行</span>
+</code></pre>
+</section>
+
+<section id="isr" class="toc-link">
+  <h2><span class="num">07</span> ISR 中使用</h2>
+
+<pre><code class="language-c"><span class="cmt">// 工作队列是 ISR 延迟处理的首选机制</span>
+
+<span class="cmt">// ISR：只提交工作，不做耗时操作</span>
+void button_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+{
+    k_work_submit(&amp;button_work);
+}
+
+<span class="cmt">// 工作处理：在线程上下文执行</span>
+static void button_work_handler(struct k_work *work)
+{
+    <span class="cmt">// 可以调用阻塞 API</span>
+    k_sem_give(&amp;button_sem);
+    printk("按钮按下\n");
+}
+
+K_WORK_DEFINE(button_work, button_work_handler);
+
+<span class="cmt">// 可延迟版本（去抖动）</span>
+K_WORK_DELAYABLE_DEFINE(debounce_work, debounce_handler);
+
+void button_isr(...)
+{
+    <span class="cmt">// 每次中断重新调度（去抖动）</span>
+    k_work_reschedule(&amp;debounce_work, K_MSEC(50));
+}
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> Work API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 初始化</span>
+void k_work_init(struct k_work *work, k_work_handler_t handler);
+void k_work_init_delayable(struct k_work_delayable *dwork, k_work_handler_t handler);
+
+<span class="cmt">// 提交</span>
+int k_work_submit(struct k_work *work);
+int k_work_submit_to_queue(struct k_work_q *queue, struct k_work *work);
+int k_work_schedule(struct k_work_delayable *dwork, k_timeout_t delay);
+int k_work_reschedule(struct k_work_delayable *dwork, k_timeout_t delay);
+
+<span class="cmt">// 取消</span>
+int k_work_cancel(struct k_work *work);
+int k_work_cancel_sync(struct k_work *work, struct k_work_sync *sync);
+int k_work_cancel_delayable(struct k_work_delayable *dwork);
+int k_work_cancel_delayable_sync(struct k_work_delayable *dwork, struct k_work_sync *sync);
+
+<span class="cmt">// Flush</span>
+int k_work_flush(struct k_work *work, struct k_work_flusher *flusher, k_timeout_t timeout);
+int k_work_flush_delayable(struct k_work_delayable *dwork, struct k_work_flusher *flusher, k_timeout_t timeout);
+
+<span class="cmt">// 查询</span>
+bool k_work_is_pending(const struct k_work *work);
+int k_work_busy_get(const struct k_work *work);
+
+<span class="cmt">// 工作队列管理</span>
+void k_work_queue_init(struct k_work_q *queue);
+void k_work_queue_start(struct k_work_q *queue, k_thread_stack_t *stack,
+                        size_t stack_size, int prio, const struct k_work_queue_config *cfg);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>kernel/work.c</code> 工作队列核心实现（1320行）。<br>
+  <code>include/zephyr/kernel.h</code> k_work API 定义。<br>
+  <code>kernel/system_work_q.c</code> 默认系统工作队列。<br>
+  <code>samples/basic/blinky/</code> 使用 workqueue 的示例。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

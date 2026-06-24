@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 文件系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 文件系统深度解析</h1>
+  <p class="subtitle">VFS / FAT / LittleFS / ext2 / Flash / FCB</p>
+  <span class="version">Zephyr 4.x · subsys/fs/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">文件系统概览</a></li>
+    <li><a href="#vfs">VFS 层</a></li>
+    <li><a href="#fat">FAT 文件系统</a></li>
+    <li><a href="#littlefs">LittleFS</a></li>
+    <li><a href="#flash">Flash 存储</a></li>
+    <li><a href="#fcb">Flash 日志 (FCB)</a></li>
+    <li><a href="#settings">Settings 存储</a></li>
+    <li><a href="#api">文件系统 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 文件系统概览</h2>
+
+  <p>Zephyr 支持多种文件系统实现，从 FAT 到 LittleFS，适用于不同的存储需求。</p>
+
+  <h3>文件系统对比</h3>
+
+  <table>
+    <tr><th>文件系统</th><th>目录</th><th>特点</th><th>适用场景</th></tr>
+    <tr><td>FAT</td><td><code>subsys/fs/fat_fs.c</code></td><td>通用兼容</td><td>SD 卡、USB 存储</td></tr>
+    <tr><td>LittleFS</td><td><code>subsys/fs/littlefs_fs.c</code></td><td>掉电安全、磨损均衡</td><td>Flash 存储</td></tr>
+    <tr><td>ext2</td><td><code>subsys/fs/ext2/</code></td><td>Linux 兼容</td><td>大容量存储</td></tr>
+    <tr><td>NFS</td><td><code>subsys/fs/nfs/</code></td><td>网络文件系统</td><td>网络存储</td></tr>
+    <tr><td>FCB</td><td><code>subsys/fs/fcb/</code></td><td>Flash 循环缓冲区</td><td>日志存储</td></tr>
+    <tr><td>Settings</td><td><code>subsys/settings/</code></td><td>键值对存储</td><td>配置持久化</td></tr>
+  </table>
+</section>
+
+<section id="vfs" class="toc-link">
+  <h2><span class="num">02</span> VFS 层</h2>
+
+  <p>Zephyr VFS（Virtual File System）提供统一的文件操作接口。</p>
+
+<pre><code class="language-c"><span class="cmt">// VFS 文件操作</span>
+#include &lt;zephyr/fs/fs.h&gt;
+
+<span class="cmt">// 打开文件</span>
+struct fs_file_t file;
+fs_file_t_init(&amp;file);
+
+int ret = fs_open(&amp;file, "/littlefs/data.txt", FS_O_CREATE | FS_O_RDWR);
+if (ret &lt; 0) {
+    printk("打开文件失败: %d\n", ret);
+}
+
+<span class="cmt">// 写入数据</span>
+char data[] = "Hello, Zephyr!";
+fs_write(&amp;file, data, sizeof(data));
+
+<span class="cmt">// 读取数据</span>
+char buffer[64];
+fs_seek(&amp;file, 0, FS_SEEK_SET);
+fs_read(&amp;file, buffer, sizeof(buffer));
+
+<span class="cmt">// 关闭文件</span>
+fs_close(&amp;file);
+
+<span class="cmt">// 目录操作</span>
+struct fs_dir_t dir;
+fs_dir_t_init(&amp;dir);
+fs_opendir(&amp;dir, "/littlefs");
+
+struct fs_dirent entry;
+while (fs_readdir(&amp;dir, &amp;entry) == 0) {
+    if (entry.name[0] == '\0') break;
+    printk("文件: %s\n", entry.name);
+}
+
+fs_closedir(&amp;dir);
+</code></pre>
+
+  <h3>文件系统挂载</h3>
+
+<pre><code class="language-c"><span class="cmt">// 文件系统挂载</span>
+<span class="cmt">// FAT</span>
+static struct fs_fat_mount fat_mnt = {
+    .type = FS_FATFS,
+    .fs = "SD",
+    .mnt_point = "/fat",
+};
+fs_mount(&amp;fat_mnt);
+
+<span class="cmt">// LittleFS</span>
+<span class="cmt">// 使用设备树配置挂载点</span>
+<span class="cmt">// CONFIG_FILE_SYSTEM_LITTLEFS=y</span>
+<span class="cmt">// 在 DTS 中配置 littlefs 分区</span>
+</code></pre>
+</section>
+
+<section id="fat" class="toc-link">
+  <h2><span class="num">03</span> FAT 文件系统</h2>
+
+  <p>FAT 是最通用的文件系统，支持 SD 卡和 USB 存储。</p>
+
+<pre><code class="language-c"><span class="cmt">// FAT 配置</span>
+<span class="cmt">// CONFIG_FILE_SYSTEM_FAT=y</span>
+<span class="cmt">// CONFIG_FS_FATFS_MAX_LFN=255  ← 长文件名支持</span>
+
+<span class="cmt">// SD 卡挂载</span>
+<span class="cmt">// DTS 配置：</span>
+<span class="cmt">// &amp;spi0 {</span>
+<span class="cmt">//     sd_card: sd_card@0 {</span>
+<span class="cmt">//         compatible = "zephyr,sdhc-spi-slot";</span>
+<span class="cmt">//         reg = &lt;0&gt;;</span>
+<span class="cmt">//         sck-gpios = &lt;&amp;gpio0 14 0&gt;;</span>
+<span class="cmt">//         mosi-gpios = &lt;&amp;gpio0 13 0&gt;;</span>
+<span class="cmt">//         miso-gpios = &lt;&amp;gpio0 15 0&gt;;</span>
+<span class="cmt">//         cs-gpios = &lt;&amp;gpio0 16 0&gt;;</span>
+<span class="cmt">//     };</span>
+<span class="cmt">// };</span>
+</code></pre>
+</section>
+
+<section id="littlefs" class="toc-link">
+  <h2><span class="num">04</span> LittleFS</h2>
+
+  <p>LittleFS 是专为 Flash 存储设计的文件系统，支持掉电安全和磨损均衡。</p>
+
+  <h3>LittleFS 特点</h3>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>掉电安全</td><td>崩溃后自动恢复</td></tr>
+    <tr><td>磨损均衡</td><td>均匀使用 Flash 块</td></tr>
+    <tr><td>动态磨损管理</td><td>运行时自动管理</td></tr>
+    <tr><td>块擦除</td><td>支持 Flash 擦除特性</td></tr>
+    <tr><td>小 RAM 占用</td><td>适合资源受限设备</td></tr>
+  </table>
+
+<pre><code class="language-c"><span class="cmt">// LittleFS 配置</span>
+<span class="cmt">// CONFIG_FILE_SYSTEM_LITTLEFS=y</span>
+
+<span class="cmt">// DTS 配置（Flash 分区）</span>
+<span class="cmt">// storage: storage@fd000 {</span>
+<span class="cmt">//     compatible = "zephyr,flash-disk";</span>
+<span class="cmt">//     partition-run = "storage-partition";</span>
+<span class="cmt">//     fat,sector-size = &lt;512&gt;;</span>
+<span class="cmt">//     fat,num-sectors = &lt;128&gt;;</span>
+<span class="cmt">// };</span>
+</code></pre>
+</section>
+
+<section id="flash" class="toc-link">
+  <h2><span class="num">05</span> Flash 存储</h2>
+
+  <p>直接操作 Flash 存储器，适用于原始数据存储。</p>
+
+<pre><code class="language-c"><span class="cmt">// Flash API（include/zephyr/drivers/flash.h）</span>
+
+const struct device *flash_dev = DEVICE_DT_GET(DT_NODELABEL(flash0));
+
+<span class="cmt">// 擦除 Flash 扇区</span>
+struct flash_pages_info info;
+flash_get_page_info_by_addr(flash_dev, CONFIG_FLASH_BASE_ADDRESS, &amp;info);
+flash_erase(flash_dev, info.start_offset, info.size);
+
+<span class="cmt">// 写入数据</span>
+uint8_t write_buf[256];
+flash_write(flash_dev, CONFIG_FLASH_BASE_ADDRESS, write_buf, sizeof(write_buf));
+
+<span class="cmt">// 读取数据</span>
+uint8_t read_buf[256];
+flash_read(flash_dev, CONFIG_FLASH_BASE_ADDRESS, read_buf, sizeof(read_buf));
+</code></pre>
+</section>
+
+<section id="fcb" class="toc-link">
+  <h2><span class="num">06</span> Flash 日志 (FCB)</h2>
+
+  <p>FCB（Flash Circular Buffer）在 Flash 上实现循环缓冲区，适合日志存储。</p>
+
+<pre><code class="language-c"><span class="cmt">// FCB 配置</span>
+<span class="cmt">// CONFIG_FCB=y</span>
+
+<span class="cmt">// FCB 使用</span>
+#include &lt;zephyr/fs/fcb.h&gt;
+
+struct fcb fcb;
+fcb.f_sectors = fcb_sectors;
+fcb.fSectorCnt = ARRAY_SIZE(fcb_sectors);
+fcb.fAlign = 1;
+
+fcb_init(&amp;fcb);
+
+<span class="cmt">// 写入日志条目</span>
+struct fcb_entry entry;
+uint8_t data[] = "Log entry data";
+fcb_append(&amp;fcb, sizeof(data), &amp;entry);
+fcb_write(&amp;fcb, &amp;entry, data, sizeof(data));
+
+<span class="cmt">// 读取日志条目</span>
+uint8_t read_buf[64];
+while (fcb_getnext(&amp;fcb, &amp;entry) == 0) {
+    fcb_read(&amp;fcb, &amp;entry, read_buf, entry.fe_data_len);
+}
+</code></pre>
+</section>
+
+<section id="settings" class="toc-link">
+  <h2><span class="num">07</span> Settings 存储</h2>
+
+  <p>Settings 子系统提供键值对持久化存储。</p>
+
+<pre><code class="language-c"><span class="cmt">// Settings 配置</span>
+<span class="cmt">// CONFIG_SETTINGS=y</span>
+<span class="cmt">// CONFIG_SETTINGS_FS=y</span>
+
+<span class="cmt">// 设置值</span>
+settings_save_one("my_module/device_name", "sensor_01", 11);
+
+<span class="cmt">// 加载值</span>
+char name[32];
+size_t len = sizeof(name);
+settings_load_one("my_module/device_name", name, &amp;len);
+
+<span class="cmt">// 注册 handler</span>
+static int settings_set(const char *key, size_t len,
+                        settings_read_cb read_cb, void *cb_arg)
+{
+    if (!strcmp(key, "device_name")) {
+        read_cb(cb_arg, device_name, sizeof(device_name));
+    }
+    return 0;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(my_module, "my_module",
+                               NULL, settings_set, NULL, NULL);
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 文件系统 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 文件操作</span>
+int fs_open(struct fs_file_t *zfp, const char *fs_path, fs_mode_t mode);
+int fs_close(struct fs_file_t *zfp);
+ssize_t fs_read(struct fs_file_t *zfp, void *data, size_t len);
+ssize_t fs_write(struct fs_file_t *zfp, const void *data, size_t len);
+int fs_seek(struct fs_file_t *zfp, off_t offset, int whence);
+int fs_tell(struct fs_file_t *zfp, off_t *pos);
+
+<span class="cmt">// 目录操作</span>
+int fs_opendir(struct fs_dir_t *zdp, const char *fs_path);
+int fs_readdir(struct fs_dir_t *zdp, struct fs_dirent *entry);
+int fs_closedir(struct fs_dir_t *zdp);
+
+<span class="cmt">// 文件系统管理</span>
+int fs_mount(struct fs_mount_t *mountp);
+int fs_unmount(struct fs_mount_t *mountp);
+
+<span class="cmt">// 文件操作</span>
+int fs_stat(const char *path, struct fs_dirent *entry);
+int fs_unlink(const char *path);
+int fs_rename(const char *from, const char *to);
+int fs_mkdir(const char *path);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/fs/fs.c</code> VFS 核心实现。<br>
+  <code>subsys/fs/fat_fs.c</code> FAT 文件系统实现。<br>
+  <code>subsys/fs/littlefs_fs.c</code> LittleFS 实现。<br>
+  <code>subsys/fs/fcb/</code> Flash 循环缓冲区实现。<br>
+  <code>include/zephyr/fs/fs.h</code> 文件系统 API 定义。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

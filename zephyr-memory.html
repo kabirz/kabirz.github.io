@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 内存管理深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 内存管理深度解析</h1>
+  <p class="subtitle">堆分配器 / 内存池 / 内存 Slab / 内存域 / 线程栈分配</p>
+  <span class="version">Zephyr 4.x · kheap.c · mempool.c · mem_slab.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">内存管理概览</a></li>
+    <li><a href="#heap">内核堆 (k_heap)</a></li>
+    <li><a href="#slab">内存 Slab</a></li>
+    <li><a href="#mempool">内存池</a></li>
+    <li><a href="#mem-domain">内存域</a></li>
+    <li><a href="#userspace-mem">用户态内存</a></li>
+    <li><a href="#mmu">MMU 支持</a></li>
+    <li><a href="#api">内存 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 内存管理概览</h2>
+
+  <p>Zephyr 提供多种内存分配机制，适用于不同的使用场景和资源约束。</p>
+
+  <h3>内存分配器对比</h3>
+
+  <table>
+    <tr><th>分配器</th><th>分配大小</th><th>碎片</th><th>延迟</th><th>适用场景</th></tr>
+    <tr><td>k_heap</td><td>任意大小</td><td>有碎片</td><td>O(n) 最坏</td><td>通用动态分配</td></tr>
+    <tr><td>k_mem_slab</td><td>固定大小</td><td>无碎片</td><td>O(1)</td><td>固定大小对象（网络包、消息）</td></tr>
+    <tr><td>k_mem_pool</td><td>2^n 对齐</td><td>少量碎片</td><td>O(1)</td><td>变长但对齐的分配</td></tr>
+    <tr><td>k_mem_domain</td><td>分区管理</td><td>无</td><td>编译时</td><td>用户态内存隔离</td></tr>
+  </table>
+
+  <h3>内存层次</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>k_malloc() / k_free()k_mem_slab_alloc() / k_mem_pool_alloc()</small>"]
+    L1["内核内存管理层<br><small>k_heap · k_mem_slab · k_mem_pool · k_mem_domain</small>"]
+    L0 --> L1
+    L2["底层堆管理（lib/heap/）<br><small>sys_heap · sys_bitmask_heap</small>"]
+    L1 --> L2
+    L3["物理内存<br><small>链接器脚本定义的 .bss / .data / 堆区域</small>"]
+    L2 --> L3
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="heap" class="toc-link">
+  <h2><span class="num">02</span> 内核堆 (k_heap)</h2>
+
+  <p><code>k_heap</code> 是 Zephyr 的通用动态内存分配器，基于 <code>sys_heap</code> 实现，支持任意大小分配。</p>
+
+  <h3>数据结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// 内核堆结构体</span>
+struct k_heap {
+    struct sys_heap heap;     <span class="cmt">// 底层堆管理</span>
+    struct k_spinlock lock;   <span class="cmt">// 自旋锁保护</span>
+    struct k_wait_q wait_q;   <span class="cmt">// 等待队列（阻塞分配）</span>
+};
+</code></pre>
+
+  <h3>堆分配实现</h3>
+
+<pre><code class="language-c"><span class="cmt">// kernel/kheap.c</span>
+
+<span class="cmt">// 堆初始化</span>
+void k_heap_init(struct k_heap *heap, void *mem, size_t bytes)
+{
+    z_waitq_init(&heap->wait_q);
+    heap->lock = (struct k_spinlock) {};
+    sys_heap_init(&heap->heap, mem, bytes);
+}
+
+<span class="cmt">// 堆分配</span>
+static void *z_heap_alloc_helper(struct k_heap *heap, size_t align,
+                                 size_t bytes, k_timeout_t timeout,
+                                 sys_heap_allocator_t *alloc_fn)
+{
+    k_timepoint_t end = sys_timepoint_calc(timeout);
+    void *ret = NULL;
+
+    k_spinlock_key_t key = k_spin_lock(&heap->lock);
+
+    <span class="cmt">// 循环尝试分配</span>
+    while (ret == NULL) {
+        <span class="cmt">// 1. 尝试从 sys_heap 分配</span>
+        ret = alloc_fn(&heap->heap, align, bytes);
+
+        <span class="cmt">// 2. 分配成功则退出</span>
+        if (ret != NULL) {
+            break;
+        }
+
+        <span class="cmt">// 3. 如果是 K_NO_WAIT，立即返回</span>
+        if (K_TIMEOUT_EQ(timeout, K_NO_WAIT)) {
+            break;
+        }
+
+        <span class="cmt">// 4. 等待内存释放</span>
+        (void)z_pend_curr_unlocked(&heap->wait_q, NULL, end);
+    }
+
+    k_spin_unlock(&heap->lock, key);
+    return ret;
+}
+
+<span class="cmt">// k_malloc 底层实现</span>
+void *k_malloc(size_t size)
+{
+    <span class="cmt">// 从默认堆分配</span>
+    return k_heap_alloc(&_k_thread_heap, size, K_NO_WAIT);
+}
+
+<span class="cmt">// k_free 底层实现</span>
+void k_free(void *ptr)
+{
+    <span class="cmt">// 释放到默认堆</span>
+    k_heap_free(&_k_thread_heap, ptr);
+}
+</code></pre>
+
+  <h3>静态堆定义</h3>
+
+<pre><code class="language-c"><span class="cmt">// 静态定义堆</span>
+K_HEAP_DEFINE(my_heap, 4096);  <span class="cmt">// 定义 4KB 堆</span>
+
+<span class="cmt">// 或者动态初始化</span>
+static char heap_mem[4096];
+struct k_heap my_heap;
+
+k_heap_init(&my_heap, heap_mem, sizeof(heap_mem));
+
+<span class="cmt">// 从堆分配</span>
+void *ptr = k_heap_alloc(&my_heap, 128, K_NO_WAIT);
+
+<span class="cmt">// 释放</span>
+k_heap_free(&my_heap, ptr);
+</code></pre>
+</section>
+
+<section id="slab" class="toc-link">
+  <h2><span class="num">03</span> 内存 Slab</h2>
+
+  <p><code>k_mem_slab</code> 是固定大小对象的分配器，O(1) 分配/释放，零碎片，适合频繁分配相同大小对象的场景。</p>
+
+  <h3>数据结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/zephyr/kernel.h</span>
+struct k_mem_slab {
+    struct k_wait_q wait_q;   <span class="cmt">// 等待队列</span>
+    struct k_spinlock lock;   <span class="cmt">// 自旋锁</span>
+    char *buffer;             <span class="cmt">// 内存块起始地址</span>
+    size_t block_size;        <span class="cmt">// 每个块的大小</span>
+    uint32_t num_blocks;      <span class="cmt">// 总块数</span>
+    uint32_t num_used;        <span class="cmt">// 已使用块数</span>
+    uint32_t max_used;        <span class="cmt">// 历史最大使用块数</span>
+    struct sys_memory_stats info;
+    <span class="cmt">// 空闲块链表（每块前 4 字节指向下一个空闲块）</span>
+};
+</code></pre>
+
+  <h3>Slab 分配实现</h3>
+
+<pre><code class="language-c"><span class="cmt">// kernel/mem_slab.c</span>
+
+<span class="cmt">// 分配一个内存块</span>
+int k_mem_slab_alloc(struct k_mem_slab *slab, void **mem, k_timeout_t timeout)
+{
+    k_timepoint_t end = sys_timepoint_calc(timeout);
+
+    k_spinlock_key_t key = k_spin_lock(&slab->lock);
+
+    <span class="cmt">// 1. 检查是否有空闲块</span>
+    if (slab->num_used < slab->num_blocks) {
+        <span class="cmt">// 从空闲链表取第一个块</span>
+        *mem = slab->free_list;
+        slab->free_list = *(void **)*mem;
+        slab->num_used++;
+
+        <span class="cmt">// 更新最大使用统计</span>
+        if (slab->num_used > slab->max_used) {
+            slab->max_used = slab->num_used;
+        }
+
+        k_spin_unlock(&slab->lock, key);
+        return 0;
+    }
+
+    <span class="cmt">// 2. 无空闲块，等待或立即返回</span>
+    if (K_TIMEOUT_EQ(timeout, K_NO_WAIT)) {
+        k_spin_unlock(&slab->lock, key);
+        *mem = NULL;
+        return -ENOMEM;
+    }
+
+    <span class="cmt">// 3. 加入等待队列</span>
+    int ret = z_pend_curr(&slab->lock, key, &slab->wait_q, end);
+    if (ret == 0) {
+        *mem = k_current_get()->base.swap_data;
+    } else {
+        *mem = NULL;
+    }
+    return ret;
+}
+
+<span class="cmt">// 释放内存块</span>
+void k_mem_slab_free(struct k_mem_slab *slab, void *mem)
+{
+    k_spinlock_key_t key = k_spin_lock(&slab->lock);
+
+    <span class="cmt">// 将块加入空闲链表头部</span>
+    *(void **)mem = slab->free_list;
+    slab->free_list = mem;
+    slab->num_used--;
+
+    <span class="cmt">// 唤醒等待的线程</span>
+    struct k_thread *pending = z_waitq_head(&slab->wait_q);
+    if (pending != NULL) {
+        z_thread_return_value(pending, 0);
+        z_unready_thread(pending);
+    }
+
+    k_spin_unlock(&slab->lock, key);
+}
+</code></pre>
+
+  <h3>静态 Slab 定义</h3>
+
+<pre><code class="language-c"><span class="cmt">// 静态定义 Slab</span>
+K_MEM_SLAB_DEFINE(my_slab, 128, 16, 4);
+<span class="cmt">// 参数：name, block_size, num_blocks, alignment</span>
+<span class="cmt">// 即：16 个 128 字节的块，4 字节对齐</span>
+
+<span class="cmt">// 使用</span>
+void *buf;
+int ret = k_mem_slab_alloc(&my_slab, &buf, K_NO_WAIT);
+if (ret == 0) {
+    <span class="cmt">// 使用 buf...</span>
+    k_mem_slab_free(&my_slab, buf);
+}
+</code></pre>
+</section>
+
+<section id="mempool" class="toc-link">
+  <h2><span class="num">04</span> 内存池</h2>
+
+  <p><code>k_mem_pool</code> 支持 2^n 大小的块分配，提供介于 Slab 和 Heap 之间的灵活性。</p>
+
+<pre><code class="language-c"><span class="cmt">// 内存池结构（简化版）</span>
+<span class="cmt">// 内部使用多级空闲列表管理不同大小的块</span>
+
+<span class="cmt">// 静态定义内存池</span>
+K_MEM_POOL_DEFINE(my_pool, 64, 1024, 4, 4);
+<span class="cmt">// 参数：name, min_block_size, max_block_size, num_blocks, align</span>
+<span class="cmt">// 即：支持 64/128/256/512/1024 字节的块分配</span>
+
+<span class="cmt">// 分配</span>
+struct k_mem_block block;
+int ret = k_mem_pool_alloc(&my_pool, &block, 256, K_NO_WAIT);
+
+<span class="cmt">// 释放</span>
+k_mem_pool_free(&block);
+</code></pre>
+</section>
+
+<section id="mem-domain" class="toc-link">
+  <h2><span class="num">05</span> 内存域</h2>
+
+  <p>内存域（Memory Domain）用于用户态线程的内存隔离，通过 MPU/MMU 保护不同线程的内存空间。</p>
+
+<pre><code class="language-c"><span class="cmt">// 内存域定义</span>
+K_MEM_DOMAIN_DEFINE(my_domain);
+
+<span class="cmt">// 添加内存分区到域</span>
+K_MEM_PARTITION_DEFINE(part1, part1_mem, PART1_SIZE,
+                       K_MEM_PARTITION_P_RW_U_RW);
+
+k_mem_domain_add_partition(&my_domain, &part1);
+
+<span class="cmt">// 将线程添加到域</span>
+k_mem_domain_add_thread(&my_domain, user_tid);
+
+<span class="cmt">// 内存分区权限</span>
+<span class="cmt">// K_MEM_PARTITION_P_RW_U_RW  - 内核/用户 可读写</span>
+<span class="cmt">// K_MEM_PARTITION_P_RO_U_RO  - 内核/用户 只读</span>
+<span class="cmt">// K_MEM_PARTITION_P_RX_U_RX  - 内核/用户 可执行</span>
+<span class="cmt">// K_MEM_PARTITION_P_RW_U_RO  - 内核读写，用户只读</span>
+<span class="cmt">// K_MEM_PARTITION_P_RWX_U_RWX - 全权限</span>
+</code></pre>
+</section>
+
+<section id="userspace-mem" class="toc-link">
+  <h2><span class="num">06</span> 用户态内存</h2>
+
+  <p>用户态线程不能直接访问内核内存，需要通过系统调用分配内存。</p>
+
+<pre><code class="language-c"><span class="cmt">// 用户态线程内存分配</span>
+<span class="cmt">// 1. 从内核堆分配（通过系统调用）</span>
+void *ptr = k_malloc(size);
+k_free(ptr);
+
+<span class="cmt">// 2. 从内存域分配（MPU 保护）</span>
+<span class="cmt">// 线程只能访问自己内存域中的内存</span>
+
+<span class="cmt">// 3. 线程栈独立保护</span>
+<span class="cmt">// 每个用户态线程的栈有独立的 MPU 保护</span>
+<span class="cmt">// 栈溢出触发 MemManage 异常</span>
+</code></pre>
+</section>
+
+<section id="mmu" class="toc-link">
+  <h2><span class="num">07</span> MMU 支持</h2>
+
+  <p>Zephyr 可选启用 MMU，提供虚拟内存、按需分页和写时复制（COW）。</p>
+
+<pre><code class="language-c"><span class="cmt">// MMU 启用条件</span>
+<span class="cmt">// CONFIG_MMU=y（需要硬件 MMU 支持）</span>
+<span class="cmt">// 支持架构：ARM Cortex-A、x86、RISC-V</span>
+
+<span class="cmt">// 虚拟内存映射</span>
+<span class="cmt">// CONFIG_MMU 启用后：</span>
+<span class="cmt">// - 线程栈使用虚拟地址</span>
+<span class="cmt">// - 支持 mmap 式的内存映射</span>
+<span class="cmt">// - 内存保护通过页表实现（比 MPU 更灵活）</span>
+
+<span class="cmt">// 页面错误处理</span>
+<span class="cmt">// kernel/paging/ 目录包含页面错误处理逻辑</span>
+<span class="cmt">// 支持按需分页（demand paging）</span>
+</code></pre>
+
+  <h3>MPU vs MMU</h3>
+
+  <table>
+    <tr><th>特性</th><th>MPU</th><th>MMU</th></tr>
+    <tr><td>保护粒度</td><td>区域（region）</td><td>页面（4KB）</td></tr>
+    <tr><td>最大区域数</td><td>8-16（硬件限制）</td><td>无限（页表）</td></tr>
+    <tr><td>虚拟内存</td><td>不支持</td><td>支持</td></tr>
+    <tr><td>按需分页</td><td>不支持</td><td>支持</td></tr>
+    <tr><td>内存开销</td><td>极低</td><td>需要页表内存</td></tr>
+    <tr><td>适用架构</td><td>Cortex-M</td><td>Cortex-A/x86/RISC-V</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 内存 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 堆分配</span>
+void *k_malloc(size_t size);
+void k_free(void *ptr);
+void *k_heap_alloc(struct k_heap *heap, size_t size, k_timeout_t timeout);
+void k_heap_free(struct k_heap *heap, void *mem);
+
+<span class="cmt">// 内存 Slab</span>
+int k_mem_slab_alloc(struct k_mem_slab *slab, void **mem, k_timeout_t timeout);
+void k_mem_slab_free(struct k_mem_slab *slab, void *mem);
+
+<span class="cmt">// 内存池</span>
+int k_mem_pool_alloc(struct k_mem_pool *pool, struct k_mem_block *block,
+                     size_t size, k_timeout_t timeout);
+void k_mem_pool_free(struct k_mem_block *block);
+
+<span class="cmt">// 内存域</span>
+int k_mem_domain_create(struct k_mem_domain *domain);
+int k_mem_domain_add_partition(struct k_mem_domain *domain,
+                               struct k_mem_partition *partition);
+int k_mem_domain_add_thread(struct k_mem_domain *domain, k_tid_t thread);
+
+<span class="cmt">// 统计</span>
+int k_mem_heap_stats(struct k_heap *heap, struct sys_memory_stats *stats);
+int k_mem_slab_info_get(struct k_mem_slab *slab, struct k_mem_slab_info *info);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>kernel/kheap.c</code> 内核堆分配实现。<br>
+  <code>kernel/mem_slab.c</code> 内存 Slab 分配器实现。<br>
+  <code>kernel/mempool.c</code> 内存池实现。<br>
+  <code>lib/heap/</code> 底层 sys_heap 实现。<br>
+  <code>kernel/mmu.c</code> MMU 管理（如启用）。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

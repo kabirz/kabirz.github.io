@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr CAN 总线深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr CAN 总线深度解析</hh1>
+  <p class="subtitle">CAN/CAN-FD / ISO-TP / CAN 帧 / 过滤器 / 驱动 API</p>
+  <span class="version">Zephyr 4.x · drivers/can/ · subsys/canbus/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">CAN 总线概览</a></li>
+    <li><a href="#can-api">CAN 驱动 API</a></li>
+    <li><a href="#filter">过滤器</a></li>
+    <li><a href="#isotp">ISO-TP 传输层</a></li>
+    <li><a href="#canfd">CAN-FD</a></li>
+    <li><a href="#drivers">CAN 驱动</a></li>
+    <li><a href="#use-cases">应用场景</a></li>
+    <li><a href="#api">CAN API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> CAN 总线概览</h2>
+
+  <p>Zephyr 支持完整的 CAN 协议栈，包括 CAN 2.0、CAN-FD 和 ISO-TP 传输层。</p>
+
+  <h3>CAN 协议层次</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>UDS · J1939 · CANopen · 自定义协议</small>"]
+    L1["传输层<br><small>ISO-TP (ISO 15765-2)</small>"]
+    L0 --> L1
+    L2["CAN 驱动层<br><small>can_send / can_add_rx_filter / can_set_mode</small>"]
+    L1 --> L2
+    L3["硬件层<br><small>CAN 2.0B · CAN-FD · m_CAN · FlexCAN</small>"]
+    L2 --> L3
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+
+  <h3>CAN 帧格式</h3>
+
+  <p style="color:var(--text-dim);font-size:0.9em;margin-bottom:6px;">标准帧（CAN 2.0）：</p>
+  <table style="border-collapse:collapse;font-size:0.85em;margin-bottom:16px;">
+  <tr style="border:1px solid var(--border);background:#1769aa10;">
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">SOF</td>
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">ID</td>
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">RTR</td>
+    <td style="padding:6px 18px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">Data (0-8 bytes)</td>
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">CRC</td>
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">ACK</td>
+  </tr>
+  <tr style="border:1px solid var(--border);">
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">1b</td>
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">11b</td>
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">1b</td>
+    <td style="padding:4px 18px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">64b</td>
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">16b</td>
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">2b</td>
+  </tr>
+  </table>
+
+  <p style="color:var(--text-dim);font-size:0.9em;margin-bottom:6px;">CAN-FD 帧：</p>
+  <table style="border-collapse:collapse;font-size:0.85em;">
+  <tr style="border:1px solid var(--border);background:#1769aa10;">
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">SOF</td>
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">ID</td>
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">RTR</td>
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">BRS</td>
+    <td style="padding:6px 18px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">Data (0-64 bytes)</td>
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">CRC</td>
+    <td style="padding:6px 12px;text-align:center;border:1px solid var(--border);font-weight:600;color:var(--text-dim);">ACK</td>
+  </tr>
+  <tr style="border:1px solid var(--border);">
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">1b</td>
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">11b</td>
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">1b</td>
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">1b</td>
+    <td style="padding:4px 18px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">512b</td>
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">21b</td>
+    <td style="padding:4px 12px;text-align:center;border:1px solid var(--border);color:var(--text-dim);">2b</td>
+  </tr>
+  </table>
+</section>
+
+<section id="can-api" class="toc-link">
+  <h2><span class="num">02</span> CAN 驱动 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// CAN API（include/zephyr/drivers/can.h）</span>
+
+<span class="cmt">// 获取 CAN 设备</span>
+const struct device *can_dev = DEVICE_DT_GET(DT_NODELABEL(can0));
+
+<span class="cmt">// 配置 CAN</span>
+struct can_timing timing;
+can_calc_timing(can_dev, 500000, 100, &amp;timing);
+can_set_timing(can_dev, &amp;timing);
+
+<span class="cmt">// 设置模式</span>
+can_set_mode(can_dev, CAN_MODE_FD);
+
+<span class="cmt">// 启动</span>
+can_start(can_dev);
+
+<span class="cmt">// 发送帧</span>
+struct can_frame frame = {
+    .id = 0x123,
+    .dlc = 8,
+    .data = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+};
+
+can_send(can_dev, &amp;frame, K_MSEC(100), tx_callback, NULL);
+
+<span class="cmt">// 接收回调</span>
+static void rx_callback(const struct device *dev, struct can_frame *frame, void *user_data)
+{
+    printk("收到帧: ID=0x%03x DLC=%d\n", frame->id, frame->dlc);
+}
+
+<span class="cmt">// 添加接收过滤器</span>
+struct can_filter filter = {
+    .id = 0x456,
+    .mask = CAN_STD_ID_MASK,
+};
+can_add_rx_filter(can_dev, rx_callback, NULL, &amp;filter);
+</code></pre>
+</section>
+
+<section id="filter" class="toc-link">
+  <h2><span class="num">03</span> 过滤器</h2>
+
+<pre><code class="language-c"><span class="cmt">// CAN 过滤器匹配标准/扩展帧</span>
+
+<span class="cmt">// 标准帧过滤（11位 ID）</span>
+struct can_filter std_filter = {
+    .id = 0x100,
+    .mask = CAN_STD_ID_MASK,  <span class="cmt">// 0x7FF</span>
+};
+
+<span class="cmt">// 扩展帧过滤（29位 ID）</span>
+struct can_filter ext_filter = {
+    .id = 0x12345678,
+    .mask = CAN_EXT_ID_MASK,  <span class="cmt">// 0x1FFFFFFF</span>
+};
+
+<span class="cmt">// 掩码过滤</span>
+<span class="cmt">// mask 中 bit=1 表示必须匹配</span>
+<span class="cmt">// mask 中 bit=0 表示不关心</span>
+
+<span class="cmt">// 示例：匹配 0x100-0x10F</span>
+struct can_filter range_filter = {
+    .id = 0x100,
+    .mask = 0x7F0,  <span class="cmt">// 高7位必须匹配</span>
+};
+</code></pre>
+</section>
+
+<section id="isotp" class="toc-link">
+  <h2><span class="num">04</span> ISO-TP 传输层</h2>
+
+  <p>ISO-TP（ISO 15765-2）在 CAN 上实现多帧传输，支持最大 4095 字节数据。</p>
+
+<pre><code class="language-c"><span class="cmt">// ISO-TP（subsys/canbus/isotp/）</span>
+<span class="cmt">// CONFIG_ISOTP=y</span>
+
+<span class="cmt">// ISO-TP 帧类型：</span>
+<span class="cmt">// Single Frame (SF)  - 单帧（≤8字节）</span>
+<span class="cmt">// First Frame (FF)   - 首帧</span>
+<span class="cmt">// Consecutive (CF)   - 连续帧</span>
+<span class="cmt">// Flow Control (FC)  - 流控帧</span>
+
+<span class="cmt">// ISO-TP 使用</span>
+<span class="cmt">// 1. 绑定到 CAN 设备</span>
+<span class="cmt">// 2. 配置 TX/RX ID</span>
+<span class="cmt">// 3. 发送/接收多帧数据</span>
+</code></pre>
+</section>
+
+<section id="canfd" class="toc-link">
+  <h2><span class="num">05</span> CAN-FD</h2>
+
+<pre><code class="language-c"><span class="cmt">// CAN-FD 支持更高速率和更大数据</span>
+
+<span class="cmt">// 传统 CAN：最高 1Mbps，最大 8 字节</span>
+<span class="cmt">// CAN-FD：最高 8Mbps，最大 64 字节</span>
+
+<span class="cmt">// CAN-FD 配置</span>
+can_set_mode(can_dev, CAN_MODE_FD);
+
+<span class="cmt">// CAN-FD 帧</span>
+struct canfd_frame fd_frame = {
+    .id = 0x123,
+    .dlc = 16,
+    .flags = CANFD_FDF | CANFD_BRS,  <span class="cmt">// FD 格式 + 速率切换</span>
+    .data = {...},
+};
+
+can_send(can_dev, &amp;fd_frame, K_MSEC(100), tx_cb, NULL);
+</code></pre>
+</section>
+
+<section id="drivers" class="toc-link">
+  <h2><span class="num">06</span> CAN 驱动</h2>
+
+  <table>
+    <tr><th>驱动</th><th>SoC</th><th>说明</th></tr>
+    <tr><td>m_can</td><td>STM32, NXP, TI</td><td>Bosch m_CAN IP</td></tr>
+    <tr><td>flexcan</td><td>NXP i.MX</td><td>FlexCAN 控制器</td></tr>
+    <tr><td>stm32_bxcan</td><td>STM32F1</td><td>bxCAN 控制器</td></tr>
+    <tr><td>stm32_fdcan</td><td>STM32H7</td><td>FDCAN 控制器</td></tr>
+    <tr><td>mcux_flexcan</td><td>NXP LPC/i.MX RT</td><td>MCUXpresso FlexCAN</td></tr>
+  </table>
+</section>
+
+<section id="use-cases" class="toc-link">
+  <h2><span class="num">07</span> 应用场景</h2>
+
+  <table>
+    <tr><th>场景</th><th>协议</th><th>说明</th></tr>
+    <tr><td>汽车诊断</td><td>UDS (ISO 14229)</td><td>OBD-II 诊断</td></tr>
+    <tr><td>商用车</td><td>J1939</td><td>卡车/客车通信</td></tr>
+    <tr><td>工业自动化</td><td>CANopen</td><td>设备通信</td></tr>
+    <tr><td>机器人</td><td>自定义</td><td>电机控制</td></tr>
+    <tr><td>新能源</td><td>BMS</td><td>电池管理</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> CAN API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 配置</span>
+int can_set_mode(const struct device *dev, enum can_mode mode);
+int can_set_timing(const struct device *dev, const struct can_timing *timing);
+int can_set_timing_data(const struct device *dev, const struct can_timing *timing_data);
+
+<span class="cmt">// 控制</span>
+int can_start(const struct device *dev);
+int can_stop(const struct device *dev);
+
+<span class="cmt">// 收发</span>
+int can_send(const struct device *dev, const struct can_frame *frame,
+             k_timeout_t timeout, can_tx_callback_t callback, void *user_data);
+
+<span class="cmt">// 过滤器</span>
+int can_add_rx_filter(const struct device *dev, can_rx_callback_t callback,
+                      void *user_data, const struct can_filter *filter);
+void can_remove_rx_filter(const struct device *dev, int filter_id);
+
+<span class="cmt">// 信息</span>
+int can_get_state(const struct device *dev, enum can_state *state, struct can_bus_err_cnt *err_cnt);
+int can_get_capabilities(const struct device *dev, can_mode_t *cap);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>drivers/can/can_common.c</code> CAN 驱动公共实现。<br>
+  <code>subsys/canbus/isotp/</code> ISO-TP 传输层实现。<br>
+  <code>include/zephyr/drivers/can.h</code> CAN API 定义。<br>
+  <code>samples/drivers/can/</code> CAN 驱动示例。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

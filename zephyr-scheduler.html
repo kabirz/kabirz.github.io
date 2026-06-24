@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 内核调度器深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 内核调度器深度解析</h1>
+  <p class="subtitle">优先级调度 / 时间片轮转 / EDF 截止期限 / ECFS / SMP 调度</p>
+  <span class="version">Zephyr 4.x · sched.c · scheduler.c · priority_queues</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">调度器概览</a></li>
+    <li><a href="#runq">就绪队列</a></li>
+    <li><a href="#priority">优先级调度</a></li>
+    <li><a href="#timeslice">时间片轮转</a></li>
+    <li><a href="#edf">EDF 截止期限调度</a></li>
+    <li><a href="#sched-lock">调度锁</a></li>
+    <li><a href="#smp">SMP 调度</a></li>
+    <li><a href="#api">调度 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 调度器概览</h2>
+
+  <p>Zephyr 调度器是内核的核心组件，负责决定哪个线程获得 CPU 执行权。它支持<strong>优先级抢占式调度</strong>、<strong>时间片轮转</strong>和<strong>截止期限（EDF）调度</strong>三种模式，可配置为单处理器或多处理器（SMP）运行。</p>
+
+  <h3>调度器架构</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["调度决策层<br><small>next_up() → runq_best() → metairq_preempt_recover</small>"]
+    L1["就绪队列层<br><small>_priq_run（优先级队列）· _priq_wait（等待队列）</small>"]
+    L0 --> L1
+    L2["时间管理层<br><small>时间片计数 · 超时队列 · 系统时钟</small>"]
+    L1 --> L2
+    L3["上下文切换层<br><small>arch_switch() · ISR 返回 · 线程状态机</small>"]
+    L2 --> L3
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+
+  <h3>核心源文件</h3>
+
+  <table>
+    <tr><th>文件</th><th>行数</th><th>职责</th></tr>
+    <tr><td><code>sched.c</code></td><td>~950</td><td>调度核心：next_up()、线程状态转换、上下文切换触发</td></tr>
+    <tr><td><code>scheduler.c</code></td><td>~160</td><td>调度器初始化、调度锁、重调度</td></tr>
+    <tr><td><code>priority_queues.c</code></td><td>~200</td><td>优先级队列实现（红黑树 + 位图）</td></tr>
+    <tr><td><code>timeslicing.c</code></td><td>~150</td><td>时间片轮转逻辑</td></tr>
+    <tr><td><code>deadline.c</code></td><td>~100</td><td>EDF 截止期限调度</td></tr>
+    <tr><td><code>smp/</code></td><td>~300</td><td>SMP 调度、IPI、CPU 亲和性</td></tr>
+  </table>
+</section>
+
+<section id="runq" class="toc-link">
+  <h2><span class="num">02</span> 就绪队列</h2>
+
+  <p>Zephyr 使用<strong>两级优先级队列</strong>管理就绪线程：外层按优先级索引，内层按具体优先级排序。</p>
+
+  <h3>数据结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// 内核全局调度数据（kernel/include/ksched.h）</span>
+struct z_kernel {
+    <span class="cmt">// 单核模式：全局就绪队列</span>
+    struct {
+        _priq_run runq;      <span class="cmt">// 就绪线程优先级队列</span>
+    } ready_q;
+
+<span class="cmt">#ifdef CONFIG_SMP</span>
+    <span class="cmt">// SMP 模式：每 CPU 一个就绪队列</span>
+    struct {
+        _priq_run runq;
+    } cpus[CONFIG_MP_MAX_NUM_CPUS];
+<span class="cmt">#endif</span>
+
+    struct k_thread *current;  <span class="cmt">// 当前线程</span>
+    struct k_thread *idle;     <span class="cmt">// 空闲线程</span>
+};
+
+<span class="cmt">// 优先级队列节点</span>
+struct _priq_rb {
+    struct rbtree tree;       <span class="cmt">// 红黑树（按优先级排序）</span>
+    int min_pri;              <span class="cmt">// 最高优先级缓存</span>
+    int max_pri;              <span class="cmt">// 最低优先级缓存</span>
+};
+</code></pre>
+
+  <h3>就绪队列工作流程</h3>
+
+<pre><code class="language-c"><span class="cmt">// 就绪队列操作（kernel/priority_queues.c）</span>
+
+<span class="cmt">// 添加线程到就绪队列</span>
+void z_priq_run_add(_priq_run *pq, struct k_thread *thread)
+{
+    RB_TREE_INSERT(&pq->tree, &thread->base.qnode_rb);
+    <span class="cmt">// 更新最小优先级缓存</span>
+    if (thread->base.prio < pq->min_pri) {
+        pq->min_pri = thread->base.prio;
+    }
+}
+
+<span class="cmt">// 从就绪队列移除线程</span>
+void z_priq_run_remove(_priq_run *pq, struct k_thread *thread)
+{
+    RB_TREE_REMOVE(&pq->tree, &thread->base.qnode_rb);
+    <span class="cmt">// 重新计算最小优先级</span>
+    struct rbnode *n = rbtree_get_min(&pq->tree);
+    pq->min_pri = n ? CONTAINER_OF(n, struct k_thread, base.qnode_rb)->base.prio
+                    : CONFIG_NUM_PREEMPT_PRIORITIES;
+}
+
+<span class="cmt">// 获取最高优先级就绪线程</span>
+struct k_thread *z_priq_run_best(_priq_run *pq)
+{
+    struct rbnode *n = rbtree_get_min(&pq->tree);
+    return n ? CONTAINER_OF(n, struct k_thread, base.qnode_rb) : NULL;
+}
+</code></pre>
+
+  <h3>红黑树 + 位图加速</h3>
+
+  <p>Zephyr 使用<strong>红黑树</strong>按优先级排序就绪线程，同时维护一个<strong>位图</strong>来快速找到最高优先级非空队列：</p>
+
+<pre><code class="language-c"><span class="cmt">// 位图加速（用于快速查找最高优先级）</span>
+<span class="cmt">// 每个 bit 对应一个优先级，bit=1 表示该优先级有就绪线程</span>
+<span class="cmt">// 使用 __builtin_clz() 一条指令找到最高优先级</span>
+
+static inline int runq_best_prio(_priq_run *pq)
+{
+    <span class="cmt">// 红黑树 O(log n) 查找</span>
+    struct rbnode *n = rbtree_get_min(&pq->tree);
+    return n ? CONTAINER_OF(n, struct k_thread, base.qnode_rb)->base.prio : -1;
+}
+</code></pre>
+</section>
+
+<section id="priority" class="toc-link">
+  <h2><span class="num">03</span> 优先级调度</h2>
+
+  <p>Zephyr 的核心调度策略是<strong>严格优先级抢占</strong>：更高优先级的线程总是优先执行。</p>
+
+  <h3>调度决策流程</h3>
+
+<pre><code class="language-c"><span class="cmt">// 调度决策核心函数（kernel/sched.c）</span>
+static ALWAYS_INLINE struct k_thread *next_up(void)
+{
+    <span class="cmt">// 1. 处理当前线程挂起/中止（SMP）</span>
+<span class="cmt">#ifdef CONFIG_SMP</span>
+    if (z_is_thread_halting(_current)) {
+        halt_thread(_current, ...);
+    }
+<span class="cmt">#endif</span>
+
+    <span class="cmt">// 2. 从就绪队列选择最高优先级线程</span>
+    struct k_thread *thread = runq_best();
+
+    <span class="cmt">// 3. 元 IRQ 抢占恢复</span>
+    thread = metairq_preempt_recover(thread);
+
+<span class="cmt">#ifndef CONFIG_SMP</span>
+    <span class="cmt">// 4. 单核：如果当前线程仍在队列中，不切换</span>
+    if (thread == _current) {
+        return thread;
+    }
+<span class="cmt">#endif</span>
+
+    return thread;
+}
+</code></pre>
+
+  <h3>抢占时机</h3>
+
+  <table>
+    <tr><th>事件</th><th>抢占行为</th></tr>
+    <tr><td>高优先级线程就绪</td><td>立即抢占当前线程</td></tr>
+    <tr><td>低优先级线程释放锁</td><td>唤醒等待的高优先级线程并抢占</td></tr>
+    <tr><td>ISR 返回</td><td>检查是否有更高优先级线程就绪</td></tr>
+    <tr><td>时间片到期</td><td>同优先级线程轮转（非抢占）</td></tr>
+    <tr><td>调度锁释放</td><td>重新评估调度决策</td></tr>
+  </table>
+
+  <h3>线程状态机</h3>
+
+  <div class="mermaid">
+graph TD
+    START((" ")) --> PENDING
+
+    subgraph 状态转换
+        PENDING["⬜ PENDING<br><small>已创建未启动</small>"] -->|"k_thread_start()"| READY["🟦 READY<br><small>就绪 / 运行中</small>"]
+        READY -->|"k_thread_suspend()"| SUSPENDED["🟨 SUSPENDED<br><small>挂起</small>"]
+        SUSPENDED -->|"k_sem.give()<br>k_thread_resume()"| READY
+        READY -->|"k_thread_abort()"| DEAD["🟥 DEAD<br><small>已终止</small>"]
+        SUSPENDED -->|"k_thread_abort()"| DEAD
+    end
+
+    subgraph READY内部
+        R1["Running<br>运行中"] -->|"更高优先级就绪"| R2["Preempted<br>被抢占"]
+        R2 -->|"调度器选择"| R1
+    end
+
+    READY -.-> R1
+
+    style PENDING fill:#f0f0f0,stroke:#999,color:#333
+    style READY fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style SUSPENDED fill:#fef3c7,stroke:#f59e0b,color:#92400e
+    style DEAD fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style R1 fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style R2 fill:#e0e7ff,stroke:#6366f1,color:#3730a3
+  </div>
+</section>
+
+<section id="timeslice" class="toc-link">
+  <h2><span class="num">04</span> 时间片轮转</h2>
+
+  <p>当多个<strong>相同优先级</strong>的抢占线程同时就绪时，Zephyr 使用时间片轮转（Round-Robin）在它们之间切换。</p>
+
+  <h3>时间片实现</h3>
+
+<pre><code class="language-c"><span class="cmt">// 时间片管理（kernel/timeslicing.c）</span>
+
+<span class="cmt">// 时间片到期回调</span>
+static void timeslice_expiration(void *handle)
+{
+    struct k_thread *thread = handle;
+
+    <span class="cmt">// 1. 取消当前时间片定时器</span>
+    z_abort_timeout(&thread->base.timeout);
+
+    <span class="cmt">// 2. 标记时间片到期</span>
+    thread->base.slice_expired = true;
+
+    <span class="cmt">// 3. 触发重新调度</span>
+    z_reschedule(&lock, key);
+}
+
+<span class="cmt">// 设置时间片（CONFIG_TIMESLICING）</span>
+void z_thread_timeout(struct k_thread *thread)
+{
+    <span class="cmt">// 线程被唤醒时启动时间片定时器</span>
+    if (CONFIG_TIMESLICING > 0) {
+        z_reset_timeout(&thread->base.timeout,
+                        timeslice_expiration,
+                        thread,
+                        K_TICKS(CONFIG_TIMESLICING));
+    }
+}
+</code></pre>
+
+  <h3>时间片参数</h3>
+
+  <table>
+    <tr><th>Kconfig 选项</th><th>默认值</th><th>说明</th></tr>
+    <tr><td><code>CONFIG_TIMESLICING</code></td><td>y</td><td>启用时间片轮转</td></tr>
+    <tr><td><code>CONFIG_TIMESLICE_SIZE</code></td><td>0</td><td>时间片大小（tick 数），0 表示等于系统 tick 周期</td></tr>
+    <tr><td><code>CONFIG_TIMESLICE_PRIORITY</code></td><td>0</td><td>启用时间片的最高优先级</td></tr>
+  </table>
+
+  <h3>时间片工作流程</h3>
+
+<pre><code class="language-c"><span class="cmt">// 时间片轮转决策</span>
+static ALWAYS_INLINE void update_cache(int preempt_ok)
+{
+    struct k_thread *thread = _current;
+
+    <span class="cmt">// 如果时间片到期</span>
+    if (thread->base.slice_expired) {
+        thread->base.slice_expired = false;
+
+        <span class="cmt">// 重置时间片定时器</span>
+        z_reset_timeout(&thread->base.timeout,
+                        timeslice_expiration,
+                        thread,
+                        K_TICKS(CONFIG_TIMESLICING));
+
+        <span class="cmt">// 移到同优先级队列尾部</span>
+        z_priq_run_remove(&_kernel.ready_q.runq, thread);
+        z_priq_run_add(&_kernel.ready_q.runq, thread);
+
+        <span class="cmt">// 标记需要重新调度</span>
+        z_set_reschedule_pending();
+    }
+}
+</code></pre>
+</section>
+
+<section id="edf" class="toc-link">
+  <h2><span class="num">05</span> EDF 截止期限调度</h2>
+
+  <p>Zephyr 支持<strong>最早截止期限优先（Earliest Deadline First, EDF）</strong>调度，适用于实时控制系统。</p>
+
+  <h3>EDF 原理</h3>
+
+  <p>EDF 调度器为每个周期性任务维护三个参数：周期（period）、截止期限（deadline）和执行预算（budget）。调度器总是选择截止期限最近的任务执行。</p>
+
+<pre><code class="language-c"><span class="cmt">// EDF 任务参数</span>
+struct k_threadDeadline {
+    uint32_t deadline;    <span class="cmt">// 绝对截止期限</span>
+    uint32_t period;      <span class="cmt">// 周期</span>
+    uint32_t budget;      <span class="cmt">// 执行预算</span>
+    uint32_t consumed;    <span class="cmt">// 已消耗预算</span>
+};
+
+<span class="cmt">// EDF 调度决策</span>
+<span class="cmt">// 在 deadline.c 中实现</span>
+<span class="cmt">// 当启用 CONFIG_DEADLINE_SCHEDULING 时：</span>
+<span class="cmt">// 1. 从 EDF 队列选择 deadline 最小的线程</span>
+<span class="cmt">// 2. 与优先级队列结果比较</span>
+<span class="cmt">// 3. 选择更紧急的线程执行</span>
+</code></pre>
+
+  <h3>EDF vs 优先级调度</h3>
+
+  <table>
+    <tr><th>维度</th><th>优先级调度</th><th>EDF 调度</th></tr>
+    <tr><td>策略</td><td>静态优先级</td><td>动态截止期限</td></tr>
+    <tr><td>CPU 利用率</td><td>最坏情况分析</td><td>理论上可达 100%</td></tr>
+    <tr><td>可预测性</td><td>高（WCET 分析简单）</td><td>中（受任务数量影响）</td></tr>
+    <tr><td>适用场景</td><td>确定性实时系统</td><td>周期性任务</td></tr>
+    <tr><td>实现复杂度</td><td>简单</td><td>中等</td></tr>
+  </table>
+</section>
+
+<section id="sched-lock" class="toc-link">
+  <h2><span class="num">06</span> 调度锁</h2>
+
+  <p>调度锁（<code>k_sched_lock()</code>）禁止当前线程被<strong>同优先级或低优先级</strong>线程抢占，但高优先级线程仍可抢占。</p>
+
+<pre><code class="language-c"><span class="cmt">// 调度锁实现（kernel/scheduler.c）</span>
+void k_sched_lock(void)
+{
+    K_SPINLOCK(&_sched_spinlock) {
+        __ASSERT(!arch_is_in_isr(), <span class="cmt">"不能在 ISR 中加锁"</span>);
+        __ASSERT(_current->base.sched_locked != 1U,
+                 <span class="cmt">"已经锁定"</span>);
+
+        <span class="cmt">// sched_locked 计数器：0=解锁，负数=锁定</span>
+        --_current->base.sched_locked;
+
+        compiler_barrier();
+    }
+}
+
+void k_sched_unlock(void)
+{
+    k_spinlock_key_t key = k_spin_lock(&_sched_spinlock);
+
+    __ASSERT(_current->base.sched_locked != 0U, <span class="cmt">"未锁定"</span>);
+    __ASSERT(!arch_is_in_isr(), <span class="cmt">"不能在 ISR 中解锁"</span>);
+
+    ++_current->base.sched_locked;
+
+    <span class="cmt">// 解锁后检查是否需要重新调度</span>
+    z_sched_lock_reschedule(key);
+}
+</code></pre>
+
+  <h3>调度锁 vs 中断锁</h3>
+
+  <table>
+    <tr><th>特性</th><th>k_sched_lock()</th><th>irq_lock()</th></tr>
+    <tr><td>中断响应</td><td>仍响应中断</td><td>屏蔽所有中断</td></tr>
+    <tr><td>抢占</td><td>禁止同/低优先级抢占</td><td>禁止所有抢占</td></tr>
+    <tr><td>延迟</td><td>极低（纳秒级）</td><td>极低（纳秒级）</td></tr>
+    <tr><td>适用场景</td><td>保护临界区（短）</td><td>保护硬件临界区</td></tr>
+  </table>
+</section>
+
+<section id="smp" class="toc-link">
+  <h2><span class="num">07</span> SMP 调度</h2>
+
+  <p>Zephyr SMP 支持在多核处理器上运行，每个 CPU 维护独立的就绪队列。</p>
+
+  <h3>SMP 调度架构</h3>
+
+<pre><code class="language-c"><span class="cmt">// SMP 模式下的调度（kernel/smp/）</span>
+
+<span class="cmt">// 1. 每 CPU 独立就绪队列</span>
+_kernel.cpus[cpu].ready_q.runq;
+
+<span class="cmt">// 2. 线程亲和性</span>
+thread->base.cpu_mask = BIT(cpu);  <span class="cmt">// 绑定到特定 CPU</span>
+
+<span class="cmt">// 3. IPI（处理器间中断）</span>
+<span class="cmt">// 当线程状态改变时，发送 IPI 通知其他 CPU</span>
+void z_sched_ipi(void)
+{
+    <span class="cmt">// 检查本 CPU 是否需要重新调度</span>
+    z_reschedule_unlocked();
+}
+
+<span class="cmt">// 4. 负载均衡</span>
+<span class="cmt">// 当 CPU 空闲时，从其他 CPU 偷取线程</span>
+static struct k_thread *thread_expired(void)
+{
+    <span class="cmt">// 从其他 CPU 的就绪队列偷取最高优先级线程</span>
+}
+</code></pre>
+
+  <h3>SMP 配置选项</h3>
+
+  <table>
+    <tr><th>Kconfig</th><th>说明</th></tr>
+    <tr><td><code>CONFIG_SMP</code></td><td>启用 SMP 支持</td></tr>
+    <tr><td><code>CONFIG_MP_MAX_NUM_CPUS</code></td><td>最大 CPU 数量</td></tr>
+    <tr><td><code>CONFIG_SCHED_CPU_MASK_PIN_ONLY</code></td><td>仅允许线程绑定到特定 CPU</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 调度 API</h2>
+
+  <h3>常用调度 API</h3>
+
+<pre><code class="language-c"><span class="cmt">// 线程优先级管理</span>
+int k_thread_priority_get(k_tid_t thread);
+void k_thread_priority_set(k_tid_t thread, int prio);
+
+<span class="cmt">// 调度控制</span>
+void k_sched_lock(void);
+void k_sched_unlock(void);
+void k_yield(void);                  <span class="cmt">// 主动让出 CPU</span>
+void k_reschedule(void);             <span class="cmt">// 触发重新调度</span>
+
+<span class="cmt">// 线程挂起/恢复</span>
+int k_thread_suspend(k_tid_t thread);
+int k_thread_resume(k_tid_t thread);
+
+<span class="cmt">// 延时</span>
+void k_sleep(k_timeout_t timeout);
+void k_msleep(int ms);
+void k_busy_wait(uint32_t usec);
+
+<span class="cmt">// 当前线程信息</span>
+k_tid_t k_sched_current_thread_query(void);
+bool k_is_in_isr(void);
+</code></pre>
+
+  <h3>调度时序示例</h3>
+
+<pre><code class="language-c"><span class="cmt">// 三个线程的调度时序</span>
+<span class="cmt">// 线程 A: 优先级 0（最高）</span>
+<span class="cmt">// 线程 B: 优先级 1</span>
+<span class="cmt">// 线程 C: 优先级 2（最低）</span>
+
+<span class="cmt">// 时间线：</span>
+<span class="cmt">// T0: A 运行 → B 就绪 → A 继续（A 优先级更高）</span>
+<span class="cmt">// T1: A 调用 k_sleep() → B 运行 → C 就绪 → B 继续</span>
+<span class="cmt">// T2: A 唤醒 → B 被抢占 → A 运行</span>
+<span class="cmt">// T3: A 完成 → B 运行 → C 等待</span>
+<span class="cmt">// T4: B 调用 k_sleep() → C 运行</span>
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>kernel/sched.c</code> 调度核心实现，重点看 next_up() 和 halt_thread()。<br>
+  <code>kernel/scheduler.c</code> 调度器初始化和调度锁。<br>
+  <code>kernel/priority_queues.c</code> 红黑树优先级队列实现。<br>
+  <code>kernel/timeslicing.c</code> 时间片轮转逻辑。<br>
+  <code>kernel/deadline.c</code> EDF 截止期限调度。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

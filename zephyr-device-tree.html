@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr LoRaWAN 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr LoRaWAN 深度解析</h1>
+  <p class="subtitle">LPWAN / OTAA / ABP / 类 A/B/C / 低功耗广域网</p>
+  <span class="version">Zephyr 4.x · subsys/lorawan/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">LoRaWAN 概览</a></li>
+    <li><a href="#arch">协议栈架构</a></li>
+    <li><a href="#otaa">OTAA 入网</a></li>
+    <li><a href="#classes">设备类别</a></li>
+    <li><a href="#regions">区域参数</a></li>
+    <li><a href="#duty-cycle">占空比管理</a></li>
+    <li><a href="#security">安全机制</a></li>
+    <li><a href="#api">LoRaWAN API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> LoRaWAN 概览</h2>
+
+  <p>LoRaWAN 是基于 LoRa 调制的低功耗广域网（LPWAN）协议，适用于 IoT 远程通信。</p>
+
+  <h3>LoRaWAN 特点</h3>
+
+  <table>
+    <tr><th>特性</th><th>参数</th></tr>
+    <tr><td>通信距离</td><td>城市 2-5km，农村 10-15km</td></tr>
+    <tr><td>数据速率</td><td>0.3 - 50 kbps</td></tr>
+    <tr><td>电池寿命</td><td>数年（Class A）</td></tr>
+    <tr><td>频段</td><td>EU868, US915, AS923, CN470 等</td></tr>
+    <tr><td>网络拓扑</td><td>星型（设备→网关→网络服务器）</td></tr>
+  </table>
+
+  <h3>架构</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>LoRaWAN API · 数据发送/接收</small>"]
+    L1["LoRaWAN MAC 层<br><small>loramac-node 库 · MAC 命令 · 调度</small>"]
+    L0 --> L1
+    L2["LoRa 射频层<br><small>SX1276 · SX1262 · SX1261 · LLCC68</small>"]
+    L1 --> L2
+    L3["SPI 驱动层<br><small>SPI · GPIO (中断/复位)</small>"]
+    L2 --> L3
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 协议栈架构</h2>
+
+<pre><code class="language-c"><span class="cmt">// LoRaWAN 子系统</span>
+<span class="cmt">// subsys/lorawan/</span>
+<span class="cmt">// ├── native/           ← 原生 LoRaWAN 实现</span>
+<span class="cmt">// ├── loramac-node/     ← loramac-node 库集成</span>
+<span class="cmt">// ├── nvm/              ← 非易失性存储</span>
+<span class="cmt">// └── services/         ← 应用服务</span>
+
+<span class="cmt">// Kconfig</span>
+<span class="cmt">// CONFIG_LORAWAN=y</span>
+<span class="cmt">// CONFIG_LORAMAC=y</span>
+</code></pre>
+</section>
+
+<section id="otaa" class="toc-link">
+  <h2><span class="num">03</span> OTAA 入网</h2>
+
+<pre><code class="language-c"><span class="cmt">// OTAA（Over-The-Air Activation）</span>
+<span class="cmt">// 动态入网，安全性更高</span>
+
+<span class="cmt">// 配置参数</span>
+struct lorawan_join_config join_cfg = {
+    .mode = LORAWAN_ACT_OTAA,
+    .dev_eui = dev_eui,
+    .app_eui = app_eui,
+    .app_key = app_key,
+    .channel = LORAWAN_CHANNEL_AUTO,
+};
+
+<span class="cmt">// 入网</span>
+int ret = lorawan_join(&amp;join_cfg);
+if (ret) {
+    printk("入网失败: %d\n", ret);
+}
+
+<span class="cmt">// ABP（Activation By Personalization）</span>
+<span class="cmt">// 预配置密钥，无需入网服务器</span>
+struct lorawan_join_config abp_cfg = {
+    .mode = LORAWAN_ACT_ABP,
+    .dev_addr = dev_addr,
+    .app_s_key = app_s_key,
+    .nwk_s_key = nwk_s_key,
+};
+</code></pre>
+</section>
+
+<section id="classes" class="toc-link">
+  <h2><span class="num">04</span> 设备类别</h2>
+
+  <table>
+    <tr><th>类别</th><th>特点</th><th>适用场景</th></tr>
+    <tr><td>Class A</td><td>最低功耗，双向通信（上行后开窗）</td><td>传感器、计量表</td></tr>
+    <tr><td>Class B</td><td>周期性接收窗，中等功耗</td><td>需要下行控制的设备</td></tr>
+    <tr><td>Class C</td><td>持续监听，最高功耗</td><td>市电供电设备</td></tr>
+  </table>
+
+  <h3>Class A 通信时序</h3>
+
+  <div class="mermaid">
+sequenceDiagram
+    participant D as 设备
+    participant G as 网关
+    D->>G: 上行数据
+    Note over D: RX1 窗口 (1s 后)
+    G-->>D: 下行数据
+    Note over D: RX2 窗口 (2s 后)
+    G-->>D: 下行数据
+    Note over D: 休眠
+</div>
+</section>
+
+<section id="regions" class="toc-link">
+  <h2><span class="num">05</span> 区域参数</h2>
+
+<pre><code class="language-c"><span class="cmt">// 区域配置</span>
+<span class="cmt">// CONFIG_LORAWAN_REGION_EU868=y</span>
+<span class="cmt">// CONFIG_LORAWAN_REGION_US915=y</span>
+<span class="cmt">// CONFIG_LORAWAN_REGION_AS923=y</span>
+<span class="cmt">// CONFIG_LORAWAN_REGION_CN470=y</span>
+
+<span class="cmt">// EU868 频段：</span>
+<span class="cmt">// 868.0 - 868.6 MHz（多信道）</span>
+<span class="cmt">// 869.525 MHz（RX2）</span>
+<span class="cmt">// 最大 EIRP: 16 dBm</span>
+<span class="cmt">// 占空比: 1%</span>
+</code></pre>
+</section>
+
+<section id="duty-cycle" class="toc-link">
+  <h2><span class="num">06</span> 占空比管理</h2>
+
+<pre><code class="language-c"><span class="cmt">// 占空比（Duty Cycle）限制发射时间</span>
+<span class="cmt">// EU868: 1% 占空比（每秒只能发射 1% 时间）</span>
+
+<span class="cmt">// LoRaWAN MAC 自动管理占空比</span>
+<span class="cmt">// 应用层无需手动管理</span>
+
+<span class="cmt">// 信道管理</span>
+<span class="cmt">// 信道黑名单</span>
+<span class="cmt">// 自适应数据速率（ADR）</span>
+</code></pre>
+</section>
+
+<section id="security" class="toc-link">
+  <h2><span class="num">07</span> 安全机制</h2>
+
+<pre><code class="language-c"><span class="cmt">// LoRaWAN 安全</span>
+<span class="cmt">// 1. 入网密钥（AppKey/NwkKey）- OTAA 入网</span>
+<span class="cmt">// 2. 网络会话密钥（NwkSKey）- MAC 层加密</span>
+<span class="cmt">// 3. 应用会话密钥（AppSKey）- 应用层加密</span>
+<span class="cmt">// 4. 帧计数器 - 防重放攻击</span>
+
+<span class="cmt">// 加密算法：AES-128</span>
+<span class="cmt">// CCM* 认证加密</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> LoRaWAN API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 入网</span>
+int lorawan_join(const struct lorawan_join_config *cfg);
+int lorawan_leave(void);
+
+<span class="cmt">// 数据传输</span>
+int lorawan_send(uint8_t port, const uint8_t *data, uint8_t len,
+                 enum lorawan_message_type type);
+
+<span class="cmt">// 接收回调</span>
+typedef void (*lorawan_recv_cb)(uint8_t port, const uint8_t *data, uint8_t len);
+
+<span class="cmt">// 配置</span>
+int lorawan_set_class(enum lorawan_device_class dev_class);
+int lorawan_set_region(enum lorawan_region_id region);
+int lorawan_set_datarate(uint8_t dr);
+
+<span class="cmt">// 事件回调</span>
+lorawan_recv_cb recv_cb = my_recv_handler;
+lorawan_recv_register(recv_cb);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/lorawan/</code> LoRaWAN 子系统核心。<br>
+  <code>subsys/lorawan/loramac-node/</code> loramac-node 库集成。<br>
+  <code>drivers/lora/</code> LoRa 射频驱动（SX1276/SX1262）。<br>
+  <code>samples/subsys/lorawan/</code> LoRaWAN 示例。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

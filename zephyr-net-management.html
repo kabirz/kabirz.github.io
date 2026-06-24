@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 网络管理深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 网络管理深度解析</h1>
+  <p class="subtitle">net_mgmt / 连接管理 / L2 管理 / 网络事件 / 接口管理</p>
+  <span class="version">Zephyr 4.x · subsys/net/conn_mgr/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">网络管理概览</a></li>
+    <li><a href="#mgmt">net_mgmt 框架</a></li>
+    <li><a href="#conn-mgr">连接管理器</a></li>
+    <li><a href="#l2">L2 管理</a></li>
+    <li><a href="#events">网络事件</a></li>
+    <li><a href="#api">网络管理 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 网络管理概览</h2>
+
+  <p>Zephyr 网络管理子系统提供网络接口管理、连接管理和事件通知。</p>
+
+  <h3>管理组件</h3>
+
+  <table>
+    <tr><th>组件</th><th>说明</th></tr>
+    <tr><td>net_mgmt</td><td>网络管理事件框架</td></tr>
+    <tr><td>conn_mgr</td><td>连接管理器</td></tr>
+    <tr><td>L2 管理</td><td>链路层事件管理</td></tr>
+    <tr><td>接口管理</td><td>网络接口控制</td></tr>
+  </table>
+</section>
+
+<section id="mgmt" class="toc-link">
+  <h2><span class="num">02</span> net_mgmt 框架</h2>
+
+<pre><code class="language-c"><span class="cmt">// net_mgmt 事件框架</span>
+
+<span class="cmt">// 注册事件回调</span>
+static void event_handler(struct mgmt_entry *entry, int status,
+                          struct net_if *iface, void *data, size_t len)
+{
+    printk("网络事件: %d, 状态: %d\n", entry->cmd, status);
+}
+
+<span class="cmt">// 监听事件</span>
+struct mgmt_callback cb = { .handler = event_handler };
+mgmt_register_event_callback(&amp;cb, NET_REQUEST_IPV4_ADDR_ADD);
+
+<span class="cmt">// 触发事件</span>
+mgmt_event_send(iface, NET_EVENT_IF_UP, NULL, 0);
+</code></pre>
+</section>
+
+<section id="conn-mgr" class="toc-link">
+  <h2><span class="num">03</span> 连接管理器</h2>
+
+<pre><code class="language-c"><span class="cmt">// 连接管理器</span>
+<span class="cmt">// CONFIG_NET_CONNECTION_MANAGER=y</span>
+
+<span class="cmt">// 自动连接管理</span>
+<span class="cmt">// - 监听网络接口状态</span>
+<span class="cmt">// - 自动获取 IP 地址</span>
+<span class="cmt">// - 自动重连</span>
+
+<span class="cmt">// 连接事件</span>
+<span class="cmt">// NET_EVENT_IF_UP        - 接口启动</span>
+<span class="cmt">// NET_EVENT_IF_DOWN      - 接口关闭</span>
+<span class="cmt">// NET_EVENT_IPV4_ADDR_ADD - IPv4 地址添加</span>
+<span class="cmt">// NET_EVENT_IPV4_ADDR_DEL - IPv4 地址删除</span>
+<span class="cmt">// NET_EVENT_IPV4_ROUTE_ADD - 路由添加</span>
+</code></pre>
+</section>
+
+<section id="l2" class="toc-link">
+  <h2><span class="num">04</span> L2 管理</h2>
+
+<pre><code class="language-c"><span class="cmt">// L2 层管理</span>
+<span class="cmt">// 管理链路层事件（连接、断开、认证）</span>
+
+<span class="cmt">// L2 事件类型：</span>
+<span class="cmt">// NET_L2_CONNECTED      - 链路连接</span>
+<span class="cmt">// NET_L2_DISCONNECTED   - 链路断开</span>
+<span class="cmt">// NET_L2_READY          - 链路就绪</span>
+<span class="cmt">// NET_L2_ERROR          - 链路错误</span>
+</code></pre>
+</section>
+
+<section id="events" class="toc-link">
+  <h2><span class="num">05</span> 网络事件</h2>
+
+<pre><code class="language-c"><span class="cmt">// 常用网络事件</span>
+
+<span class="cmt">// 接口事件</span>
+NET_EVENT_IF_UP              <span class="cmt">// 接口启动</span>
+NET_EVENT_IF_DOWN            <span class="cmt">// 接口关闭</span>
+NET_EVENT_IF_ADMIN_UP       <span class="cmt">// 管理员启动</span>
+
+<span class="cmt">// IPv4 事件</span>
+NET_EVENT_IPV4_ADDR_ADD     <span class="cmt">// 地址添加</span>
+NET_EVENT_IPV4_ADDR_DEL     <span class="cmt">// 地址删除</span>
+NET_EVENT_IPV4_ROUTE_ADD    <span class="cmt">// 路由添加</span>
+NET_EVENT_IPV4_ROUTE_DEL    <span class="cmt">// 路由删除</span>
+
+<span class="cmt">// DHCP 事件</span>
+NET_EVENT_DHCPV4_BOUND      <span class="cmt">// DHCP 绑定</span>
+NET_EVENT_DHCPV4_STOP       <span class="cmt">// DHCP 停止</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">06</span> 网络管理 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// net_mgmt</span>
+int mgmt_register_event_callback(struct mgmt_callback *cb, uint32_t event_mask);
+int mgmt_unregister_event_callback(struct mgmt_callback *cb);
+int mgmt_event_send(struct net_if *iface, uint32_t event, void *data, size_t len);
+
+<span class="cmt">// 接口管理</span>
+int net_if_up(struct net_if *iface);
+int net_if_down(struct net_if *iface);
+int net_if_set_link_addr(struct net_if *iface, const uint8_t *ll_addr, uint8_t ll_len);
+
+<span class="cmt">// DHCP</span>
+int net_dhcpv4_start(struct net_if *iface);
+int net_dhcpv4_stop(struct net_if *iface);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/net/conn_mgr/</code> 连接管理器实现。<br>
+  <code>subsys/net/ip/net_mgmt.c</code> net_mgmt 核心。<br>
+  <code>include/zephyr/net/net_mgmt.h</code> 网络管理 API。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

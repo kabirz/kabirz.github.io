@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 构建系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 构建系统深度解析</h1>
+  <p class="subtitle">West / CMake / Kconfig / Devicetree 编译器 / 交叉编译</p>
+  <span class="version">Zephyr 4.x · CMake · Kconfig · West</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">构建系统概览</a></li>
+    <li><a href="#west">West 元工具</a></li>
+    <li><a href="#cmake">CMake 构建</a></li>
+    <li><a href="#kconfig">Kconfig 配置</a></li>
+    <li><a href="#dt-compiler">Devicetree 编译器</a></li>
+    <li><a href="#cross-compile">交叉编译</a></li>
+    <li><a href="#cmake-api">CMake API</a></li>
+    <li><a href="#advanced">高级构建</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 构建系统概览</h2>
+
+  <p>Zephyr 使用三层构建系统：West（元工具）→ CMake（构建生成）→ Ninja/Make（构建执行）。</p>
+
+  <h3>构建工具链</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["West（元工具）<br><small>west build · west flash · west debug · west lis</small>"]
+    L1["CMake（构建生成）<br><small>CMakeLists.txt → build.ninja</small>"]
+    L0 --> L1
+    L2["Kconfig（配置）<br><small>Kconfig → .config → CONFIG_XXX</small>"]
+    L1 --> L2
+    L3["Devicetree（硬件描述）<br><small>.dts → devicetree_generated.h</small>"]
+    L2 --> L3
+    L4["交叉编译器<br><small>arm-zephyr-eabi-gcc · riscv64-zephyr-elf-gcc</small>"]
+    L3 --> L4
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="west" class="toc-link">
+  <h2><span class="num">02</span> West 元工具</h2>
+
+  <p>West 是 Zephyr 的统一入口工具，管理多仓库、构建、调试和闪存。</p>
+
+  <h3>常用命令</h3>
+
+<pre><code class="language-bash"><span class="cmt"># 构建</span>
+west build -b <board> <application>
+west build -b stm32f4_disco samples/basic/blinky
+
+<span class="cmt"># 闪存</span>
+west flash
+west flash --runner jlink
+
+<span class="cmt"># 调试</span>
+west debug
+west attach
+
+<span class="cmt"># 仓库管理</span>
+west init -l <manifest_path>
+west update
+west list
+
+<span class="cmt"># 符号表</span>
+west build -t ram_report
+west build -t rom_report
+
+<span class="cmt"># 清理</span>
+west build -t clean
+west build -t pristine
+</code></pre>
+
+  <h3>West 清单（west.yml）</h3>
+
+<pre><code class="language-yaml"><span class="cmt"># west.yml - 仓库清单</span>
+manifest:
+  remotes:
+    - name: zephyrproject
+      url-base: https://github.com/zephyrproject
+
+  projects:
+    - name: zephyr
+      remote: zephyrproject
+      revision: main
+      path: zephyr
+
+    - name: hal_stm32
+      remote: zephyrproject
+      revision: main
+      path: modules/hal/stm32
+      groups:
+        - hal
+
+  self:
+    path: application
+</code></pre>
+</section>
+
+<section id="cmake" class="toc-link">
+  <h2><span class="num">03</span> CMake 构建</h2>
+
+  <h3>CMakeLists.txt 层次</h3>
+
+  <div class="mermaid">
+graph TD
+    APP["应用层 CMakeLists.txt<br>target_sources(app PRIVATE main.c)"] --> K["内核 CMakeLists.txt<br>sched.c thread.c ..."]
+    APP --> DR["驱动 CMakeLists.txt<br>gpio_nrf.c ..."]
+    APP --> SU["子系统 CMakeLists.txt"]
+    APP --> AR["arch CMakeLists.txt<br>arch/arm/"]
+    style APP fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style K fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style DR fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style SU fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style AR fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+  <h3>CMake API</h3>
+
+<pre><code class="language-cmake"><span class="cm"># 应用 CMakeLists.txt 示例</span>
+cmake_minimum_required(VERSION 3.20.0)
+
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+project(my_application)
+
+<span class="cm"># 添加源文件</span>
+target_sources(app PRIVATE src/main.c src/sensor.c)
+
+<span class="cm"># 添加包含目录</span>
+target_include_directories(app PRIVATE src)
+
+<span class="cm"># 条件编译</span>
+target_sources_ifdef(CONFIG_SENSOR app PRIVATE src/sensor.c)
+target_sources_ifdef(CONFIG_NETWORKING app PRIVATE src/network.c)
+
+<span class="cm"># 添加宏定义</span>
+target_compile_definitions(app PRIVATE MY_MACRO=1)
+
+<span class="cm"># 链接库</span>
+target_link_libraries(app PRIVATE some_library)
+</code></pre>
+
+  <h3>Zephyr CMake 函数</h3>
+
+<pre><code class="language-cmake"><span class="cm"># 条件源文件</span>
+target_sources_ifdef(CONFIG_XXX target PRIVATE file.c)
+
+<span class="cm"># 条件包含</span>
+target_include_directories_ifdef(CONFIG_XXX target PRIVATE dir)
+
+<span class="cm"># 条件定义</span>
+target_compile_definitions_ifdef(CONFIG_XXX target PRIVATE DEF)
+
+<span class="cm"># 生成二进制</span>
+zephyr_executable(app)
+
+<span class="cm"># 添加设备树包含</span>
+zephyr_include_directories(${ZEPHYR_BASE}/dts)
+
+<span class="cm"># 嵌入二进制</span>
+zephyr_linker_sources(SECTIONS sections.ld)
+</code></pre>
+</section>
+
+<section id="kconfig" class="toc-link">
+  <h2><span class="num">04</span> Kconfig 配置</h2>
+
+  <p>Kconfig 系统管理所有内核和驱动的配置选项。</p>
+
+  <h3>Kconfig 文件</h3>
+
+<pre><code class="language-kconfig"><span class="cm"># Kconfig 配置示例</span>
+<span class="cm"># drivers/Kconfig</span>
+
+menu "GPIO Driver"
+
+config GPIO_NRF
+    bool "Nordic nRF GPIO Driver"
+    default y
+    depends on HAS_GPIO
+    help
+      Enable the Nordic nRF GPIO driver.
+
+config GPIO_NRF_INT_PIN
+    int "GPIO interrupt pin"
+    range 0 31
+    depends on GPIO_NRF
+    help
+      GPIO pin number for interrupt.
+
+endmenu
+</code></pre>
+
+  <h3>Kconfig 语法</h3>
+
+  <table>
+    <tr><th>语法</th><th>说明</th></tr>
+    <tr><td><code>bool</code></td><td>布尔选项（y/n）</td></tr>
+    <tr><td><code>int</code></td><td>整数选项</td></tr>
+    <tr><td><code>string</code></td><td>字符串选项</td></tr>
+    <tr><td><code>tristate</code></td><td>三态选项（y/n/m）</td></tr>
+    <tr><td><code>depends on</code></td><td>依赖条件</td></tr>
+    <tr><td><code>select</code></td><td>自动选择</td></tr>
+    <tr><td><code>default</code></td><td>默认值</td></tr>
+    <tr><td><code>help</code></td><td>帮助文本</td></tr>
+  </table>
+
+  <h3>配置优先级</h3>
+
+<pre><code class="language-bash"><span class="cm"># 配置优先级（从高到低）：</span>
+<span class="cm"># 1. application/prj.conf              ← 用户配置</span>
+<span class="cm"># 2. boards/<board>_defconfig           ← 板级默认</span>
+<span class="cm"># 3. arch/<arch>/Kconfig                ← 架构配置</span>
+<span class="cm"># 4. subsys/Kconfig, drivers/Kconfig    ← 子系统默认</span>
+<span class="cm"># 5. Kconfig.zephyr                     ← 内核默认</span>
+
+<span class="cm"># menuconfig 界面</span>
+west build -t menuconfig
+</code></pre>
+</section>
+
+<section id="dt-compiler" class="toc-link">
+  <h2><span class="num">05</span> Devicetree 编译器</h2>
+
+  <p>Zephyr 的 Devicetree 编译器将 .dts 文件编译为 C 头文件。</p>
+
+  <h3>编译流程</h3>
+
+  <div class="mermaid">
+graph TD
+    DTS[".dts 文件（源）"] --> CPP["DTS 预处理（cpp）"]
+    CPP --> DTC["DTS 编译器（dtc）"]
+    DTC --> GEN["后处理（gen_defines.py）"]
+    GEN --> OUT["输出 devicetree_generated.h"]
+    style DTS fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style CPP fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style DTC fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style GEN fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style OUT fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+  <h3>生成的头文件</h3>
+
+<pre><code class="language-c"><span class="cm">// build/zephyr/include/generated/devicetree_generated.h</span>
+<span class="cm">// 自动生成，不要手动编辑</span>
+
+<span class="cm">// 设备树节点</span>
+#define DT_NODELABEL(uart0)  DT_N_S_soc_S_uart_40002000
+#define DT_NODELABEL(spi1)   DT_N_S_soc_S_spi_40003000
+
+<span class="cm">// 寄存器地址</span>
+#define DT_REG_ADDR(DT_N_S_soc_S_uart_40002000)  0x40002000
+#define DT_REG_SIZE(DT_N_S_soc_S_uart_40002000)  0x1000
+
+<span class="cm">// 属性值</span>
+#define DT_PROP(DT_N_S_soc_S_uart_40002000, clock_frequency)  16000000
+
+<span class="cm">// 中断</span>
+#define DT_INST_IRQN(0)  3
+
+<span class="cm">// GPIO</span>
+#define DT_GPIO_LABEL(DT_N_S_soc_S_gpio_50000000, gpios)  "GPIO_0"
+#define DT_GPIO_PIN(DT_N_S_soc_S_gpio_50000000, gpios)    5
+</code></pre>
+</section>
+
+<section id="cross-compile" class="toc-link">
+  <h2><span class="num">06</span> 交叉编译</h2>
+
+  <h3>工具链配置</h3>
+
+<pre><code class="language-bash"><span class="cm"># Zephyr SDK 工具链（推荐）</span>
+<span class="cm"># 安装后自动配置</span>
+<span class="cm"># arm-zephyr-eabi-gcc</span>
+<span class="cm"># riscv64-zephyr-elf-gcc</span>
+<span class="cm"># x86_64-zephyr-elf-gcc</span>
+
+<span class="cm"># 使用外部工具链</span>
+west build -b stm32f4_disco samples/basic/blinky \
+  -- -DCMAKE_TOOLCHAIN_FILE=<path>/toolchain.cmake
+
+<span class="cm"># 指定工具链变量</span>
+west build -b stm32f4_disco samples/basic/blinky \
+  -- -DCROSS_COMPILE=arm-zephyr-eabi-
+</code></pre>
+
+  <h3>Board 配置</h3>
+
+<pre><code class="language-bash"><span class="cm"># 列出可用的 board</span>
+west boards
+
+<span class="cm"># Board 目录结构</span>
+boards/arm/stm32f4_disco/
+├── stm32f4_disco.dts           <span class="cm"># 设备树</span>
+├── stm32f4_disco_defconfig     <span class="cm"># 默认配置</span>
+├── board.cmake                 <span class="cm"># CMake 板级配置</span>
+├── pins.yaml                   <span class="cm"># 引脚配置</span>
+└── README.rst                  <span class="cm"># 说明</span>
+</code></pre>
+</section>
+
+<section id="cmake-api" class="toc-link">
+  <h2><span class="num">07</span> CMake API</h2>
+
+<pre><code class="language-cmake"><span class="cm"># Zephyr 提供的 CMake 函数</span>
+
+<span class="cm"># 条件编译</span>
+target_sources_ifdef(CONFIG_XXX target PRIVATE file.c)
+target_include_directories_ifdef(CONFIG_XXX target PRIVATE dir)
+target_compile_definitions_ifdef(CONFIG_XXX target PRIVATE DEF)
+target_link_libraries_ifdef(CONFIG_XXX target PRIVATE lib)
+
+<span class="cm"># 生成文件</span>
+zephyr_generate_cmake_file()
+
+<span class="cm"># 链接器脚本</span>
+zephyr_linker_sources(SECTIONS linker.ld)
+
+<span class="cm"># 添加设备树绑定</span>
+zephyr_dt_find_compatible(<compatible>)
+
+<span class="cm"># 扩展二进制</span>
+zephyr_library()
+zephyr_library_sources(file1.c file2.c)
+zephyr_library_include_directories(include)
+</code></pre>
+</section>
+
+<section id="advanced" class="toc-link">
+  <h2><span class="num">08</span> 高级构建</h2>
+
+  <h3>构建选项</h3>
+
+<pre><code class="language-bash"><span class="cm"># 构建类型</span>
+west build -b <board> <app> -DCMAKE_BUILD_TYPE=Debug
+west build -b <board> <app> -DCMAKE_BUILD_TYPE=Release
+
+<span class="cm"># 生成报告</span>
+west build -t ram_report    <span class="cm"># RAM 使用报告</span>
+west build -t rom_report    <span class="cm"># ROM 使用报告</span>
+west build -t initlevels    <span class="cm"># 初始化级别报告</span>
+
+<span class="cm"># 并行构建</span>
+west build -b <board> <app> -- -GNinja -DCMAKE_BUILD_PARALLEL_LEVEL=8
+
+<span class="cm"># 增量构建</span>
+west build                  <span class="cm"># 自动增量</span>
+
+<span class="cm"># 完全重新构建</span>
+west build -t pristine
+west build -b <board> <app>
+</code></pre>
+
+  <h3>自定义构建</h3>
+
+<pre><code class="language-cmake"><span class="cm"># 自定义板级 CMake</span>
+<span class="cm"># boards/<board>/board.cmake</span>
+
+board_runner_args(jlink "--device=STM32F407VG")
+board_runner_args(stm32 "--freq=8000000")
+
+include(${ZEPHYR_BASE}/boards/common/jlink.board.cmake)
+include(${ZEPHYR_BASE}/boards/common/stm32.board.cmake)
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>CMakeLists.txt</code>（根目录）内核 CMake 入口。<br>
+  <code>Kconfig.zephyr</code> 内核配置选项定义。<br>
+  <code>cmake/modules/</code> CMake 模块目录。<br>
+  <code>scripts/gen_defines.py</code> Devicetree 代码生成器。<br>
+  <code>boards/</code> 板级支持定义。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

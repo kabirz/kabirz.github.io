@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr RTIO 异步 I/O 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr RTIO 异步 I/O 深度解析</h1>
+  <p class="subtitle">SQ / CQ / Executor / 零拷贝 / 传感器批量采集</p>
+  <span class="version">Zephyr 4.x · subsys/rtio/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">RTIO 概览</a></li>
+    <li><a href="#arch">架构设计</a></li>
+    <li><a href="#sq-cq">SQ 与 CQ</a></li>
+    <li><a href="#executor">执行器</a></li>
+    <li><a href="#scheduler">调度器</a></li>
+    <li><a href="#zero-copy">零拷贝</a></li>
+    <li><a href="#sensor">传感器集成</a></li>
+    <li><a href="#api">RTIO API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> RTIO 概览</h2>
+
+  <p>RTIO（Real-Time I/O）是 Zephyr 的异步 I/O 框架，支持零拷贝、批量操作和传感器采集。</p>
+
+  <h3>核心概念</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>rtio_sqe_prep_*() · rtio_submit()</small>"]
+    L1["RTIO 核心层<br><small>Submission Queue → Executor → Completion Queue</small>"]
+    L0 --> L1
+    L2["执行器层<br><small>RTIO 工作队列 · 传感器驱动 · DMA</small>"]
+    L1 --> L2
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+
+  <h3>设计目标</h3>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>异步非阻塞</td><td>提交 I/O 后立即返回</td></tr>
+    <tr><td>零拷贝</td><td>数据直接在缓冲区操作</td></tr>
+    <tr><td>批量操作</td><td>一次提交多个 I/O 请求</td></tr>
+    <tr><td>类型安全</td><td>编译时检查 I/O 操作类型</td></tr>
+  </table>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构设计</h2>
+
+<pre><code class="language-c"><span class="cmt">// RTIO 核心数据结构</span>
+struct rtio {
+    struct rtio_iodev **iovs;    <span class="cmt">// I/O 设备列表</span>
+    struct rtio_sqe *sqes;       <span class="cmt">// 提交队列</span>
+    struct rtio_cqe *cqes;       <span class="cmt">// 完成队列</span>
+    uint32_t sqe_count;          <span class="cmt">// SQ 大小</span>
+    uint32_t cqe_count;          <span class="cmt">// CQ 大小</span>
+};
+
+<span class="cmt">// SQE（Submission Queue Entry）</span>
+struct rtio_sqe {
+    uint8_t op;                  <span class="cmt">// 操作类型</span>
+    uint8_t prio;                <span class="cmt">// 优先级</span>
+    uint16_t flags;              <span class="cmt">// 标志</span>
+    struct rtio_iodev *iodev;    <span class="cmt">// 目标设备</span>
+    void *userdata;              <span class="cmt">// 用户数据</span>
+    <span class="cmt">// 操作特定字段...</span>
+};
+
+<span class="cmt">// CQE（Completion Queue Entry）</span>
+struct rtio_cqe {
+    int32_t result;              <span class="cmt">// 操作结果</span>
+    void *userdata;              <span class="cmt">// 用户数据</span>
+    struct rtio_sqe *sqe;        <span class="cmt">// 对应的 SQE</span>
+};
+</code></pre>
+</section>
+
+<section id="sq-cq" class="toc-link">
+  <h2><span class="num">03</span> SQ 与 CQ</h2>
+
+<pre><code class="language-c"><span class="cmt">// 提交队列（SQ）</span>
+<span class="cmt">// 应用层将 I/O 请求放入 SQ</span>
+
+<span class="cmt">// 完成队列（CQ）</span>
+<span class="cmt">// 执行器完成后将结果放入 CQ</span>
+<span class="cmt">// 应用层从 CQ 获取完成事件</span>
+
+<span class="cmt">// 使用流程：</span>
+<span class="cmt">// 1. 分配 SQE</span>
+<span class="cmt">// 2. 填充操作参数</span>
+<span class="cmt">// 3. 提交到 SQ</span>
+<span class="cmt">// 4. 等待 CQ 完成事件</span>
+<span class="cmt">// 5. 处理结果</span>
+</code></pre>
+</section>
+
+<section id="executor" class="toc-link">
+  <h2><span class="num">04</span> 执行器</h2>
+
+<pre><code class="language-c"><span class="cmt">// RTIO 执行器</span>
+<span class="cmt">// 将 SQ 中的请求分发到具体驱动执行</span>
+
+<span class="cmt">// 执行器配置</span>
+<span class="cmt">// CONFIG_RTIO_WORKQUEUE=y  ← 使用工作队列执行</span>
+
+<span class="cmt">// 执行器工作流程：</span>
+<span class="cmt">// 1. 从 SQ 取出请求</span>
+<span class="cmt">// 2. 分发到对应 I/O 设备驱动</span>
+<span class="cmt">// 3. 驱动执行操作</span>
+<span class="cmt">// 4. 将结果放入 CQ</span>
+<span class="cmt">// 5. 通知应用层</span>
+</code></pre>
+</section>
+
+<section id="scheduler" class="toc-link">
+  <h2><span class="num">05</span> 调度器</h2>
+
+<pre><code class="language-c"><span class="cmt">// RTIO 调度器（subsys/rtio/rtio_sched.c）</span>
+<span class="cmt">// 管理多个 RTIO 上下文的执行优先级</span>
+
+<span class="cmt">// 调度策略：</span>
+<span class="cmt">// - 优先级调度（高优先级先执行）</span>
+<span class="cmt">// - 公平调度（轮流执行）</span>
+<span class="cmt">// - 自定义调度策略</span>
+</code></pre>
+</section>
+
+<section id="zero-copy" class="toc-link">
+  <h2><span class="num">06</span> 零拷贝</h2>
+
+<pre><code class="language-c"><span class="cmt">// RTIO 支持零拷贝操作</span>
+<span class="cmt">// 数据直接在共享缓冲区中操作</span>
+<span class="cmt">// 避免数据复制开销</span>
+
+<span class="cmt">// 典型场景：</span>
+<span class="cmt">// 1. DMA 传输直接写入缓冲区</span>
+<span class="cmt">// 2. 传感器数据直接写入用户缓冲区</span>
+<span class="cmt">// 3. 网络数据直接传递到应用层</span>
+</code></pre>
+</section>
+
+<section id="sensor" class="toc-link">
+  <h2><span class="num">07</span> 传感器集成</h2>
+
+<pre><code class="language-c"><span class="cmt">// RTIO 传感器批量采集</span>
+<span class="cmt">// 一次提交多个传感器读取请求</span>
+
+<span class="cmt">// 场景：同时读取加速度计和陀螺仪</span>
+<span class="cmt">// 1. 提交 2 个 SQE（各一个传感器）</span>
+<span class="cmt">// 2. 驱动并行执行</span>
+<span class="cmt">// 3. 2 个 CQE 返回</span>
+<span class="cmt">// 4. 应用层一次性处理</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> RTIO API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 初始化</span>
+int rtio_init(struct rtio *r, const struct rtio_config *cfg);
+
+<span class="cmt">// SQE 操作</span>
+struct rtio_sqe *rtio_sqe_acquire(struct rtio *r);
+void rtio_sqe_prep_read(struct rtio_sqe *sqe, struct rtio_iodev *iodev, void *buf, size_t len);
+void rtio_sqe_prep_write(struct rtio_sqe *sqe, struct rtio_iodev *iodev, const void *buf, size_t len);
+
+<span class="cmt">// 提交</span>
+int rtio_submit(struct rtio *r, uint32_t head);
+
+<span class="cmt">// CQ 操作</span>
+struct rtio_cqe *rtio_cqe_acquire(struct rtio *r);
+void rtio_cqe_release(struct rtio *r, struct rtio_cqe *cqe);
+
+<span class="cmt">// 批量操作</span>
+int rtio_sqe_batch(struct rtio *r, struct rtio_sqe *sqes, uint32_t count);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/rtio/rtio_init.c</code> RTIO 初始化。<br>
+  <code>subsys/rtio/rtio_executor.c</code> 执行器实现。<br>
+  <code>subsys/rtio/rtio_sched.c</code> 调度器实现。<br>
+  <code>include/zephyr/drivers/rtio.h</code> RTIO API 定义。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

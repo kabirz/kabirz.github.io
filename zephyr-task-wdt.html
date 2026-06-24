@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 任务看门狗深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 任务看门狗深度解析</h1>
+  <p class="subtitle">多级监控 / 软件看门狗 / 硬件看门狗链 / 超时处理</p>
+  <span class="version">Zephyr 4.x · subsys/task_wdt/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">任务看门狗概览</a></li>
+    <li><a href="#arch">架构设计</a></li>
+    <li><a href="#software">软件看门狗</a></li>
+    <li><a href="#hardware">硬件看门狗链</a></li>
+    <li><a href="#api">Task WDT API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 任务看门狗概览</h2>
+
+  <p>任务看门狗（Task WDT）提供多级超时监控，支持软件和硬件看门狗链。</p>
+
+  <h3>核心特性</h3>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>多级超时</td><td>软件超时 → 硬件超时 → 系统复位</td></tr>
+    <tr><td>任务绑定</td><td>每个看门狗通道绑定到特定任务</td></tr>
+    <tr><td>自动喂狗</td><td>任务正常运行时自动喂狗</td></tr>
+    <tr><td>超时回调</td><td>超时时可执行自定义处理</td></tr>
+  </table>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构设计</h2>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>task_wdt_install() · task_wdt_feed()</small>"]
+    L1["任务看门狗层<br><small>软件超时 → 硬件看门狗 → 系统复位</small>"]
+    L0 --> L1
+    L2["硬件看门狗驱动<br><small>watchdog_dev · 多级超时配置</small>"]
+    L1 --> L2
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="software" class="toc-link">
+  <h2><span class="num">03</span> 软件看门狗</h2>
+
+<pre><code class="language-c"><span class="cmt">// 任务看门狗</span>
+<span class="cmt">// CONFIG_TASK_WDT=y</span>
+
+<span class="cmt">// 安装看门狗通道</span>
+task_wdt_install(TASK_WDT_CHANNEL, timeout_ms, wdt_callback, NULL);
+
+<span class="cmt">// 喂狗</span>
+task_wdt_feed(TASK_WDT_CHANNEL);
+
+<span class="cmt">// 超时回调</span>
+static void wdt_callback(int channel_id, void *user_data)
+{
+    <span class="cmt">// 软件超时处理</span>
+    printk("任务看门狗超时!\n");
+    <span class="cmt">// 可以：</span>
+    <span class="cmt">// 1. 记录错误日志</span>
+    <span class="cmt">// 2. 尝试恢复</span>
+    <span class="cmt">// 3. 触发硬件看门狗复位</span>
+}
+</code></pre>
+</section>
+
+<section id="hardware" class="toc-link">
+  <h2><span class="num">04</span> 硬件看门狗链</h2>
+
+<pre><code class="language-c"><span class="cmt">// 硬件看门狗链</span>
+<span class="cmt">// 当软件看门狗超时后，触发硬件看门狗</span>
+<span class="cmt">// 硬件看门狗超时后，系统复位</span>
+
+<span class="cmt">// 超时链：</span>
+<span class="cmt">// 1. 软件超时（500ms）→ 回调通知</span>
+<span class="cmt">// 2. 硬件超时（2s）→ 系统复位</span>
+
+<span class="cmt">// 硬件看门狗配置</span>
+<span class="cmt">// CONFIG_WDT=y</span>
+<span class="cmt">// CONFIG_WDT_DISABLE_AT_BOOT=n</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">05</span> Task WDT API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 安装</span>
+int task_wdt_install(int channel_id, int timeout_ms,
+                     task_wdt_callback_t callback, void *user_data);
+
+<span class="cmt">// 喂狗</span>
+int task_wdt_feed(int channel_id);
+
+<span class="cmt">// 移除</span>
+int task_wdt_remove(int channel_id);
+
+<span class="cmt">// 重置所有通道</span>
+int task_wdt_reset_all(void);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/task_wdt/</code> 任务看门狗实现。<br>
+  <code>drivers/watchdog/</code> 硬件看门狗驱动。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

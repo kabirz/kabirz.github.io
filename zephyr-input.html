@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 输入子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 输入子系统深度解析</h1>
+  <p class="subtitle">Input 事件 / 按键映射 / 触摸屏 / 编码器 / 长按 / 双击</p>
+  <span class="version">Zephyr 4.x · subsys/input/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">输入子系统概览</a></li>
+    <li><a href="#event">输入事件</a></li>
+    <li><a href="#api">输入 API</a></li>
+    <li><a href="#keymap">按键映射</a></li>
+    <li><a href="#longpress">长按检测</a></li>
+    <li><a href="#double-tap">双击检测</a></li>
+    <li><a href="#drivers">输入驱动</a></li>
+    <li><a href="#example">使用示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 输入子系统概览</h2>
+
+  <p>Zephyr 输入子系统提供统一的输入事件处理框架，支持按键、触摸屏、编码器等。</p>
+
+  <h3>输入设备类型</h3>
+
+  <table>
+    <tr><th>类型</th><th>说明</th></tr>
+    <tr><td>按键 (Key)</td><td>GPIO 按键、矩阵键盘</td></tr>
+    <tr><td>触摸 (Touch)</td><td>电容触摸屏、触摸板</td></tr>
+    <tr><td>编码器 (Encoder)</td><td>旋转编码器、滚轮</td></tr>
+    <tr><td>鼠标 (Mouse)</td><td>USB/蓝牙鼠标</td></tr>
+    <tr><td>游戏手柄 (Gamepad)</td><td>手柄按钮和摇杆</td></tr>
+  </table>
+</section>
+
+<section id="event" class="toc-link">
+  <h2><span class="num">02</span> 输入事件</h2>
+
+<pre><code class="language-c"><span class="cmt">// 输入事件结构</span>
+struct input_event {
+    const struct device *dev;   <span class="cmt">// 来源设备</span>
+    uint32_t sync;              <span class="cmt">// 同步标志</span>
+    uint16_t type;              <span class="cmt">// 事件类型</span>
+    uint16_t code;              <span class="cmt">// 事件代码</span>
+    int32_t value;              <span class="cmt">// 事件值</span>
+};
+
+<span class="cmt">// 事件类型</span>
+<span class="cmt">// INPUT_EV_KEY    - 按键事件</span>
+<span class="cmt">// INPUT_EV_REL    - 相对位移（鼠标）</span>
+<span class="cmt">// INPUT_EV_ABS    - 绝对坐标（触摸屏）</span>
+<span class="cmt">// INPUT_EV_MSC    - 杂项事件</span>
+
+<span class="cmt">// 按键代码</span>
+<span class="cmt">// INPUT_KEY_0 ~ INPUT_KEY_9</span>
+<span class="cmt">// INPUT_KEY_A ~ INPUT_KEY_Z</span>
+<span class="cmt">// INPUT_KEY_UP / DOWN / LEFT / RIGHT</span>
+<span class="cmt">// INPUT_KEY_ENTER / ESCAPE / SPACE</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">03</span> 输入 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 输入 API</span>
+<span class="cmt">#include &lt;zephyr/input/input.h&gt;</span>
+
+<span class="cmt">// 注册输入回调</span>
+static void input_callback(struct input_event *event, void *user_data)
+{
+    printk("设备: %s, 类型: %d, 代码: %d, 值: %d\n",
+           event->dev->name, event->type, event->code, event->value);
+}
+
+INPUT_LISTENER_CB_DEFINE(my_listener, input_callback, NULL);
+
+<span class="cmt">// 绑定到特定设备</span>
+const struct device *input_dev = DEVICE_DT_GET(DT_NODELABEL(buttons));
+INPUT_LISTENER_DATAGEN(my_listener, input_callback, NULL);
+input_register_listener(&amp;my_listener, input_dev);
+</code></pre>
+</section>
+
+<section id="keymap" class="toc-link">
+  <h2><span class="num">04</span> 按键映射</h2>
+
+<pre><code class="language-c"><span class="cmt">// 按键映射（subsys/input/input_keymap.c）</span>
+<span class="cmt">// CONFIG_INPUT_KEYMAP=y</span>
+
+<span class="cmt">// 将物理按键映射为逻辑功能</span>
+<span class="cmt">// 例如：GPIO Pin 5 → "volume_up"</span>
+
+<span class="cmt">// DTS 配置</span>
+<span class="cmt">// keys {</span>
+<span class="cmt">//     compatible = "gpio-keys";</span>
+<span class="cmt">//     button0: button_0 {</span>
+<span class="cmt">//         gpios = &lt;&amp;gpio0 5 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)&gt;;</span>
+<span class="cmt">//         zephyr,code = &lt;INPUT_KEY_0&gt;;</span>
+<span class="cmt">//     };</span>
+<span class="cmt">// };</span>
+</code></pre>
+</section>
+
+<section id="longpress" class="toc-link">
+  <h2><span class="num">05</span> 长按检测</h2>
+
+<pre><code class="language-c"><span class="cmt">// 长按检测（subsys/input/input_longpress.c）</span>
+<span class="cmt">// CONFIG_INPUT_LONGPRESS=y</span>
+
+<span class="cmt">// 配置：</span>
+<span class="cmt">// - 短按：按下释放</span>
+<span class="cmt">// - 长按：按住超过阈值</span>
+<span class="cmt">// - 超长按：按住更长时间</span>
+
+<span class="cmt">// 回调：</span>
+<span class="cmt">// short_handler - 短按触发</span>
+<span class="cmt">// long_handler  - 长按触发</span>
+<span class="cmt">// extra_handler - 超长按触发</span>
+</code></pre>
+</section>
+
+<section id="double-tap" class="toc-link">
+  <h2><span class="num">06</span> 双击检测</h2>
+
+<pre><code class="language-c"><span class="cmt">// 双击检测（subsys/input/input_double_tap.c）</span>
+<span class="cmt">// CONFIG_INPUT_DOUBLE_TAP=y</span>
+
+<span class="cmt">// 检测快速双击操作</span>
+<span class="cmt">// 例如：双击电源键 = 截屏</span>
+</code></pre>
+</section>
+
+<section id="drivers" class="toc-link">
+  <h2><span class="num">07</span> 输入驱动</h2>
+
+  <table>
+    <tr><th>驱动</th><th>目录</th><th>说明</th></tr>
+    <tr><td>GPIO Keys</td><td><code>drivers/input/input_gpio_keys.c</code></td><td>GPIO 按键</td></tr>
+    <tr><td>Cap Touch</td><td><code>drivers/input/input_captouch.c</code></td><td>电容触摸</td></tr>
+    <tr><td>Pinconn</td><td><code>drivers/input/input_pinconn.c</code></td><td>引脚连接</td></tr>
+    <tr><td>LPC KBD</td><td><code>drivers/input/input_lpc_kbd.c</code></td><td>LPC 键盘矩阵</td></tr>
+  </table>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">08</span> 使用示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// 按键处理示例</span>
+<span class="cmt">#include &lt;zephyr/input/input.h&gt;</span>
+
+<span class="cmt">// DTS 中定义的按键</span>
+<span class="cmt">// buttons {</span>
+<span class="cmt">//     compatible = "gpio-keys";</span>
+<span class="cmt">//     button_0: button_0 {</span>
+<span class="cmt">//         gpios = &lt;&amp;gpio0 5 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)&gt;;</span>
+<span class="cmt">//         label = "SW0";</span>
+<span class="cmt">//     };</span>
+<span class="cmt">// };</span>
+
+static void button_handler(struct input_event *event, void *user_data)
+{
+    if (event->type == INPUT_EV_KEY &amp;&amp; event->code == INPUT_KEY_0) {
+        if (event->value) {
+            printk("按钮按下\n");
+        } else {
+            printk("按钮释放\n");
+        }
+    }
+}
+
+INPUT_LISTENER_DATAGEN(button_listener, button_handler, NULL);
+
+<span class="cmt">// 注册监听</span>
+const struct device *gpio_keys = DEVICE_DT_GET(DT_NODELABEL(buttons));
+input_register_listener(&amp;button_listener, gpio_keys);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/input/input.c</code> 输入子系统核心。<br>
+  <code>subsys/input/input_keymap.c</code> 按键映射。<br>
+  <code>subsys/input/input_longpress.c</code> 长按检测。<br>
+  <code>include/zephyr/input/input.h</code> 输入 API 定义。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

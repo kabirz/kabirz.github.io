@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 同步原语深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 同步原语深度解析</h1>
+  <p class="subtitle">互斥锁 / 信号量 / 事件 / 条件变量 / Futex / Spinlock</p>
+  <span class="version">Zephyr 4.x · mutex.c · sem.c · events.c · condvar.c</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">同步原语概览</a></li>
+    <li><a href="#mutex">互斥锁 (k_mutex)</a></li>
+    <li><a href="#sem">信号量 (k_sem)</a></li>
+    <li><a href="#events">事件 (k_event)</a></li>
+    <li><a href="#condvar">条件变量 (k_condvar)</a></li>
+    <li><a href="#futex">Futex</a></li>
+    <li><a href="#spinlock">自旋锁 (k_spinlock)</a></li>
+    <li><a href="#compare">选型对比</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 同步原语概览</h2>
+
+  <p>Zephyr 提供丰富的同步原语，从轻量级自旋锁到高级互斥锁，满足不同并发场景的需求。</p>
+
+  <table>
+    <tr><th>原语</th><th>核心文件</th><th>等待方式</th><th>适用场景</th></tr>
+    <tr><td>k_mutex</td><td><code>mutex.c</code></td><td>阻塞</td><td>保护共享资源（支持优先级继承）</td></tr>
+    <tr><td>k_sem</td><td><code>sem.c</code></td><td>阻塞</td><td>资源计数、任务通知</td></tr>
+    <tr><td>k_event</td><td><code>events.c</code></td><td>阻塞</td><td>位掩码事件等待</td></tr>
+    <tr><td>k_condvar</td><td><code>condvar.c</code></td><td>阻塞</td><td>条件等待（与 mutex 配合）</td></tr>
+    <tr><td>k_futex</td><td><code>mutex.c</code></td><td>阻塞</td><td>用户态原子操作等待</td></tr>
+    <tr><td>k_spinlock</td><td><code>spinlock.c</code></td><td>自旋</td><td>极短临界区（中断上下文）</td></tr>
+  </table>
+</section>
+
+<section id="mutex" class="toc-link">
+  <h2><span class="num">02</span> 互斥锁 (k_mutex)</h2>
+
+  <p>Zephyr 互斥锁实现了<strong>优先级继承</strong>算法，防止优先级反转问题。</p>
+
+  <h3>数据结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/zephyr/kernel.h</span>
+struct k_mutex {
+    struct k_wait_q wait_q;    <span class="cmt">// 等待队列</span>
+    struct k_thread *owner;    <span class="cmt">// 当前持有者线程</span>
+    int lock_count;            <span class="cmt">// 锁计数（支持递归）</span>
+    int owner_orig_prio;       <span class="cmt">// 持有者原始优先级（优先级继承）</span>
+};
+</code></pre>
+
+  <h3>优先级继承</h3>
+
+<pre><code class="language-c"><span class="cmt">// kernel/mutex.c</span>
+
+<span class="cmt">// 加锁（核心逻辑）</span>
+int z_impl_k_mutex_lock(struct k_mutex *mutex, k_timeout_t timeout)
+{
+    k_spinlock_key_t key = k_spin_lock(&lock);
+
+    <span class="cmt">// 1. 无持有者，直接获取</span>
+    if (mutex->owner == NULL) {
+        mutex->owner = _current;
+        mutex->lock_count = 1;
+        mutex->owner_orig_prio = _current->base.prio;
+        k_spin_unlock(&lock, key);
+        return 0;
+    }
+
+    <span class="cmt">// 2. 同一线程递归加锁</span>
+    if (mutex->owner == _current) {
+        mutex->lock_count++;
+        k_spin_unlock(&lock, key);
+        return 0;
+    }
+
+    <span class="cmt">// 3. 优先级继承：提升持有者优先级</span>
+    if (_current->base.prio < mutex->owner->base.prio) {
+        <span class="cmt">// 记录原始优先级</span>
+        mutex->owner_orig_prio = mutex->owner->base.prio;
+        <span class="cmt">// 提升到等待者的优先级</span>
+        z_thread_priority_inherit(mutex->owner, _current->base.prio);
+    }
+
+    <span class="cmt">// 4. 当前线程加入等待队列</span>
+    int ret = z_pend_curr(&lock, key, &mutex->wait_q, timeout);
+    return ret;
+}
+
+<span class="cmt">// 解锁</span>
+int z_impl_k_mutex_unlock(struct k_mutex *mutex)
+{
+    k_spinlock_key_t key = k_spin_lock(&lock);
+
+    <span class="cmt">// 1. 递归锁计数减一</span>
+    mutex->lock_count--;
+    if (mutex->lock_count > 0) {
+        k_spin_unlock(&lock, key);
+        return 0;
+    }
+
+    <span class="cmt">// 2. 优先级恢复</span>
+    z_thread_priority_uninherit(mutex->owner, mutex->owner_orig_prio);
+
+    <span class="cmt">// 3. 唤醒最高优先级等待者</span>
+    struct k_thread *pending = z_waitq_head(&mutex->wait_q);
+    if (pending != NULL) {
+        mutex->owner = pending;
+        mutex->lock_count = 1;
+        mutex->owner_orig_prio = pending->base.prio;
+        z_thread_return_value(pending, 0);
+        z_unready_thread(pending);
+    } else {
+        mutex->owner = NULL;
+    }
+
+    k_spin_unlock(&lock, key);
+    return 0;
+}
+</code></pre>
+
+  <h3>优先级反转示例</h3>
+
+  <div class="mermaid">
+graph TD
+    subgraph 问题["优先级反转"]
+        H["线程 H（高优先级）"] -->|"等待 mutex"| L1["阻塞"]
+        M["线程 M（中优先级）"] -->|"抢占"| L["线程 L（低优先级）"]
+        L -->|"持有 mutex"| L2["mutex"]
+    end
+    subgraph 解决["优先级继承"]
+        L3["线程 L"] -->|"优先级提升到 H"| L4["可运行"]
+        M2["线程 M"] -->|"无法抢占"| L4
+    end
+    style H fill:#ff6b6b15,stroke:#ff6b6b
+    style L fill:#1769aa15,stroke:#1769aa
+    style M fill:#ffb86c15,stroke:#ffb86c
+</div>
+</section>
+
+<section id="sem" class="toc-link">
+  <h2><span class="num">03</span> 信号量 (k_sem)</h2>
+
+  <p>信号量是计数同步原语，用于资源管理和任务通知。</p>
+
+  <h3>数据结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/zephyr/kernel.h</span>
+struct k_sem {
+    struct k_wait_q wait_q;    <span class="cmt">// 等待队列</span>
+    atomic_t count;            <span class="cmt">// 计数器</span>
+    atomic_t limit;            <span class="cmt">// 最大计数值</span>
+};
+</code></pre>
+
+  <h3>实现</h3>
+
+<pre><code class="language-c"><span class="cmt">// kernel/sem.c</span>
+
+<span class="cmt">// 初始化</span>
+void z_impl_k_sem_init(struct k_sem *sem, unsigned int initial_count,
+                       unsigned int limit)
+{
+    __ASSERT_NO_MSG(initial_count <= limit);
+    sem->count = ATOMIC_INIT(initial_count);
+    sem->limit = ATOMIC_INIT(limit);
+    z_waitq_init(&sem->wait_q);
+}
+
+<span class="cmt">// 释放（give）</span>
+int z_impl_k_sem_give(struct k_sem *sem)
+{
+    k_spinlock_key_t key = k_spin_lock(&lock);
+
+    <span class="cmt">// 检查是否有等待者</span>
+    struct k_thread *pending = z_waitq_head(&sem->wait_q);
+    if (pending != NULL) {
+        <span class="cmt">// 有等待者，直接唤醒（不增加计数）</span>
+        z_thread_return_value(pending, 0);
+        z_unready_thread(pending);
+    } else {
+        <span class="cmt">// 无等待者，增加计数</span>
+        int count = atomic_get(&sem->count);
+        if (count < atomic_get(&sem->limit)) {
+            atomic_set(&sem->count, count + 1);
+        }
+    }
+
+    k_spin_unlock(&lock, key);
+    return 0;
+}
+
+<span class="cmt">// 获取（take）</span>
+int z_impl_k_sem_take(struct k_sem *sem, k_timeout_t timeout)
+{
+    k_spinlock_key_t key = k_spin_lock(&lock);
+
+    <span class="cmt">// 尝试获取</span>
+    int count = atomic_get(&sem->count);
+    if (count > 0) {
+        atomic_set(&sem->count, count - 1);
+        k_spin_unlock(&lock, key);
+        return 0;
+    }
+
+    <span class="cmt">// 无法获取，等待</span>
+    int ret = z_pend_curr(&lock, key, &sem->wait_q, timeout);
+    return ret;
+}
+</code></pre>
+
+  <h3>典型用法</h3>
+
+<pre><code class="language-c"><span class="cmt">// 资源计数（例如：3 个可用缓冲区）</span>
+K_SEM_DEFINE(buf_sem, 3, 3);  <span class="cmt">// 初始3，最大3</span>
+
+<span class="cmt">// 生产者</span>
+void producer(void)
+{
+    k_sem_give(&buf_sem);  <span class="cmt">// 释放资源</span>
+}
+
+<span class="cmt">// 消费者</span>
+void consumer(void)
+{
+    k_sem_take(&buf_sem, K_FOREVER);  <span class="cmt">// 等待资源</span>
+    <span class="cmt">// 使用缓冲区...</span>
+}
+
+<span class="cmt">// 任务通知（事件驱动）</span>
+K_SEM_DEFINE(notify_sem, 0, 1);  <span class="cmt">// 初始0，最大1</span>
+
+<span class="cmt">// ISR 中通知</span>
+void isr_handler(void *arg, void *arg2)
+{
+    k_sem_give(&notify_sem);
+}
+
+<span class="cmt">// 线程中等待</span>
+void worker_thread(void)
+{
+    while (1) {
+        k_sem_take(&notify_sem, K_FOREVER);
+        <span class="cmt">// 处理事件...</span>
+    }
+}
+</code></pre>
+</section>
+
+<section id="events" class="toc-link">
+  <h2><span class="num">04</span> 事件 (k_event)</h2>
+
+  <p>事件对象用于线程间基于<strong>位掩码</strong>的事件通知，支持等待任意或所有事件。</p>
+
+<pre><code class="language-c"><span class="cmt">// 事件定义</span>
+K_EVENT_DEFINE(my_event);
+
+<span class="cmt">// 发布事件（设置位）</span>
+k_event_post(&my_event, BIT(0) | BIT(3));
+
+<span class="cmt">// 等待任意事件</span>
+struct k_event_wait ev = {
+    .events = BIT(0) | BIT(1),
+    .options = K_EVENT_WAIT_ANY,
+};
+int ret = k_event_wait(&my_event, &ev, 1, K_FOREVER);
+<span class="cmt">// ret = 匹配的事件位</span>
+
+<span class="cmt">// 等待所有事件</span>
+struct k_event_wait ev = {
+    .events = BIT(0) | BIT(1),
+    .options = K_EVENT_WAIT_ALL,
+};
+int ret = k_event_wait(&my_event, &ev, 1, K_FOREVER);
+
+<span class="cmt">// 带选项等待</span>
+<span class="cmt">// K_EVENT_WAIT_RESET  - 等待前重置事件</span>
+<span class="cmt">// K_EVENT_WAIT_CLEAR  - 匹配后清除事件位</span>
+</code></pre>
+
+  <h3>内部实现</h3>
+
+<pre><code class="language-c"><span class="cmt">// kernel/events.c</span>
+
+<span class="cmt">// 等待条件检查</span>
+<span class="cmt">// K_EVENT_WAIT_ANY: 匹配任一事件位</span>
+<span class="cmt">// K_EVENT_WAIT_ALL: 匹配所有事件位</span>
+
+static int check_events(struct k_event *event, struct k_event_wait *wait)
+{
+    uint32_t matched = event->events & wait->events;
+
+    if (wait->options & K_EVENT_WAIT_ALL) {
+        <span class="cmt">// 必须匹配所有位</span>
+        return (matched == wait->events) ? matched : 0;
+    } else {
+        <span class="cmt">// 匹配任一位即可</span>
+        return matched;
+    }
+}
+</code></pre>
+</section>
+
+<section id="condvar" class="toc-link">
+  <h2><span class="num">05</span> 条件变量 (k_condvar)</h2>
+
+  <p>条件变量用于线程等待特定条件成立，必须与互斥锁配合使用。</p>
+
+<pre><code class="language-c"><span class="cmt">// 条件变量定义</span>
+K_CONDVAR_DEFINE(my_condvar);
+
+<span class="cmt">// 等待条件</span>
+K_MUTEX_DEFINE(my_mutex);
+
+void consumer(void)
+{
+    k_mutex_lock(&my_mutex, K_FOREVER);
+    while (!condition_met) {
+        <span class="cmt">// 原子地释放 mutex 并等待条件变量</span>
+        k_condvar_wait(&my_condvar, &my_mutex, K_FOREVER);
+    }
+    <span class="cmt">// 条件满足，继续执行（mutex 已重新获取）</span>
+    k_mutex_unlock(&my_mutex);
+}
+
+<span class="cmt">// 通知条件</span>
+void producer(void)
+{
+    k_mutex_lock(&my_mutex, K_FOREVER);
+    condition_met = true;
+    k_mutex_broadcast(&my_condvar);  <span class="cmt">// 唤醒所有等待者</span>
+    <span class="cmt">// 或 k_condvar_signal(&my_condvar);  唤醒一个</span>
+    k_mutex_unlock(&my_mutex);
+}
+</code></pre>
+</section>
+
+<section id="futex" class="toc-link">
+  <h2><span class="num">06</span> Futex</h2>
+
+  <p>Futex（Fast Userspace Mutex）允许用户态线程在无竞争时避免系统调用。</p>
+
+<pre><code class="language-c"><span class="cmt">// Futex 定义</span>
+K_FUTEX_DEFINE(my_futex);
+
+<span class="cmt">// 等待（原子操作 + 系统调用）</span>
+<span class="cmt">// 如果 futex 值为 0，线程阻塞</span>
+<span class="cmt">// 如果 futex 值非 0，立即返回</span>
+int ret = k_futex_wait(&my_futex, 0, K_FOREVER);
+
+<span class="cmt">// 释放（原子操作 + 系统调用）</span>
+<span class="cmt">// 设置 futex 值为 1，唤醒等待线程</span>
+k_futex_wake(&my_futex, 1);
+</code></pre>
+
+  <h3>无竞争快速路径</h3>
+
+<pre><code class="language-c"><span class="cmt">// Futex 的核心优势：无竞争时无需内核介入</span>
+<span class="cmt">// 1. 用户态检查 atomic 值</span>
+<span class="cmt">// 2. 如果值非 0，直接获取（无系统调用）</span>
+<span class="cmt">// 3. 如果值为 0，调用系统调用阻塞</span>
+
+<span class="cmt">// 适用于：</span>
+<span class="cmt">// - 用户态 pthread_mutex 实现</span>
+<span class="cmt">// - 高性能锁（大部分情况无竞争）</span>
+</code></pre>
+</section>
+
+<section id="spinlock" class="toc-link">
+  <h2><span class="num">07</span> 自旋锁 (k_spinlock)</h2>
+
+  <p>自旋锁是最轻量级的同步原语，在中断上下文和极短临界区中使用。</p>
+
+<pre><code class="language-c"><span class="cmt">// 自旋锁定义</span>
+static struct k_spinlock my_lock;
+
+<span class="cmt">// 使用（中断上下文）</span>
+k_spinlock_key_t key = k_spin_lock(&my_lock);
+
+<span class="cmt">// 临界区（极短操作）</span>
+shared_var++;
+
+k_spin_unlock(&my_lock, key);
+
+<span class="cmt">// 注意：自旋锁会禁止抢占（和中断，取决于架构）</span>
+<span class="cmt">// 临界区必须非常短，否则会影响系统响应性</span>
+</code></pre>
+
+  <h3>自旋锁 vs 互斥锁</h3>
+
+  <table>
+    <tr><th>特性</th><th>k_spinlock</th><th>k_mutex</th></tr>
+    <tr><td>等待方式</td><td>自旋（忙等待）</td><td>阻塞（让出 CPU）</td></tr>
+    <tr><td>中断上下文</td><td>可用</td><td>不可用</td></tr>
+    <tr><td>临界区长度</td><td>极短（纳秒级）</td><td>可长可短</td></tr>
+    <tr><td>CPU 开销</td><td>高（忙等待）</td><td>低（让出 CPU）</td></tr>
+    <tr><td>优先级继承</td><td>不支持</td><td>支持</td></tr>
+  </table>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">08</span> 选型对比</h2>
+
+  <table>
+    <tr><th>场景</th><th>推荐原语</th><th>原因</th></tr>
+    <tr><td>保护共享资源（可睡眠）</td><td>k_mutex</td><td>支持优先级继承，避免优先级反转</td></tr>
+    <tr><td>资源计数</td><td>k_sem</td><td>轻量级，支持计数</td></tr>
+    <tr><td>事件通知（位掩码）</td><td>k_event</td><td>支持等待任意/所有事件</td></tr>
+    <tr><td>条件等待</td><td>k_condvar + k_mutex</td><td>标准条件变量模式</td></tr>
+    <tr><td>用户态高性能锁</td><td>k_futex</td><td>无竞争时无系统调用</td></tr>
+    <tr><td>中断上下文</td><td>k_spinlock</td><td>唯一可在 ISR 中使用的锁</td></tr>
+    <tr><td>ISR 通知线程</td><td>k_sem_give()</td><td>ISR 中可调用</td></tr>
+    <tr><td>ISR 通知线程（事件）</td><td>k_event_post()</td><td>ISR 中可调用</td></tr>
+  </table>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>kernel/mutex.c</code> 互斥锁实现，重点看优先级继承逻辑。<br>
+  <code>kernel/sem.c</code> 信号量实现。<br>
+  <code>kernel/events.c</code> 事件对象实现。<br>
+  <code>kernel/condvar.c</code> 条件变量实现。<br>
+  <code>kernel/spinlock.c</code> 自旋锁验证。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr MCU 管理器 (mcumgr) 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr MCU 管理器 (mcumgr) 深度解析</h1>
+  <p class="subtitle">OTA 升级 / OS 管理 / 统计 / Shell 远程 / SMP 协议</p>
+  <span class="version">Zephyr 4.x · subsys/mgmt/mcumgr/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">mcumgr 概览</a></li>
+    <li><a href="#arch">架构设计</a></li>
+    <li><a href="#smp">SMP 协议</a></li>
+    <li><a href="#image">镜像管理</a></li>
+    <li><a href="#os-mgmt">OS 管理</a></li>
+    <li><a href="#shell">Shell 远程管理</a></li>
+    <li><a href="#transport">传输层</a></li>
+    <li><a href="#api">mcumgr API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> mcumgr 概览</h2>
+
+  <p>mcumgr（MCU Manager）是 Zephyr 的设备管理框架，提供 OTA 升级、OS 管理、统计收集等功能。</p>
+
+  <h3>支持的命令组</h3>
+
+  <table>
+    <tr><th>命令组</th><th>说明</th></tr>
+    <tr><td>Image (imgmgr)</td><td>固件镜像管理（上传、测试、确认、回滚）</td></tr>
+    <tr><td>OS (os)</td><td>OS 管理（复位、日期时间、任务列表）</td></tr>
+    <tr><td>Stats</td><td>统计信息收集</td></tr>
+    <tr><td>Shell</td><td>远程 Shell 访问</td></tr>
+    <tr><td>File System</td><td>远程文件操作</td></tr>
+    <tr><td>Storage</td><td>存储管理</td></tr>
+  </table>
+
+  <h3>架构</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["客户端（PC/手机）<br><small>MCUmgr CLI · 自定义客户端</small>"]
+    L1["SMP 协议层<br><small>CBOR 编码 · 请求/响应 · 分片</small>"]
+    L0 --> L1
+    L2["命令处理层<br><small>image_mgmt · os_mgmt · shell_mgmt</small>"]
+    L1 --> L2
+    L3["传输层<br><small>UART (SMP) · BLE · HTTP · UDP</small>"]
+    L2 --> L3
+    L4["MCU 固件<br><small>Zephyr + MCUboot</small>"]
+    L3 --> L4
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构设计</h2>
+
+<pre><code class="language-c"><span class="cmt">// mcumgr 核心组件</span>
+<span class="cmt">// subsys/mgmt/mcumgr/</span>
+<span class="cmt">// ├── transport/       ← 传输层（UART、BLE、UDP）</span>
+<span class="cmt">// ├── smp/             ← SMP 协议编解码</span>
+<span class="cmt">// ├── cmd/             ← 命令处理</span>
+<span class="cmt">// │   ├── img_mgmt/    ← 镜像管理</span>
+<span class="cmt">// │   ├── os_mgmt/     ← OS 管理</span>
+<span class="cmt">// │   ├── stat_mgmt/   ← 统计</span>
+<span class="cmt">// │   └── shell_mgmt/  ← Shell</span>
+<span class="cmt">// └── mgmt/            ← 注册和分发</span>
+</code></pre>
+</section>
+
+<section id="smp" class="toc-link">
+  <h2><span class="num">03</span> SMP 协议</h2>
+
+  <p>SMP（Simple Management Protocol）是 mcumgr 的传输协议，使用 CBOR 编码。</p>
+
+<pre><code class="language-c"><span class="cmt">// SMP 协议格式</span>
+<span class="cmt">// +------+------+------+------+------+------+------+------+</span>
+<span class="cmt">// | len  | op   | flags| group| id   | seq  | data ...    |</span>
+<span class="cmt">// | 2B   | 1B   | 1B   | 2B   | 1B   | 1B   | variable    |</span>
+<span class="cmt">// +------+------+------+------+------+------+------+------+</span>
+
+<span class="cmt">// op 字段：</span>
+<span class="cmt">// 0x00 - request</span>
+<span class="cmt">// 0x01 - response</span>
+<span class="cmt">// 0x02 - notification</span>
+
+<span class="cmt">// group 字段：</span>
+<span class="cmt">// 0 - OS mgmt</span>
+<span class="cmt">// 1 - Image mgmt</span>
+<span class="cmt">// 2 - Storage mgmt</span>
+<span class="cmt">// 9 - Shell mgmt</span>
+</code></pre>
+</section>
+
+<section id="image" class="toc-link">
+  <h2><span class="num">04</span> 镜像管理</h2>
+
+<pre><code class="language-c"><span class="cmt">// OTA 升级流程</span>
+<span class="cmt">// 1. 客户端上传新固件镜像</span>
+<span class="cmt">// 2. MCU 接收并写入 Flash</span>
+<span class="cmt">// 3. 客户端发送"测试"命令</span>
+<span class="cmt">// 4. MCU 重启，运行新固件</span>
+<span class="cmt">// 5. 应用发送"确认"命令</span>
+<span class="cmt">// 6. 新固件永久生效</span>
+<span class="cmt">// 7. 如果超时未确认，自动回滚</span>
+
+<span class="cmt">// 镜像状态</span>
+<span class="cmt">// IMAGE_STATE_PENDING    - 待测试</span>
+<span class="cmt">// IMAGE_STATE_CONFIRMED  - 已确认</span>
+<span class="cmt">// IMAGE_STATE_TESTING    - 测试中</span>
+<span class="cmt">// IMAGE_STATE_REVERTING  - 回滚中</span>
+<span class="cmt">// IMAGE_STATE_PENDING_CONFIRMED - 待确认</span>
+
+<span class="cmt">// Kconfig 配置</span>
+<span class="cmt">// CONFIG_IMG_MGMT=y</span>
+<span class="cmt">// CONFIG_IMG_MANAGER=y</span>
+<span class="cmt">// CONFIG_STREAM_FLASH=y</span>
+</code></pre>
+</section>
+
+<section id="os-mgmt" class="toc-link">
+  <h2><span class="num">05</span> OS 管理</h2>
+
+<pre><code class="language-c"><span class="cmt">// OS 管理命令</span>
+<span class="cmt">// os reset     - 复位设备</span>
+<span class="cmt">// os date      - 获取/设置日期时间</span>
+<span class="cmt">// os tasks     - 列出线程</span>
+<span class="cmt">// os uptime    - 获取运行时间</span>
+
+<span class="cmt">// Kconfig</span>
+<span class="cmt">// CONFIG_OS_MGMT=y</span>
+</code></pre>
+</section>
+
+<section id="shell" class="toc-link">
+  <h2><span class="num">06</span> Shell 远程管理</h2>
+
+<pre><code class="language-c"><span class="cmt">// 远程 Shell</span>
+<span class="cmt">// CONFIG_SHELL_MGMT=y</span>
+
+<span class="cmt">// 客户端连接后可执行 Shell 命令</span>
+<span class="cmt">// mcumgr --conntype serial --connstring /dev/ttyACM0 shell</span>
+<span class="cmt">// uart:~$ </span>
+</code></pre>
+</section>
+
+<section id="transport" class="toc-link">
+  <h2><span class="num">07</span> 传输层</h2>
+
+  <table>
+    <tr><th>传输</th><th>配置</th><th>说明</th></tr>
+    <tr><td>UART</td><td><code>CONFIG_MCUMGR_TRANSPORT_UART=y</code></td><td>串口传输（最常用）</td></tr>
+    <tr><td>BLE</td><td><code>CONFIG_MCUMGR_TRANSPORT_BT=y</code></td><td>蓝牙传输</td></tr>
+    <tr><td>UDP</td><td><code>CONFIG_MCUMGR_TRANSPORT_UDP=y</code></td><td>UDP 传输</td></tr>
+    <tr><td>HTTP</td><td><code>CONFIG_MCUMGR_TRANSPORT_HTTP=y</code></td><td>HTTP 传输</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> mcumgr API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 注册命令组</span>
+int mgmt_register_group(struct mgmt_group *group);
+
+<span class="cmt">// 注册命令</span>
+int mgmt_register_cmd(struct mgmt_group *group,
+                      const struct mgmt_handler *handler,
+                      uint32_t id, enum mgmt_handler_rc (*fn)(void));
+
+<span class="cmt">// 传输注册</span>
+int smp_uart_register(void);
+int smp_ble_register(void);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/mgmt/mcumgr/</code> mcumgr 核心实现。<br>
+  <code>subsys/mgmt/mcumgr/cmd/img_mgmt/</code> 镜像管理命令。<br>
+  <code>subsys/mgmt/mcumgr/transport/</code> 传输层实现。<br>
+  <code>subsys/mgmt/mcumgr/smp/</code> SMP 协议编解码。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

@@ -2,7 +2,7 @@
 
 ## 文档集合
 
-当前共 **217 篇**深度解析文档 + 1 个导航页 + 2 个公共资源文件（common.css / common.js）。
+当前共 **256 篇**深度解析文档 + 1 个导航页 + 3 个公共资源文件（common.css / common.js / mermaid.min.js）。
 
 ### 文件结构
 
@@ -11,8 +11,10 @@
 ├── index.html            # 导航页（左侧栏 + 搜索，数据驱动渲染）
 ├── common.css            # 公共样式（主题、侧边栏、所有组件）
 ├── common.js             # 公共脚本（主题切换、侧边栏生成、滚动高亮、代码高亮）
+├── mermaid.min.js        # Mermaid 图表渲染库（本地，3.3MB）
 ├── AGENTS.md             # 本文档
 ├── linux-*.html          # 141 篇 Linux 相关（115 内核 + 26 网络）
+├── zephyr-*.html         # 39 篇 Zephyr RTOS 深度解析
 ├── docker-*.html         # 12 篇 Docker / 容器技术解析
 ├── rust-*.html           # 13 篇 Rust 语言深度解析
 ├── vision-*.html         # 15 篇 AI 视觉技术解析
@@ -33,6 +35,7 @@
 | AI 视觉 | 15 | 计算机视觉 | OpenCV, YOLO, PyTorch, TensorFlow, ONNX |
 | Go 语言 | 12 | 系统编程 | goroutine、GMP 调度、GC、反射、net/http、Module、CGo、泛型 |
 | Python | 15 | 语言生态 | 异步、FastAPI、Pydantic、SQLAlchemy、测试、性能、NumPy 可视化、torchvision 测试图形 |
+| Zephyr RTOS | 39 | 嵌入式 | 内核、调度、内存、同步、IPC、定时器、中断、设备模型、驱动、PM、网络、蓝牙、构建、调试、安全、zbus、SMP、文件系统、工作队列、USB、LLEXT、mcumgr、Modem、DFU、传感、CAN、LoRaWAN、Modbus、RTIO、POSIX、输入、统计、Settings、随机数、Retention、看门狗、网络管理 |
 
 ### 已覆盖主题（Linux 内核）
 
@@ -358,6 +361,50 @@
 | 8 | windows-winui3.html | WinUI 3 |
 | 9 | windows-wpf.html | WPF |
 
+### 已覆盖主题（Zephyr RTOS）
+
+| # | 文件 | 主题 |
+|---|------|------|
+| 1 | zephyr-overview.html | Zephyr RTOS 整体架构 |
+| 2 | zephyr-scheduler.html | 内核调度器 |
+| 3 | zephyr-thread.html | 线程模型 |
+| 4 | zephyr-memory.html | 内存管理 |
+| 5 | zephyr-synchronization.html | 同步原语 |
+| 6 | zephyr-ipc.html | 进程间通信 |
+| 7 | zephyr-timer.html | 定时器与时间管理 |
+| 8 | zephyr-interrupt.html | 中断与异常处理 |
+| 9 | zephyr-device-model.html | 设备模型 |
+| 10 | zephyr-device-tree.html | 设备树 |
+| 11 | zephyr-driver-framework.html | 驱动框架 |
+| 12 | zephyr-power-management.html | 电源管理 |
+| 13 | zephyr-networking.html | 网络栈 |
+| 14 | zephyr-bluetooth.html | 蓝牙协议栈 |
+| 15 | zephyr-build-system.html | 构建系统 |
+| 16 | zephyr-tracing.html | 追踪与调试 |
+| 17 | zephyr-security.html | 安全机制 |
+| 18 | zephyr-zbus.html | zbus 消息总线 |
+| 19 | zephyr-smp.html | SMP 多核支持 |
+| 20 | zephyr-filesystem.html | 文件系统 |
+| 21 | zephyr-workqueue.html | 工作队列 (k_work) |
+| 22 | zephyr-usb.html | USB 子系统 |
+| 23 | zephyr-llext.html | LLEXT 可加载扩展 |
+| 24 | zephyr-mcumgr.html | MCU 管理器 (mcumgr) |
+| 25 | zephyr-modem.html | Modem 子系统 |
+| 26 | zephyr-dfu.html | 设备固件升级 (DFU) |
+| 27 | zephyr-sensing.html | 传感量子系统 |
+| 28 | zephyr-can.html | CAN 总线 |
+| 29 | zephyr-lorawan.html | LoRaWAN |
+| 30 | zephyr-modbus.html | Modbus 协议 |
+| 31 | zephyr-rtio.html | RTIO 异步 I/O |
+| 32 | zephyr-posix.html | POSIX 兼容层 |
+| 33 | zephyr-input.html | 输入子系统 |
+| 34 | zephyr-stats.html | 统计子系统 |
+| 35 | zephyr-settings.html | Settings 持久化 |
+| 36 | zephyr-random.html | 随机数子系统 |
+| 37 | zephyr-retention.html | Retention 掉电保留 |
+| 38 | zephyr-task-wdt.html | 任务看门狗 |
+| 39 | zephyr-net-management.html | 网络管理 |
+
 ---
 
 ## 公共文件
@@ -420,6 +467,29 @@
 └── <span class="file">zzz.c</span>    <span class="cmt">说明</span>
   </pre></div>
 ```
+
+### ⚠️ Mermaid 图表规则
+
+架构图、流程图、状态图等一律使用 Mermaid，不使用 ASCII 框图或 HTML 表格：
+
+```html
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+```
+
+图表类型选择：
+- **架构/层次图** → `graph TD`（自上而下）
+- **状态机** → `graph TD` + 彩色节点
+- **流程图** → `graph TD` 或 `graph LR`
+- **时序图** → `sequenceDiagram`
+- **栈布局** → `graph BT`（自下而上）
+
+样式规范：使用 `style` 设置节点颜色，颜色参考：
+- 蓝色系：`fill:#dbeafe,stroke:#3b82f6,color:#1e40af`
+- 绿色系：`fill:#dcfce7,stroke:#22c55e,color:#166534`
+- 黄色系：`fill:#fef3c7,stroke:#f59e0b,color:#92400e`
+- 红色系：`fill:#fee2e2,stroke:#ef4444,color:#991b1b`
+- 紫色系：`fill:#f3e8ff,stroke:#a855f7,color:#6b21a8`
 
 ### ⚠️ 阅读建议规则
 
@@ -498,7 +568,7 @@ const ICON_MAP = {
 | 文件系统 | 待扩展（XFS、btrfs、F2FS） |
 | 网络 | 待扩展（WireGuard、MPTCP、SRv6） |
 | 设备驱动 | 待扩展（USB、PCIe、ALSA、V4L2） |
-| Zephyr | 待扩展 |
+| Zephyr | ✅ 39 篇（内核/调度/内存/同步/IPC/定时器/中断/设备模型/驱动/PM/网络/蓝牙/构建/调试/安全/zbus/SMP/文件系统/工作队列/USB/LLEXT/mcumgr/Modem/DFU/传感/CAN/LoRaWAN/Modbus/RTIO/POSIX/输入/统计/Settings/随机数/Retention/看门狗/网络管理） |
 | AI 视觉 | ✅ 15 篇（OpenCV / YOLO / PyTorch / TensorFlow / ONNX） |
 | Go 语言 | ✅ 12 篇（基础/并发/调度/GC/内存/反射/net-http/CGo/模块/泛型/性能） |
 | Python | ✅ 15 篇（基础/异步/并发/Pydantic/FastAPI/NiceGUI/SQLAlchemy/测试/性能/NumPy 可视化/torchvision 测试图形） |

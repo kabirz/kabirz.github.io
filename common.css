@@ -180,7 +180,7 @@ tr:nth-child(even) { background: rgba(127,127,127,0.05); }
 [data-theme="dark"] .callout.danger { background: rgba(255,85,85,0.05); }
 
 /* ---- File tree ---- */
-.file-tree { font-family: monospace; font-size: 0.9em; line-height: 1.8; color: var(--text-dim); padding: 18px; background: var(--code-bg); border-radius: 8px; border: 1px solid var(--border); }
+.file-tree { font-family: "Noto Sans Mono CJK SC", "Source Han Mono SC", "Microsoft YaHei Mono", "Consolas", "Liberation Mono", "Courier New", monospace; font-size: 0.9em; line-height: 1.8; color: var(--text-dim); padding: 18px; background: var(--code-bg); border-radius: 8px; border: 1px solid var(--border); letter-spacing: 0; font-variant-east-asian: full-width; -webkit-font-feature-settings: "halt"; }
 .file-tree .dir { color: #0969da; }
 .file-tree .file { color: #1a7f37; }
 .file-tree .cmt { color: #656d76; font-style: italic; }

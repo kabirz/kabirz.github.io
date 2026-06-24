@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 传感量子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 传感量子系统深度解析</h1>
+  <p class="subtitle">Sensing 框架 / 传感器 API / RTIO 异步 I/O / 多传感器融合</p>
+  <span class="version">Zephyr 4.x · subsys/sensing/ · subsys/rtio/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">传感量子系统概览</a></li>
+    <li><a href="#sensing">Sensing 框架</a></li>
+    <li><a href="#sensor-api">传感器 API</a></li>
+    <li><a href="#rtio">RTIO 异步 I/O</a></li>
+    <li><a href="#channels">传感器通道</a></li>
+    <li><a href="#trigger">触发模式</a></li>
+    <li><a href="#virtual">虚拟传感器</a></li>
+    <li><a href="#api">传感器 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 传感量子系统概览</h2>
+
+  <p>Zephyr 提供两层传感器抽象：底层传感器驱动 API 和高层 Sensing 框架。</p>
+
+  <h3>两层架构</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>Sensing API · 数据融合 · 滤波</small>"]
+    L1["Sensing 框架（subsys/sensing/）<br><small>传感器管理 · 虚拟传感器 · 管道处理</small>"]
+    L0 --> L1
+    L2["传感器驱动 API（include/zephyr/drivers/sensor.<br><small>sample_fetch · channel_get · trigger</small>"]
+    L1 --> L2
+    L3["传感器驱动（drivers/sensor/）<br><small>BME280 · BMI160 · LIS2DH · MAX30101 ...</small>"]
+    L2 --> L3
+    L4["硬件接口<br><small>I2C · SPI · 模拟输入</small>"]
+    L3 --> L4
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+
+  <h3>支持的传感器</h3>
+
+  <table>
+    <tr><th>类别</th><th>传感器</th><th>说明</th></tr>
+    <tr><td>环境</td><td>BME280, SHT3x, TMP116</td><td>温度/湿度/气压</td></tr>
+    <tr><td>运动</td><td>BMI160, LSM6DSO, LIS2DH</td><td>加速度/陀螺仪</td></tr>
+    <tr><td>光学</td><td>MAX30101, VEML6075</td><td>血氧/紫外线</td></tr>
+    <tr><td>距离</td><td>VL53L0X, VL53L1X</td><td>激光测距</td></tr>
+    <tr><td>磁力</td><td>MMC5603, LIS2MDL</td><td>磁力计</td></tr>
+  </table>
+</section>
+
+<section id="sensing" class="toc-link">
+  <h2><span class="num">02</span> Sensing 框架</h2>
+
+  <p>Sensing 是 Zephyr 的高层传感管理框架，支持虚拟传感器和数据管道。</p>
+
+<pre><code class="language-c"><span class="cmt">// Sensing 框架（subsys/sensing/）</span>
+<span class="cmt">// CONFIG_SENSING=y</span>
+
+<span class="cmt">// 核心概念：</span>
+<span class="cmt">// 1. 传感器（sensor）- 物理或虚拟传感器</span>
+<span class="cmt">// 2. 管道（pipeline）- 数据处理管道</span>
+<span class="cmt">// 3. 处理器（processor）- 数据变换</span>
+<span class="cmt">// 4. 接收器（receiver）- 数据消费</span>
+
+<span class="cmt">// 虚拟传感器</span>
+<span class="cmt">// 从物理传感器数据派生新数据</span>
+<span class="cmt">// 例如：融合加速度+陀螺仪 → 旋转矩阵</span>
+</code></pre>
+</section>
+
+<section id="sensor-api" class="toc-link">
+  <h2><span class="num">03</span> 传感器 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 传感器 API（include/zephyr/drivers/sensor.h）</span>
+
+<span class="cmt">// 获取设备</span>
+const struct device *dev = DEVICE_DT_GET(DT_NODELABEL(bme280));
+
+<span class="cmt">// 采样数据</span>
+sensor_sample_fetch(dev);
+
+<span class="cmt">// 获取通道数据</span>
+struct sensor_value temp, hum, press;
+sensor_channel_get(dev, SENSOR_CHAN_AMBIENT_TEMP, &amp;temp);
+sensor_channel_get(dev, SENSOR_CHAN_HUMIDITY, &amp;hum);
+sensor_channel_get(dev, SENSOR_CHAN_PRESS, &amp;press);
+
+<span class="cmt">// 打印数据</span>
+printk("温度: %.2f°C\n", sensor_value_to_double(&amp;temp));
+printk("湿度: %.2f%%\n", sensor_value_to_double(&amp;hum));
+printk("气压: %.2f hPa\n", sensor_value_to_double(&amp;press) / 100.0);
+
+<span class="cmt">// 非阻塞采样</span>
+sensor_sample_fetch-chan(dev, SENSOR_CHAN_AMBIENT_TEMP);
+
+<span class="cmt">// 批量读取</span>
+struct sensor_data采集 {
+    struct sensor_value temp;
+    struct sensor_value hum;
+};
+sensor_channel_get(dev, SENSOR_CHAN_AMBIENT_TEMP, &amp;采集.temp);
+sensor_channel_get(dev, SENSOR_CHAN_HUMIDITY, &amp;采集.hum);
+</code></pre>
+</section>
+
+<section id="rtio" class="toc-link">
+  <h2><span class="num">04</span> RTIO 异步 I/O</h2>
+
+  <p>RTIO 提供异步 I/O 框架，用于传感器批量采集和零拷贝数据处理。</p>
+
+<pre><code class="language-c"><span class="cmt">// RTIO（subsys/rtio/）</span>
+<span class="cmt">// CONFIG_RTIO=y</span>
+
+<span class="cmt">// RTIO 核心概念：</span>
+<span class="cmt">// 1. Submission Queue (SQ) - 提交 I/O 请求</span>
+<span class="cmt">// 2. Completion Queue (CQ) - 完成事件</span>
+<span class="cmt">// 3. Executor - 执行 I/O 操作</span>
+<span class="cmt">// 4. Scheduler - I/O 调度</span>
+
+<span class="cmt">// 传感器 RTIO 集成</span>
+<span class="cmt">// - 异步采样</span>
+<span class="cmt">// - 批量采集</span>
+<span class="cmt">// - 零拷贝传输</span>
+<span class="cmt">// - 多传感器并发</span>
+</code></pre>
+</section>
+
+<section id="channels" class="toc-link">
+  <h2><span class="num">05</span> 传感器通道</h2>
+
+  <table>
+    <tr><th>通道</th><th>宏</th><th>单位</th></tr>
+    <tr><td>温度</td><td><code>SENSOR_CHAN_AMBIENT_TEMP</code></td><td>摄氏度</td></tr>
+    <tr><td>湿度</td><td><code>SENSOR_CHAN_HUMIDITY</code></td><td>%</td></tr>
+    <tr><td>气压</td><td><code>SENSOR_CHAN_PRESS</code></td><td>帕斯卡</td></tr>
+    <tr><td>加速度</td><td><code>SENSOR_CHAN_ACCEL_X/Y/Z</code></td><td>m/s²</td></tr>
+    <tr><td>陀螺仪</td><td><code>SENSOR_CHAN_GYRO_X/Y/Z</code></td><td>rad/s</td></tr>
+    <tr><td>磁力</td><td><code>SENSOR_CHAN_MAG_X/Y/Z</code></td><td>高斯</td></tr>
+    <tr><td>光照</td><td><code>SENSOR_CHAN_LIGHT</code></td><td>lux</td></tr>
+    <tr><td>距离</td><td><code>SENSOR_CHAN_DISTANCE</code></td><td>米</td></tr>
+  </table>
+</section>
+
+<section id="trigger" class="toc-link">
+  <h2><span class="num">06</span> 触发模式</h2>
+
+<pre><code class="language-c"><span class="cmt">// 传感器触发</span>
+<span class="cmt">// 替代轮询，使用中断通知</span>
+
+<span class="cmt">// 触发类型</span>
+<span class="cmt">// SENSOR_TRIG_DATA_READY   - 数据就绪</span>
+<span class="cmt">// SENSOR_TRIG_THRESHOLD    - 阈值触发</span>
+<span class="cmt">// SENSOR_TRIG_TAP          - 敲击检测</span>
+<span class="cmt">// SENSOR_TRIG_FREEFALL     - 自由落体</span>
+<span class="cmt">// SENSOR_TRIG_MOTION       - 运动检测</span>
+<span class="cmt">// SENSOR_TRIG_STATIONARY   - 静止检测</span>
+
+<span class="cmt">// 设置触发</span>
+struct sensor_trigger trig = {
+    .type = SENSOR_TRIG_DATA_READY,
+    .chan = SENSOR_CHAN_ALL,
+};
+sensor_trigger_set(dev, &amp;trig, data_ready_handler);
+
+<span class="cmt">// 触发回调</span>
+void data_ready_handler(const struct device *dev,
+                        const struct sensor_trigger *trigger)
+{
+    <span class="cmt">// ISR 上下文，不能阻塞</span>
+    k_sem_give(&amp;data_sem);
+}
+</code></pre>
+</section>
+
+<section id="virtual" class="toc-link">
+  <h2><span class="num">07</span> 虚拟传感器</h2>
+
+<pre><code class="language-c"><span class="cmt">// 虚拟传感器从物理传感器派生数据</span>
+<span class="cmt">// 例如：计步器 = f(加速度, 陀螺仪)</span>
+
+<span class="cmt">// Sensing 框架支持定义虚拟传感器：</span>
+<span class="cmt">// 1. 从多个物理传感器获取数据</span>
+<span class="cmt">// 2. 执行算法处理</span>
+<span class="cmt">// 3. 输出派生数据</span>
+
+<span class="cmt">// 典型应用：</span>
+<span class="cmt">// - 计步器</span>
+<span class="cmt">// - 手势识别</span>
+<span class="cmt">// - 活动分类</span>
+<span class="cmt">// - 姿态估计</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 传感器 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 采样</span>
+int sensor_sample_fetch(const struct device *dev);
+int sensor_sample_fetch_chan(const struct device *dev, enum sensor_channel chan);
+int sensor_sample_fetch_chan_list(const struct device *dev,
+                                  const enum sensor_channel *chan_list, size_t count);
+
+<span class="cmt">// 数据获取</span>
+int sensor_channel_get(const struct device *dev, enum sensor_channel chan,
+                       struct sensor_value *val);
+int sensor_get_orientation(const struct device *dev, struct sensor_orientation *orient);
+
+<span class="cmt">// 触发</span>
+int sensor_trigger_set(const struct device *dev,
+                       const struct sensor_trigger *trig,
+                       sensor_trigger_handler_t handler);
+
+<span class="cmt">// 属性</span>
+int sensor_attr_set(const struct device *dev, enum sensor_channel chan,
+                    enum sensor_attribute attr, const struct sensor_value *val);
+int sensor_attr_get(const struct device *dev, enum sensor_channel chan,
+                    enum sensor_attribute attr, struct sensor_value *val);
+
+<span class="cmt">// 工具函数</span>
+double sensor_value_to_double(const struct sensor_value *val);
+int64_t sensor_value_to_milli(const struct sensor_value *val);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>include/zephyr/drivers/sensor.h</code> 传感器 API 定义。<br>
+  <code>subsys/sensing/</code> Sensing 框架实现。<br>
+  <code>subsys/rtio/</code> RTIO 异步 I/O 框架。<br>
+  <code>drivers/sensor/</code> 传感器驱动实现。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

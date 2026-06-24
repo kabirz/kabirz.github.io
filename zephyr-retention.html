@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr Retention 掉电保留存储深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr Retention 掉电保留存储深度解析</h1>
+  <p class="csubtitle">跨重启状态 / Flash 保留区 / RAM 保留区</p>
+  <span class="version">Zephyr 4.x · subsys/retention/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">Retention 概览</a></li>
+    <li><a href="#types">保留区类型</a></li>
+    <li><a href="#flash">Flash 保留</a></li>
+    <li><a href="#ram">RAM 保留</a></li>
+    <li><a href="#api">Retention API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> Retention 概览</h2>
+
+  <p>Retention 子系统提供跨重启的数据保留能力，用于传递状态和配置。</p>
+
+  <h3>应用场景</h3>
+
+  <table>
+    <tr><th>场景</th><th>说明</th></tr>
+    <tr><td>Bootloader → 应用</td><td>传递启动原因、升级状态</td></tr>
+    <tr><td>崩溃日志</td><td>保留崩溃信息供下次启动分析</td></tr>
+    <tr><td>OTA 状态</td><td>保留固件升级进度</td></tr>
+    <tr><td>用户数据</td><td>小量用户数据跨重启保留</td></tr>
+  </table>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 保留区类型</h2>
+
+  <table>
+    <tr><th>类型</th><th>说明</th></tr>
+    <tr><td>Flash 保留</td><td>使用 Flash 分区保留数据</td></tr>
+    <tr><td>RAM 保留</td><td>使用特殊 RAM 保留数据（需硬件支持）</td></tr>
+    <tr><td>寄存器保留</td><td>使用 SoC 寄存器保留数据</td></tr>
+  </table>
+</section>
+
+<section id="flash" class="toc-link">
+  <h2><span class="num">03</span> Flash 保留</h2>
+
+<pre><code class="language-c"><span class="cmt">// Flash 保留区</span>
+<span class="cmt">// CONFIG_RETENTION=y</span>
+
+<span class="cmt">// 定义保留区（DTS）</span>
+<span class="cmt">// retention: retention@fd000 {</span>
+<span class="cmt">//     compatible = "zephyr,retention";</span>
+<span class="cmt">//     reg = &lt;0xfd000 0x1000&gt;;</span>
+<span class="cmt">// };</span>
+
+<span class="cmt">// 写入数据</span>
+const struct device *ret_dev = DEVICE_DT_GET(DT_NODELABEL(retention));
+retention_write(ret_dev, 0, data, sizeof(data));
+
+<span class="cmt">// 读取数据</span>
+uint8_t buf[64];
+retention_read(ret_dev, 0, buf, sizeof(buf));
+</code></pre>
+</section>
+
+<section id="ram" class="toc-link">
+  <h2><span class="num">04</span> RAM 保留</h2>
+
+<pre><code class="language-c"><span class="cmt">// RAM 保留区（需硬件支持）</span>
+<span class="cmt">// 某些 SoC 有专用保留 RAM 区域</span>
+<span class="cmt">// 即使在深度休眠后数据仍然保留</span>
+
+<span class="cmt">// 适用于：</span>
+<span class="cmt">// - Deep Sleep 唤醒后恢复状态</span>
+<span class="cmt">// - Bootloader 传递数据</span>
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">05</span> Retention API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 读写</span>
+ssize_t retention_read(const struct device *dev, off_t offset, void *data, size_t len);
+ssize_t retention_write(const struct device *dev, off_t offset, const void *data, size_t len);
+
+<span class="cmt">// 信息</span>
+size_t retention_size(const struct device *dev);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/retention/</code> Retention 子系统实现。<br>
+  <code>include/zephyr/retention/retention.h</code> Retention API 定义。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

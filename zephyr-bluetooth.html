@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr 蓝牙协议栈深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr 蓝牙协议栈深度解析</h1>
+  <p class="subtitle">BLE Host / Controller / HCI / GATT / ATT / SMP / Mesh</p>
+  <span class="version">Zephyr 4.x · subsys/bluetooth/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">蓝牙协议栈概览</a></li>
+    <li><a href="#arch">协议栈架构</a></li>
+    <li><a href="#hci">HCI 传输层</a></li>
+    <li><a href="#host">Host 层</a></li>
+    <li><a href="#gatt">GATT / ATT</a></li>
+    <li><a href="#smp">SMP 安全管理</a></li>
+    <li><a href="#mesh">Bluetooth Mesh</a></li>
+    <li><a href="#api">蓝牙 API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 蓝牙协议栈概览</h2>
+
+  <p>Zephyr 内置完整的 Bluetooth Low Energy（BLE）协议栈，支持 Host + Controller 一体化或分离架构。</p>
+
+  <h3>支持的蓝牙功能</h3>
+
+  <table>
+    <tr><th>功能</th><th>说明</th></tr>
+    <tr><td>BLE Central/Peripheral</td><td>中心设备和外围设备角色</td></tr>
+    <tr><td>GATT Client/Server</td><td>通用属性协议</td></tr>
+    <tr><td>LE Secure Connections</td><td>LE 安全连接（LESC）</td></tr>
+    <tr><td>Bluetooth Mesh</td><td>蓝牙网状网络</td></tr>
+    <tr><td>Bluetooth Audio</td><td>LE Audio / LC3 编解码</td></tr>
+    <tr><td>ISO Channels</td><td>同步数据通道（Isochronous）</td></tr>
+    <tr><td>Direction Finding</td><td>蓝牙方向查找（AoA/AoD）</td></tr>
+  </table>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 协议栈架构</h2>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>bt_gatt_*() · bt_conn_*() · bt_mesh_*()</small>"]
+    L1["Host 层（subsys/bluetooth/host/）<br><small>GATT · ATT · L2CAP · SMP · GAP · 连接管理</small>"]
+    L0 --> L1
+    L2["HCI 传输层（subsys/bluetooth/common/）<br><small>HCI 命令/事件/数据封装</small>"]
+    L1 --> L2
+    L3["Controller（subsys/bluetooth/controller/）<br><small>链路层 · 调度 · 跳频 · 加密</small>"]
+    L2 --> L3
+    L4["HCI 驱动层<br><small>UART (H4/H5) · SPI · 网络 (IPSP) · 虚拟 HCI</small>"]
+    L3 --> L4
+    L5["硬件<br><small>nRF52/53 · ESP32 · CC2652 · TI CC1352</small>"]
+    L4 --> L5
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L5 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="hci" class="toc-link">
+  <h2><span class="num">03</span> HCI 传输层</h2>
+
+  <p>HCI（Host Controller Interface）是 Host 和 Controller 之间的标准接口。</p>
+
+  <h3>HCI 传输类型</h3>
+
+  <table>
+    <tr><th>类型</th><th>驱动</th><th>说明</th></tr>
+    <tr><td>UART H4</td><td><code>drivers/bluetooth/hci_spi.c</code></td><td>SPI 传输</td></tr>
+    <tr><td>UART H5</td><td><code>drivers/bluetooth/hci_uart.c</code></td><td>三线 UART</td></tr>
+    <tr><td>Native</td><td><code>subsys/bluetooth/controller/</code></td><td>Host + Controller 一体</td></tr>
+    <tr><td>Virtual</td><td><code>subsys/bluetooth/host/hci_vesc.c</code></td><td>虚拟 HCI</td></tr>
+  </table>
+
+<pre><code class="language-c"><span class="cmt">// HCI 命令发送</span>
+int bt_hci_cmd_send(uint16_t opcode, size_t param_len,
+                    const void *param, bt_hci_cmd_complete_t complete,
+                    void *user_data);
+
+<span class="cmt">// HCI 事件接收</span>
+<span class="cmt">// Host 层自动处理 HCI 事件</span>
+<span class="cmt">// 应用层通过 Host API 接收回调</span>
+</code></pre>
+</section>
+
+<section id="host" class="toc-link">
+  <h2><span class="num">04</span> Host 层</h2>
+
+  <p>Host 层实现完整的蓝牙核心协议，包括 GAP、GATT、L2CAP、SMP 等。</p>
+
+<pre><code class="language-c"><span class="cmt">// 蓝牙初始化</span>
+int bt_enable(bt_ready_t ready_cb);
+
+<span class="cmt">// 回调函数</span>
+void bt_ready(int err)
+{
+    <span class="cmt">// 蓝牙已就绪，可以开始使用</span>
+}
+
+<span class="cmt">// 连接管理</span>
+<span class="cmt">// bt_conn_cb - 连接回调</span>
+static struct bt_conn_cb conn_callbacks = {
+    .connected = connected,
+    .disconnected = disconnected,
+};
+
+bt_conn_cb_register(&conn_callbacks);
+
+<span class="cmt">// 广播</span>
+struct bt_le_adv_param param = BT_LE_ADV_PARAM_INIT(
+    BT_LE_ADV_OPT_CONNECTABLE,
+    BT_GAP_ADV_FAST_INT_MIN_2,
+    BT_GAP_ADV_FAST_INT_MAX_2,
+    NULL);
+
+struct bt_data ad[] = {
+    BT_DATA(BT_DATA_FLAGS, flags, sizeof(flags)),
+    BT_DATA(BT_DATA_NAME_COMPLETE, name, sizeof(name) - 1),
+};
+
+bt_le_adv_start(&param, ad, ARRAY_SIZE(ad), NULL, 0);
+</code></pre>
+</section>
+
+<section id="gatt" class="toc-link">
+  <h2><span class="num">05</span> GATT / ATT</h2>
+
+  <p>GATT（Generic Attribute Profile）定义了数据组织和交换的框架。</p>
+
+<pre><code class="language-c"><span class="cmt">// GATT 服务定义</span>
+BT_GATT_SERVICE_DEFINE(my_service,
+    BT_GATT_PRIMARY_SERVICE(&my_uuid),
+    BT_GATT_CHARACTERISTIC(&my_char_uuid.uuid,
+                           BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+                           BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+                           read_func, write_func, &my_data),
+    BT_GATT_CCC(my_ccc_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+);
+
+<span class="cmt">// GATT 读回调</span>
+static ssize_t read_func(struct bt_conn *conn,
+                         const struct bt_gatt_attr *attr,
+                         void *buf, uint16_t len, uint16_t offset)
+{
+    return bt_gatt_attr_read(conn, attr, buf, len, offset,
+                             &my_data, sizeof(my_data));
+}
+
+<span class="cmt">// GATT 写回调</span>
+static ssize_t write_func(struct bt_conn *conn,
+                          const struct bt_gatt_attr *attr,
+                          const void *buf, uint16_t len,
+                          uint16_t offset, uint8_t flags)
+{
+    memcpy(&my_data, buf, len);
+    return len;
+}
+</code></pre>
+
+  <h3>GATT 特征值</h3>
+
+  <table>
+    <tr><th>属性</th><th>说明</th></tr>
+    <tr><td>Primary Service</td><td>主服务（0x2800）</td></tr>
+    <tr><td>Characteristic</td><td>特征值（0x2803）</td></tr>
+    <tr><td>CCC</td><td>客户端配置描述符</td></tr>
+    <tr><td>User Description</td><td>用户描述</td></tr>
+    <tr><td>Format</td><td>格式描述</td></tr>
+  </table>
+</section>
+
+<section id="smp" class="toc-link">
+  <h2><span class="num">06</span> SMP 安全管理</h2>
+
+  <p>SMP（Security Manager Protocol）负责配对、密钥分发和加密。</p>
+
+<pre><code class="language-c"><span class="cmt">// 安全管理配置</span>
+<span class="cmt">// CONFIG_BT_SMP=y</span>
+<span class="cmt">// CONFIG_BT_SMP_SC_ONLY=y      ← 仅安全连接</span>
+<span class="cmt">// CONFIG_BT_SMP_MAX_KEY_LEN=16</span>
+
+<span class="cmt">// 配对回调</span>
+static struct bt_conn_auth_cb auth_cb = {
+    .passkey_display = passkey_display,
+    .passkey_confirm = passkey_confirm,
+    .cancel = auth_cancel,
+};
+
+bt_conn_auth_cb_register(&auth_cb);
+
+<span class="cmt">// 安全级别</span>
+<span class="cmt">// BT_SECURITY_LOW    - 无安全</span>
+<span class="cmt">// BT_SECURITY_MEDIUM  - 配对</span>
+<span class="cmt">// BT_SECURITY_HIGH    - 加密</span>
+<span class="cmt">// BT_SECURITY_FIPS    - FIPS 合规</span>
+
+bt_conn_set_security(conn, BT_SECURITY_HIGH);
+</code></pre>
+</section>
+
+<section id="mesh" class="toc-link">
+  <h2><span class="num">07</span> Bluetooth Mesh</h2>
+
+  <p>Bluetooth Mesh 实现多对多通信，适用于楼宇自动化、传感器网络等场景。</p>
+
+<pre><code class="language-c"><span class="cmt">// Mesh 初始化</span>
+<span class="cmt">// CONFIG_BT_MESH=y</span>
+bt_mesh_init(&prov, &comp);
+
+<span class="cmt">// 配网</span>
+bt_mesh_prov_enable(BT_MESH_PROV_ADV);
+
+<span class="cmt">// 模型定义</span>
+BT_MESH_MODEL_DEFINE(onoff_model,
+                      BT_MESH_MODEL_ID_GEN_ONOFF_SRV,
+                      model_ops, &onoff_state, NULL);
+
+<span class="cmt">// 消息发布</span>
+struct bt_mesh_msg_ctx ctx = {
+    .app_idx = app_key_idx,
+    .addr = target_addr,
+    .send_ttl = BT_MESH_TTL_DEFAULT,
+};
+
+bt_mesh_model_msg_init(&msg, BT_MESH_MODEL_OP_GEN_ONOFF_SET);
+net_buf_simple_add_u8(&msg, onoff);
+
+bt_mesh_model_send(&onoff_model, &ctx, &msg, NULL, NULL);
+</code></pre>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> 蓝牙 API</h2>
+
+<pre><code class="language-c"><span class="cmt">// 初始化</span>
+int bt_enable(bt_ready_t ready_cb);
+
+<span class="cmt">// 广播</span>
+int bt_le_adv_start(const struct bt_le_adv_param *param,
+                    const struct bt_data *ad, size_t ad_len,
+                    const struct bt_data *sd, size_t sd_len);
+int bt_le_adv_stop(void);
+
+<span class="cmt">// 连接</span>
+int bt_conn_le_create(const bt_addr_le_t *addr,
+                      const struct bt_le_conn_param *conn_param,
+                      const struct bt_le_scan_param *scan_param,
+                      bt_conn_complete_t cb);
+int bt_conn_disconnect(struct bt_conn *conn, uint8_t reason);
+
+<span class="cmt">// GATT</span>
+ssize_t bt_gatt_attr_read(struct bt_conn *conn,
+                          const struct bt_gatt_attr *attr,
+                          void *buf, uint16_t len, uint16_t offset,
+                          const void *value, uint16_t value_len);
+int bt_gatt_notify(struct bt_conn *conn,
+                   const struct bt_gatt_attr *attr,
+                   const void *data, uint16_t len);
+
+<span class="cmt">// 配对</span>
+int bt_conn_set_security(struct bt_conn *conn, enum bt_security_level level);
+int bt_conn_auth_cb_register(struct bt_conn_auth_cb *cb);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/bluetooth/host/gatt.c</code> GATT 协议实现。<br>
+  <code>subsys/bluetooth/host/l2cap.c</code> L2CAP 实现。<br>
+  <code>subsys/bluetooth/host/smp.c</code> SMP 安全管理实现。<br>
+  <code>subsys/bluetooth/mesh/</code> Bluetooth Mesh 实现。<br>
+  <code>include/zephyr/bluetooth/gatt.h</code> GATT API 定义。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>

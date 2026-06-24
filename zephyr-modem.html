@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Zephyr Modem 子系统深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231769aa'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>Z</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Zephyr Modem 子系统深度解析</h1>
+  <p class="subtitle">AT 命令 / CMUX / PPP / Pipe / Chat / 蜂窝网络管理</p>
+  <span class="version">Zephyr 4.x · subsys/modem/</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">Modem 子系统概览</a></li>
+    <li><a href="#arch">架构设计</a></li>
+    <li><a href="#pipe">Pipe 与连接</a></li>
+    <li><a href="#chat">Chat（AT 命令）</a></li>
+    <li><a href="#cmux">CMUX 复用</a></li>
+    <li><a href="#ppp">PPP 网络</a></li>
+    <li><a href="#drivers">Modem 驱动</a></li>
+    <li><a href="#api">Modem API</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> Modem 子系统概览</h2>
+
+  <p>Zephyr Modem 子系统提供蜂窝 Modem 管理框架，支持 AT 命令、CMUX 复用、PPP 网络。</p>
+
+  <h3>支持的 Modem</h3>
+
+  <table>
+    <tr><th>厂商</th><th>型号</th><th>说明</th></tr>
+    <tr><td>u-blox</td><td>SARA-R4/R5, LARA-R6</td><td>LTE-M/NB-IoT</td></tr>
+    <tr><td>Quectel</td><td>EG91, EG912</td><td>LTE Cat-1</td></tr>
+    <tr><td>SIMCom</td><td>SIM7080, SIMA200</td><td>NB-IoT/Cat-M</td></tr>
+    <tr><td>nRF</td><td>nRF9160</td><td>集成 Modem</td></tr>
+  </table>
+
+  <h3>架构</h3>
+
+  <div class="mermaid">
+graph TD
+    L0["应用层<br><small>MQTT · CoAP · LwM2M · HTTP</small>"]
+    L1["网络层<br><small>PPP · UDP · TCP</small>"]
+    L0 --> L1
+    L2["Modem 管理层<br><small>Chat · CMUX · Pipe · PPP · UBX</small>"]
+    L1 --> L2
+    L3["传输层<br><small>UART · SPI</small>"]
+    L2 --> L3
+    L4["硬件层<br><small>Modem 模块（u-blox, Quectel, nRF9160）</small>"]
+    L3 --> L4
+    style L0 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L1 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L2 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L3 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+    style L4 fill:#1769aa15,stroke:#1769aa,color:#1f2328
+</div>
+
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 架构设计</h2>
+
+<pre><code class="language-c"><span class="cmt">// Modem 子系统核心组件</span>
+<span class="cmt">// subsys/modem/</span>
+<span class="cmt">// ├── modem_pipe.c      ← 字节流管道</span>
+<span class="cmt">// ├── modem_chat.c      ← AT 命令交互</span>
+<span class="cmt">// ├── modem_cmux.c      ← CMUX 协议复用</span>
+<span class="cmt">// ├── modem_ppp.c       ← PPP 网络协议</span>
+<span class="cmt">// ├── modem_pipelink.c  ← 管道链接</span>
+<span class="cmt">// ├── modem_ubx.c       ← u-blox 扩展</span>
+<span class="cmt">// ├── modem_stats.c     ← 统计信息</span>
+<span class="cmt">// └── modem_workqueue.c ← 专用工作队列</span>
+</code></pre>
+</section>
+
+<section id="pipe" class="toc-link">
+  <h2><span class="num">03</span> Pipe 与连接</h2>
+
+<pre><code class="language-c"><span class="cmt">// Pipe 是 Modem 通信的基础抽象</span>
+<span class="cmt">// 封装 UART/SPI 字节流</span>
+
+#include &lt;zephyr/modem/pipe.h&gt;
+
+<span class="cmt">// 初始化 Pipe</span>
+struct modem_pipe pipe;
+modem_pipe_init(&amp;pipe, &amp;uart_pipe_api, &amp;uart_config);
+
+<span class="cmt">// 打开/关闭</span>
+modem_pipe_open(&amp;pipe);
+modem_pipe_close(&amp;pipe);
+
+<span class="cmt">// 异步传输</span>
+modem_pipe_transmit(&amp;pipe, data, len);
+
+<span class="cmt">// 接收回调</span>
+<span class="cmt">// pipe_open_cb · pipe_receive_cb · pipe_close_cb</span>
+</code></pre>
+</section>
+
+<section id="chat" class="toc-link">
+  <h2><span class="num">04</span> Chat（AT 命令）</h2>
+
+<pre><code class="language-c"><span class="cmt">// Chat 模块处理 AT 命令交互</span>
+
+#include &lt;zephyr/modem/chat.h&gt;
+
+<span class="cmt">// 定义 AT 命令匹配</span>
+MODEM_CHAT_MATCH(ok_match, "OK", "", NULL);
+MODEM_CHAT_MATCH(err_match, "ERROR", "", NULL);
+
+<span class="cmt">// 定义脚本</span>
+MODEM_CHAT_SCRIPT_CMDS_DEFINE(init_script_chats) = {
+    MODEM_CHAT_SCRIPT_CMD("AT", ok_match, err_match),
+    MODEM_CHAT_SCRIPT_CMD("AT+CFUN=1", ok_match, err_match),
+    MODEM_CHAT_SCRIPT_CMD("AT+CGDCONT=1,\"IP\",\"internet\"",
+                          ok_match, err_match),
+};
+MODEM_CHAT_SCRIPT_DEFINE(init_script, init_script_chats,
+                         modem_chat_empty_matches, 5, NULL);
+
+<span class="cmt">// 执行脚本</span>
+modem_chat_run_script(&amp;chat, &amp;init_script);
+</code></pre>
+</section>
+
+<section id="cmux" class="toc-link">
+  <h2><span class="num">05</span> CMUX 复用</h2>
+
+<pre><code class="language-c"><span class="cmt">// CMUX（Concentrated MODEM eXtensions）</span>
+<span class="cmt">// 在单个 UART 上复用多个逻辑通道</span>
+
+<span class="cmt">// 通道 0: AT 命令</span>
+<span class="cmt">// 通道 1: PPP 数据</span>
+<span class="cmt">// 通道 2: 诊断</span>
+
+<span class="cmt">// CMUX 帧格式：</span>
+<span class="cmt">// +------+------+------+------+------+------+------+------+</span>
+<span class="cmt">// | F    | EA/C | len  | DLCI | data ...       | FCS  | F    |</span>
+<span class="cmt">// | 0xF9 | 1B   | 1-2B | 1B   | variable       | 1B   | 0xF9 |</span>
+<span class="cmt">// +------+------+------+------+------+------+------+------+</span>
+
+<span class="cmt">// Kconfig</span>
+<span class="cmt">// CONFIG_MODEM_CMUX=y</span>
+</code></pre>
+</section>
+
+<section id="ppp" class="toc-link">
+  <h2><span class="num">06</span> PPP 网络</h2>
+
+<pre><code class="language-c"><span class="cmt">// PPP（Point-to-Point Protocol）</span>
+<span class="cmt">// 通过 Modem 建立 IP 网络连接</span>
+
+<span class="cmt">// 配置</span>
+<span class="cmt">// CONFIG_MODEM_PPP=y</span>
+<span class="cmt">// CONFIG_NET_L2_PPP=y</span>
+
+<span class="cmt">// PPP 建立流程：</span>
+<span class="cmt">// 1. 发送 AT 命令激活 PDP 上下文</span>
+<span class="cmt">// 2. 启动 CMUX（可选）</span>
+<span class="cmt">// 3. 在逻辑通道上启动 PPP</span>
+<span class="cmt">// 4. PPP 协商（LCP → NCP）</span>
+<span class="cmt">// 5. 获取 IP 地址</span>
+<span class="cmt">// 6. 数据传输</span>
+</code></pre>
+</section>
+
+<section id="drivers" class="toc-link">
+  <h2><span class="num">07</span> Modem 驱动</h2>
+
+  <table>
+    <tr><th>驱动</th><th>目录</th><th>说明</th></tr>
+    <tr><td>u-blox SARA</td><td><code>drivers/modem/ublox_sara/</code></td><td>u-blox 蜂窝 Modem</td></tr>
+    <tr><td>Quectel BG9x</td><td><code>drivers/modem/quectel_bg9x/</code></td><td>Quectel Cat-M/NB-IoT</td></tr>
+    <tr><td>ESP-AT</td><td><code>drivers/modem/esp_AT/</code></td><td>ESP WiFi/BLE AT 命令</td></tr>
+    <tr><td>HL7800</td><td><code>drivers/modem/holtek/</code></td><td>HL7800 蜂窝 Modem</td></tr>
+  </table>
+</section>
+
+<section id="api" class="toc-link">
+  <h2><span class="num">08</span> Modem API</h2>
+
+<pre><code class="language-c"><span class="cmt">// Pipe</span>
+int modem_pipe_init(struct modem_pipe *pipe, const struct modem_pipe_api *api, void *ctx);
+int modem_pipe_open(struct modem_pipe *pipe);
+int modem_pipe_close(struct modem_pipe *pipe);
+int modem_pipe_transmit(struct modem_pipe *pipe, uint8_t *data, size_t len);
+
+<span class="cmt">// Chat</span>
+int modem_chat_init(struct modem_chat *chat, const struct modem_chat_config *cfg);
+int modem_chat_run_script(struct modem_chat *chat, const struct modem_chat_script *script);
+int modem_chat_send(struct modem_chat *chat, const char *command, k_timeout_t timeout);
+
+<span class="cmt">// CMUX</span>
+int modem_cmux_init(struct modem_cmux *cmux, const struct modem_cmux_config *cfg);
+int modem_cmux_open(struct modem_cmux *cmux);
+int modem_cmux_close(struct modem_cmux *cmux);
+
+<span class="cmt">// PPP</span>
+int modem_ppp_init(struct modem_ppp *ppp, const struct modem_ppp_config *cfg);
+int modem_ppp_open(struct modem_ppp *ppp);
+int modem_ppp_close(struct modem_ppp *ppp);
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>subsys/modem/modem_chat.c</code> AT 命令交互核心（1087行）。<br>
+  <code>subsys/modem/modem_cmux.c</code> CMUX 协议实现。<br>
+  <code>subsys/modem/modem_pipe.c</code> Pipe 通信管道。<br>
+  <code>subsys/modem/modem_ppp.c</code> PPP 网络实现。
+</div>
+
+</div>
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+</body>
+</html>
