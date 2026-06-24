@@ -77,7 +77,7 @@
     { t:"Linux 时钟", f:"linux-clk.html", top:"linux" },
     { t:"Linux DMA", f:"linux-dma.html", top:"linux" },
     { t:"Linux V4L2", f:"linux-v4l2.html", top:"linux" },
-    { t:"Linux 网络", f:"linux-network.html", top:"linux" },
+    { t:"Linux 网络", f:"linux-network.html", top:"net" },
     { t:"Linux Bridge", f:"linux-bridge.html", top:"net" },
     { t:"Linux veth", f:"linux-veth.html", top:"net" },
     { t:"Linux tun/tap", f:"linux-tun-tap.html", top:"net" },
