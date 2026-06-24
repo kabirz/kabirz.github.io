@@ -455,7 +455,7 @@ function renderSidebar() {
   });
 
   let html = '';
-  var SIDEBAR_ORDER = ['linux', 'net', 'zephyr', 'docker', 'rust', 'python', 'windows', 'vision', 'go'];
+  var SIDEBAR_ORDER = ['linux', 'net', 'zephyr', 'freertos', 'docker', 'rust', 'python', 'windows', 'vision', 'go'];
   var sorted = Object.keys(tops).sort(function(a,b){ return SIDEBAR_ORDER.indexOf(a) - SIDEBAR_ORDER.indexOf(b); });
   for (var i = 0; i < sorted.length; i++) { var key = sorted[i]; var top = tops[key];
     const info = ICON_MAP[key] || ICON_MAP.other;
