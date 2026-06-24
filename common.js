@@ -224,7 +224,7 @@
     { t:"NumPy 数据可视化", f:"python-numpy-charts.html", top:"python" },
     { t:"vivid TPG 测试图形", f:"linux-vivid-patterns.html", top:"python" },
   ];
-  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", python:"Python 开发", other:"硬件与平台" };
+  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"Linux 网络", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", python:"Python 开发", other:"硬件与平台" };
 
   // 主题切换
   var STORAGE_KEY = 'kernel-docs-theme';
@@ -309,7 +309,8 @@
     var html = '<div class="doc-sidebar-hdr"><a class="back" href="index.html">← 导航页</a><div class="btns"><button class="hdr-btn" id="sb-collapse" title="收起">‹</button></div></div>';
     html += '<div class="sidebar-search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg><input type="text" id="sb-search-input" placeholder="搜索文档..."></div>';
     html += '<nav class="doc-sidebar-nav">';
-    Object.keys(tops).forEach(function(top) {
+    var SIDEBAR_ORDER = ['linux', 'net', 'docker', 'rust', 'python', 'windows', 'vision', 'go'];
+    Object.keys(tops).sort(function(a,b){ return SIDEBAR_ORDER.indexOf(a) - SIDEBAR_ORDER.indexOf(b); }).forEach(function(top) {
       var cat = tops[top];
       if (!cat || !cat.items || !cat.items.length) return;
       var info = ICON_MAP[top] || ICON_MAP.other;
