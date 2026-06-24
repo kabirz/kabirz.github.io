@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS TCP/IP 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS TCP/IP 深度解析</h1><p class="subtitle">BSD Socket / TCP / UDP / DHCP / DNS</p><span class="version">FreeRTOS-Plus-TCP</span></div>
+<nav class="toc"><ul>
+<li><a href="#overview">TCP 概览</a></li>
+<li><a href="#socket">Socket API</a></li>
+<li><a href="#dhcp">DHCP / DNS</a></li>
+</ul></nav>
+<div class="container">
+<section id="overview" class="toc-link">
+<h2><span class="num">01</span> TCP 概览</h2>
+<p>FreeRTOS-Plus-TCP 是专为 FreeRTOS 设计的 TCP/IP 协议栈。</p>
+</section>
+<section id="socket" class="toc-link">
+<h2><span class="num">02</span> Socket API</h2>
+<pre><code class="language-c">Socket_t xSocket = FreeRTOS_socket(
+    FREERTOS_AF_INET, FREERTOS_SOCK_STREAM, FREERTOS_IPPROTO_TCP);
+FreeRTOS_bind(xSocket, &amp;xAddress, sizeof(xAddress));
+FreeRTOS_listen(xSocket, 20);
+Socket_t xClient = FreeRTOS_accept(xSocket, NULL, NULL);
+</code></pre>
+</section>
+<section id="dhcp" class="toc-link">
+<h2><span class="num">03</span> DHCP / DNS</h2>
+<pre><code class="language-c"><span class="cmt">// DHCP</span>
+FreeRTOS_IPInit(ucIP, ucMask, ucGW, ucDNS, usPort);
+<span class="cmt">// DNS</span>
+uint32_t ulIP;
+FreeRTOS_gethostbyname("example.com", &amp;ulIP);
+</code></pre>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

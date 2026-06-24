@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 空闲任务与电源管理深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS 空闲任务与电源管理深度解析</h1><p class="subtitle">空闲任务 / 低功耗 / tickless / 守护任务</p><span class="version">FreeRTOS Kernel</span></div>
+<nav class="toc"><ul>
+<li><a href="#idle">空闲任务</a></li>
+<li><a href="#tickless">Tickless 空闲</a></li>
+<li><a href="#power">电源管理</a></li>
+</ul></nav>
+<div class="container">
+<section id="idle" class="toc-link">
+<h2><span class="num">01</span> 空闲任务</h2>
+<pre><code class="language-c"><span class="cmt">// 空闲任务自动创建，优先级为 0</span>
+<span class="cmt">// 执行：回收已删除任务 + 调用钩子</span>
+void vApplicationIdleHook(void) {
+    <span class="cmt">// 可以进入低功耗模式</span>
+}
+</code></pre>
+</section>
+<section id="tickless" class="toc-link">
+<h2><span class="num">02</span> Tickless 空闲</h2>
+<pre><code class="language-c"><span class="cmt">// configUSE_TICKLESS_IDLE = 1</span>
+void vApplicationSleep(TickType_t xExpectedIdleTime) {
+    <span class="cmt">// 停止 tick 中断，进入低功耗</span>
+}
+</code></pre>
+</section>
+<section id="power" class="toc-link">
+<h2><span class="num">03</span> 电源管理</h2>
+<div class="mermaid">graph TD
+    A["正常运行"] -->|"无就绪任务"| B["空闲任务"]
+    B -->|"tickless"| C["停止 tick"]
+    C -->|"低功耗"| D["深度休眠"]
+    D -->|"中断唤醒"| A
+</div>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

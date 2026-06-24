@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 移植深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS 移植深度解析</h1><p class="subtitle">移植接口 / port.c / 上下文切换 / 新架构移植</p><span class="version">FreeRTOS Kernel · portable/</span></div>
+<nav class="toc"><ul>
+<li><a href="#interface">移植接口</a></li>
+<li><a href="#context">上下文切换</a></li>
+<li><a href="#critical">临界区</a></li>
+<li><a href="#new-port">新架构移植</a></li>
+</ul></nav>
+<div class="container">
+<section id="interface" class="toc-link">
+<h2><span class="num">01</span> 移植接口</h2>
+<table><tr><th>接口</th><th>说明</th></tr>
+<tr><td><code>portSTACK_TYPE</code></td><td>栈类型定义</td></tr>
+<tr><td><code>portYIELD()</code></td><td>触发上下文切换</td></tr>
+<tr><td><code>portENTER_CRITICAL()</code></td><td>进入临界区</td></tr>
+<tr><td><code>portDISABLE_INTERRUPTS()</code></td><td>禁止中断</td></tr>
+<tr><td><code>portINITIAL_SP</code></td><td>初始栈指针</td></tr></table>
+</section>
+<section id="context" class="toc-link">
+<h2><span class="num">02</span> 上下文切换</h2>
+<pre><code class="language-c"><span class="cmt">// ARM Cortex-M PendSV</span>
+void xPortPendSVHandler(void) {
+    <span class="cmt">// 1. 保存当前任务寄存器到栈</span>
+    <span class="cmt">// 2. 切换栈指针到新任务</span>
+    <span class="cmt">// 3. 恢复新任务寄存器</span>
+    <span class="cmt">// 4. bx lr 返回</span>
+}
+
+#define portYIELD() \
+    portNVIC_INT_CTRL_REG = portNVIC_PENDSVSET_BIT
+</code></pre>
+</section>
+<section id="critical" class="toc-link">
+<h2><span class="num">03</span> 临界区</h2>
+<pre><code class="language-c">#define portDISABLE_INTERRUPTS() portNVIC_SET_PRIMASK(1)
+#define portENABLE_INTERRUPTS()  portNVIC_SET_PRIMASK(0)
+#define portENTER_CRITICAL()     vPortEnterCritical()
+#define portEXIT_CRITICAL()      vPortExitCritical()
+</code></pre>
+</section>
+<section id="new-port" class="toc-link">
+<h2><span class="num">04</span> 新架构移植步骤</h2>
+<div class="mermaid">graph TD
+    S1["1. 创建 portable/ARCH/ 目录"] --> S2["2. 实现 portmacro.h"]
+    S2 --> S3["3. 实现 port.c"]
+    S3 --> S4["4. 实现上下文切换"]
+    S4 --> S5["5. 实现 tick 中断"]
+    S5 --> S6["6. 测试 Demo"]
+</div>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

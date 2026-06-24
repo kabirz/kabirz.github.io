@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 软件定时器深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>FreeRTOS 软件定时器深度解析</h1>
+  <p class="subtitle">定时器结构体 / 命令队列 / 守护任务 / 周期性 / 一次性 / 溢出处理</p>
+  <span class="version">FreeRTOS V11.1.0 · timers.c · 1343 行</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#struct">定时器结构体</a></li>
+    <li><a href="#command-queue">命令队列</a></li>
+    <li><a href="#daemon">守护任务</a></li>
+    <li><a href="#create">创建定时器</a></li>
+    <li><a href="#periodic">周期性 vs 一次性</a></li>
+    <li><a href="#overflow">溢出处理</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="struct" class="toc-link">
+  <h2><span class="num">01</span> 定时器结构体</h2>
+
+  <h3>xTIMER 完整结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// timers.c 第 83-94 行</span>
+typedef struct tmrTimerControl
+{
+    const char * pcTimerName;         <span class="cmt">// 定时器名称（调试用）</span>
+    ListItem_t xTimerListItem;        <span class="cmt">// 链表节点（按到期时间排序）</span>
+    TickType_t xTimerPeriodInTicks;   <span class="cmt">// 周期（tick 数）</span>
+    void * pvTimerID;                 <span class="cmt">// 定时器 ID（区分同一回调的多个定时器）</span>
+    TimerCallbackFunction_t pxCallbackFunction; <span class="cmt">// 回调函数</span>
+    uint8_t ucStatus;                 <span class="cmt">// 状态位：active / static / autoreload</span>
+} xTIMER;
+</code></pre>
+
+  <h3>定时器状态位</h3>
+
+<pre><code class="language-c"><span class="cmt">// timers.c 第 78-80 行</span>
+#define tmrSTATUS_IS_ACTIVE                  ( 0x01U )  <span class="cmt">// 定时器是否激活</span>
+#define tmrSTATUS_IS_STATICALLY_ALLOCATED    ( 0x02U )  <span class="cmt">// 是否静态分配</span>
+#define tmrSTATUS_IS_AUTORELOAD              ( 0x04U )  <span class="cmt">// 是否自动重载</span>
+</code></pre>
+</section>
+
+<section id="command-queue" class="toc-link">
+  <h2><span class="num">02</span> 命令队列</h2>
+
+  <p>定时器命令通过<strong>命令队列</strong>发送给守护任务。</p>
+
+  <div class="mermaid">graph TD
+    A["应用任务"] -->|"xTimerStart()"| B["命令队列<br>xTimerQueue"]
+    B -->|"prvProcessReceivedCommands()"| C["守护任务"]
+    C --> D["处理定时器命令"]
+    D --> E["修改定时器列表"]
+    E --> F["执行回调"]
+    style B fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
+
+  <h3>命令消息结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// timers.c 第 122-135 行</span>
+typedef struct tmrTimerQueueMessage
+{
+    BaseType_t xMessageID;  <span class="cmt">// 命令类型</span>
+    union
+    {
+        TimerParameter_t xTimerParameters;  <span class="cmt">// 定时器命令参数</span>
+        CallbackParameters_t xCallbackParameters;  <span class="cmt">// 回调命令参数</span>
+    } u;
+} DaemonTaskMessage_t;
+
+<span class="cmt">// 命令类型</span>
+<span class="cmt">// tmrCOMMAND_SEND_COMMAND = 0</span>
+<span class="cmt">// tmrCOMMAND_START = 1</span>
+<span class="cmt">// tmrCOMMAND_STOP = 2</span>
+<span class="cmt">// tmrCOMMAND_CHANGE_PERIOD = 3</span>
+<span class="cmt">// tmrCOMMAND_DELETE = 4</span>
+<span class="cmt">// tmrCOMMAND_RESET = 5</span>
+</code></pre>
+</section>
+
+<section id="daemon" class="toc-link">
+  <h2><span class="num">03</span> 守护任务</h2>
+
+<pre><code class="language-c"><span class="cmt">// timers.c 中的定时器守护任务</span>
+static portTASK_FUNCTION( prvTimerTask, pvParameters )
+{
+    TickType_t xNextExpireTime;
+
+    for ( ;; )
+    {
+        <span class="cmt">// 1. 获取下一个定时器的到期时间</span>
+        xNextExpireTime = prvGetNextExpireTime();
+
+        <span class="cmt">// 2. 阻塞等待命令或超时</span>
+        if( xNextExpireTime != tmrMAX_TIME_BEFORE_OVERFLOW )
+        {
+            <span class="cmt">// 等待直到下一个定时器到期或收到命令</span>
+            xQueueReceive( xTimerQueue, &amp;xMessage, xNextExpireTime );
+        }
+        else
+        {
+            <span class="cmt">// 无活动定时器，无限等待命令</span>
+            xQueueReceive( xTimerQueue, &amp;xMessage, portMAX_DELAY );
+        }
+
+        <span class="cmt">// 3. 处理收到的命令</span>
+        prvProcessReceivedCommands();
+
+        <span class="cmt">// 4. 检查是否有定时器到期</span>
+        prvProcessExpiredTimers();
+    }
+}
+</code></pre>
+</section>
+
+<section id="create" class="toc-link">
+  <h2><span class="num">04</span> 创建定时器</h2>
+
+<pre><code class="language-c"><span class="cmt">// timers.c 中的 xTimerCreate()</span>
+TimerHandle_t xTimerCreate( const char * const pcTimerName,
+                             const TickType_t xTimerPeriodInTicks,
+                             const UBaseType_t uxAutoReload,
+                             void * const pvTimerID,
+                             TimerCallbackFunction_t pxCallbackFunction )
+{
+    Timer_t * pxNewTimer;
+
+    <span class="cmt">// 1. 分配定时器结构体</span>
+    pxNewTimer = ( Timer_t * ) pvPortMalloc( sizeof( Timer_t ) );
+
+    <span class="cmt">// 2. 初始化定时器</span>
+    if( pxNewTimer != NULL )
+    {
+        <span class="cmt">// 设置名称</span>
+        pxNewTimer->pcTimerName = pcTimerName;
+        pxNewTimer->xTimerPeriodInTicks = xTimerPeriodInTicks;
+        pxNewTimer->pvTimerID = pvTimerID;
+        pxNewTimer->pxCallbackFunction = pxCallbackFunction;
+
+        <span class="cmt">// 设置状态位</span>
+        pxNewTimer->ucStatus = 0x00;
+        if( uxAutoReload != pdFALSE )
+        {
+            pxNewTimer->ucStatus |= tmrSTATUS_IS_AUTORELOAD;
+        }
+
+        <span class="cmt">// 初始化链表节点</span>
+        listINIT_LIST_ITEM( &amp;( pxNewTimer->xTimerListItem ) );
+    }
+
+    return pxNewTimer;
+}
+</code></pre>
+</section>
+
+<section id="periodic" class="toc-link">
+  <h2><span class="num">05</span> 周期性 vs 一次性</h2>
+
+  <div class="mermaid">graph LR
+    subgraph 一次性["pdFALSE — 一次性"]
+        O1["启动"] --> O2["到期"] --> O3["回调"] --> O4["停止"]
+    end
+    subgraph 周期性["pdTRUE — 周期性"]
+        P1["启动"] --> P2["到期"] --> P3["回调"]
+        P3 -->|"自动重载"| P2
+    end
+  </div>
+
+<pre><code class="language-c"><span class="cmt">// 一次性定时器</span>
+TimerHandle_t xOneShot = xTimerCreate("OneShot", pdMS_TO_TICKS(1000),
+                                       pdFALSE, NULL, vCallback);
+xTimerStart(xOneShot, 0);
+
+<span class="cmt">// 周期性定时器</span>
+TimerHandle_t xPeriodic = xTimerCreate("Periodic", pdMS_TO_TICKS(500),
+                                        pdTRUE, NULL, vCallback);
+xTimerStart(xPeriodic, 0);
+
+<span class="cmt">// 重载一次性定时器</span>
+xTimerReset(xOneShot, 0);
+
+<span class="cmt">// 修改周期</span>
+xTimerChangePeriod(xPeriodic, pdMS_TO_TICKS(200), 0);
+</code></pre>
+</section>
+
+<section id="overflow" class="toc-link">
+  <h2><span class="num">06</span> 溢出处理</h2>
+
+<pre><code class="language-c"><span class="cmt">// timers.c 中的双链表机制</span>
+<span class="cmt">// 使用两个活动列表处理 tick 计数器溢出</span>
+
+<span class="cmt">// timers.c 第 143-146 行</span>
+PRIVILEGED_DATA static List_t xActiveTimerList1;    <span class="cmt">// 当前列表</span>
+PRIVILEGED_DATA static List_t xActiveTimerList2;    <span class="cmt">// 溢出列表</span>
+PRIVILEGED_DATA static List_t * pxCurrentTimerList; <span class="cmt">// 指向当前列表</span>
+PRIVILEGED_DATA static List_t * pxOverflowTimerList; <span class="cmt">// 指向溢出列表</span>
+
+<span class="cmt">// 当 tick 计数器溢出时：</span>
+<span class="cmt">// 1. 交换 pxCurrentTimerList 和 pxOverflowTimerList</span>
+<span class="cmt">// 2. 将溢出列表中的定时器移到当前列表</span>
+<span class="cmt">// 3. 重新检查到期时间</span>
+</code></pre>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">07</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS 定时器完整示例 =====</span>
+<span class="cmt">// 演示：一次性、周期性、重载、修改周期</span>
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "timers.h"
+#include &lt;stdio.h&gt;
+
+<span class="cmt">// 定时器句柄</span>
+TimerHandle_t xOneShotTimer;
+TimerHandle_t xPeriodicTimer;
+
+<span class="cmt">// 一次性定时器回调</span>
+void vOneShotCallback( TimerHandle_t xTimer )
+{
+    printf( "One-shot timer expired!\\n" );
+}
+
+<span class="cmt">// 周期性定时器回调</span>
+void vPeriodicCallback( TimerHandle_t xTimer )
+{
+    static uint32_t ulCount = 0;
+    ulCount++;
+    printf( "Periodic timer expired: %lu\\n", ulCount );
+}
+
+<span class="cmt">// 控制任务</span>
+void vControlTask( void * pvParameters )
+{
+    <span class="cmt">// 启动一次性定时器（1秒后触发）</span>
+    xTimerStart( xOneShotTimer, pdMS_TO_TICKS( 100 ) );
+
+    <span class="cmt">// 启动周期性定时器（每500ms触发）</span>
+    xTimerStart( xPeriodicTimer, pdMS_TO_TICKS( 100 ) );
+
+    for ( ;; )
+    {
+        vTaskDelay( pdMS_TO_TICKS( 5000 ) );
+
+        <span class="cmt">// 5秒后修改周期性定时器周期</span>
+        xTimerChangePeriod( xPeriodicTimer, pdMS_TO_TICKS( 1000 ), pdMS_TO_TICKS( 100 ) );
+        printf( "Changed periodic timer period to 1000ms\\n" );
+
+        <span class="cmt">// 重载一次性定时器</span>
+        xTimerReset( xOneShotTimer, pdMS_TO_TICKS( 100 ) );
+        printf( "Reset one-shot timer\\n" );
+    }
+}
+
+int main( void )
+{
+    <span class="cmt">// 创建一次性定时器</span>
+    xOneShotTimer = xTimerCreate( "OneShot",
+                                   pdMS_TO_TICKS( 1000 ),
+                                   pdFALSE,  <span class="cmt">// 一次性</span>
+                                   NULL,
+                                   vOneShotCallback );
+
+    <span class="cmt">// 创建周期性定时器</span>
+    xPeriodicTimer = xTimerCreate( "Periodic",
+                                    pdMS_TO_TICKS( 500 ),
+                                    pdTRUE,  <span class="cmt">// 周期性</span>
+                                    NULL,
+                                    vPeriodicCallback );
+
+    <span class="cmt">// 创建控制任务</span>
+    xTaskCreate( vControlTask, "Control", 256, NULL, 2, NULL );
+
+    vTaskStartScheduler();
+
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/timers.c</code> 软件定时器实现（1343行），重点看 prvTimerTask、prvProcessReceivedCommands、prvInsertTimerInActiveList。<br>
+  <code>FreeRTOS/Source/include/timers.h</code> 定时器 API 定义。
+</div>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

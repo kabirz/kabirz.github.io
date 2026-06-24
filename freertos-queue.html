@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 队列与 IPC 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>FreeRTOS 队列与 IPC 深度解析</h1>
+  <p class="subtitle">队列结构体 / 信号量 / 互斥锁 / 任务通知 / 统一实现 / 源码分析</p>
+  <span class="version">FreeRTOS V11.1.0 · queue.c · 3389 行</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#queue-struct">队列结构体</a></li>
+    <li><a href="#queue-create">队列创建</a></li>
+    <li><a href="#queue-send">发送操作</a></li>
+    <li><a href="#queue-receive">接收操作</a></li>
+    <li><a href="#semaphore">信号量实现</a></li>
+    <li><a href="#mutex">互斥锁实现</a></li>
+    <li><a href="#notification">任务通知</a></li>
+    <li><a href="#compare">IPC 对比</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="queue-struct" class="toc-link">
+  <h2><span class="num">01</span> 队列结构体</h2>
+
+  <p>FreeRTOS 的队列、信号量、互斥锁都基于 <code>queue.c</code> 中的 <code>xQUEUE</code> 结构体实现。</p>
+
+  <h3>xQUEUE 完整结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// queue.c 第 103-136 行</span>
+typedef struct QueueDefinition
+{
+    <span class="cmt">// ===== 环形缓冲区指针 =====</span>
+    int8_t * pcHead;        <span class="cmt">// 缓冲区起始地址</span>
+    int8_t * pcWriteTo;     <span class="cmt">// 下一个写入位置</span>
+
+    <span class="cmt">// ===== 联合体（队列/信号量二选一） =====</span>
+    union
+    {
+        QueuePointers_t xQueue;     <span class="cmt">// 队列：pcTail + pcReadFrom</span>
+        SemaphoreData_t xSemaphore; <span class="cmt">// 信号量：持有者 + 递归计数</span>
+    } u;
+
+    <span class="cmt">// ===== 等待列表 =====</span>
+    List_t xTasksWaitingToSend;     <span class="cmt">// 等待发送的任务（阻塞在满队列）</span>
+    List_t xTasksWaitingToReceive;  <span class="cmt">// 等待接收的任务（阻塞在空队列）</span>
+
+    <span class="cmt">// ===== 状态信息 =====</span>
+    volatile UBaseType_t uxMessagesWaiting;  <span class="cmt">// 当前消息数</span>
+    UBaseType_t uxLength;                    <span class="cmt">// 队列容量</span>
+    UBaseType_t uxItemSize;                  <span class="cmt">// 每条消息大小（字节）</span>
+
+    <span class="cmt">// ===== 锁定计数 =====</span>
+    volatile int8_t cRxLock;   <span class="cmt">// 接收锁计数（ISR 中接收时递增）</span>
+    volatile int8_t cTxLock;   <span class="cmt">// 发送锁计数（ISR 中发送时递增）</span>
+
+    <span class="cmt">// ===== 分配标记 =====</span>
+<span class="cmt">#if ( ( configSUPPORT_STATIC_ALLOCATION == 1 ) &amp;&amp; ( configSUPPORT_DYNAMIC_ALLOCATION == 1 ) )</span>
+    uint8_t ucStaticallyAllocated;
+<span class="cmt">#endif</span>
+} xQUEUE;
+</code></pre>
+
+  <h3>队列 vs 信号量的内存布局</h3>
+
+  <div class="mermaid">graph TD
+    subgraph Queue["队列模式"]
+        Q1["pcHead → 缓冲区起始"]
+        Q2["pcWriteTo → 写入位置"]
+        Q3["u.xQueue.pcTail → 缓冲区结束"]
+        Q4["u.xQueue.pcReadFrom → 读取位置"]
+    end
+    subgraph Sem["信号量模式"]
+        S1["pcHead = NULL（标记为信号量）"]
+        S2["u.xSemaphore.xMutexHolder → 持有者"]
+        S3["u.xSemaphore.uxRecursiveCallCount → 递归计数"]
+    end
+    style Queue fill:#dbeafe15,stroke:#3b82f6,color:#1e40af
+    style Sem fill:#fee2e215,stroke:#ef4444,color:#991b1b
+  </div>
+</section>
+
+<section id="queue-create" class="toc-link">
+  <h2><span class="num">02</span> 队列创建</h2>
+
+<pre><code class="language-c"><span class="cmt">// queue.c 中的 xQueueGenericCreate()</span>
+<span class="cmt">// 所有队列/信号量创建最终调用此函数</span>
+
+QueueHandle_t xQueueGenericCreate( const UBaseType_t uxQueueLength,
+                                    const UBaseType_t uxItemSize,
+                                    const uint8_t ucQueueType )
+{
+    Queue_t * pxNewQueue;
+    size_t xQueueSizeInBytes;
+
+    <span class="cmt">// 1. 计算缓冲区大小</span>
+    xQueueSizeInBytes = ( size_t ) ( uxQueueLength * uxItemSize )
+                        + ( size_t ) xQueueStructSize;
+
+    <span class="cmt">// 2. 分配内存</span>
+    pxNewQueue = ( Queue_t * ) pvPortMalloc( xQueueSizeInBytes );
+
+    <span class="cmt">// 3. 初始化队列</span>
+    prvInitialiseNewQueue( uxQueueLength, uxItemSize,
+                           ( uint8_t * ) pxNewQueue + xQueueStructSize,
+                           ucQueueType, pxNewQueue );
+
+    return pxNewQueue;
+}
+</code></pre>
+
+  <h3>队列初始化</h3>
+
+<pre><code class="language-c"><span class="cmt">// queue.c 中的 prvInitialiseNewQueue()</span>
+static void prvInitialiseNewQueue( const UBaseType_t uxQueueLength,
+                                   const UBaseType_t uxItemSize,
+                                   uint8_t * pucQueueStorage,
+                                   const uint8_t ucQueueType,
+                                   Queue_t * pxNewQueue )
+{
+    <span class="cmt">// 1. 设置缓冲区指针</span>
+    pxNewQueue->pcHead = pucQueueStorage;
+
+    <span class="cmt">// 2. 初始化队列状态</span>
+    xQueueGenericReset( pxNewQueue, pdTRUE );
+
+    <span class="cmt">// 3. 如果是互斥锁，特殊初始化</span>
+<span class="cmt">#if ( configUSE_MUTEXES == 1 )</span>
+    {
+        if( ucQueueType == queueQUEUE_TYPE_MUTEX )
+        {
+            prvInitialiseMutex( pxNewQueue );
+        }
+    }
+<span class="cmt">#endif</span>
+}
+</code></pre>
+</section>
+
+<section id="queue-send" class="toc-link">
+  <h2><span class="num">03</span> 发送操作</h2>
+
+<pre><code class="language-c"><span class="cmt">// queue.c 中的 xQueueGenericSend() — 发送核心逻辑</span>
+BaseType_t xQueueGenericSend( QueueHandle_t xQueue,
+                               const void * pvItemToQueue,
+                               TickType_t xTicksToWait,
+                               BaseType_t xCopyPosition )
+{
+    Queue_t * pxQueue = xQueue;
+    BaseType_t xEntryTimeCreated = pdFALSE;
+
+    <span class="cmt">// 1. 挂起调度器（保护队列操作）</span>
+    vTaskSuspendAll();
+    {
+        <span class="cmt">// 2. 检查队列是否有空间</span>
+        if( pxQueue->uxMessagesWaiting &lt; pxQueue->uxLength )
+        {
+            <span class="cmt">// 3. 有空间：拷贝数据到队列</span>
+            prvCopyDataToQueue( pxQueue, pvItemToQueue, xCopyPosition );
+            pxQueue->uxMessagesWaiting++;
+
+            <span class="cmt">// 4. 检查是否有任务在等待接收</span>
+            if( listLIST_IS_EMPTY( &amp;( pxQueue->xTasksWaitingToReceive ) ) == pdFALSE )
+            {
+                <span class="cmt">// 5. 唤醒最高优先级等待任务</span>
+                if( xTaskRemoveFromEventList( &amp;( pxQueue->xTasksWaitingToReceive ) ) != pdFALSE )
+                {
+                    <span class="cmt">// 唤醒的任务优先级更高，触发调度</span>
+                    queueYIELD_IF_USING_PREEMPTION();
+                }
+            }
+        }
+        else
+        {
+            <span class="cmt">// 6. 队列满：如果等待时间为 0，立即返回</span>
+            if( xTicksToWait == ( TickType_t ) 0 )
+            {
+                xQueueGenericReset( pxQueue, pdFALSE );
+            }
+            else
+            {
+                <span class="cmt">// 7. 队列满：将当前任务加入等待发送列表</span>
+                vTaskPlaceOnEventList( &amp;( pxQueue->xTasksWaitingToSend ), xTicksToWait );
+                <span class="cmt">// 挂起调度器后恢复，任务被唤醒</span>
+            }
+        }
+    }
+    xTaskResumeAll();
+
+    return pdPASS;
+}
+</code></pre>
+
+  <h3>数据拷贝函数</h3>
+
+<pre><code class="language-c"><span class="cmt">// queue.c 中的 prvCopyDataToQueue()</span>
+static BaseType_t prvCopyDataToQueue( Queue_t * const pxQueue,
+                                       const void * pvItemToQueue,
+                                       const BaseType_t xPosition )
+{
+    if( pxQueue->uxItemSize == ( UBaseType_t ) 0 )
+    {
+<span class="cmt">#if ( configUSE_MUTEXES == 1 )</span>
+        <span class="cmt">// 信号量/互斥锁：不拷贝数据，只记录持有者</span>
+        if( pxQueue->u.xSemaphore.xMutexHolder == NULL )
+        {
+            pxQueue->u.xSemaphore.xMutexHolder = xTaskGetCurrentTaskHandle();
+        }
+        else
+        {
+            <span class="cmt">// 递归互斥锁：递增计数</span>
+            pxQueue->u.xSemaphore.uxRecursiveCallCount++;
+        }
+<span class="cmt">#endif</span>
+    }
+    else if( xPosition == queueSEND_TO_BACK )
+    {
+        <span class="cmt">// 向队尾写入（标准 FIFO）</span>
+        ( void ) memcpy( ( void * ) pxQueue->pcWriteTo, pvItemToQueue, ( size_t ) pxQueue->uxItemSize );
+        pxQueue->pcWriteTo += pxQueue->uxItemSize;
+        if( pxQueue->pcWriteTo &gt;= pxQueue->u.xQueue.pcTail )
+        {
+            pxQueue->pcWriteTo = pxQueue->pcHead;  <span class="cmt">// 环形回绕</span>
+        }
+    }
+    else
+    {
+        <span class="cmt">// 向队首写入（xQueueSendToFront）</span>
+        ( void ) memcpy( ( void * ) pxQueue->u.xQueue.pcReadFrom, pvItemToQueue, ( size_t ) pxQueue->uxItemSize );
+        pxQueue->u.xQueue.pcReadFrom -= pxQueue->uxItemSize;
+        if( pxQueue->u.xQueue.pcReadFrom &lt; pxQueue->pcHead )
+        {
+            pxQueue->u.xQueue.pcReadFrom = ( pxQueue->u.xQueue.pcTail - pxQueue->uxItemSize );
+        }
+    }
+
+    return pdFALSE;
+}
+</code></pre>
+</section>
+
+<section id="queue-receive" class="toc-link">
+  <h2><span class="num">04</span> 接收操作</h2>
+
+<pre><code class="language-c"><span class="cmt">// queue.c 中的 xQueueGenericReceive() — 接收核心逻辑</span>
+BaseType_t xQueueGenericReceive( QueueHandle_t xQueue,
+                                  void * pvBuffer,
+                                  TickType_t xTicksToWait,
+                                  BaseType_t xJustPeeking )
+{
+    Queue_t * pxQueue = xQueue;
+
+    vTaskSuspendAll();
+    {
+        <span class="cmt">// 1. 检查队列是否有数据</span>
+        if( pxQueue->uxMessagesWaiting > ( UBaseType_t ) 0 )
+        {
+            <span class="cmt">// 2. 有数据：从队列拷贝数据</span>
+            if( xJustPeeking == pdFALSE )
+            {
+                prvCopyDataFromQueue( pxQueue, pvBuffer );
+                pxQueue->uxMessagesWaiting--;
+            }
+
+            <span class="cmt">// 3. 检查是否有任务在等待发送</span>
+            if( listLIST_IS_EMPTY( &amp;( pxQueue->xTasksWaitingToSend ) ) == pdFALSE )
+            {
+                if( xTaskRemoveFromEventList( &amp;( pxQueue->xTasksWaitingToSend ) ) != pdFALSE )
+                {
+                    queueYIELD_IF_USING_PREEMPTION();
+                }
+            }
+        }
+        else
+        {
+            <span class="cmt">// 4. 队列空：等待或返回</span>
+            if( xTicksToWait == ( TickType_t ) 0 )
+            {
+                <span class="cmt">// 不等待，立即返回</span>
+            }
+            else
+            {
+                <span class="cmt">// 将任务加入等待接收列表</span>
+                vTaskPlaceOnEventList( &amp;( pxQueue->xTasksWaitingToReceive ), xTicksToWait );
+            }
+        }
+    }
+    xTaskResumeAll();
+
+    return pdPASS;
+}
+</code></pre>
+</section>
+
+<section id="semaphore" class="toc-link">
+  <h2><span class="num">05</span> 信号量实现</h2>
+
+  <p>信号量是队列的<strong>特例</strong>：长度为 1，不传递数据。</p>
+
+<pre><code class="language-c"><span class="cmt">// queue.c 中的二值信号量创建</span>
+SemaphoreHandle_t xSemaphoreCreateBinary( void )
+{
+    QueueHandle_t xNewSemaphore;
+
+    <span class="cmt">// 创建长度为 1、大小为 0 的队列</span>
+    <span class="cmt">// uxItemSize = 0 表示不传递数据</span>
+    xNewSemaphore = xQueueGenericCreate( ( UBaseType_t ) 1,
+                                          ( UBaseType_t ) 0,
+                                          queueQUEUE_TYPE_BINARY_SEMAPHORE );
+
+    <span class="cmt">// 初始状态：无信号（uxMessagesWaiting = 0）</span>
+    <span class="cmt">// 需要 xSemaphoreGive() 才能"填充"信号</span>
+    return xNewSemaphore;
+}
+
+<span class="cmt">// 信号量 Give = 队列 Send</span>
+<span class="cmt">// xSemaphoreGive(xSem) == xQueueGenericSend(xSem, NULL, 0, queueSEND_TO_BACK)</span>
+
+<span class="cmt">// 信号量 Take = 队列 Receive</span>
+<span class="cmt">// xSemaphoreTake(xSem, timeout) == xQueueGenericReceive(xSem, NULL, timeout, pdFALSE)</span>
+</code></pre>
+
+  <h3>信号量内部流转</h3>
+
+  <div class="mermaid">graph TD
+    A["xSemaphoreCreateBinary()"] --> B["xQueueGenericCreate(1, 0, ...)"]
+    B --> C["uxMessagesWaiting = 0"]
+    D["xSemaphoreGive()"] --> E["uxMessagesWaiting = 1"]
+    E --> F["xSemaphoreTake()"]
+    F --> G{"uxMessagesWaiting > 0?"}
+    G -->|"是"| H["uxMessagesWaiting = 0<br>获取成功"]
+    G -->|"否"| I["阻塞等待"]
+    style A fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style D fill:#22c55e15,stroke:#22c55e,color:#166534
+    style F fill:#3b82f615,stroke:#3b82f6,color:#1e40af
+  </div>
+</section>
+
+<section id="mutex" class="toc-link">
+  <h2><span class="num">06</span> 互斥锁实现</h2>
+
+<pre><code class="language-c"><span class="cmt">// queue.c 中的互斥锁初始化</span>
+static void prvInitialiseMutex( Queue_t * pxNewQueue )
+{
+    <span class="cmt">// 互斥锁特殊初始化</span>
+    pxNewQueue->u.xSemaphore.xMutexHolder = NULL;  <span class="cmt">// 无持有者</span>
+    pxNewQueue->u.xSemaphore.uxRecursiveCallCount = 0;  <span class="cmt">// 递归计数</span>
+    pxNewQueue->pcHead = NULL;  <span class="cmt">// 标记为互斥锁（不是队列）</span>
+
+    <span class="cmt">// 初始 Give：使互斥锁可用</span>
+    xQueueGenericSend( pxNewQueue, NULL, ( TickType_t ) 0U, queueSEND_TO_BACK );
+}
+
+<span class="cmt">// 优先级继承（queue.c 内部）</span>
+<span class="cmt">// 当高优先级任务等待互斥锁时：</span>
+<span class="cmt">// 1. 提升持有者优先级到等待者的优先级</span>
+<span class="cmt">// 2. 持有者释放锁后恢复基础优先级</span>
+
+<span class="cmt">// 递归互斥锁</span>
+<span class="cmt">// 同一线程可以多次获取（计数递增）</span>
+<span class="cmt">// 必须释放相同次数</span>
+BaseType_t xQueueTakeMutexRecursive( QueueHandle_t xMutex, TickType_t xTicksToWait )
+{
+    <span class="cmt">// 如果是当前线程持有，递增计数</span>
+    if( pxQueue->u.xSemaphore.xMutexHolder == xTaskGetCurrentTaskHandle() )
+    {
+        pxQueue->u.xSemaphore.uxRecursiveCallCount++;
+        return pdTRUE;
+    }
+    <span class="cmt">// 否则正常 Take</span>
+    return xQueueGenericReceive( pxMutex, NULL, xTicksToWait, pdFALSE );
+}
+</code></pre>
+
+  <h3>优先级继承流程</h3>
+
+  <div class="mermaid">graph TD
+    H["高优先级 P5<br>等待 Mutex"] -->|"发现持有者 P1"| I["提升 P1 到 P5"]
+    I --> J["P1 以 P5 运行"]
+    J --> K["P1 释放 Mutex"]
+    K --> L["恢复 P1 到 P1"]
+    L --> M["P5 获得 Mutex"]
+    style H fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style I fill:#fef3c7,stroke:#f59e0b,color:#92400e
+    style M fill:#22c55e,stroke:#16a34a,color:#fff
+  </div>
+</section>
+
+<section id="notification" class="toc-link">
+  <h2><span class="num">07</span> 任务通知</h2>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 中的任务通知实现</span>
+<span class="cmt">// 每个任务自带通知值，无需创建队列</span>
+
+<span class="cmt">// 发送通知（tasks.c 第 4500+ 行）</span>
+BaseType_t xTaskNotify( TaskHandle_t xTaskToNotify,
+                         uint32_t ulValue,
+                         eNotifyAction eAction )
+{
+    tskTCB * pxTCB = xTaskToNotify;
+
+    taskENTER_CRITICAL();
+    {
+        <span class="cmt">// 根据动作更新通知值</span>
+        switch( eAction )
+        {
+            case eSetBits:
+                pxTCB->ulNotifiedValue[ 0 ] |= ulValue;
+                break;
+            case eIncrement:
+                pxTCB->ulNotifiedValue[ 0 ]++;
+                break;
+            case eSetValueWithOverwrite:
+                pxTCB->ulNotifiedValue[ 0 ] = ulValue;
+                break;
+            case eSetValueWithoutOverwrite:
+                if( pxTCB->ucNotifyState[ 0 ] != taskNOTIFICATION_RECEIVED )
+                {
+                    pxTCB->ulNotifiedValue[ 0 ] = ulValue;
+                }
+                break;
+        }
+
+        <span class="cmt">// 标记通知已接收</span>
+        pxTCB->ucNotifyState[ 0 ] = taskNOTIFICATION_RECEIVED;
+
+        <span class="cmt">// 如果任务在等待通知，唤醒它</span>
+        if( listIS_CONTAINED_WITHIN( &amp;xSuspendedTaskList,
+                                     &amp;( pxTCB->xStateListItem ) ) != pdFALSE )
+        {
+            ( void ) uxListRemove( &amp;( pxTCB->xStateListItem ) );
+            prvAddNewTaskToReadyList( pxTCB );
+        }
+    }
+    taskEXIT_CRITICAL();
+    return pdTRUE;
+}
+</code></pre>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">08</span> IPC 对比</h2>
+
+  <table>
+    <tr><th>机制</th><th>开销</th><th>数据传递</th><th>ISR 安全</th><th>内部实现</th></tr>
+    <tr><td>队列</td><td>高</td><td>拷贝</td><td>✅</td><td>环形缓冲区 + 任务列表</td></tr>
+    <tr><td>二值信号量</td><td>中</td><td>无</td><td>✅</td><td>队列(uxItemSize=0)</td></tr>
+    <tr><td>计数信号量</td><td>中</td><td>无</td><td>✅</td><td>队列(uxItemSize=0)</td></tr>
+    <tr><td>互斥锁</td><td>中</td><td>无</td><td>❌</td><td>队列 + 优先级继承</td></tr>
+    <tr><td>递归互斥锁</td><td>中</td><td>无</td><td>❌</td><td>队列 + 递归计数</td></tr>
+    <tr><td>任务通知</td><td>最低</td><td>32位</td><td>✅</td><td>直接写 TCB 字段</td></tr>
+  </table>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">09</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS 队列完整示例 =====</span>
+<span class="cmt">// 演示：队列创建、发送、接收、ISR 中使用</span>
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "semphr.h"
+#include &lt;stdio.h&gt;
+
+<span class="cmt">// 定义队列</span>
+#define QUEUE_LENGTH 10
+#define ITEM_SIZE    sizeof( uint32_t )
+
+QueueHandle_t xDataQueue;
+SemaphoreHandle_t xBinarySem;
+SemaphoreHandle_t xCountingSem;
+SemaphoreHandle_t xMutex;
+
+<span class="cmt">// 生产者任务</span>
+void vProducerTask( void * pvParameters )
+{
+    uint32_t ulValue = 0;
+
+    for ( ;; )
+    {
+        ulValue++;
+        <span class="cmt">// 发送到队列</span>
+        if( xQueueSend( xDataQueue, &amp;ulValue, pdMS_TO_TICKS( 100 ) ) == pdTRUE )
+        {
+            printf( "Produced: %lu\\n", ulValue );
+        }
+        vTaskDelay( pdMS_TO_TICKS( 200 ) );
+    }
+}
+
+<span class="cmt">// 消费者任务</span>
+void vConsumerTask( void * pvParameters )
+{
+    uint32_t ulReceived;
+
+    for ( ;; )
+    {
+        <span class="cmt">// 从队列接收</span>
+        if( xQueueReceive( xDataQueue, &amp;ulReceived, pdMS_TO_TICKS( 500 ) ) == pdTRUE )
+        {
+            printf( "Consumed: %lu\\n", ulReceived );
+        }
+    }
+}
+
+<span class="cmt">// ISR 示例</span>
+void vISR Handler( void )
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    uint32_t ulISRValue = 999;
+
+    <span class="cmt">// ISR 中发送到队列</span>
+    xQueueSendFromISR( xDataQueue, &amp;ulISRValue, &amp;xHigherPriorityTaskWoken );
+
+    <span class="cmt">// ISR 中释放信号量</span>
+    xSemaphoreGiveFromISR( xBinarySem, &amp;xHigherPriorityTaskWoken );
+
+    <span class="cmt">// 必须调用此宏触发上下文切换</span>
+    portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+}
+
+<span class="cmt">// 互斥锁示例</span>
+void vCriticalSectionTask( void * pvParameters )
+{
+    for ( ;; )
+    {
+        <span class="cmt">// 获取互斥锁</span>
+        xSemaphoreTake( xMutex, portMAX_DELAY );
+
+        <span class="cmt">// 临界区代码</span>
+        printf( "Task accessing shared resource\\n" );
+
+        <span class="cmt">// 释放互斥锁</span>
+        xSemaphoreGive( xMutex );
+
+        vTaskDelay( pdMS_TO_TICKS( 100 ) );
+    }
+}
+
+int main( void )
+{
+    <span class="cmt">// 创建队列</span>
+    xDataQueue = xQueueCreate( QUEUE_LENGTH, ITEM_SIZE );
+
+    <span class="cmt">// 创建二值信号量</span>
+    xBinarySem = xSemaphoreCreateBinary();
+
+    <span class="cmt">// 创建计数信号量</span>
+    xCountingSem = xSemaphoreCreateCounting( 10, 0 );
+
+    <span class="cmt">// 创建互斥锁</span>
+    xMutex = xSemaphoreCreateMutex();
+
+    <span class="cmt">// 创建任务</span>
+    xTaskCreate( vProducerTask, "Producer", 128, NULL, 2, NULL );
+    xTaskCreate( vConsumerTask, "Consumer", 128, NULL, 2, NULL );
+    xTaskCreate( vCriticalSectionTask, "Critical", 128, NULL, 3, NULL );
+
+    vTaskStartScheduler();
+
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/queue.c</code> 队列/信号量/互斥锁统一实现（3389行），重点看 xQueueGenericSend、xQueueGenericReceive、prvCopyDataToQueue。<br>
+  <code>FreeRTOS/Source/include/queue.h</code> 队列 API 定义。<br>
+  <code>FreeRTOS/Source/include/semphr.h</code> 信号量 API 定义。<br>
+  <code>FreeRTOS/Source/tasks.c</code> 任务通知实现。
+</div>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

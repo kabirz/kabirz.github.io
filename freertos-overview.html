@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 整体架构深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>FreeRTOS 整体架构深度解析</h1>
+  <p class="subtitle">内核架构 / 源码结构 / 移植层 / 配置系统 / 与 Zephyr 对比</p>
+  <span class="version">FreeRTOS Kernel · MIT 许可 · 嵌入式 RTOS</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">FreeRTOS 概览</a></li>
+    <li><a href="#arch">内核架构</a></li>
+    <li><a href="#source">源码结构</a></li>
+    <li><a href="#portable">移植层</a></li>
+    <li><a href="#config">配置系统</a></li>
+    <li><a href="#vs-zephyr">与 Zephyr 对比</a></li>
+    <li><a href="#ecosystem">生态系统</a></li>
+    <li><a href="#getting-started">快速上手</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> FreeRTOS 概览</h2>
+
+  <p>FreeRTOS 是全球最流行的嵌入式实时操作系统内核，由 Amazon Web Services 维护，支持 40+ 种处理器架构。</p>
+
+  <h3>核心特性</h3>
+
+  <table>
+    <tr><th>特性</th><th>说明</th></tr>
+    <tr><td>调度器</td><td>抢占式 + 协作式 + 时间片轮转</td></tr>
+    <tr><td>任务数</td><td>无限制（受 RAM 约束）</td></tr>
+    <tr><td>优先级</td><td>0 ~ configMAX_PRIORITIES-1（数值越大优先级越高）</td></tr>
+    <tr><td>SMP 支持</td><td>多核调度（FreeRTOS SMP）</td></tr>
+    <tr><td>MPU 支持</td><td>内存保护单元集成</td></tr>
+    <tr><td>内存管理</td><td>5 种方案（heap_1 ~ heap_5）</td></tr>
+    <tr><td>许可证</td><td>MIT（商业免费）</td></tr>
+  </table>
+
+  <h3>架构总览</h3>
+
+  <div class="mermaid">
+graph TD
+    subgraph 应用层
+        APP["用户应用"]
+    end
+    subgraph 中间件
+        TCP["FreeRTOS-Plus-TCP"]
+        CLI["FreeRTOS-Plus-CLI"]
+        FAT["FreeRTOS-Plus-FAT"]
+        AWS["AWS IoT SDK"]
+    end
+    subgraph 内核层
+        TASK["任务管理 tasks.c"]
+        QUEUE["队列 queue.c"]
+        TIMER["定时器 timers.c"]
+        EVENT["事件组 event_groups.c"]
+        LIST["链表 list.c"]
+        STREAM["流缓冲 stream_buffer.c"]
+    end
+    subgraph 移植层
+        PORT["portable/  移植接口"]
+        MEM["MemMang/  内存管理"]
+    end
+    subgraph 硬件
+        HW["ARM · RISC-V · x86 · Xtensa · PIC · MSP430 ..."]
+    end
+    APP --> TCP & CLI & FAT & AWS
+    TCP & CLI & FAT & AWS --> TASK & QUEUE & TIMER & EVENT
+    TASK & QUEUE & TIMER & EVENT --> LIST
+    TASK & QUEUE --> PORT & MEM
+    PORT & MEM --> HW
+    style TASK fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style QUEUE fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style TIMER fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style EVENT fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
+</section>
+
+<section id="arch" class="toc-link">
+  <h2><span class="num">02</span> 内核架构</h2>
+
+  <p>FreeRTOS 内核由 6 个核心模块组成，所有模块共用一个链表基础设施。</p>
+
+  <h3>内核模块</h3>
+
+  <table>
+    <tr><th>模块</th><th>源文件</th><th>行数</th><th>功能</th></tr>
+    <tr><td>任务管理</td><td><code>tasks.c</code></td><td>8872</td><td>创建/删除/挂起/恢复/调度</td></tr>
+    <tr><td>队列</td><td><code>queue.c</code></td><td>~6000</td><td>队列/信号量/互斥锁（统一实现）</td></tr>
+    <tr><td>定时器</td><td><code>timers.c</code></td><td>~2000</td><td>软件定时器（守护任务实现）</td></tr>
+    <tr><td>事件组</td><td><code>event_groups.c</code></td><td>~1500</td><td>位掩码事件等待</td></tr>
+    <tr><td>流缓冲</td><td><code>stream_buffer.c</code></td><td>~1500</td><td>单生产者单消费者缓冲区</td></tr>
+    <tr><td>链表</td><td><code>list.c</code></td><td>~500</td><td>双向链表（内核基础设施）</td></tr>
+  </table>
+
+  <h3>关键设计特点</h3>
+
+  <div class="callout">
+    <strong>FreeRTOS 设计哲学：</strong><br>
+    1. <strong>极简内核</strong> — 核心代码仅 ~9000 行 C<br>
+    2. <strong>统一队列</strong> — 信号量/互斥锁/消息队列都基于 queue.c<br>
+    3. <strong>守护任务</strong> — 定时器和流缓冲在专用任务中执行<br>
+    4. <strong>编译时配置</strong> — 通过 FreeRTOSConfig.h 裁剪功能<br>
+    5. <strong>零动态分配</strong> — 所有资源可静态分配
+  </div>
+</section>
+
+<section id="source" class="toc-link">
+  <h2><span class="num">03</span> 源码结构</h2>
+
+  <div class="mermaid">
+graph TD
+    ROOT["FreeRTOS/"] --> SRC["Source/"]
+    ROOT --> PLUS["FreeRTOS-Plus/"]
+    ROOT --> DEMO["Demo/"]
+    SRC --> CORE["核心源文件<br>tasks.c · queue.c · timers.c<br>event_groups.c · list.c · stream_buffer.c"]
+    SRC --> INC["include/<br>FreeRTOS.h · task.h · queue.h<br>semphr.h · timers.h"]
+    SRC --> PORT["portable/<br>ARMClang · GCC · IAR · Keil<br>MemMang/heap_1~5.c"]
+    PLUS --> TCP["FreeRTOS-Plus-TCP/<br>TCP/IP 协议栈"]
+    PLUS --> CLI["FreeRTOS-Plus-CLI/<br>交互式命令行"]
+    PLUS --> TRACE["FreeRTOS-Plus-Trace/<br>运行时追踪"]
+    style SRC fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style CORE fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
+</section>
+
+<section id="portable" class="toc-link">
+  <h2><span class="num">04</span> 移植层</h2>
+
+  <p>FreeRTOS 通过 <code>portable/</code> 目录支持多种编译器和处理器架构。</p>
+
+  <h3>支持的编译器</h3>
+
+  <table>
+    <tr><th>编译器</th><th>目录</th><th>架构</th></tr>
+    <tr><td>GCC</td><td><code>portable/GCC/</code></td><td>ARM_CM3/4F/7 · RISC-V · Posix · Linux</td></tr>
+    <tr><td>ARM Clang</td><td><code>portable/ARMClang/</code></td><td>ARMv8-M · Cortex-M</td></tr>
+    <tr><td>IAR</td><td><code>portable/IAR/</code></td><td>ARM · RISC-V · RX · MSP430</td></tr>
+    <tr><td>Keil</td><td><code>portable/Keil/</code></td><td>ARM_CM3/4F/7/AX</td></tr>
+    <tr><td>CCS</td><td><code>portable/CCS/</code></td><td>MSP430 · PRU</td></tr>
+    <tr><td>MSVC</td><td><code>portable/MSVC-MingW/</code></td><td>Windows 模拟</td></tr>
+  </table>
+
+  <h3>移植接口</h3>
+
+<pre><code class="language-c"><span class="cmt">// 每个移植必须实现的接口</span>
+<span class="cmt">// portmacro.h 定义：</span>
+<span class="cmt">// - portSTACK_TYPE        栈类型</span>
+<span class="cmt">// - portBASE_TYPE         基础类型</span>
+<span class="cmt">// - portYIELD()           上下文切换</span>
+<span class="cmt">// - portENTER_CRITICAL()  进入临界区</span>
+<span class="cmt">// - portEXIT_CRITICAL()   退出临界区</span>
+<span class="cmt">// - portDISABLE_INTERRUPTS()  禁止中断</span>
+<span class="cmt">// - portENABLE_INTERRUPTS()   恢复中断</span>
+
+<span class="cmt">// 移植层源文件：</span>
+<span class="cmt">// port.c    — 上下文切换、启动调度器</span>
+<span class="cmt">// portmacro.h — 类型定义、临界区宏</span>
+</code></pre>
+</section>
+
+<section id="config" class="toc-link">
+  <h2><span class="num">05</span> 配置系统</h2>
+
+  <p>FreeRTOS 通过 <code>FreeRTOSConfig.h</code> 进行编译时配置。</p>
+
+  <h3>关键配置项</h3>
+
+  <table>
+    <tr><th>配置宏</th><th>说明</th><th>典型值</th></tr>
+    <tr><td><code>configUSE_PREEMPTION</code></td><td>启用抢占式调度</td><td>1</td></tr>
+    <tr><td><code>configCPU_CLOCK_HZ</code></td><td>CPU 时钟频率</td><td>72000000</td></tr>
+    <tr><td><code>configTICK_RATE_HZ</code></td><td>系统 tick 频率</td><td>1000</td></tr>
+    <tr><td><code>configMAX_PRIORITIES</code></td><td>最大优先级数</td><td>56</td></tr>
+    <tr><td><code>configMINIMAL_STACK_SIZE</code></td><td>最小栈大小（字）</td><td>128</td></tr>
+    <tr><td><code>configTOTAL_HEAP_SIZE</code></td><td>堆总大小（字节）</td><td>32768</td></tr>
+    <tr><td><code>configUSE_TIMERS</code></td><td>启用软件定时器</td><td>1</td></tr>
+    <tr><td><code>configUSE_MUTEXES</code></td><td>启用互斥锁</td><td>1</td></tr>
+    <tr><td><code>configUSE_COUNTING_SEMAPHORES</code></td><td>启用计数信号量</td><td>1</td></tr>
+    <tr><td><code>configUSE_CO_ROUTINES</code></td><td>启用协程</td><td>0</td></tr>
+  </table>
+</section>
+
+<section id="vs-zephyr" class="toc-link">
+  <h2><span class="num">06</span> 与 Zephyr 对比</h2>
+
+  <table>
+    <tr><th>维度</th><th>FreeRTOS</th><th>Zephyr</th></tr>
+    <tr><td>许可证</td><td>MIT</td><td>Apache-2.0</td></tr>
+    <tr><td>内核大小</td><td>~6KB ROM</td><td>~8KB ROM</td></tr>
+    <tr><td>调度器</td><td>抢占/协作/时间片</td><td>抢占/协作/EDF/时间片</td></tr>
+    <tr><td>优先级方向</td><td>数值越大越重要</td><td>数值越小越重要</td></tr>
+    <tr><td>SMP</td><td>FreeRTOS SMP（较新）</td><td>成熟 SMP 支持</td></tr>
+    <tr><td>设备驱动</td><td>无统一框架</td><td>完整设备模型 + 设备树</td></tr>
+    <tr><td>构建系统</td><td>Makefile/CMake</td><td>CMake + Kconfig + West</td></tr>
+    <tr><td>生态</td><td>AWS IoT、大量第三方库</td><td>蓝牙、网络、USB 完整栈</td></tr>
+    <tr><td>适用场景</td><td>MCU、资源受限</td><td>MCU 到 SoC、功能丰富</td></tr>
+  </table>
+</section>
+
+<section id="ecosystem" class="toc-link">
+  <h2><span class="num">07</span> 生态系统</h2>
+
+  <div class="mermaid">
+graph TD
+    RTOS["FreeRTOS 内核"] --> TCP2["Plus-TCP<br>TCP/IP 协议栈"]
+    RTOS --> CLI2["Plus-CLI<br>交互式命令行"]
+    RTOS --> FAT2["Plus-FAT<br>文件系统"]
+    RTOS --> TRACE2["Plus-Trace<br>运行时追踪"]
+    RTOS --> AWS2["AWS IoT<br>设备 SDK"]
+    RTOS --> CELL["Cellular Interface<br>蜂窝网络"]
+    RTOS --> OTA["OTA 更新"]
+    RTOS --> SH["Shell / REPL"]
+    style RTOS fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
+</section>
+
+<section id="getting-started" class="toc-link">
+  <h2><span class="num">08</span> 快速上手</h2>
+
+<pre><code class="language-c"><span class="cmt">// FreeRTOS 最小配置示例</span>
+
+<span class="cmt">// FreeRTOSConfig.h</span>
+#define configUSE_PREEMPTION        1
+#define configCPU_CLOCK_HZ         72000000
+#define configTICK_RATE_HZ         1000
+#define configMAX_PRIORITIES        5
+#define configMINIMAL_STACK_SIZE    128
+#define configTOTAL_HEAP_SIZE       10240
+
+<span class="cmt">// main.c</span>
+#include "FreeRTOS.h"
+#include "task.h"
+
+void vTaskFunc(void *pvParameters) {
+    while (1) {
+        <span class="cmt">// 任务逻辑</span>
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+int main(void) {
+    xTaskCreate(vTaskFunc, "Task1", 128, NULL, 1, NULL);
+    vTaskStartScheduler();
+    while (1) {}  <span class="cmt">// 不应到达这里</span>
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/tasks.c</code> 任务管理核心实现（8872行）。<br>
+  <code>FreeRTOS/Source/queue.c</code> 队列/信号量/互斥锁统一实现。<br>
+  <code>FreeRTOS/Source/include/FreeRTOS.h</code> 配置宏定义。<br>
+  <code>FreeRTOS/Source/include/task.h</code> 任务 API 定义。
+</div>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

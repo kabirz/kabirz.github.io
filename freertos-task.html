@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 任务管理深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>FreeRTOS 任务管理深度解析</h1>
+  <p class="subtitle">TCB 结构体 / 任务创建删除 / 状态机 / 调度器 / 优先级 / 栈管理 / SMP</p>
+  <span class="version">FreeRTOS V11.1.0 · tasks.c · 8872 行</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#tcb">任务控制块 (TCB)</a></li>
+    <li><a href="#create">任务创建</a></li>
+    <li><a href="#delete">任务删除</a></li>
+    <li><a href="#state">任务状态机</a></li>
+    <li><a href="#sched">调度器实现</a></li>
+    <li><a href="#priority">优先级管理</a></li>
+    <li><a href="#stack">栈管理</a></li>
+    <li><a href="#notification">任务通知</a></li>
+    <li><a href="#smp">SMP 多核调度</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="tcb" class="toc-link">
+  <h2><span class="num">01</span> 任务控制块 (TCB)</h2>
+
+  <p>TCB（Task Control Block）是 FreeRTOS 任务管理的核心数据结构，存储在 <code>tasks.c</code> 内部。</p>
+
+  <h3>TCB 完整结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 内部定义（简化）</span>
+<span class="cmt">// 实际定义在 tasks.c 第 250-350 行左右</span>
+
+typedef struct tskTaskControlBlock
+{
+    <span class="cmt">// ===== 栈相关 =====</span>
+    volatile StackType_t * pxTopOfStack;   <span class="cmt">// 当前栈顶（上下文切换时保存/恢复）</span>
+    StackType_t * pxStackBase;             <span class="cmt">// 栈基地址（用于栈溢出检测）</span>
+    configSTACK_DEPTH_TYPE usStackDepth;   <span class="cmt">// 栈深度（单位：字）</span>
+
+    <span class="cmt">// ===== 链表节点 =====</span>
+    ListItem_t xStateListItem;    <span class="cmt">// 状态链表节点（就绪/阻塞/挂起）</span>
+    ListItem_t xEventListItem;    <span class="cmt">// 事件链表节点（等待事件时使用）</span>
+
+    <span class="cmt">// ===== 优先级 =====</span>
+    UBaseType_t uxPriority;       <span class="cmt">// 当前优先级（可能因优先级继承而改变）</span>
+    UBaseType_t uxBasePriority;   <span class="cmt">// 基础优先级（互斥锁释放后恢复）</span>
+
+    <span class="cmt">// ===== 互斥锁 =====</span>
+<span class="cmt">#if ( configUSE_MUTEXES == 1 )</span>
+    UBaseType_t uxMutexesHeld;   <span class="cmt">// 持有的互斥锁数量</span>
+<span class="cmt">#endif</span>
+
+    <span class="cmt">// ===== 任务通知 =====</span>
+<span class="cmt">#if ( configUSE_TASK_NOTIFICATIONS == 1 )</span>
+    volatile uint32_t ulNotifiedValue[ configTASK_NOTIFICATION_ARRAY_ENTRIES ];
+    volatile uint8_t ucNotifyState[ configTASK_NOTIFICATION_ARRAY_ENTRIES ];
+<span class="cmt">#endif</span>
+
+    <span class="cmt">// ===== 调试信息 =====</span>
+    char pcTaskName[ configMAX_TASK_NAME_LEN ];  <span class="cmt">// 任务名（调试用）</span>
+
+    <span class="cmt">// ===== 内存分配标记 =====</span>
+    uint8_t ucStaticallyAllocated;  <span class="cmt">// 0=动态, 1=静态栈, 2=静态栈+TCB</span>
+
+    <span class="cmt">// ===== 栈溢出检测 =====</span>
+<span class="cmt">#if ( configCHECK_FOR_STACK_OVERFLOW > 0 )</span>
+    <span class="cmt">// 栈末尾的魔数（用于检测溢出）</span>
+<span class="cmt">#endif</span>
+
+    <span class="cmt">// ===== SMP 相关 =====</span>
+<span class="cmt">#if ( configNUMBER_OF_CORES > 1 )</span>
+    volatile BaseType_t xTaskRunState;      <span class="cmt">// 运行状态</span>
+    UBaseType_t uxTaskAccessedState;        <span class="cmt">// 访问状态</span>
+    volatile UBaseType_t uxSuspendedSmpSpinlockCount; <span class="cmt">// SMP 挂起计数</span>
+<span class="cmt">#endif</span>
+
+    <span class="cmt">// ===== 时间统计 =====</span>
+<span class="cmt">#if ( configGENERATE_RUN_TIME_STATS == 1 )</span>
+    uint32_t ulRunTimeCounter;   <span class="cmt">// CPU 运行时间</span>
+<span class="cmt">#endif</span>
+} tskTCB;
+</code></pre>
+
+  <h3>TCB 内存布局</h3>
+
+  <div class="mermaid">graph TD
+    subgraph TCB["TCB 结构体内存布局"]
+        A["pxTopOfStack<br>栈顶指针（4/8 字节）"] --> B["pxStackBase<br>栈基地址"]
+        B --> C["usStackDepth<br>栈深度"]
+        C --> D["xStateListItem<br>状态链表节点"]
+        D --> E["xEventListItem<br>事件链表节点"]
+        E --> F["uxPriority<br>优先级"]
+        F --> G["uxBasePriority<br>基础优先级"]
+        G --> H["pcTaskName<br>任务名"]
+    end
+    style A fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
+
+  <h3>TCB 初始化流程</h3>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 中的 prvInitialiseTCB() 函数</span>
+<span class="cmt">// 在 xTaskCreate() 或 xTaskCreateStatic() 中调用</span>
+
+static void prvInitialiseTCB( tskTCB * const pxNewTCB,
+                               const StackType_t * const puxStackBuffer,
+                               configSTACK_DEPTH_TYPE usStackDepth,
+                               UBaseType_t uxStackType )
+{
+    <span class="cmt">// 1. 初始化栈</span>
+    pxNewTCB->pxStackBase = ( StackType_t * ) puxStackBuffer;
+    pxNewTCB->usStackDepth = usStackDepth;
+
+<span class="cmt">#if ( portSTACK_GROWTH < 0 )</span>
+    <span class="cmt">// 向下增长的栈（ARM Cortex-M）</span>
+    pxNewTCB->pxTopOfStack = &( puxStackBuffer[ usStackDepth - 1 ] );
+    pxNewTCB->pxEndOfStack = ( StackType_t * ) puxStackBuffer;
+<span class="cmt">#else</span>
+    <span class="cmt">// 向上增长的栈</span>
+    pxNewTCB->pxTopOfStack = ( StackType_t * ) puxStackBuffer;
+    pxNewTCB->pxEndOfStack = &( puxStackBuffer[ usStackDepth - 1 ] );
+<span class="cmt">#endif</span>
+
+    <span class="cmt">// 2. 初始化链表节点</span>
+    listINIT_LIST_ITEM( &amp;( pxNewTCB->xStateListItem ) );
+    listINIT_LIST_ITEM( &amp;( pxNewTCB->xEventListItem ) );
+    listSET_LIST_ITEM_OWNER( &amp;( pxNewTCB->xStateListItem ), pxNewTCB );
+    listSET_LIST_ITEM_OWNER( &amp;( pxNewTCB->xEventListItem ), pxNewTCB );
+
+    <span class="cmt">// 3. 设置事件列表项优先级（用于按优先级排序）</span>
+    listSET_LIST_ITEM_VALUE( &amp;( pxNewTCB->xEventListItem ),
+                             configMAX_PRIORITIES - ( TickType_t ) configMAX_PRIORITIES );
+}
+</code></pre>
+</section>
+
+<section id="create" class="toc-link">
+  <h2><span class="num">02</span> 任务创建</h2>
+
+  <p>FreeRTOS 提供两种创建方式：动态分配和静态分配。</p>
+
+  <h3>动态创建 (xTaskCreate)</h3>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 中的 xTaskCreate() 实现</span>
+BaseType_t xTaskCreate( TaskFunction_t pxTaskCode,
+                        const char * const pcName,
+                        configSTACK_DEPTH_TYPE usStackDepth,
+                        void * const pvParameters,
+                        UBaseType_t uxPriority,
+                        TaskHandle_t * const pxCreatedTask )
+{
+    tskTCB * pxNewTCB;
+    BaseType_t xReturn;
+
+    <span class="cmt">// 1. 分配栈内存（从堆中）</span>
+    StackType_t * pxStackBase = ( StackType_t * ) pvPortMalloc(
+        ( ( size_t ) usStackDepth ) * sizeof( StackType_t ) );
+
+    <span class="cmt">// 2. 分配 TCB（从堆中）</span>
+    pxNewTCB = ( tskTCB * ) pvPortMalloc( sizeof( tskTCB ) );
+
+    <span class="cmt">// 3. 初始化 TCB</span>
+    prvInitialiseTCB( pxNewTCB, pxStackBase, usStackDepth, portSTACK_TYPE );
+
+    <span class="cmt">// 4. 初始化栈（填充魔数 0xa5 用于高水位检测）</span>
+<span class="cmt">#if ( tskSET_NEW_STACKS_TO_KNOWN_VALUE == 1 )</span>
+    {
+        ( void ) memset( pxStackBase, ( int ) tskSTACK_FILL_BYTE,
+                         ( size_t ) usStackDepth * sizeof( StackType_t ) );
+    }
+<span class="cmt">#endif</span>
+
+    <span class="cmt">// 5. 初始化架构上下文（设置初始寄存器值）</span>
+    pxNewTCB->pxTopOfStack = pxPortInitialiseStack(
+        pxNewTCB->pxTopOfStack, pxStackBase, pxTaskCode, pvParameters );
+
+    <span class="cmt">// 6. 添加到就绪列表</span>
+    prvAddNewTaskToReadyList( pxNewTCB );
+
+    <span class="cmt">// 7. 返回任务句柄</span>
+    * pxCreatedTask = ( TaskHandle_t ) pxNewTCB;
+    return pdPASS;
+}
+</code></pre>
+
+  <h3>静态创建 (xTaskCreateStatic)</h3>
+
+<pre><code class="language-c"><span class="cmt">// 静态创建 — 不使用堆，所有内存由调用者提供</span>
+TaskHandle_t xTaskCreateStatic( TaskFunction_t pxTaskCode,
+                                 const char * const pcName,
+                                 configSTACK_DEPTH_TYPE usStackDepth,
+                                 void * const pvParameters,
+                                 UBaseType_t uxPriority,
+                                 StackType_t * const puxStackBuffer,
+                                 StaticTask_t * const pxTaskBuffer )
+{
+    tskTCB * pxNewTCB;
+
+    <span class="cmt">// 使用调用者提供的 TCB 缓冲区</span>
+    pxNewTCB = ( tskTCB * ) pxTaskBuffer;
+
+    <span class="cmt">// 初始化 TCB（使用调用者提供的栈）</span>
+    prvInitialiseTCB( pxNewTCB, puxStackBuffer, usStackDepth, portSTACK_TYPE );
+
+    <span class="cmt">// 标记为静态分配</span>
+    pxNewTCB->ucStaticallyAllocated = tskSTATICALLY_ALLOCATED_STACK_AND_TCB;
+
+    <span class="cmt">// 初始化架构上下文</span>
+    pxNewTCB->pxTopOfStack = pxPortInitialiseStack(
+        pxNewTCB->pxTopOfStack, puxStackBuffer, pxTaskCode, pvParameters );
+
+    <span class="cmt">// 添加到就绪列表</span>
+    prvAddNewTaskToReadyList( pxNewTCB );
+
+    return ( TaskHandle_t ) pxNewTCB;
+}
+</code></pre>
+
+  <h3>任务创建流程图</h3>
+
+  <div class="mermaid">graph TD
+    A["xTaskCreate()"] --> B{"分配栈内存"}
+    B -->|"pvPortMalloc()"| C{"分配 TCB"}
+    C -->|"pvPortMalloc()"| D["prvInitialiseTCB()"]
+    D --> E["填充栈魔数 0xa5"]
+    E --> F["pxPortInitialiseStack()"]
+    F --> G["prvAddNewTaskToReadyList()"]
+    G --> H["加入 pxReadyTasksLists[priority]"]
+    H --> I{"调度器已启动?"}
+    I -->|"是"| J["触发上下文切换"]
+    I -->|"否"| K["等待 vTaskStartScheduler()"]
+    style A fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
+
+  <h3>完整示例</h3>
+
+<pre><code class="language-c"><span class="cmt">// 示例：创建两个任务，演示不同优先级</span>
+#include "FreeRTOS.h"
+#include "task.h"
+#include &lt;stdio.h&gt;
+
+<span class="cmt">// 任务 1：高优先级（LED 闪烁）</span>
+void vHighPriorityTask( void * pvParameters )
+{
+    for ( ;; )
+    {
+        printf( "High priority task running\\n" );
+        vTaskDelay( pdMS_TO_TICKS( 500 ) );
+    }
+}
+
+<span class="cmt">// 任务 2：低优先级（传感器读取）</span>
+void vLowPriorityTask( void * pvParameters )
+{
+    for ( ;; )
+    {
+        printf( "Low priority task reading sensor\\n" );
+        vTaskDelay( pdMS_TO_TICKS( 2000 ) );
+    }
+}
+
+int main( void )
+{
+    <span class="cmt">// 创建高优先级任务</span>
+    xTaskCreate( vHighPriorityTask,
+                 "HighPrio",
+                 configMINIMAL_STACK_SIZE * 2,
+                 NULL,
+                 configMAX_PRIORITIES - 2,  <span class="cmt">// 高优先级</span>
+                 NULL );
+
+    <span class="cmt">// 创建低优先级任务</span>
+    xTaskCreate( vLowPriorityTask,
+                 "LowPrio",
+                 configMINIMAL_STACK_SIZE * 2,
+                 NULL,
+                 2,  <span class="cmt">// 低优先级</span>
+                 NULL );
+
+    <span class="cmt">// 启动调度器（不返回）</span>
+    vTaskStartScheduler();
+
+    <span class="cmt">// 不应到达这里</span>
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<section id="delete" class="toc-link">
+  <h2><span class="num">03</span> 任务删除</h2>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 中的 vTaskDelete() 实现</span>
+void vTaskDelete( TaskHandle_t xTaskToDelete )
+{
+    tskTCB * pxTCB;
+
+    taskENTER_CRITICAL();
+    {
+        <span class="cmt">// 1. 获取要删除的任务 TCB</span>
+        pxTCB = prvGetTCBFromHandle( xTaskToDelete );
+
+        <span class="cmt">// 2. 从就绪/阻塞/挂起列表中移除</span>
+        if( uxListRemove( &amp;( pxTCB->xStateListItem ) ) == ( UBaseType_t ) 0 )
+        {
+            taskRESET_READY_PRIORITY( pxTCB->uxPriority );
+        }
+
+        <span class="cmt">// 3. 如果删除自身，切换到空闲任务</span>
+        if( pxTCB == pxCurrentTCB )
+        {
+            listINSERT_END( &amp;xSuspendedTaskList, &amp;( pxTCB->xStateListItem ) );
+            ++uxCurrentNumberOfTasks;
+            --uxCurrentNumberOfTasks;
+            portPRE_TASK_DELETE_HOOK();
+        }
+        else
+        {
+            <span class="cmt">// 4. 标记为已删除，等待空闲任务回收</span>
+            --uxCurrentNumberOfTasks;
+            prvDeleteTCB( pxTCB );
+        }
+    }
+    taskEXIT_CRITICAL();
+}
+</code></pre>
+
+  <h3>删除流程</h3>
+
+  <div class="mermaid">graph TD
+    A["vTaskDelete()"] --> B["进入临界区"]
+    B --> C{"删除自身?"}
+    C -->|"是"| D["加入挂起列表"]
+    D --> E["触发调度"]
+    C -->|"否"| F["prvDeleteTCB()"]
+    F --> G["释放 TCB 和栈内存"]
+    G --> H["退出临界区"]
+    style A fill:#ee673015,stroke:#ee6730,color:#c44d1a
+  </div>
+
+  <div class="callout">
+    <strong>注意：</strong>删除任务后，其 TCB 和栈内存不会立即释放。如果任务删除自身，内存会在空闲任务中释放。如果删除其他任务，内存立即释放。
+  </div>
+</section>
+
+<section id="state" class="toc-link">
+  <h2><span class="num">04</span> 任务状态机</h2>
+
+  <p>FreeRTOS 任务有 5 种状态，通过链表管理。</p>
+
+  <div class="mermaid">graph TD
+    A["创建<br>xTaskCreate()"] -->|"加入就绪列表"| B["就绪态<br>Ready"]
+    B -->|"调度器选择"| C["运行态<br>Running"]
+    C -->|"被更高优先级抢占"| B
+    C -->|"vTaskDelay() /<br>等待信号量/队列"| D["阻塞态<br>Blocked"]
+    D -->|"超时 / 事件发生"| B
+    C -->|"vTaskSuspend()"| E["挂起态<br>Suspended"]
+    E -->|"vTaskResume()"| B
+    B -->|"vTaskDelete()"| F["已删除<br>Deleted"]
+    C -->|"vTaskDelete(NULL)"| F
+    style C fill:#22c55e15,stroke:#22c55e,color:#166534
+    style D fill:#fee2e215,stroke:#ef4444,color:#991b1b
+    style E fill:#fef3c715,stroke:#f59e0b,color:#92400e
+  </div>
+
+  <h3>状态与链表关系</h3>
+
+<pre><code class="language-c"><span class="cmt">// FreeRTOS 使用链表管理任务状态</span>
+
+<span class="cmt">// 全局链表数组</span>
+<span class="cmt">// 每个优先级一个就绪链表</span>
+static List_t pxReadyTasksLists[ configMAX_PRIORITIES ];
+
+<span class="cmt">// 延时/阻塞链表</span>
+static List_t xDelayedTaskList1;
+static List_t xDelayedTaskList2;
+static List_t * volatile pxDelayedTaskList;
+
+<span class="cmt">// 挂起链表</span>
+static List_t xSuspendedTaskList;
+
+<span class="cmt">// 状态转换时的链表操作：</span>
+<span class="cmt">// 创建 → 加入 pxReadyTasksLists[priority]</span>
+<span class="cmt">// 阻塞 → 从就绪列表移除，加入延时列表</span>
+<span class="cmt">// 恢复 → 从延时列表移除，加入就绪列表</span>
+<span class="cmt">// 挂起 → 从当前列表移除，加入挂起列表</span>
+<span class="cmt">// 删除 → 从当前列表移除，标记为已删除</span>
+</code></pre>
+</section>
+
+<section id="sched" class="toc-link">
+  <h2><span class="num">05</span> 调度器实现</h2>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 中的调度器核心逻辑</span>
+
+<span class="cmt">// 选择最高优先级任务</span>
+<span class="cmt">// 这是调度决策的核心宏</span>
+#define taskSELECT_HIGHEST_PRIORITY_TASK()                                 \
+    do {                                                                   \
+        UBaseType_t uxTopPriority = uxTopReadyPriority;                    \
+                                                                           \
+        <span class="cmt">// 从最高优先级向下搜索非空链表</span>                                  \
+        while( listLIST_IS_EMPTY( &amp;( pxReadyTasksLists[ uxTopPriority ] ) ) != pdFALSE ) \
+        {                                                                  \
+            configASSERT( uxTopPriority );                                 \
+            --uxTopPriority;                                               \
+        }                                                                  \
+                                                                           \
+        <span class="cmt">// 使用循环轮转实现时间片</span>                                       \
+        <span class="cmt">// listGET_OWNER_OF_NEXT_ENTRY 会让同优先级任务轮流执行</span>        \
+        listGET_OWNER_OF_NEXT_ENTRY( pxCurrentTCB,                        \
+                                     &amp;( pxReadyTasksLists[ uxTopPriority ] ) ); \
+        uxTopReadyPriority = uxTopPriority;                                \
+    } while( 0 )
+
+<span class="cmt">// 时间片轮转原理：</span>
+<span class="cmt">// 每个优先级的就绪链表是一个循环链表</span>
+<span class="cmt">// listGET_OWNER_OF_NEXT_ENTRY 会移动到下一个节点</span>
+<span class="cmt">// 这样同优先级任务获得相等的 CPU 时间</span>
+</code></pre>
+
+  <h3>调度器启动流程</h3>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 中的 vTaskStartScheduler()</span>
+void vTaskStartScheduler( void )
+{
+    <span class="cmt">// 1. 创建空闲任务</span>
+    xIdleTaskHandles[ 0 ] = xTaskCreateStatic( prvTaskDeleteTask,
+                                                configIDLE_TASK_NAME,
+                                                configMINIMAL_STACK_SIZE,
+                                                ( void * ) NULL,
+                                                tskIDLE_PRIORITY,
+                                                pxIdleTaskStack,
+                                                &amp;xIdleTaskTCB );
+
+<span class="cmt">#if ( configUSE_TIMERS == 1 )</span>
+    <span class="cmt">// 2. 如果启用定时器，创建定时器守护任务</span>
+    xTimerTaskHandle = xTaskCreateStatic( prvTimerTask,
+                                          "Tmr Svc",
+                                          configTIMER_TASK_STACK_DEPTH,
+                                          NULL,
+                                          configTIMER_TASK_PRIORITY,
+                                          pxTimerTaskStack,
+                                          &amp;xTimerTaskTCB );
+<span class="cmt">#endif</span>
+
+    <span class="cmt">// 3. 启动第一个任务（不返回）</span>
+    xPortStartScheduler();
+}
+</code></pre>
+</section>
+
+<section id="priority" class="toc-link">
+  <h2><span class="num">06</span> 优先级管理</h2>
+
+  <p>FreeRTOS 优先级：<strong>数值越大，优先级越高</strong>（与 Zephyr 相反）。</p>
+
+<pre><code class="language-c"><span class="cmt">// tasks.c 中的优先级相关操作</span>
+
+<span class="cmt">// 获取任务优先级</span>
+UBaseType_t uxTaskPriorityGet( const TaskHandle_t xTask )
+{
+    tskTCB * pxTCB;
+
+    taskENTER_CRITICAL();
+    {
+        pxTCB = prvGetTCBFromHandle( xTask );
+        return pxTCB->uxPriority;
+    }
+    taskEXIT_CRITICAL();
+}
+
+<span class="cmt">// 设置任务优先级</span>
+void vTaskPrioritySet( TaskHandle_t xTask, UBaseType_t uxNewPriority )
+{
+    tskTCB * pxTCB;
+
+    taskENTER_CRITICAL();
+    {
+        pxTCB = prvGetTCBFromHandle( xTask );
+
+        <span class="cmt">// 如果当前任务优先级被提升（互斥锁），恢复基础优先级</span>
+        if( ( pxTCB->uxBasePriority == pxTCB->uxPriority ) == pdTRUE )
+        {
+            <span class="cmt">// 未被提升，直接设置新优先级</span>
+            pxTCB->uxPriority = uxNewPriority;
+            pxTCB->uxBasePriority = uxNewPriority;
+        }
+        else
+        {
+            <span class="cmt">// 被提升了，只更新基础优先级</span>
+            pxTCB->uxBasePriority = uxNewPriority;
+        }
+
+        <span class="cmt">// 重新排列链表</span>
+        listSET_LIST_ITEM_VALUE( &amp;( pxTCB->xEventListItem ),
+                                 configMAX_PRIORITIES - ( TickType_t ) uxNewPriority );
+    }
+    taskEXIT_CRITICAL();
+}
+</code></pre>
+
+  <h3>优先级继承</h3>
+
+  <div class="mermaid">graph TD
+    H["高优先级任务<br>Prio=5"] -->|"等待 Mutex"| L["低优先级任务<br>Prio=1（持有 Mutex）"]
+    L -->|"优先级提升到 5"| L2["低优先级任务<br>Prio=5（临时）"]
+    L2 -->|"释放 Mutex"| L3["低优先级任务<br>Prio=1（恢复）"]
+    M["中优先级任务<br>Prio=3"] -->|"被阻塞（无法抢占）"| L2
+    style H fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style L fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style M fill:#fef3c7,stroke:#f59e0b,color:#92400e
+  </div>
+</section>
+
+<section id="stack" class="toc-link">
+  <h2><span class="num">07</span> 栈管理</h2>
+
+<pre><code class="language-c"><span class="cmt">// 栈溢出检测（tasks.c 内部）</span>
+
+<span class="cmt">// 方法 1：检查栈指针是否超出范围（configCHECK_FOR_STACK_OVERFLOW = 1）</span>
+<span class="cmt">// 方法 2：检查栈末尾魔数 0xa5 是否被覆盖（configCHECK_FOR_STACK_OVERFLOW = 2）</span>
+
+<span class="cmt">// 栈高水位查询</span>
+UBaseType_t uxTaskGetStackHighWaterMark( TaskHandle_t xTask )
+{
+    tskTCB * pxTCB = prvGetTCBFromHandle( xTask );
+    UBaseType_t uxReturn;
+
+    <span class="cmt">// 从栈底向上搜索第一个非 0xa5 的位置</span>
+    <span class="cmt">// 这就是栈使用的最高水位</span>
+    pxEndOfStack = pxTCB->pxStackBase;
+
+    while( *pxEndOfStack == tskSTACK_FILL_BYTE )
+    {
+        pxEndOfStack++;
+    }
+
+    <span class="cmt">// 返回栈剩余字数</span>
+    uxReturn = ( UBaseType_t ) ( ( ( uint32_t ) pxEndOfStack - ( uint32_t ) pxTCB->pxStackBase ) / sizeof( StackType_t ) );
+    return uxReturn;
+}
+</code></pre>
+</section>
+
+<section id="notification" class="toc-link">
+  <h2><span class="num">08</span> 任务通知</h2>
+
+<pre><code class="language-c"><span class="cmt">// 任务通知是最轻量的 IPC 机制</span>
+<span class="cmt">// 每个任务自带一个 32 位通知值（或数组）</span>
+<span class="cmt">// 不需要创建队列，开销最小</span>
+
+<span class="cmt">// 发送通知</span>
+BaseType_t xTaskNotify( TaskHandle_t xTaskToNotify,
+                         uint32_t ulValue,
+                         eNotifyAction eAction )
+{
+    tskTCB * pxTCB = xTaskToNotify;
+
+    taskENTER_CRITICAL();
+    {
+        <span class="cmt">// 根据动作更新通知值</span>
+        switch( eAction )
+        {
+            case eSetBits:
+                pxTCB->ulNotifiedValue[ 0 ] |= ulValue;
+                break;
+            case eIncrement:
+                pxTCB->ulNotifiedValue[ 0 ]++;
+                break;
+            case eSetValueWithOverwrite:
+                pxTCB->ulNotifiedValue[ 0 ] = ulValue;
+                break;
+            case eSetValueWithoutOverwrite:
+                if( pxTCB->ucNotifyState[ 0 ] != taskNOTIFICATION_RECEIVED )
+                {
+                    pxTCB->ulNotifiedValue[ 0 ] = ulValue;
+                }
+                break;
+        }
+
+        <span class="cmt">// 标记通知已接收</span>
+        pxTCB->ucNotifyState[ 0 ] = taskNOTIFICATION_RECEIVED;
+
+        <span class="cmt">// 如果任务在等待通知，唤醒它</span>
+        if( listIS_CONTAINED_WITHIN( &amp;xSuspendedTaskList,
+                                     &amp;( pxTCB->xStateListItem ) ) != pdFALSE )
+        {
+            ( void ) uxListRemove( &amp;( pxTCB->xStateListItem ) );
+            prvAddNewTaskToReadyList( pxTCB );
+        }
+    }
+    taskEXIT_CRITICAL();
+
+    return pdTRUE;
+}
+</code></pre>
+</section>
+
+<section id="smp" class="toc-link">
+  <h2><span class="num">09</span> SMP 多核调度</h2>
+
+<pre><code class="language-c"><span class="cmt">// FreeRTOS SMP 配置</span>
+<span class="cmt">// configNUMBER_OF_CORES = 2</span>
+
+<span class="cmt">// 任务亲和性</span>
+vTaskCoreAffinitySet( xTask, 0x01 );  <span class="cmt">// 绑定到 Core 0</span>
+vTaskCoreAffinitySet( xTask, 0x02 );  <span class="cmt">// 绑定到 Core 1</span>
+vTaskCoreAffinitySet( xTask, 0x03 );  <span class="cmt">// 两个 Core 都可运行</span>
+
+<span class="cmt">// SMP 调度策略（tasks.c 内部）</span>
+<span class="cmt">// 1. 每个 Core 维护独立的就绪链表</span>
+<span class="cmt">// 2. 任务可以在 Core 间迁移</span>
+<span class="cmt">// 3. 使用 spinlock 保护共享数据</span>
+<span class="cmt">// 4. 优先级抢占跨 Core 生效</span>
+</code></pre>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">10</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS 任务管理完整示例 =====</span>
+<span class="cmt">// 演示：创建、优先级、延时、删除、通知</span>
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include &lt;stdio.h&gt;
+
+<span class="cmt">// 任务句柄</span>
+TaskHandle_t xSensorTaskHandle = NULL;
+
+<span class="cmt">// 传感器任务（低优先级）</span>
+void vSensorTask( void * pvParameters )
+{
+    uint32_t ulNotificationValue;
+
+    for ( ;; )
+    {
+        <span class="cmt">// 等待通知（阻塞，最多等 1000ms）</span>
+        if( xTaskNotifyWait( 0, 0, &amp;ulNotificationValue, pdMS_TO_TICKS( 1000 ) ) == pdTRUE )
+        {
+            printf( "Sensor: received notification 0x%08lX\\n", ulNotificationValue );
+        }
+        else
+        {
+            printf( "Sensor: timeout, reading data\\n" );
+        }
+    }
+}
+
+<span class="cmt">// 控制任务（高优先级）</span>
+void vControlTask( void * pvParameters )
+{
+    uint32_t ulNotificationCount = 0;
+
+    for ( ;; )
+    {
+        <span class="cmt">// 每 500ms 发送通知给传感器任务</span>
+        vTaskDelay( pdMS_TO_TICKS( 500 ) );
+        ulNotificationCount++;
+        xTaskNotify( xSensorTaskHandle, ulNotificationCount, eIncrement );
+    }
+}
+
+<span class="cmt">// 空闲钩子</span>
+void vApplicationIdleHook( void )
+{
+    <span class="cmt">// 可以在这里执行低功耗操作</span>
+}
+
+<span class="cmt">// 栈溢出钩子</span>
+void vApplicationStackOverflowHook( TaskHandle_t xTask, char * pcTaskName )
+{
+    printf( "Stack overflow in task: %s\\n", pcTaskName );
+    for ( ;; ) {}
+}
+
+int main( void )
+{
+    <span class="cmt">// 创建传感器任务（低优先级）</span>
+    xTaskCreate( vSensorTask,
+                 "Sensor",
+                 configMINIMAL_STACK_SIZE * 2,
+                 NULL,
+                 2,
+                 &amp;xSensorTaskHandle );
+
+    <span class="cmt">// 创建控制任务（高优先级）</span>
+    xTaskCreate( vControlTask,
+                 "Control",
+                 configMINIMAL_STACK_SIZE * 2,
+                 NULL,
+                 4,
+                 NULL );
+
+    <span class="cmt">// 启动调度器</span>
+    vTaskStartScheduler();
+
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/tasks.c</code> 任务管理核心实现（8872行），重点看 prvInitialiseTCB、xTaskCreate、vTaskDelete、taskSELECT_HIGHEST_PRIORITY_TASK。<br>
+  <code>FreeRTOS/Source/include/task.h</code> 任务 API 定义（3800行）。<br>
+  <code>FreeRTOS/Source/include/FreeRTOS.h</code> 配置宏定义（3359行）。<br>
+  <code>FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c</code> ARM Cortex-M4F 移植示例。
+</div>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

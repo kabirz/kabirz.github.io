@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 常见问题与最佳实践深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS 常见问题与最佳实践深度解析</h1><p class="subtitle">栈溢出 / 优先级反转 / 内存碎片 / 性能优化</p><span class="version">FreeRTOS Kernel</span></div>
+<nav class="toc"><ul>
+<li><a href="#stack-overflow">栈溢出</a></li>
+<li><a href="#priority-inversion">优先级反转</a></li>
+<li><a href="#memory-fragmentation">内存碎片</a></li>
+<li><a href="#best-practices">最佳实践</a></li>
+</ul></nav>
+<div class="container">
+<section id="stack-overflow" class="toc-link">
+<h2><span class="num">01</span> 栈溢出</h2>
+<pre><code class="language-c"><span class="cmt">// 启用栈溢出检测</span>
+#define configCHECK_FOR_STACK_OVERFLOW 2
+
+<span class="cmt">// 栈溢出钩子</span>
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
+    <span class="cmt">// 处理栈溢出</span>
+}
+
+<span class="cmt">// 查看栈使用情况</span>
+UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark(xTask);
+<span class="cmt">// 返回值 = 栈剩余的最小字数</span>
+</code></pre>
+</section>
+<section id="priority-inversion" class="toc-link">
+<h2><span class="num">02</span> 优先级反转</h2>
+<div class="mermaid">graph TD
+    H["高优先级 P5"] -->|"等待 Mutex"| L["低优先级 P1"]
+    L -->|"优先级提升到 5"| L2["低优先级 P5"]
+    M["中优先级 P3"] -->|"被阻塞"| L2
+</div>
+<pre><code class="language-c"><span class="cmt">// 使用互斥锁（自动优先级继承）</span>
+SemaphoreHandle_t xMutex = xSemaphoreCreateMutex();
+<span class="cmt">// 不要用二值信号量做互斥（无优先级继承）</span>
+</code></pre>
+</section>
+<section id="memory-fragmentation" class="toc-link">
+<h2><span class="num">03</span> 内存碎片</h2>
+<pre><code class="language-c"><span class="cmt">// 推荐方案：</span>
+<span class="cmt">// 1. 使用 heap_4（合并相邻空闲块）</span>
+<span class="cmt">// 2. 使用静态分配</span>
+<span class="cmt">// 3. 避免频繁 malloc/free 不同大小的块</span>
+<span class="cmt">// 4. 预分配所有需要的资源</span>
+</code></pre>
+</section>
+<section id="best-practices" class="toc-link">
+<h2><span class="num">04</span> 最佳实践</h2>
+<p>1. 启用 configASSERT 验证配置<br>
+2. 使用静态分配避免堆问题<br>
+3. 启用栈溢出检测<br>
+4. 优先使用任务通知（最轻量）<br>
+5. ISR 中使用 FromISR API<br>
+6. 限制中断禁用时间<br>
+7. 使用 vTaskDelayUntil 实现周期任务<br>
+8. 优先使用互斥锁（非信号量）做同步</p>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

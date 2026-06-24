@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS CLI 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS CLI 深度解析</h1><p class="subtitle">交互式命令行 / 命令注册 / Shell 集成</p><span class="version">FreeRTOS-Plus-CLI</span></div>
+<nav class="toc"><ul>
+<li><a href="#overview">CLI 概览</a></li>
+<li><a href="#register">命令注册</a></li>
+<li><a href="#api">CLI API</a></li>
+</ul></nav>
+<div class="container">
+<section id="overview" class="toc-link">
+<h2><span class="num">01</span> CLI 概览</h2>
+<p>FreeRTOS-Plus-CLI 提供交互式命令行接口，支持命令注册和参数解析。</p>
+</section>
+<section id="register" class="toc-link">
+<h2><span class="num">02</span> 命令注册</h2>
+<pre><code class="language-c">static BaseType_t vCommand(char *pcWriteBuffer,
+    size_t xWriteBufferLen, const char *pcCommandString) {
+    strcpy(pcWriteBuffer, "Hello!\r\n");
+    return pdFALSE;
+}
+
+static const CLI_CommandDefinition_t xCommand = {
+    "hello", "hello: Print greeting\r\n",
+    vCommand, -1
+};
+FreeRTOS_CLIRegisterCommand(&amp;xCommand);
+</code></pre>
+</section>
+<section id="api" class="toc-link">
+<h2><span class="num">03</span> CLI API</h2>
+<pre><code class="language-c">BaseType_t FreeRTOS_CLIRegisterCommand(const CLI_CommandDefinition_t *);
+BaseType_t FreeRTOS_CLIProcess(char *pcInput, char *pcOutput, size_t xLen);
+</code></pre>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

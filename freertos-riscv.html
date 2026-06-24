@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS RISC-V 移植深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS RISC-V 移植深度解析</h1><p class="subtitle">RISC-V 架构 / 机器模式 / 中断 / PMP</p><span class="version">FreeRTOS Kernel · portable/GCC/RISC-V</span></div>
+<nav class="toc"><ul>
+<li><a href="#arch">RISC-V 架构</a></li>
+<li><a href="#interrupt">中断处理</a></li>
+<li><a href="#pmp">PMP 保护</a></li>
+</ul></nav>
+<div class="container">
+<section id="arch" class="toc-link">
+<h2><span class="num">01</span> RISC-V 架构</h2>
+<p>RISC-V 是开源指令集架构，FreeRTOS 支持 32/64 位处理器。</p>
+<pre><code class="language-c"><span class="cmt">// RISC-V 特权级</span>
+<span class="cmt">// M 模式 — 最高特权（FreeRTOS 运行在此）</span>
+<span class="cmt">// S 模式 — 可选</span>
+<span class="cmt">// U 模式 — 最低特权</span>
+</code></pre>
+</section>
+<section id="interrupt" class="toc-link">
+<h2><span class="num">02</span> 中断处理</h2>
+<pre><code class="language-c"><span class="cmt">// mtvec — 异常向量</span>
+<span class="cmt">// mie — 中断使能</span>
+<span class="cmt">// mip — 中断挂起</span>
+<span class="cmt">// mepc — 异常返回地址</span>
+</code></pre>
+</section>
+<section id="pmp" class="toc-link">
+<h2><span class="num">03</span> PMP 保护</h2>
+<pre><code class="language-c"><span class="cmt">// PMP（Physical Memory Protection）</span>
+<span class="cmt">// 8 个 PMP 条目</span>
+<span class="cmt">// 类似 ARM MPU 但更简单</span>
+<span class="cmt">// 标志：PMP_R(读) PMP_W(写) PMP_X(执行)</span>
+</code></pre>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

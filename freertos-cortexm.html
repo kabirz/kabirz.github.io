@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS ARM Cortex-M 移植深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS ARM Cortex-M 移植深度解析</h1><p class="subtitle">Cortex-M3/4F/7/M33 / PendSV / SysTick / MPU</p><span class="version">FreeRTOS Kernel · portable/GCC/ARM_CM*</span></div>
+<nav class="toc"><ul>
+<li><a href="#arch">Cortex-M 架构</a></li>
+<li><a href="#pendsv">PendSV 上下文切换</a></li>
+<li><a href="#systick">SysTick 定时器</a></li>
+</ul></nav>
+<div class="container">
+<section id="arch" class="toc-link">
+<h2><span class="num">01</span> Cortex-M 架构</h2>
+<table><tr><th>特性</th><th>M3</th><th>M4F</th><th>M7</th><th>M33</th></tr>
+<tr><td>FPU</td><td>无</td><td>有</td><td>有</td><td>有</td></tr>
+<tr><td>TrustZone</td><td>无</td><td>无</td><td>无</td><td>有</td></tr></table>
+</section>
+<section id="pendsv" class="toc-link">
+<h2><span class="num">02</span> PendSV 上下文切换</h2>
+<pre><code class="language-c"><span class="cmt">// PendSV Handler</span>
+void xPortPendSVHandler(void) {
+    <span class="cmt">// 1. 保存当前任务寄存器</span>
+    <span class="cmt">// 2. 切换栈指针</span>
+    <span class="cmt">// 3. 恢复新任务寄存器</span>
+}
+#define portYIELD() portNVIC_INT_CTRL_REG = portNVIC_PENDSVSET_BIT
+</code></pre>
+</section>
+<section id="systick" class="toc-link">
+<h2><span class="num">03</span> SysTick 定时器</h2>
+<pre><code class="language-c">void xPortSetupTimerInterrupt(void) {
+    portNVIC_SYSTICK_LOAD_REG = (configCPU_CLOCK_HZ / configTICK_RATE_HZ) - 1;
+    portNVIC_SYSTICK_CTRL_REG = portNVIC_SYSTICK_CLK | portNVIC_SYSTICK_INT | portNVIC_SYSTICK_ENABLE;
+}
+</code></pre>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 追踪与调试深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS 追踪与调试深度解析</h1><p class="subtitle">运行时统计 / 调试钩子 / Tracealyzer / SystemView</p><span class="version">FreeRTOS Kernel</span></div>
+<nav class="toc"><ul>
+<li><a href="#stats">运行时统计</a></li>
+<li><a href="#hooks">调试钩子</a></li>
+</ul></nav>
+<div class="container">
+<section id="stats" class="toc-link">
+<h2><span class="num">01</span> 运行时统计</h2>
+<pre><code class="language-c">TaskStatus_t *pxArray;
+UBaseType_t uxSize = uxTaskGetNumberOfTasks();
+pxArray = pvPortMalloc(uxSize * sizeof(TaskStatus_t));
+uxTaskGetSystemState(pxArray, uxSize, &amp;ulRunTime);
+vTaskList(pcWriteBuffer);  <span class="cmt">// 打印任务列表</span>
+</code></pre>
+</section>
+<section id="hooks" class="toc-link">
+<h2><span class="num">02</span> 调试钩子</h2>
+<pre><code class="language-c"><span class="cmt">// 栈溢出钩子</span>
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName);
+<span class="cmt">// Malloc 失败钩子</span>
+void vApplicationMallocFailedHook(void);
+<span class="cmt">// 空闲钩子</span>
+void vApplicationIdleHook(void);
+<span class="cmt">// Tick 钩子</span>
+void vApplicationTickHook(void);
+</code></pre>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

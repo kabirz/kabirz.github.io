@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 内核配置深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS 内核配置深度解析</h1><p class="subtitle">FreeRTOSConfig.h / 配置宏 / 裁剪 / 最小配置</p><span class="version">FreeRTOS Kernel · FreeRTOSConfig.h</span></div>
+<nav class="toc"><ul>
+<li><a href="#overview">配置概览</a></li>
+<li><a href="#core">核心配置</a></li>
+<li><a href="#memory">内存配置</a></li>
+<li><a href="#feature">功能配置</a></li>
+<li><a href="#minimal">最小配置</a></li>
+</ul></nav>
+<div class="container">
+<section id="overview" class="toc-link">
+<h2><span class="num">01</span> 配置概览</h2>
+<p>FreeRTOS 通过 <code>FreeRTOSConfig.h</code> 进行编译时配置，每个项目必须提供此文件。</p>
+</section>
+<section id="core" class="toc-link">
+<h2><span class="num">02</span> 核心配置</h2>
+<pre><code class="language-c">#define configUSE_PREEMPTION        1
+#define configCPU_CLOCK_HZ         72000000
+#define configTICK_RATE_HZ         1000
+#define configMAX_PRIORITIES        56
+#define configMINIMAL_STACK_SIZE    128
+#define configTOTAL_HEAP_SIZE       32768
+#define configUSE_IDLE_HOOK         0
+#define configUSE_TICK_HOOK         0
+</code></pre>
+</section>
+<section id="memory" class="toc-link">
+<h2><span class="num">03</span> 内存配置</h2>
+<pre><code class="language-c">#define configSUPPORT_STATIC_ALLOCATION  0
+#define configSUPPORT_DYNAMIC_ALLOCATION 1
+#define configTOTAL_HEAP_SIZE            32768
+#define configAPPLICATION_ALLOCATED_HEAP 0
+</code></pre>
+</section>
+<section id="feature" class="toc-link">
+<h2><span class="num">04</span> 功能配置</h2>
+<pre><code class="language-c">#define configUSE_TIMERS              1
+#define configUSE_MUTEXES             1
+#define configUSE_COUNTING_SEMAPHORES 1
+#define configUSE_RECURSIVE_MUTEXES   0
+#define configUSE_QUEUE_SETS          0
+#define configUSE_TASK_NOTIFICATIONS  1
+#define configUSE_TRACE_FACILITY      0
+#define configUSE_STATS_FORMATTING_FUNCTIONS 0
+</code></pre>
+</section>
+<section id="minimal" class="toc-link">
+<h2><span class="num">05</span> 最小配置</h2>
+<pre><code class="language-c"><span class="cmt">// 最小 FreeRTOS 配置</span>
+#define configUSE_PREEMPTION        1
+#define configCPU_CLOCK_HZ         72000000
+#define configTICK_RATE_HZ         1000
+#define configMAX_PRIORITIES        5
+#define configMINIMAL_STACK_SIZE    128
+#define configTOTAL_HEAP_SIZE       10240
+#define configUSE_IDLE_HOOK         0
+#define configUSE_TICK_HOOK         0
+#define configUSE_TIMERS            0
+#define configUSE_MUTEXES           0
+#define configUSE_COUNTING_SEMAPHORES 0
+</code></pre>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

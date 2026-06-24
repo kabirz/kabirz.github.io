@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 安全与认证深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS 安全与认证深度解析</h1><p class="subtitle">MISRA C / 功能安全 / 认证 / 安全机制</p><span class="version">FreeRTOS Kernel</span></div>
+<nav class="toc"><ul>
+<li><a href="#overview">安全概览</a></li>
+<li><a href="#misra">MISRA C</a></li>
+<li><a href="#safety">功能安全</a></li>
+</ul></nav>
+<div class="container">
+<section id="overview" class="toc-link">
+<h2><span class="num">01</span> 安全概览</h2>
+<p>FreeRTOS 遵循 MISRA C 规范，支持功能安全认证。</p>
+</section>
+<section id="misra" class="toc-link">
+<h2><span class="num">02</span> MISRA C</h2>
+<pre><code class="language-c"><span class="cmt">// FreeRTOS 遵循 MISRA C:2012</span>
+<span class="cmt">// 关键规则：</span>
+<span class="cmt">// - 禁止隐式类型转换</span>
+<span class="cmt">// - 禁止递归调用</span>
+<span class="cmt">// - 所有路径必须有返回值</span>
+</code></pre>
+</section>
+<section id="safety" class="toc-link">
+<h2><span class="num">03</span> 功能安全</h2>
+<div class="mermaid">graph LR
+    A["FreeRTOS"] --> B["IEC 61508 SIL 3"]
+    A --> C["ISO 26262 ASIL D"]
+    A --> D["IEC 62304"]
+</div>
+<p>安全机制：MPU + 栈检测 + configASSERT</p>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

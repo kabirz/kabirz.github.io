@@ -403,6 +403,28 @@ const DOCS = [
   { t:"Zephyr Retention 掉电保留", f:"zephyr-retention.html", d:"跨重启状态、Flash/RAM 保留区、Bootloader 通信", i:"blue", tags:["Zephyr","Retention","掉电保留","跨重启"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
   { t:"Zephyr 任务看门狗", f:"zephyr-task-wdt.html", d:"多级监控、软件/硬件看门狗链、超时处理", i:"blue", tags:["Zephyr","看门狗","WDT","超时","监控"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-driver", catLabel:"驱动与硬件" },
   { t:"Zephyr 网络管理", f:"zephyr-net-management.html", d:"net_mgmt 事件、连接管理器、L2 管理、网络事件", i:"blue", tags:["Zephyr","网络管理","conn_mgr","net_mgmt"], top:"zephyr", topLabel:"Zephyr RTOS", cat:"zephyr-subsys", catLabel:"子系统" },
+
+  // ── FreeRTOS ──
+  { t:"FreeRTOS 整体架构", f:"freertos-overview.html", d:"内核架构、源码结构、移植层、配置系统、与 Zephyr 对比", i:"orange", tags:["FreeRTOS","RTOS","架构","嵌入式"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-core", catLabel:"内核核心" },
+  { t:"FreeRTOS 任务管理", f:"freertos-task.html", d:"TCB、任务创建删除、状态机、优先级、栈、SMP 调度", i:"orange", tags:["FreeRTOS","任务","TCB","调度"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-core", catLabel:"内核核心" },
+  { t:"FreeRTOS 队列与 IPC", f:"freertos-queue.html", d:"队列、信号量、互斥锁、任务通知、IPC 对比", i:"orange", tags:["FreeRTOS","队列","信号量","互斥锁"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-core", catLabel:"内核核心" },
+  { t:"FreeRTOS 内存管理", f:"freertos-memory.html", d:"heap_1~heap_5、静态分配、内存碎片", i:"orange", tags:["FreeRTOS","内存","heap","堆"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-core", catLabel:"内核核心" },
+  { t:"FreeRTOS 软件定时器", f:"freertos-timer.html", d:"定时器服务任务、回调、周期性、一次性", i:"orange", tags:["FreeRTOS","定时器","timer"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-core", catLabel:"内核核心" },
+  { t:"FreeRTOS 事件组与流缓冲", f:"freertos-event-stream.html", d:"事件组、流缓冲、消息缓冲、SPSC 模型", i:"orange", tags:["FreeRTOS","事件","流缓冲","消息缓冲"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-core", catLabel:"内核核心" },
+  { t:"FreeRTOS Tick 与时间管理", f:"freertos-tick.html", d:"系统 tick、tickless、低功耗、延时函数", i:"orange", tags:["FreeRTOS","tick","tickless","延时"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-core", catLabel:"内核核心" },
+  { t:"FreeRTOS 临界区与中断管理", f:"freertos-critical.html", d:"临界区、中断屏蔽、优先级、嵌套", i:"orange", tags:["FreeRTOS","临界区","中断","优先级"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-core", catLabel:"内核核心" },
+  { t:"FreeRTOS 空闲任务与电源管理", f:"freertos-idle.html", d:"空闲任务、低功耗、tickless、守护任务", i:"orange", tags:["FreeRTOS","空闲","低功耗","电源"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-core", catLabel:"内核核心" },
+  { t:"FreeRTOS 移植深度解析", f:"freertos-port.html", d:"移植接口、port.c、上下文切换、新架构移植", i:"orange", tags:["FreeRTOS","移植","portable","上下文切换"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-port", catLabel:"移植与架构" },
+  { t:"FreeRTOS ARM Cortex-M 移植", f:"freertos-cortexm.html", d:"Cortex-M3/4F/7/M33、PendSV、SysTick、MPU", i:"orange", tags:["FreeRTOS","ARM","Cortex-M","PendSV"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-port", catLabel:"移植与架构" },
+  { t:"FreeRTOS RISC-V 移植", f:"freertos-riscv.html", d:"RISC-V 架构、机器模式、中断、PMP", i:"orange", tags:["FreeRTOS","RISC-V","PMP","中断"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-port", catLabel:"移植与架构" },
+  { t:"FreeRTOS MPU 内存保护", f:"freertos-mpu.html", d:"MPU 配置、特权级、用户态、访问控制", i:"orange", tags:["FreeRTOS","MPU","内存保护","特权级"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-security", catLabel:"安全与配置" },
+  { t:"FreeRTOS 安全与认证", f:"freertos-safety.html", d:"MISRA C、功能安全、IEC 61508、ISO 26262", i:"orange", tags:["FreeRTOS","安全","MISRA","功能安全"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-security", catLabel:"安全与配置" },
+  { t:"FreeRTOS 内核配置", f:"freertos-config.html", d:"FreeRTOSConfig.h、配置宏、裁剪、最小配置", i:"orange", tags:["FreeRTOS","配置","FreeRTOSConfig","裁剪"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-security", catLabel:"安全与配置" },
+  { t:"FreeRTOS CLI 深度解析", f:"freertos-cli.html", d:"交互式命令行、命令注册、Shell 集成", i:"orange", tags:["FreeRTOS","CLI","命令行","Shell"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-middleware", catLabel:"中间件" },
+  { t:"FreeRTOS 追踪与调试", f:"freertos-trace.html", d:"运行时统计、调试钩子、Tracealyzer、SystemView", i:"orange", tags:["FreeRTOS","追踪","调试","统计"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-middleware", catLabel:"中间件" },
+  { t:"FreeRTOS TCP/IP 深度解析", f:"freertos-tcp.html", d:"BSD Socket、TCP/IP 协议栈、DHCP、DNS", i:"orange", tags:["FreeRTOS","TCP","Socket","网络"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-middleware", catLabel:"中间件" },
+  { t:"FreeRTOS vs Zephyr 对比", f:"freertos-vs-zephyr.html", d:"架构、API、生态、性能、选型指南", i:"orange", tags:["FreeRTOS","Zephyr","对比","选型"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-middleware", catLabel:"中间件" },
+  { t:"FreeRTOS 最佳实践", f:"freertos-best-practices.html", d:"栈溢出、优先级反转、内存碎片、性能优化", i:"orange", tags:["FreeRTOS","最佳实践","调试","优化"], top:"freertos", topLabel:"FreeRTOS", cat:"freertos-middleware", catLabel:"中间件" },
 ];
 
 const ICON_MAP = {
@@ -411,6 +433,7 @@ const ICON_MAP = {
   fs: { emoji: "📁", color: "#1a7f37" },
   driver: { emoji: "🔌", color: "#8250df" },
   zephyr: { emoji: "⚡", color: "#1769aa" },
+  freertos: { emoji: "🔶", color: "#ee6730" },
   windows: { emoji: "🪟", color: "#0078d4" },
   rust: { emoji: "🦀", color: "#dea584" },
   docker: { emoji: "🐳", color: "#2496ed" },

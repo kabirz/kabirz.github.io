@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS Tick 与时间管理深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+<div class="hero"><h1>FreeRTOS Tick 与时间管理深度解析</h1><p class="subtitle">系统 tick / tickless / 低功耗 / 延时 / 时钟源</p><span class="version">FreeRTOS Kernel · xPortSysTickHandler</span></div>
+<nav class="toc"><ul>
+<li><a href="#tick">系统 Tick</a></li>
+<li><a href="#delay">延时函数</a></li>
+<li><a href="#tickless">Tickless 低功耗</a></li>
+<li><a href="#api">时间 API</a></li>
+</ul></nav>
+<div class="container">
+<section id="tick" class="toc-link">
+<h2><span class="num">01</span> 系统 Tick</h2>
+<pre><code class="language-c"><span class="cmt">// 系统 tick 中断处理</span>
+void xPortSysTickHandler(void) {
+    if (xTaskIncrementTick() != pdFALSE) {
+        portYIELD_WITHIN_API();
+    }
+}
+<span class="cmt">// xTaskIncrementTick() 内部：</span>
+<span class="cmt">// 1. 递增 tick 计数</span>
+<span class="cmt">// 2. 检查延时任务是否到期</span>
+<span class="cmt">// 3. 检查时间片轮转</span>
+<span class="cmt">// 4. 检查软件定时器</span>
+</code></pre>
+</section>
+<section id="delay" class="toc-link">
+<h2><span class="num">02</span> 延时函数</h2>
+<pre><code class="language-c"><span class="cmt">// 相对延时</span>
+vTaskDelay(pdMS_TO_TICKS(100));
+
+<span class="cmt">// 绝对延时（周期性任务更精确）</span>
+TickType_t xLastWakeTime = xTaskGetTickCount();
+while (1) {
+    vTaskDelayUntil(&amp;xLastWakeTime, pdMS_TO_TICKS(10));
+}
+</code></pre>
+</section>
+<section id="tickless" class="toc-link">
+<h2><span class="num">03</span> Tickless 低功耗</h2>
+<div class="mermaid">graph LR
+    A["正常 Tick"] -->|"每 tick 中断"| B["CPU 唤醒"]
+    C["Tickless"] -->|"按需中断"| D["深度休眠"]
+    D -->|"下一事件"| E["CPU 唤醒"]
+</div>
+<pre><code class="language-c"><span class="cmt">// configUSE_TICKLESS_IDLE = 1</span>
+void vApplicationSleep(TickType_t xExpectedIdleTime) {
+    <span class="cmt">// 进入低功耗模式</span>
+}
+</code></pre>
+</section>
+<section id="api" class="toc-link">
+<h2><span class="num">04</span> 时间 API</h2>
+<pre><code class="language-c">TickType_t xTaskGetTickCount(void);
+TickType_t xTaskGetTickCountFromISR(void);
+#define pdMS_TO_TICKS(xTimeInMs) ((TickType_t)(((uint64_t)(xTimeInMs) * configTICK_RATE_HZ) / 1000U))
+#define pdTICKS_TO_MS(xTicks) ((uint32_t)(((uint64_t)(xTicks) * 1000U) / configTICK_RATE_HZ))
+</code></pre>
+</section>
+</div>
+<script src="common.js"></script>
+</body>
+</html>

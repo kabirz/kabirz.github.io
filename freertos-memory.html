@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeRTOS 内存管理深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23ee6730'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>F</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>FreeRTOS 内存管理深度解析</h1>
+  <p class="subtitle">heap_1~heap_5 / BlockLink_t / 首次适配 / 相邻合并 / 堆保护 / 静态分配</p>
+  <span class="version">FreeRTOS V11.1.0 · portable/MemMang/ · heap_4.c 638 行</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">内存管理概览</a></li>
+    <li><a href="#heap4-struct">heap_4 数据结构</a></li>
+    <li><a href="#heap4-malloc">pvPortMalloc 实现</a></li>
+    <li><a href="#heap4-free">vPortFree 实现</a></li>
+    <li><a href="#heap4-merge">相邻块合并</a></li>
+    <li><a href="#heap-protector">堆保护机制</a></li>
+    <li><a href="#static">静态分配</a></li>
+    <li><a href="#compare">方案对比</a></li>
+    <li><a href="#example">完整示例</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 内存管理概览</h2>
+
+  <p>FreeRTOS 提供 5 种堆管理方案，位于 <code>portable/MemMang/</code> 目录。</p>
+
+  <table>
+    <tr><th>方案</th><th>文件</th><th>malloc</th><th>free</th><th>碎片</th><th>合并</th><th>适用场景</th></tr>
+    <tr><td>heap_1</td><td>heap_1.c</td><td>✅</td><td>❌</td><td>无</td><td>—</td><td>最简单，不允许释放</td></tr>
+    <tr><td>heap_2</td><td>heap_2.c</td><td>✅</td><td>✅</td><td>有</td><td>❌</td><td>频繁分配相同大小</td></tr>
+    <tr><td>heap_3</td><td>heap_3.c</td><td>✅</td><td>✅</td><td>有</td><td>—</td><td>使用标准库 malloc</td></tr>
+    <tr><td>heap_4</td><td>heap_4.c</td><td>✅</td><td>✅</td><td>低</td><td>✅</td><td>通用（推荐）</td></tr>
+    <tr><td>heap_5</td><td>heap_5.c</td><td>✅</td><td>✅</td><td>低</td><td>✅</td><td>非连续内存区域</td></tr>
+  </table>
+</section>
+
+<section id="heap4-struct" class="toc-link">
+  <h2><span class="num">02</span> heap_4 数据结构</h2>
+
+  <h3>BlockLink_t 空闲块结构</h3>
+
+<pre><code class="language-c"><span class="cmt">// heap_4.c 第 100-104 行</span>
+typedef struct A_BLOCK_LINK
+{
+    struct A_BLOCK_LINK * pxNextFreeBlock;  <span class="cmt">// 下一个空闲块指针</span>
+    size_t xBlockSize;                      <span class="cmt">// 块大小（最高位标记分配状态）</span>
+} BlockLink_t;
+</code></pre>
+
+  <h3>内存布局</h3>
+
+  <div class="mermaid">graph LR
+    subgraph 堆内存["堆内存布局"]
+        A["BlockLink_t<br>xBlockSize=分配标记|大小"] --> B["用户数据区域<br>（实际分配的内存）"]
+        B --> C["BlockLink_t<br>下一个空闲块"]
+        C --> D["空闲数据区域"]
+    end
+    style A fill:#ee673015,stroke:#ee6730,color:#c44d1a
+    style C fill:#22c55e15,stroke:#22c55e,color:#166534
+  </div>
+
+  <h3>分配状态位</h3>
+
+<pre><code class="language-c"><span class="cmt">// heap_4.c 第 80-84 行</span>
+<span class="cmt">// xBlockSize 的最高位用于标记分配状态</span>
+#define heapBLOCK_ALLOCATED_BITMASK  ( ( ( size_t ) 1 ) &lt;&lt; ( ( sizeof( size_t ) * 8 ) - 1 ) )
+#define heapBLOCK_IS_ALLOCATED( pxBlock )  ( ( ( pxBlock->xBlockSize ) &amp; heapBLOCK_ALLOCATED_BITMASK ) != 0 )
+#define heapALLOCATE_BLOCK( pxBlock )      ( ( pxBlock->xBlockSize ) |= heapBLOCK_ALLOCATED_BITMASK )
+#define heapFREE_BLOCK( pxBlock )          ( ( pxBlock->xBlockSize ) &amp;= ~heapBLOCK_ALLOCATED_BITMASK )
+</code></pre>
+</section>
+
+<section id="heap4-malloc" class="toc-link">
+  <h2><span class="num">03</span> pvPortMalloc 实现</h2>
+
+<pre><code class="language-c"><span class="cmt">// heap_4.c 第 173-249+ 行</span>
+void * pvPortMalloc( size_t xWantedSize )
+{
+    BlockLink_t * pxBlock;
+    BlockLink_t * pxPreviousBlock;
+    void * pvReturn = NULL;
+
+    <span class="cmt">// 1. 增加 BlockLink_t 头部大小</span>
+    xWantedSize += xHeapStructSize;
+
+    <span class="cmt">// 2. 对齐到 portBYTE_ALIGNMENT</span>
+    if( ( xWantedSize &amp; portBYTE_ALIGNMENT_MASK ) != 0x00 )
+    {
+        xWantedSize += portBYTE_ALIGNMENT - ( xWantedSize &amp; portBYTE_ALIGNMENT_MASK );
+    }
+
+    <span class="cmt">// 3. 挂起调度器</span>
+    vTaskSuspendAll();
+    {
+        <span class="cmt">// 4. 首次调用时初始化堆</span>
+        if( pxEnd == NULL )
+        {
+            prvHeapInit();
+        }
+
+        <span class="cmt">// 5. 首次适配算法</span>
+        pxPreviousBlock = &amp;xStart;
+        pxBlock = xStart.pxNextFreeBlock;
+
+        <span class="cmt">// 遍历空闲块链表，找到第一个足够大的块</span>
+        while( ( pxBlock->xBlockSize &lt; xWantedSize ) &amp;&amp; ( pxBlock->pxNextFreeBlock != NULL ) )
+        {
+            pxPreviousBlock = pxBlock;
+            pxBlock = pxBlock->pxNextFreeBlock;
+        }
+
+        <span class="cmt">// 6. 找到足够大的块</span>
+        if( pxBlock != pxEnd )
+        {
+            pvReturn = ( void * ) ( ( ( uint8_t * ) pxPreviousBlock ) + xHeapStructSize );
+
+            <span class="cmt">// 7. 从空闲链表中移除</span>
+            pxPreviousBlock->pxNextFreeBlock = pxBlock->pxNextFreeBlock;
+
+            <span class="cmt">// 8. 如果剩余空间足够，分割块</span>
+            if( ( pxBlock->xBlockSize - xWantedSize ) > heapMINIMUM_BLOCK_SIZE )
+            {
+                <span class="cmt">// 创建新的空闲块</span>
+                pxNewBlockLink = ( void * ) ( ( ( uint8_t * ) pxBlock ) + xWantedSize );
+                pxNewBlockLink->xBlockSize = pxBlock->xBlockSize - xWantedSize;
+                pxBlock->xBlockSize = xWantedSize;
+
+                <span class="cmt">// 插入空闲链表</span>
+                prvInsertBlockIntoFreeList( pxNewBlockLink );
+            }
+
+            <span class="cmt">// 9. 标记为已分配</span>
+            heapALLOCATE_BLOCK( pxBlock );
+            xFreeBytesRemaining -= pxBlock->xBlockSize;
+        }
+    }
+    xTaskResumeAll();
+
+    return pvReturn;
+}
+</code></pre>
+</section>
+
+<section id="heap4-free" class="toc-link">
+  <h2><span class="num">04</span> vPortFree 实现</h2>
+
+<pre><code class="language-c"><span class="cmt">// heap_4.c 中的 vPortFree()</span>
+void vPortFree( void * pv )
+{
+    uint8_t * puc = ( uint8_t * ) pv;
+    BlockLink_t * pxLink;
+
+    <span class="cmt">// 1. 获取块头部</span>
+    puc -= xHeapStructSize;
+    pxLink = ( BlockLink_t * ) puc;
+
+    <span class="cmt">// 2. 验证块是否已分配</span>
+    configASSERT( heapBLOCK_IS_ALLOCATED( pxLink ) );
+
+    <span class="cmt">// 3. 挂起调度器</span>
+    vTaskSuspendAll();
+    {
+        <span class="cmt">// 4. 清除分配标记</span>
+        heapFREE_BLOCK( pxLink );
+
+        <span class="cmt">// 5. 插入空闲链表（自动合并相邻块）</span>
+        prvInsertBlockIntoFreeList( ( ( BlockLink_t * ) pxLink ) );
+
+        <span class="cmt">// 6. 更新空闲字节数</span>
+        xFreeBytesRemaining += pxLink->xBlockSize;
+    }
+    xTaskResumeAll();
+}
+</code></pre>
+</section>
+
+<section id="heap4-merge" class="toc-link">
+  <h2><span class="num">05</span> 相邻块合并</h2>
+
+<pre><code class="language-c"><span class="cmt">// heap_4.c 中的 prvInsertBlockIntoFreeList()</span>
+<span class="cmt">// 这是 heap_4 的核心优势：自动合并相邻空闲块</span>
+
+static void prvInsertBlockIntoFreeList( BlockLink_t * pxBlockToInsert )
+{
+    BlockLink_t * pxIterator;
+    uint8_t * puc;
+
+    <span class="cmt">// 遍历空闲链表，按地址排序插入</span>
+    for( pxIterator = &amp;xStart; pxIterator->pxNextFreeBlock != NULL; pxIterator = pxIterator->pxNextFreeBlock )
+    {
+        <span class="cmt">// 如果当前块地址在插入块之后，停止</span>
+        if( ( uint8_t * ) pxIterator->pxNextFreeBlock > ( uint8_t * ) pxBlockToInsert )
+        {
+            break;
+        }
+    }
+
+    <span class="cmt">// 检查是否与前一个块相邻（地址连续）</span>
+    puc = ( uint8_t * ) pxIterator;
+    if( ( puc + pxIterator->xBlockSize ) == ( uint8_t * ) pxBlockToInsert )
+    {
+        <span class="cmt">// 合并：扩大前一个块的大小</span>
+        pxIterator->xBlockSize += pxBlockToInsert->xBlockSize;
+        pxBlockToInsert = pxIterator;
+    }
+
+    <span class="cmt">// 检查是否与后一个块相邻</span>
+    puc = ( uint8_t * ) pxBlockToInsert;
+    if( ( puc + pxBlockToInsert->xBlockSize ) == ( uint8_t * ) pxIterator->pxNextFreeBlock )
+    {
+        <span class="cmt">// 合并：扩大当前块，移除后一个块</span>
+        pxBlockToInsert->xBlockSize += pxIterator->pxNextFreeBlock->xBlockSize;
+        pxBlockToInsert->pxNextFreeBlock = pxIterator->pxNextFreeBlock->pxNextFreeBlock;
+    }
+    else
+    {
+        pxBlockToInsert->pxNextFreeBlock = pxIterator->pxNextFreeBlock;
+    }
+
+    <span class="cmt">// 插入链表</span>
+    if( pxIterator != pxBlockToInsert )
+    {
+        pxIterator->pxNextFreeBlock = pxBlockToInsert;
+    }
+}
+</code></pre>
+
+  <h3>合并流程</h3>
+
+  <div class="mermaid">graph TD
+    A["释放块 B"] --> B{"与前一块 A 相邻?"}
+    B -->|"是"| C["合并: A.size += B.size"]
+    B -->|"否"| D["检查后一块"]
+    C --> D
+    D --> E{"与后一块 C 相邻?"}
+    E -->|"是"| F["合并: A.size += C.size<br>移除 C"]
+    E -->|"否"| G["直接插入"]
+    F --> G
+    style C fill:#22c55e15,stroke:#22c55e,color:#166534
+    style F fill:#22c55e15,stroke:#22c55e,color:#166534
+  </div>
+</section>
+
+<section id="heap-protector" class="toc-link">
+  <h2><span class="num">06</span> 堆保护机制</h2>
+
+<pre><code class="language-c"><span class="cmt">// heap_4.c 第 110-131 行</span>
+<span class="cmt">// configENABLE_HEAP_PROTECTOR = 1 启用堆保护</span>
+
+<span class="cmt">// 使用随机 canary 值保护空闲块指针</span>
+<span class="cmt">// 堆溢出会导致指针被破坏，触发断言</span>
+
+#define heapPROTECT_BLOCK_POINTER( pxBlock ) \
+    ( ( BlockLink_t * ) ( ( ( portPOINTER_SIZE_TYPE ) ( pxBlock ) ) ^ xHeapCanary ) )
+
+<span class="cmt">// 验证块指针是否在堆范围内</span>
+#define heapVALIDATE_BLOCK_POINTER( pxBlock ) \
+    configASSERT( ( ( uint8_t * ) ( pxBlock ) >= &amp;( ucHeap[ 0 ] ) ) &amp;&amp; \
+                  ( ( uint8_t * ) ( pxBlock ) &lt;= &amp;( ucHeap[ configTOTAL_HEAP_SIZE - 1 ] ) ) )
+</code></pre>
+</section>
+
+<section id="static" class="toc-link">
+  <h2><span class="num">07</span> 静态分配</h2>
+
+<pre><code class="language-c"><span class="cmt">// 静态分配 — 不使用堆，所有资源在编译时分配</span>
+<span class="cmt">// configSUPPORT_STATIC_ALLOCATION = 1</span>
+
+<span class="cmt">// 静态任务</span>
+StaticTask_t xTaskBuffer;
+StackType_t xStack[ 128 ];
+TaskHandle_t xTask = xTaskCreateStatic(
+    vTaskFunc, "Task", 128, NULL, 1, xStack, &amp;xTaskBuffer
+);
+
+<span class="cmt">// 静态队列</span>
+StaticQueue_t xQueueBuffer;
+uint8_t ucQueueStorage[ 10 * sizeof( uint32_t ) ];
+QueueHandle_t xQueue = xQueueCreateStatic( 10, sizeof( uint32_t ),
+                                            ucQueueStorage, &amp;xQueueBuffer );
+
+<span class="cmt">// 静态互斥锁</span>
+StaticSemaphore_t xMutexBuffer;
+SemaphoreHandle_t xMutex = xSemaphoreCreateMutexStatic( &amp;xMutexBuffer );
+</code></pre>
+</section>
+
+<section id="compare" class="toc-link">
+  <h2><span class="num">08</span> 方案对比</h2>
+
+  <div class="mermaid">graph TD
+    subgraph heap_1["heap_1<br>最简单"]
+        H1["只分配<br>不释放"]
+    end
+    subgraph heap_2["heap_2<br>最佳适配"]
+        H2["分配+释放<br>不合并"]
+    end
+    subgraph heap_4["heap_4<br>推荐通用"]
+        H3["分配+释放<br>合并相邻块"]
+    end
+    subgraph heap_5["heap_5<br>多区域"]
+        H4["分配+释放<br>非连续内存"]
+    end
+    style heap_4 fill:#22c55e15,stroke:#22c55e,color:#166534
+  </div>
+</section>
+
+<section id="example" class="toc-link">
+  <h2><span class="num">09</span> 完整示例</h2>
+
+<pre><code class="language-c"><span class="cmt">// ===== FreeRTOS 内存管理完整示例 =====</span>
+<span class="cmt">// 演示：堆配置、静态分配、栈溢出检测</span>
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include &lt;stdio.h&gt;
+
+<span class="cmt">// 配置堆大小</span>
+<span class="cmt">// FreeRTOSConfig.h 中：</span>
+<span class="cmt">// #define configTOTAL_HEAP_SIZE  ((size_t)(32 * 1024))</span>
+<span class="cmt">// #define configSUPPORT_STATIC_ALLOCATION 1</span>
+<span class="cmt">// #define configSUPPORT_DYNAMIC_ALLOCATION 1</span>
+
+<span class="cmt">// 静态任务缓冲区</span>
+StaticTask_t xIdleTaskBuffer;
+StackType_t xIdleStack[ configMINIMAL_STACK_SIZE ];
+
+<span class="cmt">// 空闲任务内存回调（静态分配必需）</span>
+void vApplicationGetIdleTaskMemory( StaticTask_t ** ppxIdleTaskTCBBuffer,
+                                    StackType_t ** ppxIdleTaskStackBuffer,
+                                    uint32_t * pulIdleTaskStackSize )
+{
+    *ppxIdleTaskTCBBuffer = &amp;xIdleTaskBuffer;
+    *ppxIdleTaskStackBuffer = xIdleStack;
+    *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
+}
+
+<span class="cmt">// 栈溢出钩子</span>
+void vApplicationStackOverflowHook( TaskHandle_t xTask, char * pcTaskName )
+{
+    printf( "Stack overflow in: %s\\n", pcTaskName );
+    for ( ;; ) {}
+}
+
+<span class="cmt">// 堆统计</span>
+void vPrintHeapStats( void )
+{
+    printf( "Free heap: %lu bytes\\n", xPortGetFreeHeapSize() );
+    printf( "Min ever free: %lu bytes\\n", xPortGetMinimumEverFreeHeapSize() );
+}
+
+<span class="cmt">// 动态任务</span>
+void vDynamicTask( void * pvParameters )
+{
+    for ( ;; )
+    {
+        <span class="cmt">// 动态分配内存</span>
+        void * pv = pvPortMalloc( 100 );
+        if( pv != NULL )
+        {
+            <span class="cmt">// 使用内存...</span>
+            vPortFree( pv );
+        }
+        vTaskDelay( pdMS_TO_TICKS( 1000 ) );
+    }
+}
+
+<span class="cmt">// 静态任务</span>
+void vStaticTask( void * pvParameters )
+{
+    for ( ;; )
+    {
+        printf( "Static task running\\n" );
+        vTaskDelay( pdMS_TO_TICKS( 2000 ) );
+    }
+}
+
+int main( void )
+{
+    <span class="cmt">// 静态创建任务</span>
+    StaticTask_t xTaskBuffer;
+    StackType_t xStack[ 128 ];
+    xTaskCreateStatic( vStaticTask, "Static", 128, NULL, 1, xStack, &amp;xTaskBuffer );
+
+    <span class="cmt">// 动态创建任务</span>
+    xTaskCreate( vDynamicTask, "Dynamic", 128, NULL, 2, NULL );
+
+    <span class="cmt">// 打印堆统计</span>
+    vPrintHeapStats();
+
+    vTaskStartScheduler();
+
+    for ( ;; ) {}
+}
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>FreeRTOS/Source/portable/MemMang/heap_4.c</code> 通用堆分配器（638行），重点看 pvPortMalloc、vPortFree、prvInsertBlockIntoFreeList。<br>
+  <code>FreeRTOS/Source/portable/MemMang/heap_1.c</code> 最简分配器。<br>
+  <code>FreeRTOS/Source/portable/MemMang/heap_5.c</code> 多区域分配器。<br>
+  <code>FreeRTOS/Source/portable/MemMang/heap_2.c</code> 最佳适配分配器。
+</div>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

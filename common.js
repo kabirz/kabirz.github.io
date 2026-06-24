@@ -263,8 +263,28 @@
     { t:"Zephyr Retention 掉电保留", f:"zephyr-retention.html", top:"zephyr" },
     { t:"Zephyr 任务看门狗", f:"zephyr-task-wdt.html", top:"zephyr" },
     { t:"Zephyr 网络管理", f:"zephyr-net-management.html", top:"zephyr" },
+    { t:"FreeRTOS 整体架构", f:"freertos-overview.html", top:"freertos" },
+    { t:"FreeRTOS 任务管理", f:"freertos-task.html", top:"freertos" },
+    { t:"FreeRTOS 队列与 IPC", f:"freertos-queue.html", top:"freertos" },
+    { t:"FreeRTOS 内存管理", f:"freertos-memory.html", top:"freertos" },
+    { t:"FreeRTOS 软件定时器", f:"freertos-timer.html", top:"freertos" },
+    { t:"FreeRTOS 事件组与流缓冲", f:"freertos-event-stream.html", top:"freertos" },
+    { t:"FreeRTOS Tick 与时间管理", f:"freertos-tick.html", top:"freertos" },
+    { t:"FreeRTOS 临界区与中断管理", f:"freertos-critical.html", top:"freertos" },
+    { t:"FreeRTOS 空闲任务与电源管理", f:"freertos-idle.html", top:"freertos" },
+    { t:"FreeRTOS 移植深度解析", f:"freertos-port.html", top:"freertos" },
+    { t:"FreeRTOS ARM Cortex-M 移植", f:"freertos-cortexm.html", top:"freertos" },
+    { t:"FreeRTOS RISC-V 移植", f:"freertos-riscv.html", top:"freertos" },
+    { t:"FreeRTOS MPU 内存保护", f:"freertos-mpu.html", top:"freertos" },
+    { t:"FreeRTOS 安全与认证", f:"freertos-safety.html", top:"freertos" },
+    { t:"FreeRTOS 内核配置", f:"freertos-config.html", top:"freertos" },
+    { t:"FreeRTOS CLI 深度解析", f:"freertos-cli.html", top:"freertos" },
+    { t:"FreeRTOS 追踪与调试", f:"freertos-trace.html", top:"freertos" },
+    { t:"FreeRTOS TCP/IP 深度解析", f:"freertos-tcp.html", top:"freertos" },
+    { t:"FreeRTOS vs Zephyr 对比", f:"freertos-vs-zephyr.html", top:"freertos" },
+    { t:"FreeRTOS 最佳实践", f:"freertos-best-practices.html", top:"freertos" },
   ];
-  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"Linux 网络", zephyr:"Zephyr RTOS", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", python:"Python 开发", other:"硬件与平台" };
+  var TOP_LABELS = { linux:"Linux 内核", fs:"文件系统", driver:"设备与驱动", net:"Linux 网络", zephyr:"Zephyr RTOS", freertos:"FreeRTOS", windows:"Windows 开发", rust:"Rust 开发", docker:"Docker 容器", vision:"AI 视觉", go:"Go 语言", python:"Python 开发", other:"硬件与平台" };
 
   // 主题切换
   var STORAGE_KEY = 'kernel-docs-theme';
