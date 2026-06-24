@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux vivid 驱动测试图形（Test Pattern）深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%230055a5'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='44' font-weight='700' fill='white' text-anchor='middle'>TP</text></svg>">
+<link rel="stylesheet" href="common.css">
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>📺 Linux vivid 驱动测试图形</h1>
+  <p class="subtitle">虚拟视频驱动 vivid · Test Pattern 生成原理 · NumPy 实现 · 10 种标准测试图形</p>
+  <span class="version">Linux 7.0.12 · vivid · TPG</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#intro">简介</a></li>
+    <li><a href="#sec1">彩条 (Color Bars)</a></li>
+    <li><a href="#sec2">灰阶渐变 (Grayscale Ramp)</a></li>
+    <li><a href="#sec3">棋盘格 (Checkerboard)</a></li>
+    <li><a href="#sec4">颜色渐变 (Gradient)</a></li>
+    <li><a href="#sec5">光栅波带片 (Zone Plate)</a></li>
+    <li><a href="#sec6">分辨率楔形 (Resolution Wedge)</a></li>
+    <li><a href="#sec7">同心圆 (Concentric Circles)</a></li>
+    <li><a href="#sec8">HSL 色轮 (Color Wheel)</a></li>
+    <li><a href="#sec9">静态噪声 (Noise Patterns)</a></li>
+    <li><a href="#sec10">综合测试卡 (Test Card)</a></li>
+    <li><a href="#ref">参考</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="intro">
+  <h2><span class="num">00</span> 简介</h2>
+  <p>Linux 内核中的 <strong>vivid</strong>（Virtual Video Test Driver）是一个虚拟视频驱动，用于测试 V4L2（Video for Linux 2）框架的各种功能。它内部实现了 <strong>TPG</strong>（Test Pattern Generator），可以生成多种标准测试图形，供视频采集、编码、显示等子系统的开发调试使用。</p>
+  <p>这些测试图形在视频测试领域有着广泛的应用：</p>
+  <ul>
+    <li><strong>彩条</strong>：验证颜色还原、亮度和色度通道</li>
+    <li><strong>波带片</strong>：检测分辨率、混叠和频响特性</li>
+    <li><strong>棋盘格</strong>：检查几何失真和像素对齐</li>
+    <li><strong>噪声</strong>：评估编码器性能和去噪算法</li>
+  </ul>
+  <p>本文使用 NumPy + Matplotlib 重新实现 vivid 中的典型测试图形，并给出完整 Python 源码。</p>
+</section>
+
+<section id="sec1" class="toc-link">
+  <h2><span class="num">01</span> 彩条 (Color Bars)</h2>
+  <p>标准 <strong>75% 彩条</strong>是视频测试中最基础的图形。vivid 的 <code>TPG_COLOR_BARS</code> 模式生成 8 条垂直色块：白、黄、青、绿、品红、红、蓝、黑（75% 幅度）。彩条用于检测颜色空间转换、亮度和色度分离的正确性。</p>
+
+  <figure class="chart-figure">
+    <img src="images/pattern-color-bars.png" alt="标准 75% 彩条">
+    <figcaption>标准 75% 彩条（8 色块）</figcaption>
+  </figure>
+
+<pre><code class="language-python">import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib import patches
+
+colors = [
+    ('White',  (255,255,255)), ('Yellow', (255,255,0)),
+    ('Cyan',   (0, 255, 255)), ('Green',  (0, 255, 0)),
+    ('Magenta',(255,0,255)),   ('Red',    (255,0,0)),
+    ('Blue',   (0, 0, 255)),   ('Black',  (0,0,0)),
+]
+
+fig, ax = plt.subplots(figsize=(8, 3))
+w = 1.0 / len(colors)
+for i, (name, (r,g,b)) in enumerate(colors):
+    ax.add_patch(patches.Rectangle(
+        (i*w, 0), w, 1, color=np.array([r,g,b])/255))
+    ax.text(i*w + w/2, 0.5, name, ha='center',
+            va='center', fontsize=10, fontweight='bold',
+            color='white' if sum([r,g,b])<384 else 'black')
+ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+ax.axis('off')
+plt.show()</code></pre>
+</section>
+
+<section id="sec2" class="toc-link">
+  <h2><span class="num">02</span> 灰阶渐变 (Grayscale Ramp)</h2>
+  <p>灰阶渐变条从纯黑到纯白分为 16 个阶梯，用于测试亮度的线性度和对比度响应。下方平滑渐变展示连续亮度变化。vivid 通过 <code>TPG_GRAY_RAMP</code> 生成类似图形，用于验证亮度量化精度。</p>
+
+  <figure class="chart-figure">
+    <img src="images/pattern-ramp.png" alt="灰阶渐变条">
+    <figcaption>灰阶渐变条（阶梯 + 平滑）</figcaption>
+  </figure>
+
+<pre><code class="language-python">import numpy as np
+import matplotlib.pyplot as plt
+
+# 16 阶渐变
+bars = np.tile(np.linspace(0, 1, 16), (100, 1))
+# 平滑渐变
+smooth = np.tile(np.linspace(0, 1, 512), (50, 1))
+
+fig, axes = plt.subplots(2, 1, figsize=(8, 4),
+    gridspec_kw={'height_ratios': [3, 1]})
+
+axes[0].imshow(bars, cmap='gray', aspect='auto',
+               interpolation='nearest')
+axes[0].axis('off')
+axes[0].set_title('灰阶渐变条 (Grayscale Ramp)')
+
+axes[1].imshow(smooth, cmap='gray', aspect='auto')
+axes[1].axis('off')
+axes[1].set_title('平滑渐变')
+
+plt.tight_layout()
+plt.show()</code></pre>
+</section>
+
+<section id="sec3" class="toc-link">
+  <h2><span class="num">03</span> 棋盘格 (Checkerboard)</h2>
+  <p>棋盘格是图像传感器测试和摄像头标定的标准图形。vivid 的 <code>TPG_CHECKERBOARD</code> 生成黑白交替的方格。通过分析棋盘格的角点偏移可以计算镜头畸变，也常用于检测像素对齐和缩放质量。</p>
+
+  <figure class="chart-figure">
+    <img src="images/pattern-checkerboard.png" alt="棋盘格">
+    <figcaption>8×8 棋盘格</figcaption>
+  </figure>
+
+<pre><code class="language-python">import numpy as np
+import matplotlib.pyplot as plt
+
+n = 8
+img = np.zeros((n, n, 3))
+img[::2, 1::2] = 1   # 偶数行奇数列
+img[1::2, ::2] = 1   # 奇数行偶数列
+
+# 放大到可视尺寸 (每个格子 32×32)
+img = np.kron(img, np.ones((32, 32, 1)))
+
+fig, ax = plt.subplots(figsize=(4, 4))
+ax.imshow(img, interpolation='nearest')
+ax.axis('off')
+plt.show()</code></pre>
+</section>
+
+<section id="sec4" class="toc-link">
+  <h2><span class="num">04</span> 颜色渐变 (Gradient)</h2>
+  <p>颜色渐变用于测试颜色插值、色调连续性和 banding 效应。左图是灰度渐变，中图为红绿蓝三通道交叉渐变，右图为红-蓝双通道渐变。vivid 的 <code>TPG_GRADIENT</code> 模式生成水平/垂直渐变来检测去马赛克算法。</p>
+
+  <figure class="chart-figure">
+    <img src="images/pattern-gradient.png" alt="颜色渐变">
+    <figcaption>三种颜色渐变模式</figcaption>
+  </figure>
+
+<pre><code class="language-python">import numpy as np
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(1, 3, figsize=(9, 3))
+
+# 灰度渐变
+gray = np.tile(np.linspace(0, 1, 256), (100, 1))
+axes[0].imshow(gray, cmap='gray', aspect='auto')
+
+# RGB 渐变 1: 红↗绿↘蓝
+rgb1 = np.zeros((100, 256, 3))
+rgb1[:, :, 0] = np.linspace(0, 1, 256)   # R
+rgb1[:, :, 1] = np.linspace(1, 0, 256)   # G
+rgb1[:, :, 2] = np.linspace(0, 1, 256)[::-1]  # B
+axes[1].imshow(rgb1, aspect='auto')
+
+# RGB 渐变 2: 红↗ + 绿↗
+rgb2 = np.zeros((100, 256, 3))
+rgb2[:, :, 0] = np.linspace(0, 1, 256)
+rgb2[:, :, 1] = np.linspace(0, 1, 256)
+rgb2[:, :, 2] = 0.5
+axes[2].imshow(rgb2, aspect='auto')
+
+for ax in axes: ax.axis('off')
+plt.tight_layout()
+plt.show()</code></pre>
+</section>
+
+<section id="sec5" class="toc-link">
+  <h2><span class="num">05</span> 光栅波带片 (Zone Plate)</h2>
+  <p>波带片是视频测试中最关键的图形之一。vivid 的 <code>TPG_ZONE_PLATE</code> 生成同心圆频率扫描图案，频率从中心到边缘递增。它用于检测：</p>
+  <ul>
+    <li><strong>分辨率限制</strong>：高频区出现摩尔纹的位置</li>
+    <li><strong>混叠效应</strong>：欠采样导致的频谱折叠</li>
+    <li><strong>编解码器频响</strong>：不同频率分量的衰减特性</li>
+  </ul>
+
+  <figure class="chart-figure">
+    <img src="images/pattern-zone-plate.png" alt="光栅波带片">
+    <figcaption>光栅波带片（频率从中心向边缘递增）</figcaption>
+  </figure>
+
+<pre><code class="language-python">import numpy as np
+import matplotlib.pyplot as plt
+
+n = 512
+x = np.linspace(-1, 1, n)
+y = np.linspace(-1, 1, n)
+X, Y = np.meshgrid(x, y)
+R = np.sqrt(X**2 + Y**2)
+
+zone = 0.5 + 0.5 * np.cos(40 * np.pi * R**2)
+
+fig, ax = plt.subplots(figsize=(4.5, 4.5))
+ax.imshow(zone, cmap='gray', extent=[-1, 1, -1, 1])
+ax.axis('off')
+plt.show()</code></pre>
+</section>
+
+<section id="sec6" class="toc-link">
+  <h2><span class="num">06</span> 分辨率楔形 (Resolution Wedge)</h2>
+  <p>分辨率楔形由从中心向外辐射的线条组成，用于检测图像在各个方向上的分辨能力。vivid 没有直接对应模式，但这是摄像头测试中常用的图形。线条密度从中心到边缘变化，通过观察线条的可分辨程度判断极限分辨率。</p>
+
+  <figure class="chart-figure">
+    <img src="images/pattern-res-wedge.png" alt="分辨率楔形">
+    <figcaption>分辨率楔形（36 条辐射线）</figcaption>
+  </figure>
+
+<pre><code class="language-python">import numpy as np
+import matplotlib.pyplot as plt
+
+n = 512
+img = np.ones((n, n))
+cx, cy = n//2, n//2
+
+for k in range(36):          # 36 根辐射线
+    angle = k * np.pi / 18
+    for r in range(1, n//2, 2):
+        x1 = int(cx + r*np.cos(angle))
+        y1 = int(cy + r*np.sin(angle))
+        x2 = int(cx + (r+1)*np.cos(angle))
+        y2 = int(cy + (r+1)*np.sin(angle))
+        if 0 <= x1 < n and 0 <= y1 < n:
+            img[y1, x1] = 0
+
+fig, ax = plt.subplots(figsize=(4.5, 4.5))
+ax.imshow(img, cmap='gray', extent=[-1, 1, -1, 1])
+ax.axis('off')
+plt.show()</code></pre>
+</section>
+
+<section id="sec7" class="toc-link">
+  <h2><span class="num">07</span> 同心圆 (Concentric Circles)</h2>
+  <p>同心圆图案模拟 vivid 的 <code>TPG_CIRCLES</code> 模式。使用二值化正弦波生成交替的黑白圆环，常用于检测几何失真、像素宽高比和显示器的线性度。环的密度从内到外递增，可同时测试低频和高频响应。</p>
+
+  <figure class="chart-figure">
+    <img src="images/pattern-concentric.png" alt="同心圆">
+    <figcaption>同心圆（频率递增）</figcaption>
+  </figure>
+
+<pre><code class="language-python">import numpy as np
+import matplotlib.pyplot as plt
+
+n = 512
+x = np.linspace(-1, 1, n)
+y = np.linspace(-1, 1, n)
+X, Y = np.meshgrid(x, y)
+R = np.sqrt(X**2 + Y**2)
+
+circles = np.sin(30 * np.pi * R) > 0
+
+fig, ax = plt.subplots(figsize=(4.5, 4.5))
+ax.imshow(circles, cmap='gray', extent=[-1, 1, -1, 1])
+circle = plt.Circle((0,0), 1, fill=False,
+                    edgecolor='#ccc', linewidth=0.5)
+ax.add_patch(circle)
+ax.axis('off')
+plt.show()</code></pre>
+</section>
+
+<section id="sec8" class="toc-link">
+  <h2><span class="num">08</span> HSL 色轮 (Color Wheel)</h2>
+  <p>HSL 色轮将色相（Hue）映射到圆周角度、饱和度（Saturation）映射到半径，完整展示 HSV/HSL 色彩空间。色轮用于测试颜色传感器的色彩还原能力、白平衡算法的准确性，以及色彩空间的转换精度。</p>
+
+  <figure class="chart-figure">
+    <img src="images/pattern-color-wheel.png" alt="HSL 色轮">
+    <figcaption>HSL 色轮（色相周向分布）</figcaption>
+  </figure>
+
+<pre><code class="language-python">import numpy as np
+import matplotlib.pyplot as plt
+
+n = 512
+x = np.linspace(-1, 1, n)
+y = np.linspace(-1, 1, n)
+X, Y = np.meshgrid(x, y)
+R = np.sqrt(X**2 + Y**2)
+H = (np.arctan2(Y, X) / (2*np.pi) + 0.5) % 1.0
+S = np.minimum(R * 1.5, 1.0)
+V = np.ones_like(H)
+
+# HSV → RGB
+hi = (H * 6).astype(int) % 6
+f = (H * 6) - hi
+p = V * (1 - S); q = V * (1 - S * f)
+t = V * (1 - S * (1 - f))
+rgb = np.zeros((n, n, 3))
+for i, (r1,r2,r3) in enumerate(
+    [(V,t,p),(q,V,p),(p,V,t),(p,q,V),(t,p,V),(V,p,q)]):
+    mask = hi == i
+    rgb[mask,0]=r1[mask]; rgb[mask,1]=r2[mask]
+    rgb[mask,2]=r3[mask]
+
+fig, ax = plt.subplots(figsize=(4.5, 4.5))
+ax.imshow(rgb, extent=[-1, 1, -1, 1])
+ax.axis('off')
+plt.show()</code></pre>
+</section>
+
+<section id="sec9" class="toc-link">
+  <h2><span class="num">09</span> 静态噪声 (Noise Patterns)</h2>
+  <p>噪声图案是视频编码和图像处理测试的重要工具。vivid 的 <code>TPG_NOISE</code> 模式生成随机噪声。三种典型噪声：</p>
+  <ul>
+    <li><strong>均匀噪声</strong>：<code>np.random.rand</code>，像素值在 [0,1) 均匀分布</li>
+    <li><strong>高斯噪声</strong>：<code>np.random.randn</code>，模拟传感器热噪声</li>
+    <li><strong>椒盐噪声</strong>：随机白点和黑点，模拟传输错误</li>
+  </ul>
+
+  <figure class="chart-figure">
+    <img src="images/pattern-noise.png" alt="静态噪声">
+    <figcaption>三种噪声模式（均匀/高斯/椒盐）</figcaption>
+  </figure>
+
+<pre><code class="language-python">import numpy as np
+import matplotlib.pyplot as plt
+
+np.random.seed(42)
+
+# 均匀噪声
+uniform = np.random.rand(256, 256)
+# 高斯噪声
+gauss = np.random.randn(256, 256)
+gauss = (gauss - gauss.min()) / (gauss.max() - gauss.min())
+# 椒盐噪声 (5% 白点 + 5% 黑点)
+sp = np.random.rand(256, 256)
+sp = np.where(sp < 0.05, 0,
+     np.where(sp > 0.95, 1, 0.5))
+
+fig, axes = plt.subplots(1, 3, figsize=(9, 3))
+titles = ['均匀噪声', '高斯噪声', '椒盐噪声']
+for ax, img, title in zip(axes, [uniform, gauss, sp], titles):
+    ax.imshow(img, cmap='gray', aspect='auto')
+    ax.axis('off')
+    ax.set_title(title)
+plt.tight_layout()
+plt.show()</code></pre>
+</section>
+
+<section id="sec10" class="toc-link">
+  <h2><span class="num">10</span> 综合测试卡 (Test Card)</h2>
+  <p>综合测试卡将多种测试元素整合在一张图中，类似传统电视测试卡（如 Philips PM5544）。vivid 虽然没有直接对应模式，但综合测试卡在摄像头调试中极为常用。包含彩条、辐射线、灰阶条、同心圆等元素，一次性评估多项图像质量指标。</p>
+
+  <figure class="chart-figure">
+    <img src="images/pattern-test-card.png" alt="综合测试卡">
+    <figcaption>综合测试卡（彩条 + 辐射线 + 灰阶 + 同心圆 + 网格）</figcaption>
+  </figure>
+
+<pre><code class="language-python">import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib import patches
+
+fig, ax = plt.subplots(figsize=(6, 5))
+ax.set_xlim(0, 12); ax.set_ylim(0, 10)
+ax.set_aspect('equal'); ax.axis('off')
+
+# 背景
+ax.add_patch(patches.Rectangle((0,0), 12, 10, facecolor='#222'))
+
+# 顶部彩条
+cbar = ['#fff','#ff0','#0ff','#0f0','#f0f','#f00','#00f','#000']
+for i, c in enumerate(cbar):
+    ax.add_patch(patches.Rectangle(
+        (i*1.5, 8.5), 1.5, 1.5, facecolor=c))
+
+# 辐射线
+for i in range(13):
+    ax.plot([i, 6], [8, 3], 'w-', lw=1, alpha=0.5)
+
+# 灰阶条
+for i in range(10):
+    v = i/9
+    ax.add_patch(patches.Rectangle(
+        (i*1.2+0.1, 3), 1.1, 1.5, facecolor=[v,v,v]))
+
+# 同心圆
+for r in range(1, 6):
+    ax.add_patch(plt.Circle(
+        (10, 1.5), r*0.25, fill=False, edgecolor='w', lw=1))
+
+# 网格
+for i in range(13):
+    ax.axvline(i, 0, 0.2, color='w', lw=0.5, alpha=0.4)
+for i in range(11):
+    ax.axhline(i, 0, 0.08, color='w', lw=0.5, alpha=0.4)
+
+ax.text(6, 9.5, 'TEST CARD', ha='center', va='top',
+        fontsize=16, fontweight='bold', color='white')
+plt.show()</code></pre>
+</section>
+
+<section id="ref">
+  <h2>参考</h2>
+  <ul>
+    <li>Linux 内核源码：<code>drivers/media/test-drivers/vivid/vivid-tpg*.{c,h}</code></li>
+    <li><a href="https://www.kernel.org/doc/html/latest/admin-guide/media/vivid.html">Vivid Test Driver 文档</a></li>
+    <li><a href="https://gitlab.freedesktop.org/d3d/test-pattern-generator">Test Pattern Generator (TPG) 规范</a></li>
+  </ul>
+</section>
+
+</div>
+
+<script src="common.js"></script>
+</body>
+</html>

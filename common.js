@@ -171,6 +171,7 @@
     { t:"Linux 调试技术全景", f:"linux-debugging-overview.html", top:"linux" },
     { t:"Linux 进程间通信全景", f:"linux-ipc-overview.html", top:"linux" },
     { t:"select/poll/epoll", f:"linux-select-poll-epoll.html", top:"linux" },
+    { t:"vivid 测试图形", f:"linux-vivid-patterns.html", top:"linux" },
     { t:"Windows MFC 深度解析", f:"windows-mfc.html", top:"windows" },
     { t:"Windows Win32 API 深度解析", f:"windows-win32.html", top:"windows" },
     { t:"Windows ATL/WTL 深度解析", f:"windows-atl-wtl.html", top:"windows" },
