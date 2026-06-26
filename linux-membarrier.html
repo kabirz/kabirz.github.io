@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核内存屏障深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核内存屏障深度解析</h1>
+  <p class="subtitle">smp_mb / smp_rmb / smp_wmb / 编译器屏障 / acquire/release / 源码分析</p>
+  <span class="version">Linux 7.0.12 · include/asm-generic/barrier.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概览</a></li>
+    <li><a href="#types">屏障类型</a></li>
+    <li><a href="#smp">SMP 屏障</a></li>
+    <li><a href="#compiler">编译器屏障</a></li>
+    <li><a href="#acquire-release">Acquire/Release</a></li>
+    <li><a href="#dma">DMA 屏障</a></li>
+    <li><a href="#usage">典型用例</a></li>
+    <li><a href="#pitfalls">常见陷阱</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概览</h2>
+
+  <p>内存屏障（Memory Barrier）是确保多核/多线程环境下内存访问顺序的硬件指令。Linux 内核提供多种屏障宏。</p>
+
+  <h3>屏障分类</h3>
+
+  <div class="mermaid">graph TD
+    A["内存屏障"] --> B["SMP 屏障<br>smp_mb/smp_rmb/smp_wmb"]
+    A --> C["编译器屏障<br>barrier()"]
+    A --> D["DMA 屏障<br>dma_mb/dma_rmb/dma_wmb"]
+    A --> E["Acquire/Release<br>smp_load_acquire/smp_store_release"]
+    A --> F["原子操作前后<br>smp_mb__before_atomic/after_atomic"]
+  </div>
+
+  <h3>核心定义</h3>
+
+  <table>
+    <tr><th>屏障</th><th>定义位置</th><th>作用</th></tr>
+    <tr><td><code>smp_mb()</code></td><td>barrier.h:99</td><td>完整内存屏障</td></tr>
+    <tr><td><code>smp_rmb()</code></td><td>barrier.h:103</td><td>读屏障</td></tr>
+    <tr><td><code>smp_wmb()</code></td><td>barrier.h:107</td><td>写屏障</td></tr>
+    <tr><td><code>smp_store_mb()</code></td><td>barrier.h:160</td><td>写入 + 屏障</td></tr>
+    <tr><td><code>smp_store_release()</code></td><td>barrier.h:172</td><td>释放语义写入</td></tr>
+    <tr><td><code>smp_load_acquire()</code></td><td>barrier.h:176</td><td>获取语义读取</td></tr>
+  </table>
+</section>
+
+<section id="types" class="toc-link">
+  <h2><span class="num">02</span> 屏障类型</h2>
+
+  <h3>完整屏障 vs 单向屏障</h3>
+
+  <table>
+    <tr><th>类型</th><th>宏</th><th>阻止重排</th></tr>
+    <tr><td>完整屏障</td><td><code>smp_mb()</code></td><td>阻止屏障前后的所有读写重排</td></tr>
+    <tr><td>读屏障</td><td><code>smp_rmb()</code></td><td>阻止屏障前的读与屏障后的读重排</td></tr>
+    <tr><td>写屏障</td><td><code>smp_wmb()</code></td><td>阻止屏障前的写与屏障后的写重排</td></tr>
+  </table>
+
+<pre><code class="language-c"><span class="cmt">// 完整屏障：所有读写都不能跨越屏障重排</span>
+WRITE_ONCE(a, 1);
+smp_mb();           <span class="cmt">// 完整屏障</span>
+READ_ONCE(b);
+
+<span class="cmt">// 读屏障：只阻止读的重排</span>
+READ_ONCE(a);
+smp_rmb();          <span class="cmt">// 读屏障</span>
+READ_ONCE(b);       <span class="cmt">// b 的读取一定在 a 之后</span>
+
+<span class="cmt">// 写屏障：只阻止写的重排</span>
+WRITE_ONCE(a, 1);
+smp_wmb();          <span class="cmt">// 写屏障</span>
+WRITE_ONCE(b, 2);   <span class="cmt">// b 的写入一定在 a 之后</span>
+</code></pre>
+</section>
+
+<section id="smp" class="toc-link">
+  <h2><span class="num">03</span> SMP 屏障</h2>
+
+  <h3>定义（barrier.h）</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/asm-generic/barrier.h 第 96-124 行</span>
+<span class="cmt">// SMP 模式下的屏障定义</span>
+
+<span class="cmt">// 完整内存屏障</span>
+#define smp_mb()    do { kcsan_mb(); __smp_mb(); } while (0)
+
+<span class="cmt">// 读屏障</span>
+#define smp_rmb()   do { kcsan_rmb(); __smp_rmb(); } while (0)
+
+<span class="cmt">// 写屏障</span>
+#define smp_wmb()   do { kcsan_wmb(); __smp_wmb(); } while (0)
+
+<span class="cmt">// 非 SMP 模式下退化为编译器屏障</span>
+<span class="cmt">// #define smp_mb()   barrier()</span>
+<span class="cmt">// #define smp_rmb()  barrier()</span>
+<span class="cmt">// #define smp_wmb()  barrier()</span>
+</code></pre>
+
+  <h3>底层实现</h3>
+
+<pre><code class="language-c"><span class="cmt">// barrier.h 第 127-128 行</span>
+<span class="cmt">// 写入 + 屏障的组合</span>
+#define smp_store_mb(var, value)  do { kcsan_mb(); __smp_store_mb(var, value); } while (0)
+
+<span class="cmt">// __smp_store_mb 定义：</span>
+#define __smp_store_mb(var, value)  do { WRITE_ONCE(var, value); __smp_mb(); } while (0)
+</code></pre>
+</section>
+
+<section id="compiler" class="toc-link">
+  <h2><span class="num">04</span> 编译器屏障</h2>
+
+<pre><code class="language-c"><span class="cmt">// 编译器屏障（barrier()）</span>
+<span class="cmt">// 仅阻止编译器重排，不生成任何 CPU 指令</span>
+
+<span class="cmt">// 定义在 include/linux/compiler.h</span>
+<span class="cmt">// #define barrier() __asm__ __volatile__("" ::: "memory")</span>
+
+<span class="cmt">// 作用：</span>
+<span class="cmt">// 1. 防止编译器跨越屏障重排读写</span>
+<span class="cmt">// 2. 强制将内存值从寄存器刷新到内存</span>
+<span class="cmt">// 3. 不生成任何 CPU 指令</span>
+
+<span class="cmt">// 与 smp_mb() 的区别：</span>
+<span class="cmt">// barrier() — 仅编译器屏障</span>
+<span class="cmt">// smp_mb()  — 编译器屏障 + CPU 内存屏障</span>
+</code></pre>
+</section>
+
+<section id="acquire-release" class="toc-link">
+  <h2><span class="num">05</span> Acquire/Release</h2>
+
+<pre><code class="language-c"><span class="cmt">// barrier.h 第 171-177 行</span>
+
+<span class="cmt">// 释放语义：之前的读写不能重排到之后</span>
+#define smp_store_release(p, v) do { kcsan_release(); __smp_store_release(p, v); } while (0)
+
+<span class="cmt">// 获取语义：之后的读写不能重排到之前</span>
+#define smp_load_acquire(p) __smp_load_acquire(p)
+
+<span class="cmt">// 底层实现：</span>
+#define __smp_store_release(p, v)  do { \
+    compiletime_assert_atomic_type(*p); \
+    __smp_mb();                           \
+    WRITE_ONCE(*p, v);                     \
+} while (0)
+
+#define __smp_load_acquire(p) ({           \
+    typeof(*p) ___p1 = READ_ONCE(*p);     \
+    compiletime_assert_atomic_type(*p);   \
+    __smp_mb();                           \
+    (typeof(*p))___p1;                     \
+})
+</code></pre>
+
+  <h3>Acquire/Release vs 完整屏障</h3>
+
+  <table>
+    <tr><th>特性</th><th>smp_mb()</th><th>smp_store_release()</th></tr>
+    <tr><td>阻止重排</td><td>前后所有操作</td><td>仅之前的操作不能到之后</td></tr>
+    <tr><td>性能</td><td>较高开销</td><td>较低开销（某些架构优化）</td></tr>
+    <tr><td>适用场景</td><td>通用同步</td><td>发布/订阅模式</td></tr>
+  </table>
+</section>
+
+<section id="dma" class="toc-link">
+  <h2><span class="num">06</span> DMA 屏障</h2>
+
+<pre><code class="language-c"><span class="cmt">// barrier.h 第 41-51 行</span>
+<span class="cmt">// DMA 屏障用于设备 DMA 操作</span>
+
+<span class="cmt">// DMA 完整屏障</span>
+#define dma_mb()   do { kcsan_mb(); __dma_mb(); } while (0)
+
+<span class="cmt">// DMA 读屏障</span>
+#define dma_rmb()  do { kcsan_rmb(); __dma_rmb(); } while (0)
+
+<span class="cmt">// DMA 写屏障</span>
+#define dma_wmb()  do { kcsan_wmb(); __dma_wmb(); } while (0)
+
+<span class="cmt">// 用途：</span>
+<span class="cmt">// - 确保 CPU 写入的数据对 DMA 控制器可见</span>
+<span class="cmt">// - 确保 DMA 写入的数据对 CPU 可见</span>
+<span class="cmt">// - 用于 PCI/PCIe 设备通信</span>
+</code></pre>
+</section>
+
+<section id="usage" class="toc-link">
+  <h2><span class="num">07</span> 典型用例</h2>
+
+<pre><code class="language-c"><span class="cmt">// 用例 1：生产者-消费者</span>
+<span class="cmt">// CPU 0 写数据，CPU 1 读数据</span>
+
+<span class="cmt">// 生产者</span>
+WRITE_ONCE(data, value);
+smp_wmb();          <span class="cmt">// 确保数据先于标志写入</span>
+WRITE_ONCE(flag, 1);
+
+<span class="cmt">// 消费者</span>
+while (READ_ONCE(flag) == 0) {
+    cpu_relax();
+}
+smp_rmb();          <span class="cmt">// 确保先读标志再读数据</span>
+value = READ_ONCE(data);
+</code></pre>
+
+<pre><code class="language-c"><span class="cmt">// 用例 2：无锁队列</span>
+<span class="cmt">// 使用 smp_store_release 和 smp_load_acquire</span>
+
+<span class="cmt">// 生产者</span>
+smp_store_release(&amp;queue->head, new_head);
+
+<span class="cmt">// 消费者</span>
+int head = smp_load_acquire(&amp;queue->head);
+</code></pre>
+
+<pre><code class="language-c"><span class="cmt">// 用例 3：原子操作前后</span>
+<span class="cmt">// 某些原子操作不包含内存屏障</span>
+
+<span class="cmt">// 原子递增前的屏障</span>
+smp_mb__before_atomic();
+atomic_inc(&amp;counter);
+
+<span class="cmt">// 原子递增后的屏障</span>
+atomic_inc(&amp;counter);
+smp_mb__after_atomic();
+</code></pre>
+</section>
+
+<section id="pitfalls" class="toc-link">
+  <h2><span class="num">08</span> 常见陷阱</h2>
+
+<pre><code class="language-c"><span class="cmt">// 陷阱 1：混淆编译器屏障和内存屏障</span>
+<span class="cmt">// barrier() 只阻止编译器重排，不阻止 CPU 重排</span>
+<span class="cmt">// smp_mb() 同时阻止编译器和 CPU 重排</span>
+
+<span class="cmt">// 陷阱 2：在 UP 系统上忽略屏障</span>
+<span class="cmt">// UP 系统上 smp_mb() 退化为 barrier()</span>
+<span class="cmt">// 但与设备通信时仍需要 dma_mb()</span>
+
+<span class="cmt">// 陷阱 3：过度使用屏障</span>
+<span class="cmt">// 屏障有性能开销，应该只在需要时使用</span>
+<span class="cmt">// 优先使用 smp_store_release/smp_load_acquire</span>
+
+<span class="cmt">// 陷阱 4：在错误的位置使用屏障</span>
+<span class="cmt">// 屏障应该放在需要顺序保证的地方</span>
+<span class="cmt">// 而不是随意添加</span>
+
+<span class="cmt">// 陷阱 5：忘记 READ_ONCE/WRITE_ONCE</span>
+<span class="cmt">// 使用屏障时，被保护的变量也应该使用 READ_ONCE/WRITE_ONCE</span>
+WRITE_ONCE(a, 1);
+smp_wmb();
+WRITE_ONCE(b, 2);  <span class="cmt">// ✅ 正确</span>
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>include/asm-generic/barrier.h</code> 屏障宏定义（306行）。<br>
+  <code>Documentation/memory-barriers.txt</code> 内存屏障官方文档（非常详细）。<br>
+  <code>tools/memory-model/</code> LKMM 内存模型（形式化验证）。<br>
+  <code>include/asm-generic/rwonce.h</code> READ_ONCE/WRITE_ONCE 定义。
+</div>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>

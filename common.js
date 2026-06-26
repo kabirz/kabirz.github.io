@@ -22,6 +22,7 @@
     { t:"Linux 工作队列", f:"linux-workqueue.html", top:"linux" },
     { t:"Linux WQ_BH", f:"linux-wq-bh.html", top:"linux" },
     { t:"Linux WRITE_ONCE/READ_ONCE", f:"linux-rwonce.html", top:"linux" },
+    { t:"Linux 内存屏障", f:"linux-membarrier.html", top:"linux" },
     { t:"Linux cgroup", f:"linux-cgroup.html", top:"linux" },
     { t:"Linux cleanup.h", f:"linux-cleanup.html", top:"linux" },
     { t:"Linux seq_file", f:"linux-seq_file.html", top:"linux" },
