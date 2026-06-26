@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核 WRITE_ONCE/READ_ONCE 深度解析</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%230969da'/><stop offset='100%25' stop-color='%238250df'/></linearGradient></defs><rect width='100' height='100' rx='20' fill='url(%23g)'/><text x='50' y='68' font-family='system-ui,sans-serif' font-size='52' font-weight='700' fill='white' text-anchor='middle'>K</text></svg>">
+<link rel="stylesheet" href="common.css">
+<script src="mermaid.min.js"></script>
+</head>
+<body>
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>Linux 内核 WRITE_ONCE/READ_ONCE 深度解析</h1>
+  <p class="subtitle">编译器屏障 / volatile 语义 / 并发安全 / 典型用例 / 源码分析</p>
+  <span class="version">Linux 7.0.12 · include/asm-generic/rwonce.h</span>
+</div>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#overview">概览</a></li>
+    <li><a href="#macro">宏定义</a></li>
+    <li><a href="#why">为什么需要</a></li>
+    <li><a href="#compiler">编译器行为</a></li>
+    <li><a href="#usage">典型用例</a></li>
+    <li><a href="#vs-atomic">vs 原子操作</a></li>
+    <li><a href="#vs-volatile">vs volatile</a></li>
+    <li><a href="#pitfalls">常见陷阱</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+
+<section id="overview" class="toc-link">
+  <h2><span class="num">01</span> 概览</h2>
+
+  <p><code>READ_ONCE()</code> 和 <code>WRITE_ONCE()</code> 是内核中最重要的并发原语之一，用于防止编译器对内存访问进行优化，确保每次读写都是真实的内存操作。</p>
+
+  <h3>核心作用</h3>
+
+  <table>
+    <tr><th>宏</th><th>作用</th></tr>
+    <tr><td><code>READ_ONCE(x)</code></td><td>强制从内存读取一次，禁止编译器缓存/重排</td></tr>
+    <tr><td><code>WRITE_ONCE(x, val)</code></td><td>强制写入内存一次，禁止编译器合并/重排</td></tr>
+  </table>
+
+  <h3>核心价值</h3>
+
+  <div class="callout">
+    <strong>两个主要用途：</strong><br>
+    1. **线程间通信** — 进程代码与 IRQ/NMI 处理程序在同一 CPU 上的通信<br>
+    2. **防止编译器优化** — 防止编译器折叠、重排或以其他方式修改不依赖顺序或与显式内存屏障交互的访问
+  </div>
+</section>
+
+<section id="macro" class="toc-link">
+  <h2><span class="num">02</span> 宏定义</h2>
+
+  <p>定义在 <code>include/asm-generic/rwonce.h</code> 中。</p>
+
+  <h3>READ_ONCE</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/asm-generic/rwonce.h 第 47-51 行</span>
+#define READ_ONCE(x)                            \
+({                                              \
+    compiletime_assert_rwonce_type(x);          \
+    __READ_ONCE(x);                             \
+})
+
+<span class="cmt">// 底层实现（第 44 行）</span>
+#define __READ_ONCE(x)  (*(const volatile __unqual_scalar_typeof(x) *)&amp;(x))
+</code></pre>
+
+  <h3>WRITE_ONCE</h3>
+
+<pre><code class="language-c"><span class="cmt">// include/asm-generic/rwonce.h 第 58-62 行</span>
+#define WRITE_ONCE(x, val)                      \
+do {                                            \
+    compiletime_assert_rwonce_type(x);          \
+    __WRITE_ONCE(x, val);                       \
+} while (0)
+
+<span class="cmt">// 底层实现（第 53-56 行）</span>
+#define __WRITE_ONCE(x, val)                    \
+do {                                            \
+    *(volatile typeof(x) *)&amp;(x) = (val);        \
+} while (0)
+</code></pre>
+
+  <h3>类型检查</h3>
+
+<pre><code class="language-c"><span class="cmt">// 编译时类型检查（第 35-37 行）</span>
+<span class="cmt">// 只允许 native word 或 long long 大小的类型</span>
+#define compiletime_assert_rwonce_type(t)                    \
+    compiletime_assert(__native_word(t) || sizeof(t) == sizeof(long long), \
+        "Unsupported access size for {READ,WRITE}_ONCE().")
+</code></pre>
+</section>
+
+<section id="why" class="toc-link">
+  <h2><span class="num">03</span> 为什么需要</h2>
+
+  <h3>不使用 WRITE_ONCE 的问题</h3>
+
+<pre><code class="language-c"><span class="cmt">// 错误示例：编译器可能优化掉写入</span>
+int global_flag = 0;
+
+void producer(void) {
+    global_flag = 1;  <span class="cmt">// 编译器可能优化为寄存器操作</span>
+}
+
+void consumer(void) {
+    while (global_flag == 0) {  <span class="cmt">// 编译器可能只读一次</span>
+        <span class="cmt">// 永远看不到更新</span>
+    }
+}
+</code></pre>
+
+  <h3>使用 WRITE_ONCE 后</h3>
+
+<pre><code class="language-c"><span class="cmt">// 正确示例：强制内存访问</span>
+int global_flag = 0;
+
+void producer(void) {
+    WRITE_ONCE(global_flag, 1);  <span class="cmt">// 强制写入内存</span>
+}
+
+void consumer(void) {
+    while (READ_ONCE(global_flag) == 0) {  <span class="cmt">// 每次都从内存读取</span>
+        <span class="cmt">// 看到更新</span>
+    }
+}
+</code></pre>
+</section>
+
+<section id="compiler" class="toc-link">
+  <h2><span class="num">04</span> 编译器行为</h2>
+
+  <div class="mermaid">graph TD
+    A["普通变量访问"] --> B["编译器优化"]
+    B --> C["缓存到寄存器"]
+    B --> D["重排序"]
+    B --> E["合并读写"]
+
+    F["READ_ONCE/WRITE_ONCE"] --> G["volatile 语义"]
+    G --> H["每次访问真实内存"]
+    G --> I["禁止重排"]
+    G --> J["禁止合并"]
+  </div>
+
+  <h3>编译器优化示例</h3>
+
+<pre><code class="language-c"><span class="cmt">// 编译器可能做的优化：</span>
+
+<span class="cmt">// 1. 缓存到寄存器</span>
+<span class="cmt">// while (flag == 0);</span>
+<span class="cmt">// 编译器可能只读一次 flag 到寄存器，后续循环不读内存</span>
+
+<span class="cmt">// 2. 重排序</span>
+<span class="cmt">// a = 1;</span>
+<span class="cmt">// b = 2;</span>
+<span class="cmt">// 编译器可能先写 b 再写 a</span>
+
+<span class="cmt">// 3. 合并读写</span>
+<span class="cmt">// x = x + 1;</span>
+<span class="cmt">// 编译器可能：reg = x; reg++; x = reg;</span>
+<span class="cmt">// 而不是：reg = x; reg = reg + 1; x = reg;</span>
+</code></pre>
+
+  <h3>WRITE_ONCE/READ_ONCE 如何解决</h3>
+
+<pre><code class="language-c"><span class="cmt">// volatile 语义确保：</span>
+<span class="cmt">// 1. 每次访问都从内存读取/写入</span>
+<span class="cmt">// 2. 禁止跨 READ_ONCE/WRITE_ONCE 重排</span>
+<span class="cmt">// 3. 不会合并多次读写</span>
+
+<span class="cmt">// 但注意：不保证原子性！</span>
+<span class="cmt">// 64 位平台上的 32 位访问通常是原子的</span>
+<span class="cmt">// 但不是所有平台都保证</span>
+</code></pre>
+</section>
+
+<section id="usage" class="toc-link">
+  <h2><span class="num">05</span> 典型用例</h2>
+
+  <h3>1. 跨 CPU 标志位通信</h3>
+
+<pre><code class="language-c"><span class="cmt">// 一个 CPU 设置标志，另一个 CPU 读取</span>
+static int data_ready = 0;
+
+<span class="cmt">// CPU 0: 设置标志</span>
+void producer(void) {
+    <span class="cmt">// 准备数据</span>
+    prepare_data();
+    <span class="cmt">// 通知消费者</span>
+    WRITE_ONCE(data_ready, 1);
+}
+
+<span class="cmt">// CPU 1: 检查标志</span>
+void consumer(void) {
+    while (READ_ONCE(data_ready) == 0) {
+        cpu_relax();
+    }
+    <span class="cmt">// 处理数据</span>
+    process_data();
+}
+</code></pre>
+
+  <h3>2. 任务状态更新</h3>
+
+<pre><code class="language-c"><span class="cmt">// 内核中常见模式</span>
+<span class="cmt">// task->state = TASK_RUNNING;</span>
+<span class="cmt">// 应该写为：</span>
+WRITE_ONCE(current-&gt;__state, TASK_RUNNING);
+
+<span class="cmt">// 读取任务状态</span>
+int state = READ_ONCE(current-&gt;__state);
+</code></pre>
+
+  <h3>3. 防止编译器优化循环</h3>
+
+<pre><code class="language-c"><span class="cmt">// 错误：编译器可能优化掉循环</span>
+while (1) {
+    if (some_flag) {
+        break;
+    }
+}
+
+<span class="cmt">// 正确：使用 READ_ONCE</span>
+while (1) {
+    if (READ_ONCE(some_flag)) {
+        break;
+    }
+}
+</code></pre>
+
+  <h3>4. 数据结构中的并发字段</h3>
+
+<pre><code class="language-c"><span class="cmt">// 结构体中的并发访问字段</span>
+struct my_struct {
+    int data;
+    volatile int refcount;  <span class="cmt">// 或使用 atomic_t</span>
+};
+
+<span class="cmt">// 正确做法</span>
+struct my_struct {
+    int data;
+    int refcount;  <span class="cmt">// 不需要 volatile</span>
+};
+
+<span class="cmt">// 读取时使用 READ_ONCE</span>
+int ref = READ_ONCE(obj-&gt;refcount);
+
+<span class="cmt">// 写入时使用 WRITE_ONCE</span>
+WRITE_ONCE(obj-&gt;refcount, new_val);
+</code></pre>
+</section>
+
+<section id="vs-atomic" class="toc-link">
+  <h2><span class="num">06</span> vs 原子操作</h2>
+
+  <table>
+    <tr><th>特性</th><th>READ_ONCE/WRITE_ONCE</th><th>atomic_t</th></tr>
+    <tr><td>原子性</td><td>不保证（但实际中通常是）</td><td>保证</td></tr>
+    <tr><td>内存屏障</td><td>不提供</td><td>可选</td></tr>
+    <tr><td>类型</td><td>任意标量类型</td><td>仅 atomic_t</td></tr>
+    <tr><td>性能</td><td>低开销</td><td>略高</td></tr>
+    <tr><td>适用场景</td><td>标志位、简单状态</td><td>计数器、引用计数</td></tr>
+  </table>
+
+<pre><code class="language-c"><span class="cmt">// READ_ONCE/WRITE_ONCE：用于简单标志位</span>
+static int flag = 0;
+WRITE_ONCE(flag, 1);
+int val = READ_ONCE(flag);
+
+<span class="cmt">// atomic_t：用于需要原子性的操作</span>
+atomic_t counter = ATOMIC_INIT(0);
+atomic_inc(&amp;counter);
+int val = atomic_read(&amp;counter);
+
+<span class="cmt">// 选择原则：</span>
+<span class="cmt">// - 只是标志通知 → READ_ONCE/WRITE_ONCE</span>
+<span class="cmt">// - 需要原子递增/递减 → atomic_t</span>
+<span class="cmt">// - 需要内存屏障 → atomic_t + smp_mb()</span>
+</code></pre>
+</section>
+
+<section id="vs-volatile" class="toc-link">
+  <h2><span class="num">07</span> vs volatile</h2>
+
+  <table>
+    <tr><th>特性</th><th>READ_ONCE/WRITE_ONCE</th><th>volatile</th></tr>
+    <tr><td>类型限制</td><td>标量类型</td><td>任意类型</td></tr>
+    <tr><td>编译器屏障</td><td>有</td><td>部分有</td></tr>
+    <tr><td>KASAN/KCSAN 检查</td><td>有</td><td>无</td></tr>
+    <tr><td>内核推荐</td><td>✅ 推荐</td><td>❌ 不推荐</td></tr>
+  </table>
+
+<pre><code class="language-c"><span class="cmt">// 内核中禁止直接使用 volatile</span>
+<span class="cmt">// 应该使用 READ_ONCE/WRITE_ONCE</span>
+
+<span class="cmt">// ❌ 错误</span>
+volatile int *p = &amp;some_var;
+*p = 1;
+int val = *p;
+
+<span class="cmt">// ✅ 正确</span>
+WRITE_ONCE(some_var, 1);
+int val = READ_ONCE(some_var);
+</code></pre>
+</section>
+
+<section id="pitfalls" class="toc-link">
+  <h2><span class="num">08</span> 常见陷阱</h2>
+
+<pre><code class="language-c"><span class="cmt">// 陷阱 1：READ_ONCE 不能保证原子性</span>
+<span class="cmt">// 在 32 位平台上读取 64 位值可能不是原子的</span>
+uint64_t val = READ_ONCE(my_64bit_var);  <span class="cmt">// 可能撕裂</span>
+<span class="cmt">// 如果需要原子性，使用 atomic64_t</span>
+
+<span class="cmt">// 陷阱 2：READ_ONCE 不提供内存屏障</span>
+<span class="cmt">// 如果需要顺序保证，需要额外的 smp_rmb()/smp_wmb()</span>
+READ_ONCE(flag);
+smp_rmb();  <span class="cmt">// 确保 flag 读取在后续读取之前</span>
+int val = READ_ONCE(data);
+
+<span class="cmt">// 陷阱 3：结构体不能整体 READ_ONCE/WRITE_ONCE</span>
+<span class="cmt">// ❌ struct foo f = READ_ONCE(some_struct);</span>
+<span class="cmt">// ✅ f.field1 = READ_ONCE(some_struct.field1);</span>
+
+<span class="cmt">// 陷阱 4：不要在 READ_ONCE 中使用指针</span>
+<span class="cmt">// ❌ p = READ_ONCE(ptr);</span>
+<span class="cmt">// ✅ p = READ_ONCE(*ptr);  或  p = READ_ONCE(ptr);</span>
+</code></pre>
+</section>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>include/asm-generic/rwonce.h</code> READ_ONCE/WRITE_ONCE 定义（98行）。<br>
+  <code>include/linux/compiler.h</code> 编译器屏障定义。<br>
+  <code>Documentation/memory-barriers.txt</code> 内存屏障官方文档。<br>
+  <code>tools/memory-model/</code> LKMM 内存模型。
+</div>
+
+</div>
+<script src="common.js"></script>
+</body>
+</html>
