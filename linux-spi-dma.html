@@ -400,8 +400,7 @@ graph TB
 
 <p>SPI 子系统使用消息（message）和传输（transfer）两个核心概念：</p>
 
-<pre>
-/* SPI 消息结构 */
+<pre><code class="language-c">/* SPI 消息结构 */
 struct spi_message {
     struct list_head transfers;    // 传输链表
     struct spi_device *spi;        // 目标设备
@@ -423,7 +422,7 @@ struct spi_transfer {
     unsigned int tx_nbits : 3;     // TX 有效位数
     unsigned int rx_nbits : 3;     // RX 有效位数
 };
-</pre>
+</code></pre>
 
 <h3>2.2 DMA 在 SPI 中的角色</h3>
 
@@ -497,20 +496,18 @@ struct spi_transfer {
 
 <h3>3.1 DMA 传输方向</h3>
 
-<pre>
-/* DMA 传输方向枚举 */
+<pre><code class="language-c">/* DMA 传输方向枚举 */
 enum dma_data_direction {
     DMA_BIDIRECTIONAL = 0,   // 双向传输
     DMA_TO_DEVICE = 1,        // 内存 -> 设备（发送）
     DMA_FROM_DEVICE = 2,      // 设备 -> 内存（接收）
     DMA_NONE = 3,             // 无传输
 };
-</pre>
+</code></pre>
 
 <h3>3.2 DMA 从设备配置</h3>
 
-<pre>
-struct dma_slave_config {
+<pre><code class="language-c">struct dma_slave_config {
     enum dma_data_direction direction;     // 传输方向
     dma_addr_t src_addr;                   // 源地址（设备寄存器）
     dma_addr_t dst_addr;                   // 目标地址（设备寄存器）
@@ -519,7 +516,7 @@ struct dma_slave_config {
     unsigned int src_maxburst;             // 源最大突发长度
     unsigned int dst_maxburst;             // 目标最大突发长度
 };
-</pre>
+</code></pre>
 
 <h2 id="imx-spi-dma">4. i.MX SPI 驱动中的 DMA 实现</h2>
 
@@ -529,8 +526,7 @@ struct dma_slave_config {
 
 <h4>4.1.1 DMA 数据包结构</h4>
 
-<pre>
-struct dma_data_package {
+<pre><code class="language-c">struct dma_data_package {
     u32 cmd_word;           // 控制寄存器配置字
     void *dma_rx_buf;       // DMA 接收缓冲区
     void *dma_tx_buf;       // DMA 发送缓冲区
@@ -539,7 +535,7 @@ struct dma_data_package {
     int dma_len;            // DMA 缓冲区长度（对齐后）
     int data_len;           // 实际数据长度
 };
-</pre>
+</code></pre>
 
 <div class="callout">
   <strong>为什么需要 dma_len 和 data_len 两个字段？</strong><br>
@@ -548,8 +544,7 @@ struct dma_data_package {
 
 <h4>4.1.2 驱动私有数据结构</h4>
 
-<pre>
-struct spi_imx_data {
+<pre><code class="language-c">struct spi_imx_data {
     struct spi_controller *controller;
     struct device *dev;
 
@@ -583,14 +578,13 @@ struct spi_imx_data {
 
     const struct spi_imx_devtype_data *devtype_data;
 };
-</pre>
+</code></pre>
 
 <h3 id="dma-init">4.2 DMA 通道初始化</h3>
 
 <p>DMA 通道的初始化在驱动 probe 阶段完成，核心函数为 <code>spi_imx_sdma_init()</code>：</p>
 
-<pre>
-static int spi_imx_sdma_init(struct device *dev,
+<pre><code class="language-c">static int spi_imx_sdma_init(struct device *dev,
                              struct spi_imx_data *spi_imx,
                              struct spi_controller *controller)
 {
@@ -630,7 +624,7 @@ err:
     spi_imx_sdma_exit(spi_imx);
     return ret;
 }
-</pre>
+</code></pre>
 
 <div class="mermaid">
 sequenceDiagram
@@ -649,8 +643,7 @@ sequenceDiagram
 
 <h4>4.2.1 DMA 通道释放</h4>
 
-<pre>
-static void spi_imx_sdma_exit(struct spi_imx_data *spi_imx)
+<pre><code class="language-c">static void spi_imx_sdma_exit(struct spi_imx_data *spi_imx)
 {
     struct spi_controller *controller = spi_imx->controller;
 
@@ -664,14 +657,13 @@ static void spi_imx_sdma_exit(struct spi_imx_data *spi_imx)
         controller->dma_tx = NULL;
     }
 }
-</pre>
+</code></pre>
 
 <h3 id="dma-capability">4.3 DMA 能力检测</h3>
 
 <p>驱动通过 <code>spi_imx_can_dma()</code> 函数判断是否应该使用 DMA 传输：</p>
 
-<pre>
-static bool spi_imx_can_dma(struct spi_controller *controller,
+<pre><code class="language-c">static bool spi_imx_can_dma(struct spi_controller *controller,
                             struct spi_device *spi,
                             struct spi_transfer *transfer)
 {
@@ -709,7 +701,7 @@ static bool spi_imx_can_dma(struct spi_controller *controller,
 
     return true;
 }
-</pre>
+</code></pre>
 
 <div class="mermaid">
 graph TD
@@ -743,8 +735,7 @@ graph TD
 
 <h4>4.4.1 DMA 从设备配置</h4>
 
-<pre>
-static int spi_imx_dma_configure(struct spi_controller *controller,
+<pre><code class="language-c">static int spi_imx_dma_configure(struct spi_controller *controller,
                                  bool word_delay)
 {
     struct spi_imx_data *spi_imx = spi_controller_get_devdata(controller);
@@ -788,14 +779,13 @@ static int spi_imx_dma_configure(struct spi_controller *controller,
 
     return 0;
 }
-</pre>
+</code></pre>
 
 <h4>4.4.2 Watermark Level 配置</h4>
 
 <p>Watermark Level（WML）决定了 DMA 传输的突发长度，影响传输效率：</p>
 
-<pre>
-static void mx51_setup_wml(struct spi_imx_data *spi_imx)
+<pre><code class="language-c">static void mx51_setup_wml(struct spi_imx_data *spi_imx)
 {
     u32 tx_wml = 0;
 
@@ -832,7 +822,7 @@ static void spi_imx_dma_max_wml_find(struct spi_imx_data *spi_imx,
 
     spi_imx->wml = i;
 }
-</pre>
+</code></pre>
 
 <div class="mermaid">
 graph LR
@@ -860,8 +850,7 @@ graph LR
 
 <h4>4.5.1 传输总入口</h4>
 
-<pre>
-static int spi_imx_transfer_one(struct spi_controller *controller,
+<pre><code class="language-c">static int spi_imx_transfer_one(struct spi_controller *controller,
                                 struct spi_device *spi,
                                 struct spi_transfer *transfer)
 {
@@ -902,12 +891,11 @@ static int spi_imx_transfer_one(struct spi_controller *controller,
     // 默认使用 PIO 中断模式
     return spi_imx_pio_transfer(spi, transfer);
 }
-</pre>
+</code></pre>
 
 <h4>4.5.2 DMA 数据准备</h4>
 
-<pre>
-static int spi_imx_dma_data_prepare(struct spi_imx_data *spi_imx,
+<pre><code class="language-c">static int spi_imx_dma_data_prepare(struct spi_imx_data *spi_imx,
                                     struct spi_transfer *transfer,
                                     bool word_delay)
 {
@@ -947,12 +935,11 @@ static int spi_imx_dma_data_prepare(struct spi_imx_data *spi_imx,
 
     return 0;
 }
-</pre>
+</code></pre>
 
 <h4>4.5.3 DMA 传输主函数</h4>
 
-<pre>
-static int spi_imx_dma_transfer(struct spi_imx_data *spi_imx,
+<pre><code class="language-c">static int spi_imx_dma_transfer(struct spi_imx_data *spi_imx,
                                 struct spi_transfer *transfer)
 {
     bool word_delay = transfer->word_delay.value != 0 && !spi_imx->target_mode;
@@ -996,12 +983,11 @@ static int spi_imx_dma_transfer(struct spi_imx_data *spi_imx,
 
     return ret;
 }
-</pre>
+</code></pre>
 
 <h4>4.5.4 单包 DMA 传输</h4>
 
-<pre>
-static int spi_imx_dma_package_transfer(struct spi_imx_data *spi_imx,
+<pre><code class="language-c">static int spi_imx_dma_package_transfer(struct spi_imx_data *spi_imx,
                                         struct dma_data_package *dma_data,
                                         struct spi_transfer *transfer,
                                         bool word_delay)
@@ -1043,14 +1029,13 @@ static int spi_imx_dma_package_transfer(struct spi_imx_data *spi_imx,
 
     return 0;
 }
-</pre>
+</code></pre>
 
 <h3 id="dma-callback">4.6 DMA 回调处理</h3>
 
 <p>DMA 传输完成通过回调函数和 completion 机制通知驱动：</p>
 
-<pre>
-// RX DMA 完成回调
+<pre><code class="language-c">// RX DMA 完成回调
 static void spi_imx_dma_rx_callback(void *cookie)
 {
     struct spi_imx_data *spi_imx = (struct spi_imx_data *)cookie;
@@ -1134,7 +1119,7 @@ static int spi_imx_dma_submit(struct spi_imx_data *spi_imx,
 
     return 0;
 }
-</pre>
+</code></pre>
 
 <div class="mermaid">
 sequenceDiagram
@@ -1173,8 +1158,7 @@ sequenceDiagram
 
 <h3>5.1 缓冲区映射</h3>
 
-<pre>
-static int spi_imx_dma_map(struct spi_imx_data *spi_imx,
+<pre><code class="language-c">static int spi_imx_dma_map(struct spi_imx_data *spi_imx,
                            struct dma_data_package *dma_data)
 {
     struct spi_controller *controller = spi_imx->controller;
@@ -1208,12 +1192,11 @@ static int spi_imx_dma_map(struct spi_imx_data *spi_imx,
 
     return 0;
 }
-</pre>
+</code></pre>
 
 <h3>5.2 缓冲区取消映射</h3>
 
-<pre>
-static void spi_imx_dma_unmap(struct spi_imx_data *spi_imx,
+<pre><code class="language-c">static void spi_imx_dma_unmap(struct spi_imx_data *spi_imx,
                               struct dma_data_package *dma_data)
 {
     struct device *tx_dev = spi_imx->controller->dma_tx->device->dev;
@@ -1226,14 +1209,13 @@ static void spi_imx_dma_unmap(struct spi_imx_data *spi_imx,
                      DMA_CACHE_ALIGNED_LEN(dma_data->dma_len),
                      DMA_FROM_DEVICE);
 }
-</pre>
+</code></pre>
 
 <h3>5.3 数据对齐与字节序处理</h3>
 
 <p>i.MX ECSPI 控制器以 32 位字为单位进行 DMA 传输，需要处理字节对齐和字节序问题：</p>
 
-<pre>
-/* 缓冲区长度对齐宏 */
+<pre><code class="language-c">/* 缓冲区长度对齐宏 */
 #define DMA_CACHE_ALIGNED_LEN(x) ALIGN((x), dma_get_cache_alignment())
 
 /* TX 数据处理：处理非 4 字节对齐的数据 */
@@ -1293,7 +1275,7 @@ static int spi_imx_dma_tx_data_handle(struct spi_imx_data *spi_imx,
 
     return 0;
 }
-</pre>
+</code></pre>
 
 <div class="mermaid">
 graph TB
@@ -1313,8 +1295,7 @@ graph TB
 
 <h3>5.4 RX 数据处理</h3>
 
-<pre>
-static void spi_imx_dma_rx_data_handle(struct spi_imx_data *spi_imx,
+<pre><code class="language-c">static void spi_imx_dma_rx_data_handle(struct spi_imx_data *spi_imx,
                                        struct dma_data_package *dma_data,
                                        void *rx_buf,
                                        bool word_delay)
@@ -1351,7 +1332,7 @@ static void spi_imx_dma_rx_data_handle(struct spi_imx_data *spi_imx,
 
     memcpy(rx_buf, copy_ptr, dma_data->data_len);
 }
-</pre>
+</code></pre>
 
 <h2 id="dma-split">6. 大数据传输的分包处理</h2>
 
@@ -1390,8 +1371,7 @@ graph LR
 
 <h3>6.2 分包实现</h3>
 
-<pre>
-static int spi_imx_dma_data_prepare(struct spi_imx_data *spi_imx,
+<pre><code class="language-c">static int spi_imx_dma_data_prepare(struct spi_imx_data *spi_imx,
                                     struct spi_transfer *transfer,
                                     bool word_delay)
 {
@@ -1454,7 +1434,7 @@ static int spi_imx_dma_data_prepare(struct spi_imx_data *spi_imx,
 
     return 0;
 }
-</pre>
+</code></pre>
 
 <h2 id="dma-fallback">7. DMA 失败回退机制</h2>
 
@@ -1492,8 +1472,7 @@ graph TD
     style SET_FB fill:#fef3c7,stroke:#f59e0b,color:#92400e
 </div>
 
-<pre>
-// DMA 传输函数中的回退逻辑
+<pre><code class="language-c">// DMA 传输函数中的回退逻辑
 static int spi_imx_dma_transfer(struct spi_imx_data *spi_imx,
                                 struct spi_transfer *transfer)
 {
@@ -1526,20 +1505,19 @@ if (spi_imx->usedma) {
     }
     return ret;
 }
-</pre>
+</code></pre>
 
 <h2 id="best-practices">8. DMA 使用最佳实践</h2>
 
 <h3>8.1 缓冲区对齐</h3>
 
-<pre>
-/* 正确：使用缓存行对齐 */
+<pre><code class="language-c">/* 正确：使用缓存行对齐 */
 dma_addr_t addr = dma_map_single(dev, buf,
     DMA_CACHE_ALIGNED_LEN(len), DMA_TO_DEVICE);
 
 /* 错误：直接使用原始长度 */
 dma_addr_t addr = dma_map_single(dev, buf, len, DMA_TO_DEVICE);
-</pre>
+</code></pre>
 
 <h3>8.2 传输顺序</h3>
 
@@ -1548,8 +1526,7 @@ dma_addr_t addr = dma_map_single(dev, buf, len, DMA_TO_DEVICE);
   在 SPI DMA 传输中，必须先配置 RX DMA 通道再配置 TX DMA 通道。因为 TX DMA 传输会立即启动 SPI 控制器，如果 RX 未就绪会导致数据丢失。
 </div>
 
-<pre>
-/* 正确顺序 */
+<pre><code class="language-c">/* 正确顺序 */
 desc_rx = dmaengine_prep_slave_single(dma_rx, ...);
 dmaengine_submit(desc_rx);
 dma_async_issue_pending(dma_rx);  // 先启动 RX
@@ -1557,12 +1534,11 @@ dma_async_issue_pending(dma_rx);  // 先启动 RX
 desc_tx = dmaengine_prep_slave_single(dma_tx, ...);
 dmaengine_submit(desc_tx);
 dma_async_issue_pending(dma_tx);  // 再启动 TX
-</pre>
+</code></pre>
 
 <h3>8.3 超时处理</h3>
 
-<pre>
-/* 设置合理的超时时间 */
+<pre><code class="language-c">/* 设置合理的超时时间 */
 static int spi_imx_calculate_timeout(struct spi_imx_data *spi_imx,
                                      int size)
 {
@@ -1577,12 +1553,11 @@ static int spi_imx_calculate_timeout(struct spi_imx_data *spi_imx,
     // 双倍超时以留有余量
     return secs_to_jiffies(2 * timeout);
 }
-</pre>
+</code></pre>
 
 <h3>8.4 错误处理</h3>
 
-<pre>
-/* 正确的错误处理模式 */
+<pre><code class="language-c">/* 正确的错误处理模式 */
 time_left = wait_for_completion_timeout(&completion, timeout);
 if (!time_left) {
     dev_err(spi_imx->dev, "DMA timeout\n");
@@ -1593,7 +1568,7 @@ if (!time_left) {
     spi_imx->devtype_data->reset(spi_imx);
     return -ETIMEDOUT;
 }
-</pre>
+</code></pre>
 
 <h3>8.5 内存管理</h3>
 
@@ -1602,14 +1577,13 @@ if (!time_left) {
   每次 DMA 传输后必须释放所有分配的内存，无论传输成功还是失败。
 </div>
 
-<pre>
-/* 正确的内存释放 */
+<pre><code class="language-c">/* 正确的内存释放 */
 for (int j = 0; j < spi_imx->dma_package_num; j++) {
     kfree(spi_imx->dma_data[j].dma_tx_buf);
     kfree(spi_imx->dma_data[j].dma_rx_buf);
 }
 kfree(spi_imx->dma_data);
-</pre>
+</code></pre>
 
 <h2 id="common-mistakes">9. 常见问题与解决方案</h2>
 
