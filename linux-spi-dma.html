@@ -1,0 +1,1912 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux SPI DMA 深度解析 — 基于 i.MX SPI 驱动的 DMA 用法详解</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>">
+<link rel="stylesheet" href="common.css">
+<style>
+/* 浅色主题覆盖 - 用户要求浅色背景 */
+:root {
+  --bg: #f8f9fa;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #e9ecef;
+  --text: #212529;
+  --text-secondary: #495057;
+  --border: #dee2e6;
+  --accent: #0d6efd;
+  --accent-light: #e7f1ff;
+  --code-bg: #f1f3f5;
+  --success: #198754;
+  --warning: #ffc107;
+  --danger: #dc3545;
+}
+
+[data-theme="dark"] {
+  --bg: #1a1b26;
+  --bg-secondary: #24283b;
+  --bg-tertiary: #1f2335;
+  --text: #c0caf5;
+  --text-secondary: #9aa5ce;
+  --border: #3b4261;
+  --accent: #7aa2f7;
+  --accent-light: #1e2030;
+  --code-bg: #1f2335;
+  --success: #9ece6a;
+  --warning: #e0af68;
+  --danger: #f7768e;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  line-height: 1.8;
+}
+
+.hero {
+  background: linear-gradient(135deg, var(--accent-light) 0%, var(--bg-secondary) 100%);
+  padding: 3rem 2rem;
+  margin-bottom: 2rem;
+  border-bottom: 2px solid var(--accent);
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+h1, h2, h3, h4 {
+  color: var(--text);
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+}
+
+h1 { font-size: 2rem; border-bottom: 2px solid var(--accent); padding-bottom: 0.5rem; }
+h2 { font-size: 1.5rem; border-left: 4px solid var(--accent); padding-left: 1rem; }
+h3 { font-size: 1.25rem; color: var(--accent); }
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+code {
+  font-family: 'Fira Code', 'Consolas', monospace;
+  font-size: 0.9em;
+}
+
+p code, li code {
+  background: var(--code-bg);
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+}
+
+th, td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border: 1px solid var(--border);
+}
+
+th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
+tr:nth-child(even) {
+  background: var(--bg-secondary);
+}
+
+.callout {
+  background: var(--accent-light);
+  border-left: 4px solid var(--accent);
+  padding: 1rem 1.5rem;
+  margin: 1.5rem 0;
+  border-radius: 0 8px 8px 0;
+}
+
+.callout.warning {
+  background: #fff3cd;
+  border-left-color: var(--warning);
+}
+
+.callout.danger {
+  background: #f8d7da;
+  border-left-color: var(--danger);
+}
+
+.callout.success {
+  background: #d1e7dd;
+  border-left-color: var(--success);
+}
+
+.file-tree {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.file-tree .file { color: var(--accent); }
+.file-tree .cmt { color: var(--text-secondary); }
+
+.mermaid {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+.toc {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+}
+
+.toc a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.toc a:hover {
+  text-decoration: underline;
+}
+
+.toc ul {
+  list-style: none;
+  padding-left: 1rem;
+}
+
+.toc > ul { padding-left: 0; }
+
+.toc li {
+  margin: 0.5rem 0;
+}
+
+.tag {
+  display: inline-block;
+  background: var(--accent);
+  color: white;
+  padding: 0.2em 0.6em;
+  border-radius: 4px;
+  font-size: 0.85em;
+  margin: 0.2em;
+}
+
+.highlight {
+  background: #fff3cd;
+  padding: 0.1em 0.3em;
+  border-radius: 2px;
+}
+
+.step-box {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin: 1rem 0;
+}
+
+.step-number {
+  display: inline-block;
+  background: var(--accent);
+  color: white;
+  width: 2rem;
+  height: 2rem;
+  line-height: 2rem;
+  text-align: center;
+  border-radius: 50%;
+  font-weight: bold;
+  margin-right: 0.5rem;
+}
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" id="theme-toggle" title="切换主题"></button>
+
+<div class="hero">
+  <h1>📡 Linux SPI DMA 深度解析</h1>
+  <p style="font-size: 1.1rem; color: var(--text-secondary);">基于 i.MX SPI 驱动（spi-imx.c）的 DMA 用法详解</p>
+  <p style="color: var(--text-secondary);">
+    <span class="tag">Linux 内核</span>
+    <span class="tag">SPI</span>
+    <span class="tag">DMA</span>
+    <span class="tag">i.MX</span>
+    <span class="tag">嵌入式</span>
+  </p>
+</div>
+
+<div class="container">
+
+<nav class="toc">
+  <h2>📑 目录</h2>
+  <ul>
+    <li><a href="#overview">1. 概述与背景</a></li>
+    <li><a href="#spi-arch">2. SPI 子系统架构</a></li>
+    <li><a href="#dma-overview">3. Linux DMA 框架概述</a></li>
+    <li><a href="#imx-spi-dma">4. i.MX SPI 驱动中的 DMA 实现</a>
+      <ul>
+        <li><a href="#dma-data-struct">4.1 数据结构设计</a></li>
+        <li><a href="#dma-init">4.2 DMA 通道初始化</a></li>
+        <li><a href="#dma-capability">4.3 DMA 能力检测</a></li>
+        <li><a href="#dma-config">4.4 DMA 配置</a></li>
+        <li><a href="#dma-transfer">4.5 DMA 传输流程</a></li>
+        <li><a href="#dma-callback">4.6 DMA 回调处理</a></li>
+      </ul>
+    </li>
+    <li><a href="#dma-buf">5. DMA 缓冲区管理</a></li>
+    <li><a href="#dma-split">6. 大数据传输的分包处理</a></li>
+    <li><a href="#dma-fallback">7. DMA 失败回退机制</a></li>
+    <li><a href="#best-practices">8. DMA 使用最佳实践</a></li>
+    <li><a href="#common-mistakes">9. 常见问题与解决方案</a></li>
+    <li><a href="#sdma">10. SDMA（Smart DMA）技术详解</a></li>
+    <li><a href="#cpu-coop">11. DMA 与 CPU 的协作机制</a></li>
+    <li><a href="#performance">12. DMA 性能优化策略</a></li>
+    <li><a href="#debugging">13. DMA 调试技术</a></li>
+    <li><a href="#usecases">14. 实际应用案例分析</a></li>
+    <li><a href="#summary">15. 总结</a></li>
+  </ul>
+</nav>
+
+<h2 id="overview">1. 概述与背景</h2>
+
+<p>DMA（Direct Memory Access，直接内存访问）是一种允许硬件设备绕过 CPU 直接访问系统内存的技术。在 Linux 内核的 SPI 子系统中，DMA 传输是提高大数据量传输效率的关键机制。</p>
+
+<p>本文以 NXP i.MX 系列 SoC 的 SPI 控制器驱动（<code>drivers/spi/spi-imx.c</code>）为实例，深入分析 Linux 内核中 SPI 设备驱动如何使用 DMA 框架进行高效数据传输。</p>
+
+<div class="callout">
+  <strong>为什么需要 DMA？</strong><br>
+  在没有 DMA 的情况下，CPU 需要逐字节地从内存读取数据并写入 SPI 控制器，或者从控制器读取数据写入内存。这种方式对于大数据量传输会占用大量 CPU 时间。DMA 允许 SPI 控制器直接从内存读取/写入数据，CPU 只需要设置好传输参数并等待传输完成即可。
+</div>
+
+<h3>1.1 i.MX SPI 控制器概述</h3>
+
+<p>i.MX 系列 SoC 提供了多种 SPI 控制器变体：</p>
+
+<table>
+  <tr>
+    <th>控制器类型</th>
+    <th>支持平台</th>
+    <th>FIFO 大小</th>
+    <th>DMA 支持</th>
+  </tr>
+  <tr>
+    <td><code>IMX1_CSPI</code></td>
+    <td>i.MX1</td>
+    <td>8 字</td>
+    <td>不支持</td>
+  </tr>
+  <tr>
+    <td><code>IMX21_CSPI</code></td>
+    <td>i.MX21/i.MX27</td>
+    <td>8 字</td>
+    <td>不支持</td>
+  </tr>
+  <tr>
+    <td><code>IMX31_CSPI</code></td>
+    <td>i.MX31/i.MX35</td>
+    <td>8 字</td>
+    <td>不支持</td>
+  </tr>
+  <tr>
+    <td><code>IMX51_ECSPI</code></td>
+    <td>i.MX51</td>
+    <td>64 字</td>
+    <td>支持</td>
+  </tr>
+  <tr>
+    <td><code>IMX53_ECSPI</code></td>
+    <td>i.MX53 及以后</td>
+    <td>64 字</td>
+    <td>支持</td>
+  </tr>
+  <tr>
+    <td><code>IMX6UL_ECSPI</code></td>
+    <td>i.MX6UL 及以后</td>
+    <td>64 字</td>
+    <td>支持（修复 TX 毛刺）</td>
+  </tr>
+</table>
+
+<div class="mermaid">
+graph TD
+    subgraph "i.MX SPI 控制器演进"
+        IMX1[IMX1_CSPI<br/>8字FIFO<br/>无DMA] --> IMX21[IMX21_CSPI<br/>8字FIFO<br/>无DMA]
+        IMX21 --> IMX27[IMX27_CSPI<br/>8字FIFO<br/>无DMA]
+        IMX27 --> IMX31[IMX31_CSPI<br/>8字FIFO<br/>无DMA]
+        IMX31 --> IMX51[IMX51_ECSPI<br/>64字FIFO<br/>支持DMA]
+        IMX51 --> IMX53[IMX53_ECSPI<br/>64字FIFO<br/>支持DMA]
+        IMX53 --> IMX6UL[IMX6UL_ECSPI<br/>64字FIFO<br/>支持DMA+修复]
+    end
+
+    style IMX1 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style IMX21 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style IMX27 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style IMX31 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style IMX51 fill:#dcfce7,stroke:#22c55e,color:#166534
+    style IMX53 fill:#dcfce7,stroke:#22c55e,color:#166534
+    style IMX6UL fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+</div>
+
+<h2 id="spi-arch">2. SPI 子系统架构</h2>
+
+<p>Linux SPI 子系统采用分层架构设计，主要包含以下层次：</p>
+
+<div class="mermaid">
+graph TB
+    subgraph "用户空间"
+        APP[用户应用程序]
+    end
+
+    subgraph "内核空间"
+        subgraph "SPI 核心层"
+            SPI_CORE[SPI Core<br/>spi_transfer/spi_message<br/>控制器管理]
+        end
+
+        subgraph "SPI 控制器驱动"
+            CTRL_DRV[spi-imx 驱动<br/>DMA/PIO 传输实现<br/>硬件寄存器操作]
+        end
+
+        subgraph "SPI 协议驱动"
+            SPI_DRV[SPI 协议驱动<br/>Flash/传感器等<br/>设备特定逻辑]
+        end
+
+        subgraph "DMA 框架"
+            DMA_CORE[DMA Engine<br/>dmaengine API<br/>通道管理]
+            SDMA[i.MX SDMA<br/>Smart DMA 控制器]
+        end
+    end
+
+    subgraph "硬件"
+        SPI_HW[SPI 控制器<br/>FIFO/DMA 接口]
+        DEV[SPI 从设备]
+    end
+
+    APP --> SPI_DRV
+    SPI_DRV --> SPI_CORE
+    SPI_CORE --> CTRL_DRV
+    CTRL_DRV --> DMA_CORE
+    DMA_CORE --> SDMA
+    SDMA --> SPI_HW
+    SPI_HW --> DEV
+
+    style APP fill:#f3e8ff,stroke:#a855f7,color:#6b21a8
+    style SPI_CORE fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style CTRL_DRV fill:#dcfce7,stroke:#22c55e,color:#166534
+    style DMA_CORE fill:#fef3c7,stroke:#f59e0b,color:#92400e
+    style SDMA fill:#fee2e2,stroke:#ef4444,color:#991b1b
+</div>
+
+<h3>2.1 SPI 传输模型</h3>
+
+<p>SPI 子系统使用消息（message）和传输（transfer）两个核心概念：</p>
+
+<pre>
+/* SPI 消息结构 */
+struct spi_message {
+    struct list_head transfers;    // 传输链表
+    struct spi_device *spi;        // 目标设备
+    unsigned int actual_length;    // 实际传输长度
+    int status;                    // 传输状态
+    void (*complete)(void *context); // 完成回调
+    void *context;                 // 回调上下文
+};
+
+/* SPI 传输结构 */
+struct spi_transfer {
+    const void *tx_buf;            // 发送缓冲区
+    void *rx_buf;                  // 接收缓冲区
+    unsigned int len;              // 传输长度
+    unsigned int speed_hz;         // 时钟频率
+    unsigned int bits_per_word;    // 每字位数
+    unsigned int delay_usecs;      // 传输间延迟
+    struct spi_delay word_delay;   // 字延迟
+    unsigned int tx_nbits : 3;     // TX 有效位数
+    unsigned int rx_nbits : 3;     // RX 有效位数
+};
+</pre>
+
+<h3>2.2 DMA 在 SPI 中的角色</h3>
+
+<p>当使用 DMA 传输时，SPI 控制器驱动需要实现以下关键操作：</p>
+
+<div class="step-box">
+  <span class="step-number">1</span><strong>DMA 通道请求</strong>：在驱动 probe 时通过 <code>dma_request_chan()</code> 请求 TX/RX 通道<br><br>
+  <span class="step-number">2</span><strong>缓冲区映射</strong>：使用 <code>dma_map_single()</code> 将内核缓冲区映射为 DMA 可访问地址<br><br>
+  <span class="step-number">3</span><strong>传输描述符准备</strong>：使用 <code>dmaengine_prep_slave_single()</code> 准备传输描述符<br><br>
+  <span class="step-number">4</span><strong>传输提交</strong>：通过 <code>dmaengine_submit()</code> 提交传输，<code>dma_async_issue_pending()</code> 启动<br><br>
+  <span class="step-number">5</span><strong>等待完成</strong>：通过 completion 等待 DMA 传输完成<br><br>
+  <span class="step-number">6</span><strong>缓冲区取消映射</strong>：使用 <code>dma_unmap_single()</code> 释放 DMA 映射
+</div>
+
+<h2 id="dma-overview">3. Linux DMA 框架概述</h2>
+
+<p>Linux DMA 引擎框架提供了统一的 API 来管理 DMA 通道和传输。以下是关键的 API 函数：</p>
+
+<table>
+  <tr>
+    <th>API 函数</th>
+    <th>用途</th>
+    <th>调用时机</th>
+  </tr>
+  <tr>
+    <td><code>dma_request_chan()</code></td>
+    <td>请求 DMA 通道</td>
+    <td>驱动 probe</td>
+  </tr>
+  <tr>
+    <td><code>dma_release_channel()</code></td>
+    <td>释放 DMA 通道</td>
+    <td>驱动 remove</td>
+  </tr>
+  <tr>
+    <td><code>dmaengine_slave_config()</code></td>
+    <td>配置 DMA 从设备参数</td>
+    <td>传输前</td>
+  </tr>
+  <tr>
+    <td><code>dma_map_single()</code></td>
+    <td>映射缓冲区为 DMA 地址</td>
+    <td>传输前</td>
+  </tr>
+  <tr>
+    <td><code>dmaengine_prep_slave_single()</code></td>
+    <td>准备单缓冲区传输描述符</td>
+    <td>传输前</td>
+  </tr>
+  <tr>
+    <td><code>dmaengine_submit()</code></td>
+    <td>提交传输到队列</td>
+    <td>传输前</td>
+  </tr>
+  <tr>
+    <td><code>dma_async_issue_pending()</code></td>
+    <td>启动所有待处理传输</td>
+    <td>传输启动</td>
+  </tr>
+  <tr>
+    <td><code>dmaengine_terminate_sync()</code></td>
+    <td>终止所有传输</td>
+    <td>错误/取消时</td>
+  </tr>
+  <tr>
+    <td><code>dma_unmap_single()</code></td>
+    <td>取消映射 DMA 缓冲区</td>
+    <td>传输后</td>
+  </tr>
+</table>
+
+<h3>3.1 DMA 传输方向</h3>
+
+<pre>
+/* DMA 传输方向枚举 */
+enum dma_data_direction {
+    DMA_BIDIRECTIONAL = 0,   // 双向传输
+    DMA_TO_DEVICE = 1,        // 内存 -> 设备（发送）
+    DMA_FROM_DEVICE = 2,      // 设备 -> 内存（接收）
+    DMA_NONE = 3,             // 无传输
+};
+</pre>
+
+<h3>3.2 DMA 从设备配置</h3>
+
+<pre>
+struct dma_slave_config {
+    enum dma_data_direction direction;     // 传输方向
+    dma_addr_t src_addr;                   // 源地址（设备寄存器）
+    dma_addr_t dst_addr;                   // 目标地址（设备寄存器）
+    enum dma_slave_buswidth src_addr_width; // 源地址宽度
+    enum dma_slave_buswidth dst_addr_width; // 目标地址宽度
+    unsigned int src_maxburst;             // 源最大突发长度
+    unsigned int dst_maxburst;             // 目标最大突发长度
+};
+</pre>
+
+<h2 id="imx-spi-dma">4. i.MX SPI 驱动中的 DMA 实现</h2>
+
+<h3 id="dma-data-struct">4.1 数据结构设计</h3>
+
+<p>i.MX SPI 驱动定义了两个核心数据结构来管理 DMA 传输：</p>
+
+<h4>4.1.1 DMA 数据包结构</h4>
+
+<pre>
+struct dma_data_package {
+    u32 cmd_word;           // 控制寄存器配置字
+    void *dma_rx_buf;       // DMA 接收缓冲区
+    void *dma_tx_buf;       // DMA 发送缓冲区
+    dma_addr_t dma_tx_addr; // 映射后的 TX DMA 地址
+    dma_addr_t dma_rx_addr; // 映射后的 RX DMA 地址
+    int dma_len;            // DMA 缓冲区长度（对齐后）
+    int data_len;           // 实际数据长度
+};
+</pre>
+
+<div class="callout">
+  <strong>为什么需要 dma_len 和 data_len 两个字段？</strong><br>
+  <code>dma_len</code> 是对齐到 4 字节边界的长度，用于 DMA 缓冲区分配和映射；<code>data_len</code> 是实际传输的数据长度。当数据长度不是 4 字节的倍数时，需要在首字节中调整数据位置。
+</div>
+
+<h4>4.1.2 驱动私有数据结构</h4>
+
+<pre>
+struct spi_imx_data {
+    struct spi_controller *controller;
+    struct device *dev;
+
+    struct completion xfer_done;      // 传输完成信号
+    void __iomem *base;               // MMIO 基地址
+    unsigned long base_phys;          // 物理基地址
+
+    /* 时钟相关 */
+    struct clk *clk_per;
+    struct clk *clk_ipg;
+    unsigned long spi_clk;            // 外设时钟频率
+    unsigned int spi_bus_clk;         // 总线时钟频率
+
+    /* 传输参数 */
+    unsigned int bits_per_word;
+    unsigned int count, remainder;
+    void (*tx)(struct spi_imx_data *); // TX 函数指针
+    void (*rx)(struct spi_imx_data *); // RX 函数指针
+    void *rx_buf;
+    const void *tx_buf;
+    unsigned int txfifo;
+
+    /* DMA 相关字段 */
+    bool usedma;                           // 是否使用 DMA
+    u32 wml;                               // Watermark Level
+    struct completion dma_rx_completion;   // RX DMA 完成信号
+    struct completion dma_tx_completion;   // TX DMA 完成信号
+    size_t dma_package_num;                // DMA 分包数量
+    struct dma_data_package *dma_data;     // DMA 数据包数组
+    int rx_offset;                         // RX 偏移量
+
+    const struct spi_imx_devtype_data *devtype_data;
+};
+</pre>
+
+<h3 id="dma-init">4.2 DMA 通道初始化</h3>
+
+<p>DMA 通道的初始化在驱动 probe 阶段完成，核心函数为 <code>spi_imx_sdma_init()</code>：</p>
+
+<pre>
+static int spi_imx_sdma_init(struct device *dev,
+                             struct spi_imx_data *spi_imx,
+                             struct spi_controller *controller)
+{
+    int ret;
+
+    // 计算 Watermark Level（FIFO 大小的一半）
+    spi_imx->wml = spi_imx->devtype_data->fifo_size / 2;
+
+    // 请求 TX DMA 通道
+    controller->dma_tx = dma_request_chan(dev, "tx");
+    if (IS_ERR(controller->dma_tx)) {
+        ret = PTR_ERR(controller->dma_tx);
+        dev_err_probe(dev, ret, "can't get the TX DMA channel!\n");
+        controller->dma_tx = NULL;
+        goto err;
+    }
+
+    // 请求 RX DMA 通道
+    controller->dma_rx = dma_request_chan(dev, "rx");
+    if (IS_ERR(controller->dma_rx)) {
+        ret = PTR_ERR(controller->dma_rx);
+        dev_err_probe(dev, ret, "can't get the RX DMA channel!\n");
+        controller->dma_rx = NULL;
+        goto err;
+    }
+
+    // 初始化完成量
+    init_completion(&spi_imx->dma_rx_completion);
+    init_completion(&spi_imx->dma_tx_completion);
+
+    // 设置控制器标志：必须同时有 TX 和 RX
+    spi_imx->controller->flags = SPI_CONTROLLER_MUST_RX |
+                                 SPI_CONTROLLER_MUST_TX;
+
+    return 0;
+err:
+    spi_imx_sdma_exit(spi_imx);
+    return ret;
+}
+</pre>
+
+<div class="mermaid">
+sequenceDiagram
+    participant Driver as SPI 驱动
+    participant DMA as DMA Engine
+    participant HW as 硬件
+
+    Driver->>DMA: dma_request_chan("tx")
+    DMA-->>Driver: 返回 TX 通道
+    Driver->>DMA: dma_request_chan("rx")
+    DMA-->>Driver: 返回 RX 通道
+    Driver->>Driver: init_completion(tx/rx)
+
+    Note over Driver,HW: probe 完成，驱动就绪
+</div>
+
+<h4>4.2.1 DMA 通道释放</h4>
+
+<pre>
+static void spi_imx_sdma_exit(struct spi_imx_data *spi_imx)
+{
+    struct spi_controller *controller = spi_imx->controller;
+
+    if (controller->dma_rx) {
+        dma_release_channel(controller->dma_rx);
+        controller->dma_rx = NULL;
+    }
+
+    if (controller->dma_tx) {
+        dma_release_channel(controller->dma_tx);
+        controller->dma_tx = NULL;
+    }
+}
+</pre>
+
+<h3 id="dma-capability">4.3 DMA 能力检测</h3>
+
+<p>驱动通过 <code>spi_imx_can_dma()</code> 函数判断是否应该使用 DMA 传输：</p>
+
+<pre>
+static bool spi_imx_can_dma(struct spi_controller *controller,
+                            struct spi_device *spi,
+                            struct spi_transfer *transfer)
+{
+    struct spi_imx_data *spi_imx = spi_controller_get_devdata(controller);
+
+    // 1. 检查是否启用 DMA 且未设置回退标志
+    if (!use_dma || controller->fallback)
+        return false;
+
+    // 2. 检查 DMA RX 通道是否可用
+    if (!controller->dma_rx)
+        return false;
+
+    // 3. Target 模式下的传输长度限制
+    if (transfer->len > MX53_MAX_TRANSFER_BYTES &&
+        spi_imx->target_mode)
+        return false;
+
+    // 4. 传输长度必须大于 FIFO 大小
+    if (transfer->len < spi_imx->devtype_data->fifo_size)
+        return false;
+
+    // 5. DMA 只能传输 8/16/32 位数据
+    if (spi_imx->bits_per_word != 8 &&
+        spi_imx->bits_per_word != 16 &&
+        spi_imx->bits_per_word != 32)
+        return false;
+
+    // 6. 传输长度不能超过 SDMA BD 最大值（32KB）
+    if (transfer->len >= MAX_SDMA_BD_BYTES)
+        return false;
+
+    // 7. DMA 模式下禁用 dynamic_burst
+    spi_imx->dynamic_burst = 0;
+
+    return true;
+}
+</pre>
+
+<div class="mermaid">
+graph TD
+    START[spi_imx_can_dma] --> C1{use_dma &&<br/>!fallback?}
+    C1 -->|No| NO1[return false]
+    C1 -->|Yes| C2{dma_rx<br/>可用?}
+    C2 -->|No| NO2[return false]
+    C2 -->|Yes| C3{Target模式<br/>长度限制}
+    C3 -->|超限| NO3[return false]
+    C3 -->|正常| C4{len >=<br/>fifo_size?}
+    C4 -->|No| NO4[return false]
+    C4 -->|Yes| C5{bits_per_word<br/>= 8/16/32?}
+    C5 -->|No| NO5[return false]
+    C5 -->|Yes| C6{len < 32KB?}
+    C6 -->|No| NO6[return false]
+    C6 -->|Yes| YES[return true]
+
+    style START fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style YES fill:#dcfce7,stroke:#22c55e,color:#166534
+    style NO1 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style NO2 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style NO3 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style NO4 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style NO5 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style NO6 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+</div>
+
+<h3 id="dma-config">4.4 DMA 配置</h3>
+
+<p>DMA 配置函数负责设置 DMA 通道的从设备参数，包括传输方向、地址、总线宽度和突发长度。</p>
+
+<h4>4.4.1 DMA 从设备配置</h4>
+
+<pre>
+static int spi_imx_dma_configure(struct spi_controller *controller,
+                                 bool word_delay)
+{
+    struct spi_imx_data *spi_imx = spi_controller_get_devdata(controller);
+    enum dma_slave_buswidth buswidth;
+    struct dma_slave_config rx = {}, tx = {};
+
+    // 根据 word_delay 决定总线宽度
+    if (word_delay) {
+        // Word delay 模式：使用实际字宽
+        switch (spi_imx_bytes_per_word(spi_imx->bits_per_word)) {
+        case 4:
+            buswidth = DMA_SLAVE_BUSWIDTH_4_BYTES;
+            break;
+        case 2:
+            buswidth = DMA_SLAVE_BUSWIDTH_2_BYTES;
+            break;
+        case 1:
+            buswidth = DMA_SLAVE_BUSWIDTH_1_BYTE;
+            break;
+        default:
+            return -EINVAL;
+        }
+    } else {
+        // 普通模式：固定 4 字节宽度
+        buswidth = DMA_SLAVE_BUSWIDTH_4_BYTES;
+    }
+
+    // 配置 TX DMA 通道
+    tx.direction = DMA_MEM_TO_DEV;
+    tx.dst_addr = spi_imx->base_phys + MXC_CSPITXDATA;  // TX FIFO 地址
+    tx.dst_addr_width = buswidth;
+    tx.dst_maxburst = spi_imx->wml;
+    dmaengine_slave_config(controller->dma_tx, &tx);
+
+    // 配置 RX DMA 通道
+    rx.direction = DMA_DEV_TO_MEM;
+    rx.src_addr = spi_imx->base_phys + MXC_CSPIRXDATA;  // RX FIFO 地址
+    rx.src_addr_width = buswidth;
+    rx.src_maxburst = spi_imx->wml;
+    dmaengine_slave_config(controller->dma_rx, &rx);
+
+    return 0;
+}
+</pre>
+
+<h4>4.4.2 Watermark Level 配置</h4>
+
+<p>Watermark Level（WML）决定了 DMA 传输的突发长度，影响传输效率：</p>
+
+<pre>
+static void mx51_setup_wml(struct spi_imx_data *spi_imx)
+{
+    u32 tx_wml = 0;
+
+    // i.MX6UL 以后修复了 TX 毛刺，可以使用 WML
+    if (spi_imx->devtype_data->tx_glitch_fixed)
+        tx_wml = spi_imx->wml;
+
+    // 配置 DMA 寄存器：设置水位线并启用 DMA 请求
+    writel(MX51_ECSPI_DMA_RX_WML(spi_imx->wml - 1) |
+           MX51_ECSPI_DMA_TX_WML(tx_wml) |
+           MX51_ECSPI_DMA_RXT_WML(spi_imx->wml) |
+           MX51_ECSPI_DMA_RXTDEN,
+           spi_imx->base + MX51_ECSPI_DMA);
+}
+
+/* WML 计算函数：找到能整除 DMA 长度的最大 WML */
+static void spi_imx_dma_max_wml_find(struct spi_imx_data *spi_imx,
+                                     struct dma_data_package *dma_data,
+                                     bool word_delay)
+{
+    unsigned int bytes_per_word = word_delay ?
+        spi_imx_bytes_per_word(spi_imx->bits_per_word) :
+        BYTES_PER_32BITS_WORD;
+    unsigned int i;
+
+    // 从 FIFO 大小的一半开始向下查找
+    for (i = spi_imx->devtype_data->fifo_size / 2; i > 0; i--) {
+        if (!(dma_data->dma_len % (i * bytes_per_word)))
+            break;
+    }
+    // 如果没有找到合适的突发长度，使用 1
+    if (i == 0)
+        i = 1;
+
+    spi_imx->wml = i;
+}
+</pre>
+
+<div class="mermaid">
+graph LR
+    subgraph "WML 计算示例"
+        FIFO["FIFO = 64 字"] --> HALF["半满 = 32"]
+        HALF --> FIND["查找能整除 dma_len 的最大值"]
+        FIND --> WML["WML = 16（示例）"]
+    end
+
+    subgraph "DMA 寄存器配置"
+        WML --> REG["ECSPI_DMA 寄存器"]
+        REG --> TX_WML["TX_WML = 16"]
+        REG --> RX_WML["RX_WML = 15"]
+        REG --> RXT_WML["RXT_WML = 16"]
+    end
+
+    style FIFO fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style WML fill:#dcfce7,stroke:#22c55e,color:#166534
+    style REG fill:#fef3c7,stroke:#f59e0b,color:#92400e
+</div>
+
+<h3 id="dma-transfer">4.5 DMA 传输流程</h3>
+
+<p>DMA 传输是 i.MX SPI 驱动的核心功能，涉及多个步骤的协调。</p>
+
+<h4>4.5.1 传输总入口</h4>
+
+<pre>
+static int spi_imx_transfer_one(struct spi_controller *controller,
+                                struct spi_device *spi,
+                                struct spi_transfer *transfer)
+{
+    int ret;
+    struct spi_imx_data *spi_imx = spi_controller_get_devdata(spi->controller);
+
+    // 设置传输参数
+    ret = spi_imx_setupxfer(spi, transfer);
+    if (ret < 0)
+        return ret;
+    transfer->effective_speed_hz = spi_imx->spi_bus_clk;
+
+    // 清空 RX FIFO
+    while (spi_imx->devtype_data->rx_available(spi_imx))
+        readl(spi_imx->base + MXC_CSPIRXDATA);
+
+    // Target 模式使用 PIO
+    if (spi_imx->target_mode && !spi_imx->usedma)
+        return spi_imx_pio_transfer_target(spi, transfer);
+
+    // 如果选择了 DMA，使用 DMA 传输
+    if (spi_imx->usedma) {
+        ret = spi_imx_dma_transfer(spi_imx, transfer);
+        if (transfer->error & SPI_TRANS_FAIL_NO_START) {
+            // DMA 失败，回退到 PIO
+            controller->fallback = true;
+            spi_imx_setupxfer(spi, transfer);
+            return spi_imx_pio_transfer(spi, transfer);
+        }
+        return ret;
+    }
+
+    // 短传输使用轮询模式
+    if (transfer->len == 1 || (polling_limit_us &&
+        spi_imx_transfer_estimate_time_us(transfer) < polling_limit_us))
+        return spi_imx_poll_transfer(spi, transfer);
+
+    // 默认使用 PIO 中断模式
+    return spi_imx_pio_transfer(spi, transfer);
+}
+</pre>
+
+<h4>4.5.2 DMA 数据准备</h4>
+
+<pre>
+static int spi_imx_dma_data_prepare(struct spi_imx_data *spi_imx,
+                                    struct spi_transfer *transfer,
+                                    bool word_delay)
+{
+    u32 pre_bl, tail_bl;
+    u32 ctrl;
+
+    ctrl = readl(spi_imx->base + MX51_ECSPI_CTRL);
+
+    if (word_delay) {
+        // Word delay 模式：每帧一个字
+        spi_imx->dma_package_num = 1;
+        pre_bl = spi_imx->bits_per_word - 1;
+    } else if (transfer->len <= MX51_ECSPI_CTRL_MAX_BURST) {
+        // 单包传输
+        spi_imx->dma_package_num = 1;
+        pre_bl = transfer->len * BITS_PER_BYTE - 1;
+    } else if (!(transfer->len % MX51_ECSPI_CTRL_MAX_BURST)) {
+        // 长度是最大突发的倍数
+        spi_imx->dma_package_num = 1;
+        pre_bl = MX51_ECSPI_CTRL_MAX_BURST * BITS_PER_BYTE - 1;
+    } else {
+        // 需要分包：主包 + 尾包
+        spi_imx->dma_package_num = 2;
+        pre_bl = MX51_ECSPI_CTRL_MAX_BURST * BITS_PER_BYTE - 1;
+        tail_bl = (transfer->len % MX51_ECSPI_CTRL_MAX_BURST) *
+                  BITS_PER_BYTE - 1;
+    }
+
+    // 分配 DMA 数据包数组
+    spi_imx->dma_data = kmalloc_objs(struct dma_data_package,
+                                      spi_imx->dma_package_num,
+                                      GFP_KERNEL | __GFP_ZERO);
+    if (!spi_imx->dma_data)
+        return -ENOMEM;
+
+    // ... 初始化各数据包 ...
+
+    return 0;
+}
+</pre>
+
+<h4>4.5.3 DMA 传输主函数</h4>
+
+<pre>
+static int spi_imx_dma_transfer(struct spi_imx_data *spi_imx,
+                                struct spi_transfer *transfer)
+{
+    bool word_delay = transfer->word_delay.value != 0 && !spi_imx->target_mode;
+    int ret, i;
+
+    // 准备 DMA 数据
+    ret = spi_imx_dma_data_prepare(spi_imx, transfer, word_delay);
+    if (ret < 0)
+        goto fallback_pio;
+
+    spi_imx->rx_offset = 0;
+
+    // 逐个执行 DMA 包传输
+    for (i = 0; i < spi_imx->dma_package_num; i++) {
+        // 映射 DMA 缓冲区
+        ret = spi_imx_dma_map(spi_imx, &spi_imx->dma_data[i]);
+        if (ret < 0)
+            break;
+
+        // 更新控制寄存器的 BL 字段
+        writel(spi_imx->dma_data[i].cmd_word,
+               spi_imx->base + MX51_ECSPI_CTRL);
+
+        // 执行 DMA 传输
+        ret = spi_imx_dma_package_transfer(spi_imx,
+               &spi_imx->dma_data[i], transfer, word_delay);
+
+        // 取消映射（无论成功与否）
+        spi_imx_dma_unmap(spi_imx, &spi_imx->dma_data[i]);
+
+        if (ret < 0)
+            break;
+    }
+
+    // 释放 DMA 缓冲区
+    for (int j = 0; j < spi_imx->dma_package_num; j++) {
+        kfree(spi_imx->dma_data[j].dma_tx_buf);
+        kfree(spi_imx->dma_data[j].dma_rx_buf);
+    }
+    kfree(spi_imx->dma_data);
+
+    return ret;
+}
+</pre>
+
+<h4>4.5.4 单包 DMA 传输</h4>
+
+<pre>
+static int spi_imx_dma_package_transfer(struct spi_imx_data *spi_imx,
+                                        struct dma_data_package *dma_data,
+                                        struct spi_transfer *transfer,
+                                        bool word_delay)
+{
+    struct spi_controller *controller = spi_imx->controller;
+    int ret;
+
+    // 查找最佳 WML
+    spi_imx_dma_max_wml_find(spi_imx, dma_data, word_delay);
+
+    // 配置 DMA 通道
+    ret = spi_imx_dma_configure(controller, word_delay);
+    if (ret)
+        goto dma_failure_no_start;
+
+    // 设置 WML 寄存器
+    if (!spi_imx->devtype_data->setup_wml) {
+        ret = -EINVAL;
+        goto dma_failure_no_start;
+    }
+    spi_imx->devtype_data->setup_wml(spi_imx);
+
+    // 提交 DMA 传输
+    ret = spi_imx_dma_submit(spi_imx, dma_data, transfer);
+    if (ret)
+        return ret;
+
+    // 同步 DMA 缓冲区到 CPU
+    dma_sync_single_for_cpu(controller->dma_rx->device->dev,
+                            dma_data->dma_rx_addr,
+                            dma_data->dma_len,
+                            DMA_FROM_DEVICE);
+
+    // 处理接收到的数据
+    spi_imx_dma_rx_data_handle(spi_imx, dma_data,
+                               transfer->rx_buf + spi_imx->rx_offset,
+                               word_delay);
+    spi_imx->rx_offset += dma_data->data_len;
+
+    return 0;
+}
+</pre>
+
+<h3 id="dma-callback">4.6 DMA 回调处理</h3>
+
+<p>DMA 传输完成通过回调函数和 completion 机制通知驱动：</p>
+
+<pre>
+// RX DMA 完成回调
+static void spi_imx_dma_rx_callback(void *cookie)
+{
+    struct spi_imx_data *spi_imx = (struct spi_imx_data *)cookie;
+    complete(&spi_imx->dma_rx_completion);
+}
+
+// TX DMA 完成回调
+static void spi_imx_dma_tx_callback(void *cookie)
+{
+    struct spi_imx_data *spi_imx = (struct spi_imx_data *)cookie;
+    complete(&spi_imx->dma_tx_completion);
+}
+
+// DMA 提交和等待完成
+static int spi_imx_dma_submit(struct spi_imx_data *spi_imx,
+                              struct dma_data_package *dma_data,
+                              struct spi_transfer *transfer)
+{
+    struct spi_controller *controller = spi_imx->controller;
+    struct dma_async_tx_descriptor *desc_tx, *desc_rx;
+    unsigned long transfer_timeout, time_left;
+    dma_cookie_t cookie;
+
+    // 1. 准备 RX 描述符（先配置 RX）
+    desc_rx = dmaengine_prep_slave_single(
+        controller->dma_rx,
+        dma_data->dma_rx_addr,
+        dma_data->dma_len,
+        DMA_DEV_TO_MEM,
+        DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+
+    desc_rx->callback = spi_imx_dma_rx_callback;
+    desc_rx->callback_param = (void *)spi_imx;
+
+    cookie = dmaengine_submit(desc_rx);
+    if (dma_submit_error(cookie))
+        goto dmaengine_terminate_rx;
+
+    reinit_completion(&spi_imx->dma_rx_completion);
+    dma_async_issue_pending(controller->dma_rx);
+
+    // 2. 准备 TX 描述符（TX 启动传输）
+    desc_tx = dmaengine_prep_slave_single(
+        controller->dma_tx,
+        dma_data->dma_tx_addr,
+        dma_data->dma_len,
+        DMA_MEM_TO_DEV,
+        DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+
+    desc_tx->callback = spi_imx_dma_tx_callback;
+    desc_tx->callback_param = (void *)spi_imx;
+
+    cookie = dmaengine_submit(desc_tx);
+    if (dma_submit_error(cookie))
+        goto dmaengine_terminate_tx;
+
+    reinit_completion(&spi_imx->dma_tx_completion);
+    dma_async_issue_pending(controller->dma_tx);
+
+    // 3. 触发传输
+    spi_imx->devtype_data->trigger(spi_imx);
+
+    // 4. 等待 TX 完成
+    transfer_timeout = spi_imx_calculate_timeout(spi_imx, transfer->len);
+    time_left = wait_for_completion_timeout(
+        &spi_imx->dma_tx_completion, transfer_timeout);
+    if (!time_left) {
+        dmaengine_terminate_sync(controller->dma_tx);
+        dmaengine_terminate_sync(controller->dma_rx);
+        return -ETIMEDOUT;
+    }
+
+    // 5. 等待 RX 完成
+    time_left = wait_for_completion_timeout(
+        &spi_imx->dma_rx_completion, transfer_timeout);
+    if (!time_left) {
+        spi_imx->devtype_data->reset(spi_imx);
+        dmaengine_terminate_sync(controller->dma_rx);
+        return -ETIMEDOUT;
+    }
+
+    return 0;
+}
+</pre>
+
+<div class="mermaid">
+sequenceDiagram
+    participant Driver as SPI 驱动
+    participant DMA_TX as TX DMA 通道
+    participant DMA_RX as RX DMA 通道
+    participant HW as SPI 控制器
+
+    Driver->>DMA_RX: prep_slave_single(RX)
+    DMA_RX-->>Driver: desc_rx
+    Driver->>DMA_RX: dmaengine_submit(desc_rx)
+    Driver->>DMA_RX: issue_pending()
+
+    Driver->>DMA_TX: prep_slave_single(TX)
+    DMA_TX-->>Driver: desc_tx
+    Driver->>DMA_TX: dmaengine_submit(desc_tx)
+    Driver->>DMA_TX: issue_pending()
+
+    Driver->>HW: trigger（启动传输）
+
+    loop 等待完成
+        HW->>DMA_TX: 发送数据
+        HW->>DMA_RX: 接收数据
+    end
+
+    DMA_TX-->>Driver: dma_tx_callback
+    DMA_RX-->>Driver: dma_rx_callback
+
+    Driver->>Driver: complete(tx_completion)
+    Driver->>Driver: complete(rx_completion)
+</div>
+
+<h2 id="dma-buf">5. DMA 缓冲区管理</h2>
+
+<p>DMA 缓冲区管理是 DMA 传输中的关键环节，涉及地址映射、字节序调整和数据对齐。</p>
+
+<h3>5.1 缓冲区映射</h3>
+
+<pre>
+static int spi_imx_dma_map(struct spi_imx_data *spi_imx,
+                           struct dma_data_package *dma_data)
+{
+    struct spi_controller *controller = spi_imx->controller;
+    struct device *tx_dev = controller->dma_tx->device->dev;
+    struct device *rx_dev = controller->dma_rx->device->dev;
+    int ret;
+
+    // 映射 TX 缓冲区
+    dma_data->dma_tx_addr = dma_map_single(tx_dev,
+        dma_data->dma_tx_buf,
+        DMA_CACHE_ALIGNED_LEN(dma_data->dma_len),
+        DMA_TO_DEVICE);
+    ret = dma_mapping_error(tx_dev, dma_data->dma_tx_addr);
+    if (ret < 0) {
+        dev_err(spi_imx->dev, "DMA TX map failed %d\n", ret);
+        return ret;
+    }
+
+    // 映射 RX 缓冲区
+    dma_data->dma_rx_addr = dma_map_single(rx_dev,
+        dma_data->dma_rx_buf,
+        DMA_CACHE_ALIGNED_LEN(dma_data->dma_len),
+        DMA_FROM_DEVICE);
+    ret = dma_mapping_error(rx_dev, dma_data->dma_rx_addr);
+    if (ret < 0) {
+        dma_unmap_single(tx_dev, dma_data->dma_tx_addr,
+                         DMA_CACHE_ALIGNED_LEN(dma_data->dma_len),
+                         DMA_TO_DEVICE);
+        return ret;
+    }
+
+    return 0;
+}
+</pre>
+
+<h3>5.2 缓冲区取消映射</h3>
+
+<pre>
+static void spi_imx_dma_unmap(struct spi_imx_data *spi_imx,
+                              struct dma_data_package *dma_data)
+{
+    struct device *tx_dev = spi_imx->controller->dma_tx->device->dev;
+    struct device *rx_dev = spi_imx->controller->dma_rx->device->dev;
+
+    dma_unmap_single(tx_dev, dma_data->dma_tx_addr,
+                     DMA_CACHE_ALIGNED_LEN(dma_data->dma_len),
+                     DMA_TO_DEVICE);
+    dma_unmap_single(rx_dev, dma_data->dma_rx_addr,
+                     DMA_CACHE_ALIGNED_LEN(dma_data->dma_len),
+                     DMA_FROM_DEVICE);
+}
+</pre>
+
+<h3>5.3 数据对齐与字节序处理</h3>
+
+<p>i.MX ECSPI 控制器以 32 位字为单位进行 DMA 传输，需要处理字节对齐和字节序问题：</p>
+
+<pre>
+/* 缓冲区长度对齐宏 */
+#define DMA_CACHE_ALIGNED_LEN(x) ALIGN((x), dma_get_cache_alignment())
+
+/* TX 数据处理：处理非 4 字节对齐的数据 */
+static int spi_imx_dma_tx_data_handle(struct spi_imx_data *spi_imx,
+                                      struct dma_data_package *dma_data,
+                                      const void *tx_buf,
+                                      bool word_delay)
+{
+    void *copy_ptr;
+    int unaligned;
+
+    if (word_delay) {
+        dma_data->dma_len = dma_data->data_len;
+    } else {
+        // 对齐到 4 字节
+        dma_data->dma_len = ALIGN(dma_data->data_len,
+                                  BYTES_PER_32BITS_WORD);
+    }
+
+    // 分配 DMA 缓冲区
+    dma_data->dma_tx_buf = kzalloc(dma_data->dma_len, GFP_KERNEL);
+    if (!dma_data->dma_tx_buf)
+        return -ENOMEM;
+
+    dma_data->dma_rx_buf = kzalloc(dma_data->dma_len, GFP_KERNEL);
+    if (!dma_data->dma_rx_buf) {
+        kfree(dma_data->dma_tx_buf);
+        return -ENOMEM;
+    }
+
+    // 处理非对齐数据
+    if (dma_data->data_len % BYTES_PER_32BITS_WORD && !word_delay) {
+        unaligned = dma_data->data_len % BYTES_PER_32BITS_WORD;
+        // 数据放在对齐位置的后面
+        copy_ptr = (u8 *)dma_data->dma_tx_buf +
+                   BYTES_PER_32BITS_WORD - unaligned;
+    } else {
+        copy_ptr = dma_data->dma_tx_buf;
+    }
+
+    memcpy(copy_ptr, tx_buf, dma_data->data_len);
+
+    // 字节序调整（小端系统）
+#ifdef __LITTLE_ENDIAN
+    unsigned int bytes_per_word = spi_imx_bytes_per_word(
+        spi_imx->bits_per_word);
+    u32 *temp = dma_data->dma_tx_buf;
+
+    for (int i = 0; i < DIV_ROUND_UP(dma_data->dma_len,
+                                      sizeof(*temp)); i++) {
+        if (bytes_per_word == 1)
+            swab32s(temp + i);      // 字节交换
+        else if (bytes_per_word == 2)
+            swahw32s(temp + i);     // 半字交换
+    }
+#endif
+
+    return 0;
+}
+</pre>
+
+<div class="mermaid">
+graph TB
+    subgraph "数据对齐处理（bpw=8，data_len=5）"
+        RAW["原始数据<br/>0x12 0x34 0x56 0x78 0x9A"]
+        BUF["DMA 缓冲区（8字节）<br/>0x00 0x00 0x12 0x34 0x56 0x78 0x9A 0x00"]
+        COPY["memcpy 到偏移位置<br/>copy_ptr = &buf[3]"]
+    end
+
+    RAW --> COPY
+    COPY --> BUF
+
+    style RAW fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style BUF fill:#dcfce7,stroke:#22c55e,color:#166534
+    style COPY fill:#fef3c7,stroke:#f59e0b,color:#92400e
+</div>
+
+<h3>5.4 RX 数据处理</h3>
+
+<pre>
+static void spi_imx_dma_rx_data_handle(struct spi_imx_data *spi_imx,
+                                       struct dma_data_package *dma_data,
+                                       void *rx_buf,
+                                       bool word_delay)
+{
+    void *copy_ptr;
+    int unaligned;
+
+    // 字节序调整
+#ifdef __LITTLE_ENDIAN
+    if (!word_delay) {
+        unsigned int bytes_per_word = spi_imx_bytes_per_word(
+            spi_imx->bits_per_word);
+        u32 *temp = dma_data->dma_rx_buf;
+
+        for (int i = 0; i < DIV_ROUND_UP(dma_data->dma_len,
+                                          sizeof(*temp)); i++) {
+            if (bytes_per_word == 1)
+                swab32s(temp + i);
+            else if (bytes_per_word == 2)
+                swahw32s(temp + i);
+        }
+    }
+#endif
+
+    // 处理非对齐数据
+    if (dma_data->data_len % BYTES_PER_32BITS_WORD && !word_delay) {
+        unaligned = dma_data->data_len % BYTES_PER_32BITS_WORD;
+        // 从对齐位置的后面开始复制
+        copy_ptr = (u8 *)dma_data->dma_rx_buf +
+                   BYTES_PER_32BITS_WORD - unaligned;
+    } else {
+        copy_ptr = dma_data->dma_rx_buf;
+    }
+
+    memcpy(rx_buf, copy_ptr, dma_data->data_len);
+}
+</pre>
+
+<h2 id="dma-split">6. 大数据传输的分包处理</h2>
+
+<p>i.MX ECSPI 控制器的最大突发长度为 512 字节（<code>MX51_ECSPI_CTRL_MAX_BURST</code>），当传输数据超过此限制时需要进行分包处理。</p>
+
+<h3>6.1 分包策略</h3>
+
+<div class="mermaid">
+graph LR
+    subgraph "传输长度分析"
+        LEN["传输长度 = 1200 字节"]
+        MAX["最大突发 = 512 字节"]
+    end
+
+    subgraph "分包计算"
+        PKG1["主包: 512 字节<br/>BL = 512*8-1 = 4095"]
+        PKG2["尾包: 176 字节<br/>BL = 176*8-1 = 1407"]
+    end
+
+    subgraph "执行顺序"
+        EXEC1["1. 执行主包 DMA"]
+        UPD["2. 更新 CTRL BL 字段"]
+        EXEC2["3. 执行尾包 DMA"]
+    end
+
+    LEN --> PKG1
+    LEN --> PKG2
+    PKG1 --> EXEC1
+    EXEC1 --> UPD
+    UPD --> EXEC2
+
+    style LEN fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style PKG1 fill:#dcfce7,stroke:#22c55e,color:#166534
+    style PKG2 fill:#fef3c7,stroke:#f59e0b,color:#92400e
+</div>
+
+<h3>6.2 分包实现</h3>
+
+<pre>
+static int spi_imx_dma_data_prepare(struct spi_imx_data *spi_imx,
+                                    struct spi_transfer *transfer,
+                                    bool word_delay)
+{
+    u32 pre_bl, tail_bl;
+    u32 ctrl;
+
+    ctrl = readl(spi_imx->base + MX51_ECSPI_CTRL);
+
+    // 判断是否需要分包
+    if (transfer->len <= MX51_ECSPI_CTRL_MAX_BURST) {
+        // 单包
+        spi_imx->dma_package_num = 1;
+        pre_bl = transfer->len * BITS_PER_BYTE - 1;
+    } else if (!(transfer->len % MX51_ECSPI_CTRL_MAX_BURST)) {
+        // 长度是最大突发的整数倍
+        spi_imx->dma_package_num = 1;
+        pre_bl = MX51_ECSPI_CTRL_MAX_BURST * BITS_PER_BYTE - 1;
+    } else {
+        // 需要分包
+        spi_imx->dma_package_num = 2;
+        pre_bl = MX51_ECSPI_CTRL_MAX_BURST * BITS_PER_BYTE - 1;
+        tail_bl = (transfer->len % MX51_ECSPI_CTRL_MAX_BURST) *
+                  BITS_PER_BYTE - 1;
+    }
+
+    // 分配数据包数组
+    spi_imx->dma_data = kmalloc_objs(struct dma_data_package,
+                                      spi_imx->dma_package_num,
+                                      GFP_KERNEL | __GFP_ZERO);
+
+    if (spi_imx->dma_package_num == 1) {
+        // 单包配置
+        ctrl &= ~MX51_ECSPI_CTRL_BL_MASK;
+        ctrl |= pre_bl << MX51_ECSPI_CTRL_BL_OFFSET;
+        spi_imx->dma_data[0].cmd_word = ctrl;
+        spi_imx->dma_data[0].data_len = transfer->len;
+        spi_imx_dma_tx_data_handle(spi_imx, &spi_imx->dma_data[0],
+                                   transfer->tx_buf, word_delay);
+    } else {
+        // 主包配置
+        ctrl &= ~MX51_ECSPI_CTRL_BL_MASK;
+        ctrl |= pre_bl << MX51_ECSPI_CTRL_BL_OFFSET;
+        spi_imx->dma_data[0].cmd_word = ctrl;
+        spi_imx->dma_data[0].data_len = round_down(transfer->len,
+                                                    MX51_ECSPI_CTRL_MAX_BURST);
+        spi_imx_dma_tx_data_handle(spi_imx, &spi_imx->dma_data[0],
+                                   transfer->tx_buf, false);
+
+        // 尾包配置
+        ctrl &= ~MX51_ECSPI_CTRL_BL_MASK;
+        ctrl |= tail_bl << MX51_ECSPI_CTRL_BL_OFFSET;
+        spi_imx->dma_data[1].cmd_word = ctrl;
+        spi_imx->dma_data[1].data_len = transfer->len %
+                                         MX51_ECSPI_CTRL_MAX_BURST;
+        spi_imx_dma_tx_data_handle(spi_imx, &spi_imx->dma_data[1],
+                                   transfer->tx_buf +
+                                   spi_imx->dma_data[0].data_len,
+                                   false);
+    }
+
+    return 0;
+}
+</pre>
+
+<h2 id="dma-fallback">7. DMA 失败回退机制</h2>
+
+<p>驱动实现了健壮的 DMA 失败回退机制，当 DMA 传输失败时自动切换到 PIO 模式：</p>
+
+<div class="mermaid">
+graph TD
+    START[spi_imx_transfer_one] --> SETUP[setupxfer]
+    SETUP --> CAN_DMA{can_dma?}
+    CAN_DMA -->|Yes| DMA_TRANSFER[dma_transfer]
+    CAN_DMA -->|No| PIO_OR_POLL{短传输?}
+
+    DMA_TRANSFER --> PREPARE[dma_data_prepare]
+    PREPARE --> PREP_OK{成功?}
+    PREP_OK -->|No| FALLBACK1[标记 NO_START]
+    PREP_OK -->|Yes| EXEC_DMA[执行 DMA 传输]
+    EXEC_DMA --> DMA_OK{成功?}
+    DMA_OK -->|No| FALLBACK1
+
+    FALLBACK1 --> SET_FB[controller->fallback = true]
+    SET_FB --> RE_SETUP[重新 setupxfer]
+    RE_SETUP --> PIO_TRANSFER[pio_transfer]
+
+    PIO_OR_POLL -->|Yes| POLL[poll_transfer]
+    PIO_OR_POLL -->|No| PIO_TRANSFER2[pio_transfer]
+
+    DMA_OK -->|Yes| DONE[传输完成]
+    PIO_TRANSFER --> DONE
+    PIO_TRANSFER2 --> DONE
+    POLL --> DONE
+
+    style START fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style DONE fill:#dcfce7,stroke:#22c55e,color:#166534
+    style FALLBACK1 fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style SET_FB fill:#fef3c7,stroke:#f59e0b,color:#92400e
+</div>
+
+<pre>
+// DMA 传输函数中的回退逻辑
+static int spi_imx_dma_transfer(struct spi_imx_data *spi_imx,
+                                struct spi_transfer *transfer)
+{
+    bool word_delay = transfer->word_delay.value != 0 &&
+                      !spi_imx->target_mode;
+    int ret, i;
+
+    // 准备 DMA 数据
+    ret = spi_imx_dma_data_prepare(spi_imx, transfer, word_delay);
+    if (ret < 0) {
+        transfer->error |= SPI_TRANS_FAIL_NO_START;
+        dev_err(spi_imx->dev, "DMA data prepare fail\n");
+        goto fallback_pio;  // 回退到 PIO
+    }
+
+    // ... DMA 传输 ...
+
+fallback_pio:
+    return ret;
+}
+
+// 调用方处理回退
+if (spi_imx->usedma) {
+    ret = spi_imx_dma_transfer(spi_imx, transfer);
+    if (transfer->error & SPI_TRANS_FAIL_NO_START) {
+        // 设置回退标志，后续传输使用 PIO
+        controller->fallback = true;
+        spi_imx_setupxfer(spi, transfer);
+        return spi_imx_pio_transfer(spi, transfer);
+    }
+    return ret;
+}
+</pre>
+
+<h2 id="best-practices">8. DMA 使用最佳实践</h2>
+
+<h3>8.1 缓冲区对齐</h3>
+
+<pre>
+/* 正确：使用缓存行对齐 */
+dma_addr_t addr = dma_map_single(dev, buf,
+    DMA_CACHE_ALIGNED_LEN(len), DMA_TO_DEVICE);
+
+/* 错误：直接使用原始长度 */
+dma_addr_t addr = dma_map_single(dev, buf, len, DMA_TO_DEVICE);
+</pre>
+
+<h3>8.2 传输顺序</h3>
+
+<div class="callout warning">
+  <strong>重要：先配置 RX 再配置 TX</strong><br>
+  在 SPI DMA 传输中，必须先配置 RX DMA 通道再配置 TX DMA 通道。因为 TX DMA 传输会立即启动 SPI 控制器，如果 RX 未就绪会导致数据丢失。
+</div>
+
+<pre>
+/* 正确顺序 */
+desc_rx = dmaengine_prep_slave_single(dma_rx, ...);
+dmaengine_submit(desc_rx);
+dma_async_issue_pending(dma_rx);  // 先启动 RX
+
+desc_tx = dmaengine_prep_slave_single(dma_tx, ...);
+dmaengine_submit(desc_tx);
+dma_async_issue_pending(dma_tx);  // 再启动 TX
+</pre>
+
+<h3>8.3 超时处理</h3>
+
+<pre>
+/* 设置合理的超时时间 */
+static int spi_imx_calculate_timeout(struct spi_imx_data *spi_imx,
+                                     int size)
+{
+    unsigned long timeout = 0;
+
+    // 数据传输时间 + CS 切换延迟
+    timeout = (8 + 4) * size / spi_imx->spi_bus_clk;
+
+    // 调度器活动开销
+    timeout += 1;
+
+    // 双倍超时以留有余量
+    return secs_to_jiffies(2 * timeout);
+}
+</pre>
+
+<h3>8.4 错误处理</h3>
+
+<pre>
+/* 正确的错误处理模式 */
+time_left = wait_for_completion_timeout(&completion, timeout);
+if (!time_left) {
+    dev_err(spi_imx->dev, "DMA timeout\n");
+    // 1. 终止 DMA 传输
+    dmaengine_terminate_sync(controller->dma_tx);
+    dmaengine_terminate_sync(controller->dma_rx);
+    // 2. 重置硬件
+    spi_imx->devtype_data->reset(spi_imx);
+    return -ETIMEDOUT;
+}
+</pre>
+
+<h3>8.5 内存管理</h3>
+
+<div class="callout danger">
+  <strong>避免内存泄漏</strong><br>
+  每次 DMA 传输后必须释放所有分配的内存，无论传输成功还是失败。
+</div>
+
+<pre>
+/* 正确的内存释放 */
+for (int j = 0; j < spi_imx->dma_package_num; j++) {
+    kfree(spi_imx->dma_data[j].dma_tx_buf);
+    kfree(spi_imx->dma_data[j].dma_rx_buf);
+}
+kfree(spi_imx->dma_data);
+</pre>
+
+<h2 id="common-mistakes">9. 常见问题与解决方案</h2>
+
+<table>
+  <tr>
+    <th>问题</th>
+    <th>症状</th>
+    <th>解决方案</th>
+  </tr>
+  <tr>
+    <td>DMA 缓冲区未对齐</td>
+    <td>数据错乱或传输失败</td>
+    <td>使用 <code>DMA_CACHE_ALIGNED_LEN()</code> 对齐</td>
+  </tr>
+  <tr>
+    <td>字节序错误</td>
+    <td>数据高低字节颠倒</td>
+    <td>在小端系统使用 <code>swab32s()</code> / <code>swahw32s()</code></td>
+  </tr>
+  <tr>
+    <td>超时过短</td>
+    <td>DMA 传输超时错误</td>
+    <td>增加超时倍数，确保大于实际传输时间</td>
+  </tr>
+  <tr>
+    <td>未处理非对齐数据</td>
+    <td>数据偏移错误</td>
+    <td>使用偏移量处理首字节对齐</td>
+  </tr>
+  <tr>
+    <td>DMA 通道未释放</td>
+    <td>资源泄漏</td>
+    <td>在驱动 remove 时调用 <code>dma_release_channel()</code></td>
+  </tr>
+  <tr>
+    <td>RX/TX 顺序错误</td>
+    <td>数据丢失</td>
+    <td>先配置 RX 再配置 TX</td>
+  </tr>
+</table>
+
+<h2 id="sdma">10. SDMA（Smart DMA）技术详解</h2>
+
+<p>i.MX 系列 SoC 使用的 SDMA（Smart DMA）是一种智能 DMA 控制器，与传统 DMA 相比具有更高的灵活性和效率。SDMA 拥有自己的微控制器核心，可以执行复杂的传输脚本，而不仅仅是简单的内存到设备的拷贝操作。</p>
+
+<h3>10.1 SDMA 架构特点</h3>
+
+<p>SDMA 控制器具有以下显著特点：</p>
+
+<ul>
+  <li><strong>独立的微控制器核心</strong>：SDMA 内置一个 32 位 RISC 处理器，可以执行存储在共享内存中的微代码（Microcode），这使得 SDMA 能够处理复杂的传输模式，而不仅仅是简单的线性传输。</li>
+  <li><strong>多通道并行</strong>：i.MX 系列 SoC 通常提供 32 个或更多的 SDMA 通道，每个通道可以独立配置和运行，支持同时处理多个外设的 DMA 请求。</li>
+  <li><strong>灵活的地址模式</strong>：支持线性地址、循环缓冲区、双缓冲区等多种地址管理模式，可以根据不同的应用场景选择最优的传输方式。</li>
+  <li><strong>事件驱动</strong>：SDMA 通过硬件事件（如 FIFO 水位线中断）触发传输，实现了与外设的紧密同步，减少了不必要的轮询操作。</li>
+  <li><strong>低功耗设计</strong>：SDMA 可以在 CPU 睡眠时继续工作，支持系统进入低功耗模式后仍然保持数据传输能力，这对于电池供电的嵌入式设备尤为重要。</li>
+</ul>
+
+<h3>10.2 SDMA 在 SPI 中的工作原理</h3>
+
+<p>在 SPI 传输中，SDMA 的工作流程如下：首先，SPI 控制器检测到 FIFO 达到预设的水位线（Watermark Level），然后向 SDMA 控制器发送请求信号。SDMA 控制器接收到请求后，根据预先配置的参数执行数据传输操作。对于发送方向，SDMA 从系统内存中读取数据并写入 SPI 控制器的 TX FIFO；对于接收方向，SDMA 从 SPI 控制器的 RX FIFO 中读取数据并写入系统内存。当传输完成或发生错误时，SDMA 通过中断通知 CPU 进行后续处理。</p>
+
+<p>这种机制的关键优势在于 CPU 只需要在传输开始前配置好 SDMA 参数，然后就可以让出处理器资源去执行其他任务。只有在传输完成或出错时才需要 CPU 干预，大大提高了系统的整体效率。在大数据量传输场景下，这种方式可以将 CPU 占用率从几乎 100% 降低到接近零，同时还能保持较高的数据吞吐率。</p>
+
+<h3>10.3 SDMA 与传统 DMA 的比较</h3>
+
+<table>
+  <tr>
+    <th>特性</th>
+    <th>传统 DMA</th>
+    <th>SDMA</th>
+  </tr>
+  <tr>
+    <td>控制器架构</td>
+    <td>固定功能硬件状态机</td>
+    <td>可编程微控制器</td>
+  </tr>
+  <tr>
+    <td>灵活性</td>
+    <td>仅支持简单传输模式</td>
+    <td>支持复杂传输脚本</td>
+  </tr>
+  <tr>
+    <td>通道数量</td>
+    <td>通常较少（8-16 个）</td>
+    <td>较多（32+ 个）</td>
+  </tr>
+  <tr>
+    <td>地址管理</td>
+    <td>简单的地址递增</td>
+    <td>支持多种地址模式</td>
+  </tr>
+  <tr>
+    <td>CPU 干预频率</td>
+    <td>每次传输需要干预</td>
+    <td>批量传输减少干预</td>
+  </tr>
+  <tr>
+    <td>功耗</td>
+    <td>相对较高</td>
+    <td>低功耗设计</td>
+  </tr>
+  <tr>
+    <td>适用场景</td>
+    <td>简单外设的数据搬运</td>
+    <td>复杂外设的高效数据传输</td>
+  </tr>
+</table>
+
+<h2 id="cpu-coop">11. DMA 与 CPU 的协作机制</h2>
+
+<p>DMA 传输并非完全独立于 CPU，两者之间需要精密的协作才能确保数据的正确性和系统的稳定性。理解这种协作机制对于编写高质量的驱动程序至关重要。</p>
+
+<h3>11.1 缓存一致性问题</h3>
+
+<p>现代处理器都使用缓存来提高内存访问速度，但 DMA 控制器通常直接访问物理内存，绕过了 CPU 的缓存系统。这就产生了一个严重的问题：当 CPU 通过缓存修改了某个内存位置的值，而 DMA 控制器从物理内存中读取的仍然是旧值；或者当 DMA 控制器将数据写入物理内存后，CPU 缓存中仍然是旧数据。这种不一致会导致数据错乱和程序错误。</p>
+
+<p>为了解决这个问题，Linux 内核提供了两种主要的 DMA 映射方法：</p>
+
+<p>第一种是一致性 DMA 映射（Consistent DMA Mapping），使用 <code>dma_alloc_coherent()</code> 分配内存。这种方式确保 CPU 和 DMA 控制器看到的始终是同一份数据，内核通过缓存禁用或缓存行填充等硬件机制来保证一致性。一致性映射的开销较大，适用于需要频繁同步的场景。</p>
+
+<p>第二种是流式 DMA 映射（Streaming DMA Mapping），使用 <code>dma_map_single()</code> 或 <code>dma_map_sg()</code> 映射已分配的内存。这种方式性能更好，但需要程序员手动管理同步操作。在 DMA 传输开始前需要调用 <code>dma_sync_single_for_device()</code> 将 CPU 缓存刷新到内存，在 DMA 传输完成后需要调用 <code>dma_sync_single_for_cpu()</code> 使 CPU 缓存失效以读取最新数据。</p>
+
+<p>i.MX SPI 驱动选择了流式 DMA 映射方式，这是因为 SPI 传输通常是突发性的，数据缓冲区在每次传输时都会重新分配和映射，流式映射的灵活性更适合这种使用模式。</p>
+
+<h3>11.2 中断处理与任务调度</h3>
+
+<p>DMA 传输完成后会触发中断通知 CPU，中断处理程序需要快速响应并进行必要的清理工作。在 SPI 驱动中，DMA 完成中断的处理相对简单：调用 <code>complete()</code> 函数唤醒等待传输完成的任务，让任务可以继续执行后续的处理逻辑。</p>
+
+<p>这种使用 completion 机制的设计是 Linux 内核中异步操作的典型模式。驱动程序在提交 DMA 传输后调用 <code>wait_for_completion_timeout()</code> 阻塞等待，DMA 完成中断处理程序调用 <code>complete()</code> 唤醒等待的任务。超时机制确保即使 DMA 传输出现异常，系统也不会无限期地等待下去，而是会返回错误码让上层进行错误处理。</p>
+
+<h3>11.3 错误恢复机制</h3>
+
+<p>DMA 传输可能因为各种原因失败，包括硬件故障、超时、映射错误等。一个健壮的驱动程序必须能够正确处理这些错误情况，确保系统能够恢复正常运行。</p>
+
+<p>i.MX SPI 驱动实现了多层错误恢复机制：在传输层面，如果 DMA 传输超时，驱动会调用 <code>dmaengine_terminate_sync()</code> 终止所有待处理的 DMA 传输，然后重置 SPI 控制器的硬件状态；在驱动层面，如果 DMA 初始化失败或传输反复失败，驱动会自动切换到 PIO（Programmed I/O）模式继续工作，确保功能可用性；在系统层面，驱动会设置 <code>controller->fallback</code> 标志，后续的传输将直接使用 PIO 模式，避免反复尝试失败的 DMA 传输。</p>
+
+<h2 id="performance">12. DMA 性能优化策略</h2>
+
+<p>在实际应用中，DMA 性能的优化需要从多个维度考虑，包括缓冲区管理、突发长度配置、中断处理策略等。</p>
+
+<h3>12.1 缓冲区分配优化</h3>
+
+<p>缓冲区的分配位置和方式对 DMA 性能有显著影响。首先，缓冲区应该尽量分配在物理内存连续的区域，避免分散聚合（Scatter-Gather）带来的额外开销。在 i.MX 平台上，可以使用 CMA（Contiguous Memory Allocator）或 <code>__GFP_COMP</code> 标志来提高分配到连续内存的概率。</p>
+
+<p>其次，缓冲区大小应该对齐到缓存行边界（通常为 64 字节），这样可以避免缓存行分裂（Cache Line Split）问题，提高内存访问效率。i.MX SPI 驱动使用 <code>DMA_CACHE_ALIGNED_LEN()</code> 宏来确保缓冲区长度的对齐。</p>
+
+<p>此外，频繁的动态内存分配和释放会带来较大的开销。在高性能场景下，可以使用内存池（Memory Pool）或预分配的环形缓冲区来减少分配开销。虽然当前的 i.MX SPI 驱动没有实现这种优化，但在高频 SPI 传输的应用中，这是一个值得考虑的改进方向。</p>
+
+<h3>12.2 突发长度优化</h3>
+
+<p>DMA 突发长度（Burst Length）是指单次 DMA 传输中连续传输的数据量。突发长度的选择需要在传输效率和延迟之间取得平衡。</p>
+
+<p>较长的突发长度可以提高总线利用率，减少 DMA 控制器和外设之间的握手次数，从而提高整体传输效率。但是，过长的突发长度会增加单次传输的延迟，并且可能需要更大的 FIFO 缓冲区来暂存数据。i.MX ECSPI 控制器的最大突发长度为 512 字节，这是一个在效率和延迟之间取得平衡的设计选择。</p>
+
+<p>i.MX SPI 驱动通过 Watermark Level（WML）机制来优化突发长度。WML 决定了 FIFO 中数据达到多少时触发 DMA 请求，合适的 WML 设置可以确保 DMA 传输的连续性，避免 FIFO 溢出或空闲。驱动程序通过 <code>spi_imx_dma_max_wml_find()</code> 函数动态计算最优的 WML 值，确保突发长度能够整除 DMA 传输的总长度。</p>
+
+<h3>12.3 中断合并优化</h3>
+
+<p>频繁的 DMA 完成中断会消耗大量的 CPU 时间，特别是在高速 SPI 传输场景下。为了减少中断次数，可以使用中断合并（Interrupt Coalescing）技术，即等待多个 DMA 传输完成后才触发一次中断。</p>
+
+<p>在 i.MX SPI 驱动中，虽然没有直接实现中断合并，但通过合理设置 WML 和突发长度，实际上已经达到了类似的效果。较大的突发长度意味着单次 DMA 传输的数据量更多，从而减少了总的传输次数和中断次数。在某些高性能场景下，还可以考虑使用延迟中断（Delayed Interrupt）机制，在数据量未达到阈值时延迟触发中断，进一步减少中断频率。</p>
+
+<h2 id="debugging">13. DMA 调试技术</h2>
+
+<p>DMA 相关的问题通常比较难以调试，因为涉及硬件行为、内存映射、中断处理等多个层面。掌握有效的调试技术对于快速定位和解决问题至关重要。</p>
+
+<h3>13.1 常用调试工具</h3>
+
+<p>Linux 内核提供了多种 DMA 调试工具：<code>CONFIG_DMA_API_DEBUG</code> 选项启用 DMA API 的调试检查，可以在开发阶段发现常见的 DMA 使用错误，如映射不平衡、缓存一致性问题等。<code>CONFIG_DMABUF_HEAPS</code> 提供 DMA 堆的调试信息，帮助追踪缓冲区的分配和释放。<code>/sys/kernel/debug/dma/</code> 目录下的文件提供了 DMA 映射的运行时统计信息。</p>
+
+<p>对于 i.MX 平台，还可以使用 <code>devmem</code> 或 <code>devmem2</code> 工具直接读取和修改 SPI 控制器的寄存器，这对于调试 DMA 寄存器配置问题非常有用。此外，<code>ftrace</code> 和 <code>trace-cmd</code> 工具可以跟踪 DMA 相关的内核函数调用，帮助分析 DMA 传输的时序和性能问题。</p>
+
+<h3>13.2 常见 DMA 问题排查</h3>
+
+<p>当遇到 DMA 传输失败时，可以按照以下步骤进行排查：</p>
+
+<p>首先，检查 DMA 通道是否正确获取。通过 <code>cat /proc/device-tree/soc/spi@*/dma-names</code> 查看设备树中的 DMA 通道名称，通过 <code>cat /sys/class/dma/*/in_use</code> 检查通道是否被占用。如果通道获取失败，可能是设备树配置错误或 DMA 控制器驱动未正确加载。</p>
+
+<p>其次，检查缓冲区映射是否成功。在驱动中添加 <code>dma_mapping_error()</code> 的错误检查日志，确认映射后的地址是否有效。如果映射失败，可能是内存不足或 IOMMU 配置问题。</p>
+
+<p>最后，检查 DMA 寄存器配置。使用 <code>devmem</code> 读取 <code>ECSPI_DMA</code> 寄存器的值，确认 WML 和 DMA 使能位是否正确设置。如果寄存器配置正确但传输仍然失败，可能是硬件时序问题，需要使用逻辑分析仪或示波器检查 SPI 信号。</p>
+
+<h2 id="usecases">14. 实际应用案例分析</h2>
+
+<p>理解 DMA 的理论知识固然重要，但将其应用到实际项目中才是最终目标。本节将通过几个典型的应用场景，展示如何在实际项目中有效地使用 SPI DMA 技术。</p>
+
+<h3>14.1 SPI Flash 存储设备</h3>
+
+<p>SPI Flash 是嵌入式系统中最常见的存储设备之一，广泛用于存储固件、配置数据和用户数据。由于 Flash 的读写操作通常涉及大块数据的传输，使用 DMA 可以显著提高存储性能。</p>
+
+<p>在读取操作中，CPU 首先发送读取命令和起始地址，然后等待数据从 Flash 返回。如果使用 PIO 模式，CPU 需要在每个时钟周期检查数据是否就绪，这会占用大量的处理器时间。而使用 DMA 模式，CPU 只需要配置好 DMA 传输参数，然后就可以让 SDMA 控制器自动完成整个数据接收过程，CPU 可以在此期间处理其他任务或进入低功耗状态。</p>
+
+<p>在写入操作中，DMA 的优势更加明显。Flash 的写入速度通常较慢，如果使用 PIO 模式，CPU 会在等待 Flash 写入完成的过程中浪费大量时间。使用 DMA，CPU 可以一次性将整个数据块提交给 DMA 控制器，然后等待传输完成中断即可，大大提高了系统的整体效率。</p>
+
+<p>对于 SPI Flash 的 DMA 优化，有几个关键点需要注意：首先，Flash 的页大小（通常为 256 字节或 512 字节）应该作为 DMA 传输的最小单位，这样可以减少 Flash 控制器的内部开销；其次，读取操作可以利用 Flash 的连续读取特性，设置较长的突发长度来提高总线利用率；最后，写入操作需要考虑 Flash 的编程时间，合理设置超时时间避免误判传输失败。</p>
+
+<h3>14.2 SPI 传感器数据采集</h3>
+
+<p>现代嵌入式系统通常配备多种 SPI 传感器，如加速度计、陀螺仪、磁力计、环境光传感器等。这些传感器通常以固定的采样率产生数据，需要及时读取并处理。</p>
+
+<p>对于低速传感器（如温度传感器、气压传感器），采样率通常在几赫兹到几十赫兹之间，数据量很小，使用 PIO 模式即可满足需求。但对于高速传感器（如六轴惯性测量单元 IMU），采样率可能高达数百甚至数千赫兹，每次采样产生多个字节的数据，此时使用 DMA 可以显著降低 CPU 负担。</p>
+
+<p>在传感器数据采集场景中，DMA 的配置需要特别注意实时性要求。由于传感器数据通常需要及时处理（如姿态控制、运动检测），DMA 传输的延迟必须控制在可接受的范围内。这通常意味着需要使用较小的缓冲区和较短的突发长度，以换取更低的传输延迟。同时，DMA 完成中断的优先级应该设置得较高，确保数据能够及时被处理。</p>
+
+<p>另一个重要的考虑是电源管理。在电池供电的设备中，传感器通常是主要的功耗来源之一。通过合理配置 DMA 的唤醒机制，可以在传感器数据就绪时唤醒 CPU 进行处理，其余时间让系统保持低功耗状态，从而显著延长电池续航时间。</p>
+
+<h3>14.3 SPI 显示屏驱动</h3>
+
+<p>SPI 接口的小尺寸 TFT 显示屏在嵌入式设备中非常常见，如智能手表、工业仪表、医疗设备等。显示更新通常涉及大量像素数据的传输，是 DMA 应用的理想场景。</p>
+
+<p>在显示屏驱动中，DMA 主要用于帧缓冲区到显示屏的数据传输。一帧图像数据通常按行存储在内存中，DMA 需要将这些数据逐行发送到显示屏控制器。对于常见的 240x240 像素、16 位色深的显示屏，一帧数据量约为 115KB，使用 DMA 传输可以在几十毫秒内完成，远快于 PIO 模式。</p>
+
+<p>显示屏驱动的 DMA 实现需要考虑几个特殊因素：首先，显示屏通常需要持续刷新以维持显示内容，这意味着 DMA 传输需要周期性地进行，可以使用循环 DMA 模式来减少每次传输的配置开销；其次，显示屏的刷新率和 SPI 时钟频率需要匹配，避免出现画面撕裂或闪烁现象；最后，为了支持部分屏幕更新，DMA 驱动需要能够处理非连续的内存区域，这可以通过分散聚合（Scatter-Gather）DMA 来实现。</p>
+
+<h3>14.4 音频编解码器接口</h3>
+
+<p>虽然 I2S 是音频编解码器的主流接口，但一些低功耗或低成本的编解码器仍然使用 SPI 接口传输音频数据。在这种应用中，DMA 的实时性要求非常高，因为音频数据必须在严格的时间约束内传输，否则会出现音频断续或噪音。</p>
+
+<p>音频 DMA 的典型实现使用双缓冲（Double Buffering）技术：当 DMA 正在传输一个缓冲区的数据时，CPU 可以填充另一个缓冲区，两个缓冲区交替使用，实现了传输和处理的并行化。这种方式可以显著降低音频延迟，同时避免因缓冲区欠载导致的音频问题。</p>
+
+<p>在音频应用中，DMA 中断的延迟直接影响音频质量。如果中断处理延迟过大，可能导致缓冲区欠载，产生可闻的噪音或断续。因此，音频 DMA 驱动通常需要使用实时补丁（PREEMPT_RT）和高优先级中断，确保中断处理的及时性。此外，音频缓冲区的大小需要仔细调整，在延迟和功耗之间取得平衡。</p>
+
+<h2 id="summary">15. 总结</h2>
+
+<p>i.MX SPI 驱动的 DMA 实现展示了 Linux 内核中 SPI 设备驱动使用 DMA 的典型模式：</p>
+
+<div class="mermaid">
+graph TB
+    subgraph "DMA 使用要点"
+        INIT["1. 初始化<br/>dma_request_chan()<br/>init_completion()"]
+        CONFIG["2. 配置<br/>dmaengine_slave_config()<br/>设置地址/宽度/突发"]
+        MAP["3. 映射<br/>dma_map_single()<br/>处理对齐和字节序"]
+        PREP["4. 准备<br/>dmaengine_prep_slave_single()<br/>设置回调"]
+        SUBMIT["5. 提交<br/>dmaengine_submit()<br/>issue_pending()"]
+        WAIT["6. 等待<br/>wait_for_completion_timeout()"]
+        UNMAP["7. 取消映射<br/>dma_unmap_single()"]
+        FREE["8. 释放<br/>kfree() 缓冲区"]
+    end
+
+    INIT --> CONFIG
+    CONFIG --> MAP
+    MAP --> PREP
+    PREP --> SUBMIT
+    SUBMIT --> WAIT
+    WAIT --> UNMAP
+    UNMAP --> FREE
+
+    style INIT fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style CONFIG fill:#dbeafe,stroke:#3b82f6,color:#1e40af
+    style MAP fill:#dcfce7,stroke:#22c55e,color:#166534
+    style PREP fill:#dcfce7,stroke:#22c55e,color:#166534
+    style SUBMIT fill:#fef3c7,stroke:#f59e0b,color:#92400e
+    style WAIT fill:#fef3c7,stroke:#f59e0b,color:#92400e
+    style UNMAP fill:#fee2e2,stroke:#ef4444,color:#991b1b
+    style FREE fill:#fee2e2,stroke:#ef4444,color:#991b1b
+</div>
+
+<p>关键设计原则：</p>
+
+<ul>
+  <li><strong>灵活性</strong>：支持 DMA 和 PIO 两种模式，自动选择最优方案</li>
+  <li><strong>健壮性</strong>：DMA 失败时自动回退到 PIO 模式</li>
+  <li><strong>正确性</strong>：正确处理字节序、对齐和边界条件</li>
+  <li><strong>效率</strong>：通过 WML 优化突发长度，减少中断次数</li>
+  <li><strong>可维护性</strong>：清晰的函数分层和错误处理</li>
+</ul>
+
+<div class="callout success">
+  <strong>学习建议</strong><br>
+  <code>drivers/spi/spi-imx.c</code> 是学习 Linux SPI DMA 的优秀参考实现。<br>
+  <code>drivers/dma/</code> 目录下包含各种 DMA 控制器驱动。<br>
+  <code>Documentation/driver-api/dmaengine/</code> 提供 DMA 引擎框架文档。<br>
+  <code>include/linux/dmaengine.h</code> 定义了 DMA API 接口。
+</div>
+
+<div class="callout">
+  <strong>阅读建议:</strong><br>
+  <code>drivers/spi/spi-imx.c</code> - 本分析的源码，包含完整的 DMA 实现<br>
+  <code>drivers/spi/spi-master.c</code> - SPI 核心框架，传输调度逻辑<br>
+  <code>include/linux/spi/spi.h</code> - SPI 核心数据结构定义<br>
+  <code>include/linux/dmaengine.h</code> - DMA 引擎 API 定义<br>
+  <code>drivers/dma/imx-dma.c</code> - i.MX DMA 控制器驱动<br>
+  <code>Documentation/driver-api/dmaengine/</code> - DMA 引擎框架文档
+</div>
+
+</div>
+
+<script src="mermaid.min.js"></script>
+<script src="common.js"></script>
+<script>
+// Mermaid 初始化
+mermaid.initialize({
+  startOnLoad: true,
+  theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default',
+  securityLevel: 'loose',
+  fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+});
+</script>
+</body>
+</html>

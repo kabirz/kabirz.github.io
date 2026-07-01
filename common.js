@@ -79,6 +79,7 @@
     { t:"Linux PWM", f:"linux-pwm.html", top:"linux" },
     { t:"Linux 时钟", f:"linux-clk.html", top:"linux" },
     { t:"Linux DMA", f:"linux-dma.html", top:"linux" },
+    { t:"Linux SPI DMA 深度解析", f:"linux-spi-dma.html", top:"linux" },
     { t:"Linux V4L2", f:"linux-v4l2.html", top:"linux" },
     { t:"Linux 网络", f:"linux-network.html", top:"net" },
     { t:"Linux Bridge", f:"linux-bridge.html", top:"net" },
